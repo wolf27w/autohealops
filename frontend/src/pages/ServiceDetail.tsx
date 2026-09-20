@@ -298,7 +298,7 @@ export default function ServiceDetail() {
   )
 }
 
-// Pod 指标监控抽屉（复用）
+// Pod/容器指标监控抽屉：CPU / 内存 / 入站流量 / 出站流量
 function PodMetricsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () => void }) {
   const [range, setRange] = useState<string>('1h')
   const [points, setPoints] = useState<MetricPoint[]>([])
@@ -312,9 +312,35 @@ function PodMetricsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: ()
   const ts = (v: MetricPoint) => (v?.sampled_at || '').slice(11, 19)
   const cpuData = points.map((p) => ({ t: ts(p), v: Number(p.cpu_usage) }))
   const memData = points.map((p) => ({ t: ts(p), v: Number(p.memory_usage) / 1024 / 1024 }))
+
+  // 入站/出站流量：network_rx/tx 是**累计字节**，换算成速率（B/s → 自动 KB/s、MB/s）
+  const raw = points.map((p) => ({
+    t: ts(p),
+    ts: new Date(String(p.sampled_at || '').replace(' ', 'T')).getTime(),
+    rx: Number(p.network_rx || 0),
+    tx: Number(p.network_tx || 0),
+  }))
+  const rxRate: number[] = [], txRate: number[] = []
+  raw.forEach((cur, i) => {
+    if (i === 0) { rxRate.push(0); txRate.push(0); return }
+    const dt = Math.max(1, (cur.ts - raw[i - 1].ts) / 1000)
+    rxRate.push(Math.max(0, cur.rx - raw[i - 1].rx) / dt)  // 计数器回绕/重启 → 视为 0
+    txRate.push(Math.max(0, cur.tx - raw[i - 1].tx) / dt)
+  })
+  const peak = Math.max(...rxRate, ...txRate, 0)
+  const unit = peak >= 1024 * 1024 ? 'MB/s' : peak >= 1024 ? 'KB/s' : 'B/s'
+  const div = unit === 'MB/s' ? 1024 * 1024 : unit === 'KB/s' ? 1024 : 1
+  const rxData = raw.map((r, i) => ({ t: r.t, v: Number((rxRate[i] / div).toFixed(2)) }))
+  const txData = raw.map((r, i) => ({ t: r.t, v: Number((txRate[i] / div).toFixed(2)) }))
+  const last = raw[raw.length - 1], first = raw[0]
+  const totalRx = last && first ? Math.max(0, last.rx - first.rx) : 0
+  const totalTx = last && first ? Math.max(0, last.tx - first.tx) : 0
+  const fmtBytes = (b: number) => b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)} GB`
+    : b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(2)} MB` : `${(b / 1024).toFixed(1)} KB`
+
   const base = { data: [], xField: 't', yField: 'v', smooth: true, height: 180, animation: false }
   return (
-    <Drawer title={`Pod 监控：${pod.name}`} open={!!pod} onClose={onClose} width={720}>
+    <Drawer title={`容器监控：${pod.name}`} open={!!pod} onClose={onClose} width={720}>
       <Space style={{ marginBottom: 12 }}>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={[
           { value: '1h', label: '1小时' }, { value: '24h', label: '24小时' }, { value: '72h', label: '3天' },
@@ -323,7 +349,20 @@ function PodMetricsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: ()
       {loading ? <Empty description="加载中..." /> : points.length === 0 ? <Empty description="暂无指标数据" /> : (
         <div>
           <div style={{ marginBottom: 16 }}><b>CPU（core）</b><Line {...base} data={cpuData} /></div>
-          <div><b>内存（MB）</b><Line {...base} data={memData} /></div>
+          <div style={{ marginBottom: 16 }}><b>内存（MB）</b><Line {...base} data={memData} /></div>
+          <div style={{ marginBottom: 4 }}>
+            <b>入站流量（{unit}）</b>
+            <span style={{ marginLeft: 8, fontSize: 12, color: '#8c8c8c' }}>区间累计 {fmtBytes(totalRx)}</span>
+          </div>
+          <Line {...base} data={rxData} scale={{ y: { nice: true } }} />
+          <div style={{ margin: '16px 0 4px' }}>
+            <b>出站流量（{unit}）</b>
+            <span style={{ marginLeft: 8, fontSize: 12, color: '#8c8c8c' }}>区间累计 {fmtBytes(totalTx)}</span>
+          </div>
+          <Line {...base} data={txData} scale={{ y: { nice: true } }} />
+          <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
+            说明：流量为容器网卡收发速率（由累计字节差分换算，采样桶间隔 {range === '1h' ? '1 分钟' : range === '24h' ? '5 分钟' : '15 分钟'}）。
+          </div>
         </div>
       )}
     </Drawer>
