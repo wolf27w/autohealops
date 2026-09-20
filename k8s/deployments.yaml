@@ -46,10 +46,16 @@ spec:
             httpGet:
               path: /health
               port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               cpu: 100m
@@ -87,9 +93,17 @@ spec:
                 secretKeyRef:
                   name: api-ops-secrets
                   key: ENCRYPTION_KEY
+          livenessProbe:
+            tcpSocket:
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             tcpSocket:
               port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m
@@ -137,10 +151,20 @@ spec:
                 secretKeyRef:
                   name: api-ops-secrets
                   key: CLAUDE_API_KEY
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               cpu: 200m
@@ -169,3 +193,16 @@ spec:
           image: api-ops/frontend:latest
           ports:
             - containerPort: 80
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -230,7 +230,34 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health_check():
+    """存活探针（liveness）：只判进程存活，不查任何外部依赖，永远快速返回"""
     return {"code": 200, "message": "success", "data": {"status": "ok", "version": "1.0.0"}}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """就绪探针（readiness）：依赖（数据库 / Redis）可用才 200，否则 503（不接流量、不重启）"""
+    from sqlalchemy import text as _text
+
+    from app.core.redis_client import redis_pool
+
+    db_ok = True
+    redis_ok = True
+    try:
+        async with async_session() as s:
+            await s.execute(_text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        db_ok = False
+    try:
+        await redis_pool.ping()
+    except Exception:  # noqa: BLE001
+        redis_ok = False
+    ok = db_ok and redis_ok
+    return JSONResponse(status_code=200 if ok else 503, content={
+        "code": 200 if ok else 503,
+        "message": "success" if ok else "dependencies unavailable",
+        "data": {"status": "ready" if ok else "not_ready", "database": db_ok, "redis": redis_ok},
+    })
 
 
 @app.get("/metrics")

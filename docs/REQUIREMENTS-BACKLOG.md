@@ -293,3 +293,9 @@
 | git 基线 | ✅ `git init` + 首次提交（352 文件），后续改动逐次提交 |
 | 待补 | 本地 Flash 模型接入参数（地址/模型名/协议/key/用途） |
 | 待确认口径 | ①「自动处理」按执行动作数统计（镜像修复/纯恢复自愈不落日志→偏低），是否改按告警条数 ②「诊断失败」现映射为 pending 未转人工，是否单独记录 ③ project_id 过滤后集群数=0（项目是否未绑资源） |
+
+### N4 健康检查 readiness/liveness 拆分 ✅ 2026-09-20
+- api-server：`/health` 为存活（不查依赖）；新增 `/ready` 查 DB+Redis，异常返回 503
+- ai-service：新增 `/live`（存活）与 `/ready`（查 DB + 已配置则查 Redis），中间件放行探活路径
+- `k8s/deployments.yaml`：api-server（live `/health` / ready `/ready`）、ai-service（live `/live` / ready `/ready`）、k8s-executor（补 liveness tcpSocket）、frontend（补 liveness/readiness httpGet `/`）
+- 实测：api-server `/health` 200、`/ready` 200(database/redis=true)；ai-service `/health` `/live` `/ready` 均 200

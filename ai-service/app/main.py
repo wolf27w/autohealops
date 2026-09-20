@@ -32,7 +32,7 @@ async def internal_auth_middleware(request: Request, call_next):
     ai-service 不直接对外，只被 api-server 调用（ai_client 内部直连 / ai_proxy 转发）。
     /health 豁免（容器探活）。
     """
-    if request.url.path in ("/health", "/docs", "/openapi.json"):
+    if request.url.path in ("/health", "/live", "/ready", "/docs", "/openapi.json"):
         return await call_next(request)
     token = request.headers.get("X-Internal-Token", "")
     if not token or token != settings.JWT_SECRET_KEY:
@@ -60,3 +60,40 @@ app.include_router(aux_router)
 @app.get("/health")
 async def health():
     return {"code": 200, "message": "success", "data": {"status": "ok"}}
+
+
+@app.get("/live")
+async def live():
+    """存活探针（liveness）：只判进程存活，不查依赖"""
+    return {"code": 200, "message": "success", "data": {"status": "ok"}}
+
+
+@app.get("/ready")
+async def ready():
+    """就绪探针（readiness）：数据库（以及配置了 REDIS_URL 时的 Redis）可用才 200"""
+    from sqlalchemy import text as _text
+
+    from app.core.database import async_session
+
+    db_ok = True
+    redis_ok = True
+    try:
+        async with async_session() as s:
+            await s.execute(_text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        db_ok = False
+    if getattr(settings, "REDIS_URL", ""):
+        try:
+            import redis.asyncio as aioredis  # noqa: PLC0415
+
+            _r = aioredis.from_url(settings.REDIS_URL)
+            await _r.ping()
+            await _r.aclose()
+        except Exception:  # noqa: BLE001
+            redis_ok = False
+    ok = db_ok and redis_ok
+    return JSONResponse(status_code=200 if ok else 503, content={
+        "code": 200 if ok else 503,
+        "message": "success" if ok else "dependencies unavailable",
+        "data": {"status": "ready" if ok else "not_ready", "database": db_ok, "redis": redis_ok},
+    })
