@@ -88,6 +88,9 @@
 | B2 日志索引两处 | ✅ 消除歧义：**选了日志源以源索引为准**，未选才用规则索引；告警文案显示实际生效索引；前端加提示 |
 | B4 静默窗口两套 | ✅ 保留两层，前端明确「两者任一命中即静默」的优先级说明 |
 | E1 `PROMPT.md` 旧版 | ✅ 删除（归档副本在 backup 目录） |
+| D8 探活重复 | ✅ `platform_health_service.check_dependencies()` 共用（/ready 与 /stats/platform-health） |
+| D7 级别/状态标签 | ✅ 新增 `constants.ts` + 统一用 SeverityTag/StatusTag |
+| E2 文档索引 | ✅ 新增 `docs/README.md`（主账/分册/归档） |
 
 **后续追加清理（同批次）**：
 - D8 健康探活重复 → 抽 `platform_health_service.check_dependencies()`，`/ready` 与 `/stats/platform-health` 共用
@@ -101,7 +104,12 @@
 - 飞书「应用凭证（个人消息）」vs「群机器人 webhook」——职责不同，仅补说明
 - `notification_logs` vs `in_app_messages` —— 渠道发送记录 vs 站内消息，字段相似但语义不同
 - 两服务同名基础模块（es_client/http_client/database/config/security）—— 独立部署的边界，抽共享包收益小于风险
-- 其余各页本地 `interface`（约 14 页）—— 低风险重复，未动
+- 其余各页本地 `interface`（62 个）—— 经脚本核对均为**单页自有视图模型**（跨文件零重复），搬到 types.ts 只是换位置，未动
+- `notification_logs` vs `in_app_messages` 合并 —— **建议不做**（改动大、涉及历史数据迁移风险），保留现结构
+- 两服务同名基础模块抽共享包 —— **建议不做**（会让独立部署的两个服务产生代码耦合）
+- `self_heal_rules`（0 条）—— 保持菜单元件不变（页面自身已说明是「决策覆盖层 + 影子模式」，隐藏反而容易被误认为功能丢失）
+
+> 老板 2026-09-20 13:48 明确：**以上按小吴建议执行（即保留现状，不做这三项改动）**。
 
 ## 建议清理顺序（按性价比）
 
