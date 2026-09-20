@@ -4,13 +4,14 @@ import json
 from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 
 from app.core.database import async_session
 from app.core.redis_client import redis_pool
 from app.middleware.permission import require_any_user
-from app.models import (AICallLog, AIModelConfig, Alert, Approval, Cluster, KnowledgeEntry,
-                        PodMetric, QuotaSnapshot, RepairPlan, ResourceSnapshot)
+from app.models import (AICallLog, AIModelConfig, Alert, Approval, Cluster, DBMetricSnapshot,
+                        DBConnection, ExecutionLog, KnowledgeEntry, PodMetric, ProjectClusterNS,
+                        ProjectDBConnection, QuotaSnapshot, RepairPlan, ResourceSnapshot)
 
 router = APIRouter(prefix="/api/v1/stats")
 
@@ -160,10 +161,41 @@ async def alert_status_distribution(user=Depends(require_any_user)):
     }}
 
 
+# ============ v2 动作分类口径（供 action_stat / action_timeline 使用） ============
+# 依据 RepairPlan.plan_json 步骤命令 + ExecutionLog 实际执行命令 + Alert.status 推导：
+#   - "rollout restart"          → restart（重启）
+#   - "scale"                    → scale（伸缩）
+#   - "rollout undo"/"rollback" 或 status=rolled_back → rollback（回滚）
+#   - 其余修复命令（kubectl delete pod / apply / patch 等）→ self_heal（自愈）
+# 口径假设：仅统计 ExecutionLog 已执行步骤（近一年）；镜像拉取修复、纯「Pod 已恢复」自愈
+#           等无执行日志的自动处理不计入（ExecutionLog.command 即 plan 步骤命令）。
+def _classify_action(command: str, status: str) -> str:
+    cmd = (command or "").lower()
+    if status == "rolled_back" or "rollout undo" in cmd or "rollback" in cmd:
+        return "rollback"
+    if "rollout restart" in cmd:
+        return "restart"
+    if "scale" in cmd:
+        return "scale"
+    return "self_heal"
+
+
 @router.get("/dashboard")
-async def dashboard(user=Depends(require_any_user)):
-    """仪表盘 / 大屏聚合数据（一次拉取，减少往返；Redis 缓存 30s）"""
-    cache_key = "cache:dashboard:v1"
+async def dashboard(
+    range_: str = Query("24h", alias="range"),
+    cluster_id: int | None = Query(None),
+    project_id: int | None = Query(None),
+    user=Depends(require_any_user),
+):
+    """仪表盘 / 大屏聚合数据（一次拉取，减少往返；Redis 缓存 15s）
+
+    v2：新增 health_score/kpi/alert_trend/ai_result_dist/realtime_alerts/abnormal_pods/
+    db_health/action_stat/action_timeline/cluster_waterline 区块。
+    range/cluster_id/project_id 仅作用于新增区块与趋势，不影响原有 core/ai_runtime/trend_* 兜底统计。
+    """
+    cache_key = "cache:dashboard:v2"
+    if range_ != "24h" or cluster_id is not None or project_id is not None:
+        cache_key = f"cache:dashboard:v2:{range_}:{cluster_id if cluster_id is not None else '-'}:{project_id if project_id is not None else '-'}"
     try:
         cached = await redis_pool.get(cache_key)
         if cached:
@@ -225,6 +257,278 @@ async def dashboard(user=Depends(require_any_user)):
         flows = (await session.execute(
             select(Approval).order_by(Approval.id.desc()).limit(12)
         )).scalars().all()
+
+        # ===================== v2 新增区块（受 range/cluster_id/project_id 过滤） =====================
+        # 过滤解析：project_id → 项目绑定集群+命名空间（ProjectClusterNS）；cluster_id 独立。
+        # 过滤仅作用于下方新增区块与趋势，不影响上面已算好的兜底统计。
+        alert_filter_conds: list = []
+        filter_cluster_ids: set[int] | None = None
+        project_db_ids: set[int] | None = None
+        if cluster_id is not None:
+            filter_cluster_ids = {cluster_id}
+            alert_filter_conds.append(Alert.cluster_id == cluster_id)
+        if project_id is not None:
+            pns_rows = (await session.execute(
+                select(ProjectClusterNS.cluster_id, ProjectClusterNS.namespace)
+                .where(ProjectClusterNS.project_id == project_id)
+            )).all()
+            pairs = [(int(cid), ns) for cid, ns in pns_rows]
+            pids = {cid for cid, _ in pairs}
+            filter_cluster_ids = pids if filter_cluster_ids is None else (filter_cluster_ids & pids)
+            if pairs:
+                alert_filter_conds.append(or_(*[
+                    and_(Alert.cluster_id == cid, Alert.namespace == ns) for cid, ns in pairs
+                ]))
+            else:
+                alert_filter_conds.append(text("1=0"))  # 项目无绑定 → 无告警匹配
+            pdb_rows = (await session.execute(
+                select(ProjectDBConnection.db_connection_id)
+                .where(ProjectDBConnection.project_id == project_id)
+            )).all()
+            project_db_ids = {int(x[0]) for x in pdb_rows}
+
+        def _filter(stmt):
+            """给统计语句追加（可选）告警过滤条件（AND）"""
+            return stmt.where(*alert_filter_conds) if alert_filter_conds else stmt
+
+        # 时间窗（趋势/成功率/MTTR 用）
+        range_since = now - timedelta(hours=24)
+        if range_ == "7d":
+            range_since = now - timedelta(days=7)
+        elif range_ == "30d":
+            range_since = now - timedelta(days=30)
+        elif range_ == "90d":
+            range_since = now - timedelta(days=90)
+        elif range_ == "1y":
+            range_since = now - timedelta(days=365)
+        since_1y = now - timedelta(days=365)
+
+        # --- health_score / kpi 基础量 ---
+        clusters_filtered = cluster_rows if filter_cluster_ids is None else [c for c in cluster_rows if c.id in filter_cluster_ids]
+        c_total = len(clusters_filtered)
+        c_healthy = sum(1 for c in clusters_filtered if c.status == "healthy")
+        active_filtered = (await session.execute(
+            _filter(select(func.count()).select_from(Alert).where(
+                Alert.status.in_(["pending", "awaiting_approval"])))
+        )).scalar() or 0
+        manual_filtered = (await session.execute(
+            _filter(select(func.count()).select_from(Alert).where(
+                Alert.manual_required.is_(True),
+                Alert.status.in_(["pending", "awaiting_approval"])))
+        )).scalar() or 0
+
+        # --- DB 异常 / DB 健康（project_id 经 ProjectDBConnection 过滤；cluster_id 不影响 DB） ---
+        db_conns = list((await session.execute(select(DBConnection))).scalars())
+        if project_db_ids is not None:
+            db_conns = [c for c in db_conns if c.id in project_db_ids]
+        db_abnormal = sum(1 for c in db_conns if c.status == "failed")
+
+        db_metric_map: dict[int, dict] = {}
+        if db_conns:
+            wanted = ("connections_used", "max_connections", "connection_usage_pct",
+                      "qps", "tps", "buffer_pool_hit_rate")
+            latest_ids = (
+                select(func.max(DBMetricSnapshot.id).label("mid"))
+                .where(DBMetricSnapshot.metric_name.in_(wanted),
+                       DBMetricSnapshot.db_connection_id.in_([c.id for c in db_conns]))
+                .group_by(DBMetricSnapshot.db_connection_id, DBMetricSnapshot.metric_name)
+            )
+            db_metric_rows = (await session.execute(
+                select(DBMetricSnapshot.db_connection_id, DBMetricSnapshot.metric_name,
+                       DBMetricSnapshot.value, DBMetricSnapshot.sampled_at)
+                .where(DBMetricSnapshot.id.in_(latest_ids))
+            )).all()
+            for cid, mname, val, ts in db_metric_rows:
+                db_metric_map.setdefault(int(cid), {})[mname] = (val, ts)
+
+        db_health = []
+        for c in db_conns:
+            m = db_metric_map.get(c.id, {})
+            def _v(name):
+                item = m.get(name)
+                return item[0] if item else None
+            _ts = [ts for _, ts in m.values() if ts]
+            db_health.append({
+                "id": c.id, "name": c.name, "db_type": c.db_type, "status": c.status,
+                "conn_used": int(_v("connections_used") or 0),
+                "conn_max": int(_v("max_connections") or 0),
+                "usage_pct": round(float(_v("connection_usage_pct") or 0), 2),
+                "qps": round(float(_v("qps") or 0), 2),
+                "tps": round(float(_v("tps") or 0), 2),
+                "cache_hit": round(float(_v("buffer_pool_hit_rate") or 0), 2),
+                "sampled_at": str(max(_ts)) if _ts else "",
+            })
+
+        # --- health_score（集群健康 40% + 活跃告警 30% + DB 健康 30%） ---
+        cluster_score = round(c_healthy / c_total * 100, 1) if c_total else 0.0
+        alert_score = round(max(0.0, 100.0 - active_filtered * 10.0), 1)  # 每 10 条活跃告警扣 10 分
+        db_total = len(db_conns)
+        db_score = round((db_total - db_abnormal) / db_total * 100, 1) if db_total else 100.0
+        health_score = {
+            "total": round(max(0.0, min(100.0, cluster_score * 0.4 + alert_score * 0.3 + db_score * 0.3)), 1),
+            "cluster_score": cluster_score,
+            "alert_score": alert_score,
+            "db_score": db_score,
+        }
+
+        # --- alert_trend（按 range 分桶：24h→小时，7d/30d→天，90d/1y→周） ---
+        if range_ == "24h":
+            bucket_mode = "hour"
+            grp_new = func.date_format(Alert.detected_at, "%Y-%m-%d %H:00")
+            grp_res = func.date_format(Alert.resolved_at, "%Y-%m-%d %H:00")
+        elif range_ in ("7d", "30d"):
+            bucket_mode = "day"
+            grp_new = func.date(Alert.detected_at)
+            grp_res = func.date(Alert.resolved_at)
+        else:  # 90d / 1y
+            bucket_mode = "week"
+            grp_new = func.date_format(Alert.detected_at, "%x-W%v")
+            grp_res = func.date_format(Alert.resolved_at, "%x-W%v")
+
+        new_rows = (await session.execute(
+            _filter(select(grp_new, func.count()).where(Alert.detected_at >= range_since).group_by(grp_new))
+        )).all()
+        resolved_rows = (await session.execute(
+            _filter(select(grp_res, func.count()).where(
+                Alert.resolved_at >= range_since,
+                Alert.status.in_(["resolved", "self_healed"])).group_by(grp_res))
+        )).all()
+        self_healed_rows = (await session.execute(
+            _filter(select(grp_res, func.count()).where(
+                Alert.resolved_at >= range_since,
+                Alert.status == "self_healed").group_by(grp_res))
+        )).all()
+
+        new_map = {str(k): int(c) for k, c in new_rows}
+        resolved_map = {str(k): int(c) for k, c in resolved_rows}
+        self_healed_map = {str(k): int(c) for k, c in self_healed_rows}
+        alert_trend: list = []
+        if bucket_mode == "hour":
+            t = range_since.replace(minute=0, second=0, microsecond=0)
+            while t <= now:
+                bk = t.strftime("%Y-%m-%d %H:00")
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                t += timedelta(hours=1)
+        elif bucket_mode == "day":
+            d = range_since.date()
+            while d <= now.date():
+                bk = d.strftime("%Y-%m-%d")
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                d += timedelta(days=1)
+        else:
+            t = range_since - timedelta(days=range_since.weekday())
+            while t <= now:
+                iso = t.isocalendar()
+                bk = f"{iso[0]}-W{iso[1]:02d}"
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                t += timedelta(days=7)
+
+        # --- ai_result_dist（Alert.status + manual_required 归类） ---
+        # 口径假设：Alert 无显式 failed 状态；
+        #   self_heal=自愈成功 / approval=待审批(未转人工) / manual=已转人工 /
+        #   failed=仍 pending 且未转人工（作为「尚未成功自动处理」兜底桶）。
+        ai_dist = (await session.execute(
+            _filter(select(
+                func.coalesce(func.sum(func.if_(Alert.status == "self_healed", 1, 0)), 0).label("self_heal"),
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "awaiting_approval", Alert.manual_required.is_(False)), 1, 0)), 0).label("approval"),
+                func.coalesce(func.sum(func.if_(Alert.manual_required.is_(True), 1, 0)), 0).label("manual"),
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "pending", Alert.manual_required.is_(False)), 1, 0)), 0).label("failed"),
+            ))
+        )).one()
+        ai_result_dist = [
+            {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},
+            {"key": "approval", "count": int(ai_dist.approval or 0)},
+            {"key": "manual", "count": int(ai_dist.manual or 0)},
+            {"key": "failed", "count": int(ai_dist.failed or 0)},
+        ]
+
+        # --- realtime_alerts（pending/awaiting 倒序 Top15，字段同 recent_alerts） ---
+        realtime_rows = (await session.execute(
+            _filter(select(Alert).where(Alert.status.in_(["pending", "awaiting_approval"]))
+                    .order_by(Alert.detected_at.desc()).limit(15))
+        )).scalars().all()
+        realtime_alerts = [{
+            "id": a.id, "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "resource_name": a.resource_name, "namespace": a.namespace,
+            "fault_type": a.fault_type, "severity": a.severity,
+            "status": a.status, "detected_at": str(a.detected_at),
+        } for a in realtime_rows]
+
+        # --- abnormal_pods（有告警的 Pod Top20） ---
+        abnormal_rows = (await session.execute(
+            _filter(select(Alert).where(Alert.resource_type == "pod")
+                    .order_by(Alert.detected_at.desc()).limit(20))
+        )).scalars().all()
+        abnormal_pods = [{
+            "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "namespace": a.namespace, "pod_name": a.resource_name,
+            "fault_type": a.fault_type, "severity": a.severity,
+            "status": a.status, "detected_at": str(a.detected_at),
+        } for a in abnormal_rows]
+
+        # --- kpi 趋势部分：heal_rate / mttr（随时间范围 + 过滤） ---
+        range_alert_total = (await session.execute(
+            _filter(select(func.count()).select_from(Alert).where(Alert.detected_at >= range_since))
+        )).scalar() or 0
+        range_alert_healed = (await session.execute(
+            _filter(select(func.count()).select_from(Alert).where(
+                Alert.detected_at >= range_since, Alert.status.in_(["resolved", "self_healed"])))
+        )).scalar() or 0
+        mttr_rows = (await session.execute(
+            _filter(select(Alert.detected_at, Alert.resolved_at).where(
+                Alert.resolved_at >= range_since,
+                Alert.resolved_at.isnot(None), Alert.detected_at.isnot(None)).limit(20000))
+        )).all()
+        mttr_durs = [(r.resolved_at - r.detected_at).total_seconds() for r in mttr_rows if r.resolved_at and r.detected_at]
+        kpi_mttr = round(sum(mttr_durs) / len(mttr_durs) / 60, 1) if mttr_durs else 0.0
+        kpi_heal_rate = round(range_alert_healed / range_alert_total, 4) if range_alert_total else 0.0
+
+        # --- action_stat / action_timeline（近一年，按执行日志步骤命令分类） ---
+        exec_join = (
+            select(ExecutionLog, RepairPlan, Alert)
+            .join(RepairPlan, RepairPlan.id == ExecutionLog.plan_id)
+            .join(Alert, Alert.id == RepairPlan.alert_id)
+        )
+        exec_1y_rows = (await session.execute(
+            _filter(exec_join.where(
+                ExecutionLog.completed_at >= since_1y,
+                ExecutionLog.status.in_(["success", "failed", "rolled_back"]),
+            )).limit(50000)
+        )).all()
+        action_stat = {"self_heal": 0, "restart": 0, "scale": 0, "rollback": 0}
+        for elog, _plan, _alert in exec_1y_rows:
+            action_stat[_classify_action(elog.command, elog.status)] += 1
+        auto_processed_1y = sum(action_stat.values())
+
+        timeline_rows = (await session.execute(
+            _filter(exec_join.order_by(ExecutionLog.id.desc()).limit(6))
+        )).all()
+        action_timeline = []
+        for elog, _plan, alert in timeline_rows:
+            ns = (alert.namespace or "").strip()
+            target = f"{ns}/{alert.resource_name}" if ns and alert.resource_name else (alert.resource_name or "")
+            action_timeline.append({
+                "time": str(elog.completed_at or elog.started_at),
+                "action": _classify_action(elog.command, elog.status),
+                "target": target,
+                "status": elog.status,
+            })
+
+        kpi = {
+            "cluster_total": c_total,
+            "alert_pending": active_filtered,
+            "auto_processed_1y": auto_processed_1y,
+            "manual_pending": manual_filtered,
+            "db_abnormal": db_abnormal,
+            "heal_rate": kpi_heal_rate,
+            "mttr_minutes": kpi_mttr,
+        }
 
         # 告警级别分布
         sev_rows = (await session.execute(
@@ -456,6 +760,21 @@ async def dashboard(user=Depends(require_any_user)):
             "last_snapshot": snap_map.get(c.id, ""),
         })
 
+    # v2 集群资源水位 Top（由 cluster_details 派生，按 CPU 水位降序；None 置底）
+    _wl_src = cluster_details if filter_cluster_ids is None else [c for c in cluster_details if c["id"] in filter_cluster_ids]
+    cluster_waterline = sorted(
+        [{
+            "cluster_id": c["id"],
+            "cluster_name": c["name"],
+            "cpu_pct": c["cpu_pct"],
+            "mem_pct": c["mem_pct"],
+            "pods": c["pods"],
+            "alert_pending": c["alert_pending"],
+        } for c in _wl_src],
+        key=lambda x: (x["cpu_pct"] if x["cpu_pct"] is not None else -1.0),
+        reverse=True,
+    )
+
     # 平台健康（Redis）
     redis_ok = True
     try:
@@ -504,10 +823,21 @@ async def dashboard(user=Depends(require_any_user)):
             "id": f.id, "kind": f.kind, "status": f.status,
             "flow_name": f.flow_name, "created_at": str(f.created_at),
         } for f in flows],
+        # ===== v2 新增区块（向后兼容：只增不改不删） =====
+        "health_score": health_score,
+        "kpi": kpi,
+        "alert_trend": alert_trend,
+        "ai_result_dist": ai_result_dist,
+        "realtime_alerts": realtime_alerts,
+        "abnormal_pods": abnormal_pods,
+        "db_health": db_health,
+        "action_stat": action_stat,
+        "action_timeline": action_timeline,
+        "cluster_waterline": cluster_waterline,
         "generated_at": now.isoformat(),
     }
     try:
-        await redis_pool.set(cache_key, json.dumps(payload, ensure_ascii=False, default=str), ex=30)
+        await redis_pool.set(cache_key, json.dumps(payload, ensure_ascii=False, default=str), ex=15)
     except Exception:  # noqa: BLE001
         pass
     return {"code": 200, "message": "success", "data": payload}
