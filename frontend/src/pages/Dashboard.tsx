@@ -1,5 +1,6 @@
-// 仪表盘 v2：6 段布局（项目/集群/时间筛选 + 全局健康分 + 平台健康 + KPI + 趋势/分布 + 实时告警/排行 + 异常 Pod/DB 健康 + 动作统计/时间线 + 集群水位）
-// 数据源：GET /api/v1/stats/dashboard?range&cluster_id&project_id（5s 轮询）+ /stats/platform-health
+// 仪表盘 v2：6 段布局（集群/时间筛选 + 全局健康分 + 平台健康 + KPI + 趋势/分布 + 实时告警/排行 + 异常 Pod/DB 健康 + 动作统计/时间线 + 集群水位）
+// 注：按老板口径只按「集群」维度看，不做项目筛选（项目颗粒度太粗）
+// 数据源：GET /api/v1/stats/dashboard?range|start/end&cluster_id（5s 轮询）+ /stats/platform-health
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -9,7 +10,7 @@ import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined, Thunderbolt
 import { Line, Pie, Bar } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
 import dayjs, { type Dayjs } from 'dayjs'
-import { getDashboard, getPlatformHealth, getProjects } from '../services/api'
+import { getDashboard, getPlatformHealth } from '../services/api'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 import { ALERT_STATUS_LABEL } from '../constants'
@@ -37,11 +38,6 @@ const clampPct = (v: number | null | undefined) =>
   v === null || v === undefined ? undefined : Math.max(0, Math.min(100, v))
 const fmtTime = (t: string | null | undefined) => (t ? String(t).slice(5, 16) : '-')
 
-interface ProjectOption {
-  id: number
-  name: string
-}
-
 export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
   // 时间范围：快捷预设（10m/3h/8h/24h，随最新滑动）或自定义起止时间
@@ -64,7 +60,6 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}`
     : (preset === '10m' ? '最近 10 分钟' : preset === '3h' ? '最近 3 小时' : preset === '8h' ? '最近 8 小时' : '最近 24 小时')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
-  const [projectId, setProjectId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
 
   useEffect(() => {
@@ -77,12 +72,6 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     else document.documentElement.requestFullscreen?.()
   }
 
-  // 项目列表（下拉筛选）
-  const { data: projects = [] } = useQuery<ProjectOption[]>({
-    queryKey: ['projects'],
-    queryFn: () => getProjects() as Promise<ProjectOption[]>,
-  })
-
   // 平台健康（右上角小标，独立接口）
   const { data: platformHealth } = useQuery({
     queryKey: ['platform-health'],
@@ -92,14 +81,14 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
 
   // 仪表盘主数据（5s 轮询；筛选变化自动重查）
   const { data, isFetching, refetch } = useQuery<DashboardData>({
-    queryKey: ['dashboard-v2', preset, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId, projectId],
+    queryKey: ['dashboard-v2', preset, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
     queryFn: () => (customRange
       ? getDashboard({
           start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
           end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
-          cluster_id: clusterId, project_id: projectId,
+          cluster_id: clusterId,
         })
-      : getDashboard({ range: preset, cluster_id: clusterId, project_id: projectId })),
+      : getDashboard({ range: preset, cluster_id: clusterId })),
     refetchInterval: 5000,
   })
 
@@ -166,12 +155,6 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <span style={{ fontSize: 16, fontWeight: 600, marginRight: 4 }}>仪表盘</span>
           <Space size={8} wrap>
-            <Select
-              allowClear placeholder="全部项目" style={{ width: 160 }}
-              value={projectId}
-              onChange={(v) => setProjectId(v)}
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
-            />
             <Select
               allowClear placeholder="全部集群" style={{ width: 160 }}
               value={clusterId}

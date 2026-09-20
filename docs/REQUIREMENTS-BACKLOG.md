@@ -463,3 +463,8 @@
 - 后端 `/stats/dashboard` 新增 `start` / `end`（YYYY-MM-DD HH:mm[:ss]），与 `range` 二选一时优先用 start/end；趋势/成功率/MTTR/AI 分布均按该窗口统计（含上界）
 - 分桶按跨度自动：≤30min→1min、≤6h→5min、≤12h→15min、≤36h→1h、更长→按天；缓存 key 带上区间参数
 - 实测：17:50-18:05→16 桶(1min)；10:00-12:00→25 桶(5min)；09-18~09-20→3 桶(按天)；预设 10m/3h/8h/24h 正常
+
+### 仪表盘去掉「项目筛选」✅ 2026-09-20（老板：项目颗粒度太粗，按集群看即可）
+- 前端移除项目下拉与相关状态/请求（`getProjects`、`projectId`、queryKey 中的 projectId），保留集群筛选 + 时间段选择
+- 后端 `/stats/dashboard` 仍保留 `project_id` 参数（不影响使用，其它调用方可用）
+- 实测：全集群 → 水位 2 条（测试环境/uat）；`cluster_id=1` → cluster_total=1、水位 1 条

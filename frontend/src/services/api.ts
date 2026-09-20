@@ -213,6 +213,7 @@ export interface DashboardParams {
   start?: string
   end?: string
   cluster_id?: number
+  /** 后端仍支持，但仪表盘按老板口径只按集群维度，不再传项目 */
   project_id?: number
 }
 
