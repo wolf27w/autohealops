@@ -47,6 +47,10 @@ interface DiagnosisResult {
 
 export default function DiagnosticCenter() {
   return (
+    <>
+      <div style={{ marginBottom: 8, color: '#8c8c8c', fontSize: 12 }}>
+        <b>数据库故障诊断</b>：面向数据库连接（指标采集 / 慢 SQL / 巡检报告）。集群故障诊断见「诊断 → 集群故障诊断」；Pod / 应用类见「应用故障诊断」；会话式深挖用「应用诊断助手」。
+      </div>
     <Tabs
       defaultActiveKey="db"
       items={[
@@ -54,6 +58,7 @@ export default function DiagnosticCenter() {
         { key: 'reports', label: '诊断报告与趋势', children: <ReportsTab /> },
       ]}
     />
+    </>
   )
 }
 

@@ -858,19 +858,11 @@ async def ai_dashboard(range_days: int = 7, user=Depends(require_any_user)):
 
 @router.get("/platform-health")
 async def platform_health(user=Depends(require_any_user)):
-    """平台自身健康探活（api-server / 数据库 / Redis）"""
-    db_ok = True
-    redis_ok = True
-    try:
-        async with async_session() as s:
-            await s.execute(text("SELECT 1"))
-    except Exception:  # noqa: BLE001
-        db_ok = False
-    try:
-        await redis_pool.ping()
-    except Exception:  # noqa: BLE001
-        redis_ok = False
+    """平台自身健康探活（api-server / 数据库 / Redis）—— 与 /ready 共用同一探测实现（去重）"""
+    from app.services.platform_health_service import check_dependencies
+
+    dep = await check_dependencies()
     return {"code": 200, "message": "success", "data": {
-        "api_server": True, "database": db_ok, "redis": redis_ok,
+        "api_server": True, "database": dep["database"], "redis": dep["redis"],
         "time": datetime.now().isoformat(),
     }}

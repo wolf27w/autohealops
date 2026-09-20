@@ -89,6 +89,12 @@
 | B4 静默窗口两套 | ✅ 保留两层，前端明确「两者任一命中即静默」的优先级说明 |
 | E1 `PROMPT.md` 旧版 | ✅ 删除（归档副本在 backup 目录） |
 
+**后续追加清理（同批次）**：
+- D8 健康探活重复 → 抽 `platform_health_service.check_dependencies()`，`/ready` 与 `/stats/platform-health` 共用
+- D7 级别/状态标签 → 新增 `frontend/src/constants.ts`（文案）+ 统一用 `SeverityTag`/`StatusTag` 组件（Dashboard 已切换）
+- A3/B3/C5 口径说明 → 在「数据库故障诊断 / 系统设置飞书 / 策略配置」页面写明各自边界，避免看起来像重复
+- E2 文档收敛 → 新增 `docs/README.md` 索引（主账 + 分册 + 历史归档）
+
 **保留未删（经核实后判定：非重复或不建议动）**：
 - `risk_policy` 配置、`prompt_versions` 表+模型（误判，见上）
 - `self_heal_rules`（0 条但是老板 09-10 明确保留的「决策覆盖层」功能）

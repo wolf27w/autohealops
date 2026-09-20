@@ -9,16 +9,15 @@ import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined, Thunderbolt
 import { Line, Pie, Bar } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
 import { getDashboard, getPlatformHealth, getProjects } from '../services/api'
+import SeverityTag from '../components/SeverityTag'
+import StatusTag from '../components/StatusTag'
+import { ALERT_STATUS_LABEL } from '../constants'
 import type {
   DashboardData, HealthScore, RealtimeAlert, AbnormalPod, DbHealthItem,
   ActionTimelineItem, ClusterWaterline,
 } from '../types'
 
-// 告警状态 / 级别 / AI 结果 / 动作标签
-const ALERT_STATUS_LABEL: Record<string, string> = {
-  pending: '待处理', awaiting_approval: '审批中', resolved: '已解决', self_healed: '已自愈',
-}
-const SEV_COLOR: Record<string, string> = { critical: '#ff4d4f', high: '#fa8c16', medium: '#faad14', low: '#8c8c8c' }
+// 告警状态/级别：走公共常量 + SeverityTag/StatusTag 组件（去重）
 const AI_RESULT_META: Record<string, { label: string; color: string }> = {
   self_heal: { label: '可自愈', color: '#52c41a' },
   approval: { label: '需审批', color: '#1677ff' },
@@ -282,8 +281,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 { title: '资源', dataIndex: 'resource_name', ellipsis: true },
                 { title: '命名空间', dataIndex: 'namespace', width: 100, ellipsis: true },
                 { title: '故障', dataIndex: 'fault_type', width: 150, ellipsis: true },
-                { title: '级别', dataIndex: 'severity', width: 72, render: (s: string) => <Tag color={SEV_COLOR[s] || 'default'}>{s}</Tag> },
-                { title: '状态', dataIndex: 'status', width: 86, render: (s: string) => ALERT_STATUS_LABEL[s] || s },
+                { title: '级别', dataIndex: 'severity', width: 72, render: (s: string) => <SeverityTag severity={s} /> },
+                { title: '状态', dataIndex: 'status', width: 86, render: (s: string) => <StatusTag status={s} label={ALERT_STATUS_LABEL[s] || s} /> },
                 { title: '时间', dataIndex: 'detected_at', width: 120, render: fmtTime },
               ]}
             />
@@ -317,8 +316,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 { title: '命名空间', dataIndex: 'namespace', width: 100, ellipsis: true },
                 { title: 'Pod', dataIndex: 'pod_name', ellipsis: true },
                 { title: '故障', dataIndex: 'fault_type', width: 140, ellipsis: true },
-                { title: '级别', dataIndex: 'severity', width: 72, render: (s: string) => <Tag color={SEV_COLOR[s] || 'default'}>{s}</Tag> },
-                { title: '状态', dataIndex: 'status', width: 86, render: (s: string) => ALERT_STATUS_LABEL[s] || s },
+                { title: '级别', dataIndex: 'severity', width: 72, render: (s: string) => <SeverityTag severity={s} /> },
+                { title: '状态', dataIndex: 'status', width: 86, render: (s: string) => <StatusTag status={s} label={ALERT_STATUS_LABEL[s] || s} /> },
                 { title: '时间', dataIndex: 'detected_at', width: 120, render: fmtTime },
               ]}
             />

@@ -252,27 +252,18 @@ async def health_check():
 
 @app.get("/ready")
 async def readiness_check():
-    """就绪探针（readiness）：依赖（数据库 / Redis）可用才 200，否则 503（不接流量、不重启）"""
-    from sqlalchemy import text as _text
+    """就绪探针（readiness）：依赖（数据库 / Redis）可用才 200，否则 503（不接流量、不重启）
 
-    from app.core.redis_client import redis_pool
+    依赖探测逻辑与 /stats/platform-health 共用 platform_health_service.check_dependencies()（去重）。
+    """
+    from app.services.platform_health_service import check_dependencies
 
-    db_ok = True
-    redis_ok = True
-    try:
-        async with async_session() as s:
-            await s.execute(_text("SELECT 1"))
-    except Exception:  # noqa: BLE001
-        db_ok = False
-    try:
-        await redis_pool.ping()
-    except Exception:  # noqa: BLE001
-        redis_ok = False
-    ok = db_ok and redis_ok
+    dep = await check_dependencies()
+    ok = dep["database"] and dep["redis"]
     return JSONResponse(status_code=200 if ok else 503, content={
         "code": 200 if ok else 503,
         "message": "success" if ok else "dependencies unavailable",
-        "data": {"status": "ready" if ok else "not_ready", "database": db_ok, "redis": redis_ok},
+        "data": {"status": "ready" if ok else "not_ready", "database": dep["database"], "redis": dep["redis"]},
     })
 
 

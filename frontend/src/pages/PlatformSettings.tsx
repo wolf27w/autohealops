@@ -61,6 +61,9 @@ export default function PlatformSettings() {
                     ES 日志源已迁移到「日志源」管理页（策略配置 → 日志源），请到那里统一维护；此处配置保留为只读兜底。
                   </div>
                   <Divider orientation="left">飞书应用（个人消息通知）</Divider>
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                    这是<strong>飞书应用凭证</strong>（用于给值班人发<strong>个人消息</strong>与长连接事件）；<strong>群通知渠道</strong>（群机器人 webhook / 卡片）在「通知配置」页维护。两处用途不同，不重复。
+                  </div>
                   <Form.Item name="feishu_app_id" label="飞书 App ID">
                     <Input placeholder="cli_xxxxx" />
                   </Form.Item>
