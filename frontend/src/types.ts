@@ -374,3 +374,19 @@ export interface CustomTask {
   enabled: boolean
   [key: string]: unknown
 }
+
+// ============ 日志源（ES 多实例） ============
+export interface LogSource {
+  id: number
+  name: string
+  es_url: string
+  index_pattern: string
+  username: string
+  has_password: boolean
+  is_default: boolean
+  enabled: boolean
+  created_by?: number
+  created_at?: string
+  updated_at?: string
+  [key: string]: unknown
+}

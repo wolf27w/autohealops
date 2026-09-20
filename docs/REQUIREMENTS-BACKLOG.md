@@ -335,3 +335,11 @@
 - 默认策略补 `PodRestartOOM`/`PodRestartProbeFail`（B 类，high）
 - 验证：go build / py_compile ✅；executor 重启后 RPC 正常（集群1 781 Pod、310 有重启；集群2 95 Pod、4 有重启）；无 UNIMPLEMENTED；扫描循环已启动；首轮只建基线不报（符合预期，无告警风暴）
 - 已知小缺口：Pod 被删除/缩容时其在途告警不会自动关闭（后续可补「快照外 Pod 告警回收」）
+
+### N7 日志源自定义（多实例）+ 与系统设置去重 ✅ 2026-09-20
+- 新增 `log_sources` 表（name/es_url/index_pattern/username/password_encrypted/is_default/enabled）+ CRUD/测试连通性 API + 前端「日志源」页（策略配置 → 日志源）
+- 日志告警规则加 `log_source_id`（空=默认源）；日志查询支持 `log_source_id`
+- **去重（老板口径）**：系统设置「可观测性」里的 ES 四项退休（前端表单移除、后端 DEPRECATED_KEYS 只读兜底）；首次读取日志源列表时**自动把 system_settings.es_* 导入为「默认日志源」**；解析顺序 log_sources.is_default → 回退 system_settings（存量规则/查询不受影响）
+- 密码 AES-256-GCM 加密存储，列表只回 `has_password`
+- 迁移 `h1i2j3k4l5m6` **已执行**（head）；实测接口 200 且已自动生成默认源（127.0.0.1:9200 / k8s-* / demo）
+- 备注：`/logs/search` 由代理 ai-service 改为 api-server 直查 ES（支持多源；结果一致）

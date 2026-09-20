@@ -17,6 +17,7 @@ class LogAlertRule(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     cluster_id: Mapped[int] = mapped_column(Integer, default=0)  # 绑定集群（0=全局）
     index_pattern: Mapped[str] = mapped_column(String(200), nullable=False)  # ES 索引，如 app-* / nginx-*
+    log_source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 日志源（空=默认源）
     keywords: Mapped[str] = mapped_column(Text, nullable=False)  # JSON 数组，命中任一计数
     namespace_filter: Mapped[str] = mapped_column(String(100), default="")  # 可选限定 namespace
     time_window: Mapped[int] = mapped_column(Integer, default=5)   # 统计窗口（分钟）

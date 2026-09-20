@@ -9,7 +9,7 @@ import {
   BookOutlined, AuditOutlined, BarChartOutlined, UserOutlined,
   SettingOutlined, LogoutOutlined, DownOutlined, ExperimentOutlined, MedicineBoxOutlined, KeyOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -42,6 +42,7 @@ const menuItems: MenuProps['items'] = [
     label: '策略配置', key: 'g-policy',
     children: [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
+      { key: '/log-sources', icon: <DatabaseOutlined />, label: '日志源' },
       { key: '/ai-models', icon: <RobotOutlined />, label: 'AI配置' },
       { key: '/knowledge', icon: <BookOutlined />, label: '知识库' },
     ],

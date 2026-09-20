@@ -54,18 +54,9 @@ export default function PlatformSettings() {
                     <Input placeholder="http://prometheus:9090" />
                   </Form.Item>
                   <Divider orientation="left">日志（Elasticsearch）</Divider>
-                  <Form.Item name="es_url" label="ES 地址">
-                    <Input placeholder="http://es:9200" />
-                  </Form.Item>
-                  <Form.Item name="es_index_pattern" label="日志索引模式">
-                    <Input placeholder="k8s-*" />
-                  </Form.Item>
-                  <Form.Item name="es_username" label="ES 用户名（可选）">
-                    <Input />
-                  </Form.Item>
-                  <Form.Item name="es_password" label="ES 密码（可选）">
-                    <Input.Password />
-                  </Form.Item>
+                  <div style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>
+                    ES 日志源已迁移到「日志源」管理页（策略配置 → 日志源），请到那里统一维护；此处配置保留为只读兜底。
+                  </div>
                   <Divider orientation="left">飞书应用（个人消息通知）</Divider>
                   <Form.Item name="feishu_app_id" label="飞书 App ID">
                     <Input placeholder="cli_xxxxx" />

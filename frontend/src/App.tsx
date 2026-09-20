@@ -34,6 +34,7 @@ import AuditTrace from './pages/AuditTrace'
 import StatsDashboard from './pages/StatsDashboard'
 import UserManagement from './pages/UserManagement'
 import PlatformSettings from './pages/PlatformSettings'
+import LogSources from './pages/LogSources'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -84,6 +85,7 @@ export default function App() {
         <Route path="ai-models" element={<RequireRole role="admin"><AIConfig /></RequireRole>} />
         <Route path="prompts" element={<RequireRole role="admin"><PromptTemplates /></RequireRole>} />
         <Route path="alert-policies" element={<RequireRole role="admin"><AlertPolicies /></RequireRole>} />
+        <Route path="log-sources" element={<RequireRole role="admin"><LogSources /></RequireRole>} />
         <Route path="self-heal-rules" element={<RequireRole role="admin"><SelfHealRules /></RequireRole>} />
         <Route path="executions/:planId" element={<ExecutionDetail />} />
         <Route path="batch" element={<BatchOperation />} />

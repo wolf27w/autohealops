@@ -39,7 +39,8 @@ async def scan_log_alerts() -> int:
                 continue
 
             m = await es_client.count_log_matches(
-                rule.index_pattern, keywords, rule.time_window, rule.namespace_filter
+                rule.index_pattern, keywords, rule.time_window, rule.namespace_filter,
+                log_source_id=rule.log_source_id,
             )
             if m.get("count", 0) < rule.threshold:
                 continue

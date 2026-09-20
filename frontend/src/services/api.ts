@@ -3,7 +3,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
-  FaultDiagnosisItem, KnowledgeEntry, NotificationConfig, OpResult, PageParams, PageResult, PlatformHealth, User, Workload,
+  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, OpResult, PageParams, PageResult, PlatformHealth, User, Workload,
 } from '../types'
 
 const api = axios.create({
@@ -274,6 +274,14 @@ export const getLogAlertRules = () => http.get('/log-alert-rules')
 export const createLogAlertRule = (data: Payload) => http.post('/log-alert-rules', data)
 export const updateLogAlertRule = (id: number, data: Payload) => http.put(`/log-alert-rules/${id}`, data)
 export const deleteLogAlertRule = (id: number) => http.delete(`/log-alert-rules/${id}`)
+
+// ============ 日志源（ES 多实例） ============
+export const getLogSources = () => http.get<LogSource[]>('/log-sources')
+export const createLogSource = (data: Payload) => http.post<LogSource>('/log-sources', data)
+export const updateLogSource = (id: number, data: Payload) => http.put<LogSource>(`/log-sources/${id}`, data)
+export const deleteLogSource = (id: number) => http.delete(`/log-sources/${id}`)
+export const testLogSource = (data: Payload) => http.post<{ success: boolean; message: string; status_code: number }>('/log-sources/test', data)
+export const testLogSourceById = (id: number) => http.post<{ success: boolean; message: string; status_code: number }>(`/log-sources/${id}/test`)
 
 // ============ 值班排班 ============
 export const getOnDuty = () => http.get('/on-duty')
