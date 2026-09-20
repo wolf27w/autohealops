@@ -87,6 +87,9 @@ DEFAULT_POLICIES = [
     # 数据库告警：B=直接报（不自动修复，统一走告警策略通知/分派）
     {"fault_type": "DBConnFailed", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
     {"fault_type": "DBAuthFailed", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
+    # N5：Pod 重启原因 AI 诊断（检测侧闭环：诊断+通知，不自动修复、不走审批）
+    {"fault_type": "PodRestartOOM", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
+    {"fault_type": "PodRestartProbeFail", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
 ]
 
 

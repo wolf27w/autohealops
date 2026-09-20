@@ -501,10 +501,22 @@ async def dashboard(
                 ExecutionLog.status.in_(["success", "failed", "rolled_back"]),
             )).limit(50000)
         )).all()
+        # 只统计「成功执行」的动作；失败动作单列 action_failed（不计入自动处理）
         action_stat = {"self_heal": 0, "restart": 0, "scale": 0, "rollback": 0}
-        for elog, _plan, _alert in exec_1y_rows:
-            action_stat[_classify_action(elog.command, elog.status)] += 1
-        auto_processed_1y = sum(action_stat.values())
+        action_failed = 0
+        acted_alert_ids: set[int] = set()
+        for elog, _plan, alert in exec_1y_rows:
+            if elog.status == "success":
+                action_stat[_classify_action(elog.command, elog.status)] += 1
+                if alert is not None and alert.id:
+                    acted_alert_ids.add(alert.id)
+            else:
+                action_failed += 1
+        # 自动处理（近一年）= 自愈告警数 ∪ 有成功执行动作的告警数（按告警去重）
+        healed_1y_ids = (await session.execute(
+            _filter(select(Alert.id).where(Alert.detected_at >= since_1y, Alert.status == "self_healed").limit(50000))
+        )).scalars().all()
+        auto_processed_1y = len(set(healed_1y_ids) | acted_alert_ids)
 
         timeline_rows = (await session.execute(
             _filter(exec_join.order_by(ExecutionLog.id.desc()).limit(6))
@@ -832,6 +844,7 @@ async def dashboard(
         "abnormal_pods": abnormal_pods,
         "db_health": db_health,
         "action_stat": action_stat,
+        "action_failed": action_failed,
         "action_timeline": action_timeline,
         "cluster_waterline": cluster_waterline,
         "generated_at": now.isoformat(),

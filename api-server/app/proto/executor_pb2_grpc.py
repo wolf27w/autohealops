@@ -105,6 +105,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.ListDeploymentPodsRequest.SerializeToString,
                 response_deserializer=executor__pb2.ListDeploymentPodsResponse.FromString,
                 _registered_method=True)
+        self.ListPodRestartInfo = channel.unary_unary(
+                '/executor.ExecutorService/ListPodRestartInfo',
+                request_serializer=executor__pb2.ListPodRestartInfoRequest.SerializeToString,
+                response_deserializer=executor__pb2.ListPodRestartInfoResponse.FromString,
+                _registered_method=True)
         self.QueryPrometheus = channel.unary_unary(
                 '/executor.ExecutorService/QueryPrometheus',
                 request_serializer=executor__pb2.QueryPrometheusRequest.SerializeToString,
@@ -274,6 +279,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListPodRestartInfo(self, request, context):
+        """列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断的检测数据源）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def QueryPrometheus(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -431,6 +443,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.ListDeploymentPods,
                     request_deserializer=executor__pb2.ListDeploymentPodsRequest.FromString,
                     response_serializer=executor__pb2.ListDeploymentPodsResponse.SerializeToString,
+            ),
+            'ListPodRestartInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListPodRestartInfo,
+                    request_deserializer=executor__pb2.ListPodRestartInfoRequest.FromString,
+                    response_serializer=executor__pb2.ListPodRestartInfoResponse.SerializeToString,
             ),
             'QueryPrometheus': grpc.unary_unary_rpc_method_handler(
                     servicer.QueryPrometheus,
@@ -877,6 +894,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/ListDeploymentPods',
             executor__pb2.ListDeploymentPodsRequest.SerializeToString,
             executor__pb2.ListDeploymentPodsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListPodRestartInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ListPodRestartInfo',
+            executor__pb2.ListPodRestartInfoRequest.SerializeToString,
+            executor__pb2.ListPodRestartInfoResponse.FromString,
             options,
             channel_credentials,
             insecure,

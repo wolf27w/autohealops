@@ -320,3 +320,10 @@
 - 修复（`alert_auto_service.py`）：① 待审批告警若已有在途（pending）审批单 → 直接跳过（恢复关闭逻辑在此之前，不受影响）② 建单前二次校验已有在途单则不再建，仅对齐告警状态
 - 数据修正：502 的 101 张单 → 2 张 approved + 99 张 cancelled；告警 502 → resolved。备份 `logs/archive/approvals_alert502_dups_backup_20260920.json`
 - 验证：api-server 重启后 >45s 无新增审批单，pending 审批 0
+
+### 仪表盘 KPI 口径修正 ✅ 2026-09-20
+- 问题：`auto_processed_1y` 原按执行日志**全部状态**计数（含 184 条 failed）→ 「自动处理 195」虚高
+- 修正：`action_stat` 只统计**成功执行**的动作；失败单列 `action_failed`；`auto_processed_1y` = 近一年「自愈告警数 ∪ 有成功执行动作的告警数」（按告警去重）
+- 实测：auto_processed_1y 195 → **144**（142 自愈 + 2 有成功执行动作）；action_stat self_heal=15；action_failed=182
+- 项目筛选核查：项目 1 不存在（库里唯一项目 = #8 demo，绑 cluster 2 / ns jenkins）→ 之前「project_id=1 集群数 0」非 bug
+- 待老板确认：是否改为纯「自愈告警条数」口径

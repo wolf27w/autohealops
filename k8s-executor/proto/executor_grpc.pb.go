@@ -35,6 +35,7 @@ const (
 	ExecutorService_GetDeploymentStatus_FullMethodName   = "/executor.ExecutorService/GetDeploymentStatus"
 	ExecutorService_ExecInPod_FullMethodName             = "/executor.ExecutorService/ExecInPod"
 	ExecutorService_ListDeploymentPods_FullMethodName    = "/executor.ExecutorService/ListDeploymentPods"
+	ExecutorService_ListPodRestartInfo_FullMethodName    = "/executor.ExecutorService/ListPodRestartInfo"
 	ExecutorService_QueryPrometheus_FullMethodName       = "/executor.ExecutorService/QueryPrometheus"
 	ExecutorService_GetPodLogs_FullMethodName            = "/executor.ExecutorService/GetPodLogs"
 	ExecutorService_GetPodYaml_FullMethodName            = "/executor.ExecutorService/GetPodYaml"
@@ -84,6 +85,8 @@ type ExecutorServiceClient interface {
 	ExecInPod(ctx context.Context, in *ExecInPodRequest, opts ...grpc.CallOption) (*ExecInPodResponse, error)
 	// 列出 Deployment 所有 Pod 状态（验证修复是否真正恢复，区分新旧版本副本）
 	ListDeploymentPods(ctx context.Context, in *ListDeploymentPodsRequest, opts ...grpc.CallOption) (*ListDeploymentPodsResponse, error)
+	// 列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断的检测数据源）
+	ListPodRestartInfo(ctx context.Context, in *ListPodRestartInfoRequest, opts ...grpc.CallOption) (*ListPodRestartInfoResponse, error)
 	QueryPrometheus(ctx context.Context, in *QueryPrometheusRequest, opts ...grpc.CallOption) (*QueryPrometheusResponse, error)
 	// 查看 Pod 容器日志（logs）
 	GetPodLogs(ctx context.Context, in *GetPodLogsRequest, opts ...grpc.CallOption) (*GetPodLogsResponse, error)
@@ -272,6 +275,16 @@ func (c *executorServiceClient) ListDeploymentPods(ctx context.Context, in *List
 	return out, nil
 }
 
+func (c *executorServiceClient) ListPodRestartInfo(ctx context.Context, in *ListPodRestartInfoRequest, opts ...grpc.CallOption) (*ListPodRestartInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPodRestartInfoResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ListPodRestartInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) QueryPrometheus(ctx context.Context, in *QueryPrometheusRequest, opts ...grpc.CallOption) (*QueryPrometheusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(QueryPrometheusResponse)
@@ -439,6 +452,8 @@ type ExecutorServiceServer interface {
 	ExecInPod(context.Context, *ExecInPodRequest) (*ExecInPodResponse, error)
 	// 列出 Deployment 所有 Pod 状态（验证修复是否真正恢复，区分新旧版本副本）
 	ListDeploymentPods(context.Context, *ListDeploymentPodsRequest) (*ListDeploymentPodsResponse, error)
+	// 列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断的检测数据源）
+	ListPodRestartInfo(context.Context, *ListPodRestartInfoRequest) (*ListPodRestartInfoResponse, error)
 	QueryPrometheus(context.Context, *QueryPrometheusRequest) (*QueryPrometheusResponse, error)
 	// 查看 Pod 容器日志（logs）
 	GetPodLogs(context.Context, *GetPodLogsRequest) (*GetPodLogsResponse, error)
@@ -510,6 +525,9 @@ func (UnimplementedExecutorServiceServer) ExecInPod(context.Context, *ExecInPodR
 }
 func (UnimplementedExecutorServiceServer) ListDeploymentPods(context.Context, *ListDeploymentPodsRequest) (*ListDeploymentPodsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDeploymentPods not implemented")
+}
+func (UnimplementedExecutorServiceServer) ListPodRestartInfo(context.Context, *ListPodRestartInfoRequest) (*ListPodRestartInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPodRestartInfo not implemented")
 }
 func (UnimplementedExecutorServiceServer) QueryPrometheus(context.Context, *QueryPrometheusRequest) (*QueryPrometheusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryPrometheus not implemented")
@@ -809,6 +827,24 @@ func _ExecutorService_ListDeploymentPods_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_ListPodRestartInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPodRestartInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ListPodRestartInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ListPodRestartInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ListPodRestartInfo(ctx, req.(*ListPodRestartInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_QueryPrometheus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QueryPrometheusRequest)
 	if err := dec(in); err != nil {
@@ -1086,6 +1122,10 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDeploymentPods",
 			Handler:    _ExecutorService_ListDeploymentPods_Handler,
+		},
+		{
+			MethodName: "ListPodRestartInfo",
+			Handler:    _ExecutorService_ListPodRestartInfo_Handler,
 		},
 		{
 			MethodName: "QueryPrometheus",

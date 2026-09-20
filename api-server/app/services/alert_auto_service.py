@@ -632,6 +632,12 @@ async def _process_one(alert: Alert) -> bool:
     if alert.resource_type == "db":
         return False
 
+    # N5：Pod 重启原因 AI 诊断告警（检测侧已完成「诊断 + 通知」闭环），
+    # 此处不自动修复、不走审批、不转人工，直接跳过（防误入审批分支）。
+    from app.services.pod_restart_service import POD_RESTART_FAULT_TYPES
+    if alert.fault_type in POD_RESTART_FAULT_TYPES:
+        return False
+
     # 🟠 转人工类（批三）：镜像名/镜像策略/镜像仓库问题，平台不自动处理，直接转人工
     if alert.fault_type in ("InvalidImageName", "ErrImageNeverPull", "ImageInspectError", "RegistryUnavailable"):
         await _mark_manual_and_notify(

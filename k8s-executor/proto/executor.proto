@@ -35,6 +35,8 @@ service ExecutorService {
   rpc ExecInPod(ExecInPodRequest) returns (ExecInPodResponse);
   // 列出 Deployment 所有 Pod 状态（验证修复是否真正恢复，区分新旧版本副本）
   rpc ListDeploymentPods(ListDeploymentPodsRequest) returns (ListDeploymentPodsResponse);
+  // 列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断的检测数据源）
+  rpc ListPodRestartInfo(ListPodRestartInfoRequest) returns (ListPodRestartInfoResponse);
 
   rpc QueryPrometheus(QueryPrometheusRequest) returns (QueryPrometheusResponse);
 
@@ -255,6 +257,32 @@ message ListDeploymentPodsResponse {
   repeated DeploymentPodInfo pods = 2;
   bool all_ready = 3;      // 所有 Pod 都 Running+Ready（含新版本副本）
   string message = 4;
+}
+
+// ---------- ListPodRestartInfo（N5 重启原因诊断数据源） ----------
+message ListPodRestartInfoRequest {
+  int64 cluster_id = 1;
+}
+message ContainerRestartInfo {
+  string name = 1;
+  int32 restart_count = 2;
+  string last_terminated_reason = 3;   // OOMKilled / Error / ...（上次终止原因）
+  int32 last_terminated_exit_code = 4; // 上次终止退出码
+  string last_terminated_message = 5;  // 上次终止消息
+}
+message PodRestartInfo {
+  string namespace = 1;
+  string name = 2;
+  int32 restart_count = 3;      // 全部容器重启次数之和
+  string restarted_at = 4;      // kubectl.kubernetes.io/restartedAt 注解值（空=无，手动重启标记）
+  string phase = 5;             // Running/Pending/...
+  bool ready = 6;               // 所有容器 Ready
+  repeated ContainerRestartInfo containers = 7;
+}
+message ListPodRestartInfoResponse {
+  bool success = 1;
+  repeated PodRestartInfo pods = 2;
+  string error = 3;
 }
 
 // ---------- QueryPrometheus（集群内 Prometheus 查询代理，port-forward） ----------

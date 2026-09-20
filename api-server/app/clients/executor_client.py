@@ -239,6 +239,35 @@ class ExecutorClient:
             logger.error("list_deployment_pods 失败: %s", e)
             return {"success": False, "pods": [], "all_ready": False, "message": str(e)}
 
+    def list_pod_restart_info(self, cluster_id: int, trace_id: str = "") -> dict:
+        """列出集群全部 Pod 的重启信息（N5 重启原因 AI 诊断检测数据源）
+
+        返回 {success, pods: [{namespace, name, restart_count, restarted_at, phase, ready,
+                               containers: [{name, restart_count, last_terminated_reason,
+                                             last_terminated_exit_code, last_terminated_message}]}], error}
+        """
+        try:
+            resp = _get_stub().ListPodRestartInfo(
+                executor_pb2.ListPodRestartInfoRequest(cluster_id=cluster_id),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            pods = [{
+                "namespace": p.namespace, "name": p.name,
+                "restart_count": p.restart_count, "restarted_at": p.restarted_at,
+                "phase": p.phase, "ready": p.ready,
+                "containers": [{
+                    "name": c.name, "restart_count": c.restart_count,
+                    "last_terminated_reason": c.last_terminated_reason,
+                    "last_terminated_exit_code": c.last_terminated_exit_code,
+                    "last_terminated_message": c.last_terminated_message,
+                } for c in p.containers],
+            } for p in resp.pods]
+            return {"success": resp.success, "pods": pods, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_pod_restart_info 失败: %s", e)
+            return {"success": False, "pods": [], "error": str(e)}
+
     def collect_quota(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> bool:
         try:
             resp = _get_stub().CollectQuota(

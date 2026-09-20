@@ -295,6 +295,36 @@ func (s *Server) ListDeploymentPods(ctx context.Context, req *pb.ListDeploymentP
 	return &pb.ListDeploymentPodsResponse{Success: true, Pods: infos, AllReady: allReady, Message: "ok"}, nil
 }
 
+// ListPodRestartInfo 列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断检测数据源）
+func (s *Server) ListPodRestartInfo(ctx context.Context, req *pb.ListPodRestartInfoRequest) (*pb.ListPodRestartInfoResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListPodRestartInfoResponse{Success: false, Error: err.Error()}, nil
+	}
+	infos, err := ex.ListPodRestartInfo(ctx)
+	if err != nil {
+		return &pb.ListPodRestartInfoResponse{Success: false, Error: err.Error()}, nil
+	}
+	pods := make([]*pb.PodRestartInfo, 0, len(infos))
+	for _, p := range infos {
+		pi := &pb.PodRestartInfo{
+			Namespace: p.Namespace, Name: p.Name, RestartCount: p.RestartCount,
+			RestartedAt: p.RestartedAt, Phase: p.Phase, Ready: p.Ready,
+		}
+		for _, c := range p.Containers {
+			pi.Containers = append(pi.Containers, &pb.ContainerRestartInfo{
+				Name:                   c.Name,
+				RestartCount:           c.RestartCount,
+				LastTerminatedReason:   c.LastTerminatedReason,
+				LastTerminatedExitCode: c.LastTerminatedExitCode,
+				LastTerminatedMessage:  c.LastTerminatedMessage,
+			})
+		}
+		pods = append(pods, pi)
+	}
+	return &pb.ListPodRestartInfoResponse{Success: true, Pods: pods}, nil
+}
+
 // GetPodLogs 查看 Pod 容器日志
 func (s *Server) GetPodLogs(ctx context.Context, req *pb.GetPodLogsRequest) (*pb.GetPodLogsResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)

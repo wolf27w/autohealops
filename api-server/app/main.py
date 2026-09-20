@@ -186,6 +186,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("数据库连接告警扫描启动失败: %s", e)
 
+    # Pod 重启原因 AI 诊断告警扫描（N5：每 60 秒，重启增量 → OOM/探针 → 诊断+通知，不审批）
+    try:
+        from app.services.pod_restart_service import background_loop as pod_restart_loop
+        _pod_restart_task = asyncio.create_task(pod_restart_loop())
+        logger.info("Pod 重启原因诊断扫描已启动（每 60 秒，OOM/探针失败 → AI 诊断 → 通知，不审批）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Pod 重启原因诊断扫描启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

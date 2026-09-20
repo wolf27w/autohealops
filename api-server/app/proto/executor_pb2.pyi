@@ -1,8 +1,7 @@
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from collections.abc import Iterable as _Iterable, Mapping as _Mapping
-from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
+from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -18,7 +17,7 @@ class StartWatchResponse(_message.Message):
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     success: bool
     message: str
-    def __init__(self, success: _Optional[bool] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., message: _Optional[str] = ...) -> None: ...
 
 class StopWatchRequest(_message.Message):
     __slots__ = ("cluster_id",)
@@ -32,7 +31,7 @@ class StopWatchResponse(_message.Message):
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     success: bool
     message: str
-    def __init__(self, success: _Optional[bool] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., message: _Optional[str] = ...) -> None: ...
 
 class ExecuteCommandRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "command", "trace_id")
@@ -54,7 +53,7 @@ class ExecuteCommandResponse(_message.Message):
     success: bool
     output: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class ExecutePlanRequest(_message.Message):
     __slots__ = ("cluster_id", "plan_id", "plan_json", "trace_id")
@@ -86,7 +85,7 @@ class ExecutePlanResponse(_message.Message):
     finished: bool
     circuit_triggered: bool
     rollback_command: str
-    def __init__(self, step_index: _Optional[int] = ..., step_command: _Optional[str] = ..., success: _Optional[bool] = ..., output: _Optional[str] = ..., message: _Optional[str] = ..., finished: _Optional[bool] = ..., circuit_triggered: _Optional[bool] = ..., rollback_command: _Optional[str] = ...) -> None: ...
+    def __init__(self, step_index: _Optional[int] = ..., step_command: _Optional[str] = ..., success: bool = ..., output: _Optional[str] = ..., message: _Optional[str] = ..., finished: bool = ..., circuit_triggered: bool = ..., rollback_command: _Optional[str] = ...) -> None: ...
 
 class RollbackPlanRequest(_message.Message):
     __slots__ = ("cluster_id", "plan_id", "plan_json", "trace_id")
@@ -108,7 +107,7 @@ class RollbackPlanResponse(_message.Message):
     success: bool
     message: str
     executed_rollbacks: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, success: _Optional[bool] = ..., message: _Optional[str] = ..., executed_rollbacks: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., executed_rollbacks: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class HealthCheckRequest(_message.Message):
     __slots__ = ("cluster_id", "trace_id")
@@ -128,7 +127,7 @@ class HealthCheckResponse(_message.Message):
     status: str
     version: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., status: _Optional[str] = ..., version: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., status: _Optional[str] = ..., version: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class CollectQuotaRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "trace_id")
@@ -146,7 +145,7 @@ class CollectQuotaResponse(_message.Message):
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     success: bool
     message: str
-    def __init__(self, success: _Optional[bool] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., message: _Optional[str] = ...) -> None: ...
 
 class RunScriptRequest(_message.Message):
     __slots__ = ("cluster_id", "script_content", "parameters", "task_id", "trace_id")
@@ -170,7 +169,7 @@ class RunScriptResponse(_message.Message):
     success: bool
     output: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class BatchExecuteRequest(_message.Message):
     __slots__ = ("cluster_ids", "namespace", "command", "trace_id")
@@ -194,7 +193,7 @@ class BatchExecuteResponse(_message.Message):
     success: bool
     output: str
     error: str
-    def __init__(self, cluster_id: _Optional[int] = ..., success: _Optional[bool] = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, cluster_id: _Optional[int] = ..., success: bool = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class GetPodStatusRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "pod_name")
@@ -218,7 +217,7 @@ class ContainerStatusInfo(_message.Message):
     ready: bool
     restart_count: int
     reason: str
-    def __init__(self, name: _Optional[str] = ..., state: _Optional[str] = ..., ready: _Optional[bool] = ..., restart_count: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., state: _Optional[str] = ..., ready: bool = ..., restart_count: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class GetPodStatusResponse(_message.Message):
     __slots__ = ("success", "phase", "ready", "restart_count", "message", "container_statuses")
@@ -234,7 +233,7 @@ class GetPodStatusResponse(_message.Message):
     restart_count: int
     message: str
     container_statuses: _containers.RepeatedCompositeFieldContainer[ContainerStatusInfo]
-    def __init__(self, success: _Optional[bool] = ..., phase: _Optional[str] = ..., ready: _Optional[bool] = ..., restart_count: _Optional[int] = ..., message: _Optional[str] = ..., container_statuses: _Optional[_Iterable[_Union[ContainerStatusInfo, _Mapping]]] = ...) -> None: ...
+    def __init__(self, success: bool = ..., phase: _Optional[str] = ..., ready: bool = ..., restart_count: _Optional[int] = ..., message: _Optional[str] = ..., container_statuses: _Optional[_Iterable[_Union[ContainerStatusInfo, _Mapping]]] = ...) -> None: ...
 
 class RepairImagePullRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "pod_name")
@@ -254,7 +253,7 @@ class RepairImagePullResponse(_message.Message):
     success: bool
     message: str
     fixed: bool
-    def __init__(self, success: _Optional[bool] = ..., message: _Optional[str] = ..., fixed: _Optional[bool] = ...) -> None: ...
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., fixed: bool = ...) -> None: ...
 
 class GetDeploymentStatusRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "deployment_name")
@@ -278,7 +277,7 @@ class GetDeploymentStatusResponse(_message.Message):
     ready_replicas: int
     ready: bool
     message: str
-    def __init__(self, success: _Optional[bool] = ..., replicas: _Optional[int] = ..., ready_replicas: _Optional[int] = ..., ready: _Optional[bool] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., replicas: _Optional[int] = ..., ready_replicas: _Optional[int] = ..., ready: bool = ..., message: _Optional[str] = ...) -> None: ...
 
 class ExecInPodRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "pod_name", "container", "command", "trace_id")
@@ -304,7 +303,7 @@ class ExecInPodResponse(_message.Message):
     success: bool
     output: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., output: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class ListDeploymentPodsRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "deployment_name")
@@ -326,7 +325,7 @@ class DeploymentPodInfo(_message.Message):
     phase: str
     ready: bool
     restart_count: int
-    def __init__(self, name: _Optional[str] = ..., phase: _Optional[str] = ..., ready: _Optional[bool] = ..., restart_count: _Optional[int] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., phase: _Optional[str] = ..., ready: bool = ..., restart_count: _Optional[int] = ...) -> None: ...
 
 class ListDeploymentPodsResponse(_message.Message):
     __slots__ = ("success", "pods", "all_ready", "message")
@@ -338,7 +337,55 @@ class ListDeploymentPodsResponse(_message.Message):
     pods: _containers.RepeatedCompositeFieldContainer[DeploymentPodInfo]
     all_ready: bool
     message: str
-    def __init__(self, success: _Optional[bool] = ..., pods: _Optional[_Iterable[_Union[DeploymentPodInfo, _Mapping]]] = ..., all_ready: _Optional[bool] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., pods: _Optional[_Iterable[_Union[DeploymentPodInfo, _Mapping]]] = ..., all_ready: bool = ..., message: _Optional[str] = ...) -> None: ...
+
+class ListPodRestartInfoRequest(_message.Message):
+    __slots__ = ("cluster_id",)
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    def __init__(self, cluster_id: _Optional[int] = ...) -> None: ...
+
+class ContainerRestartInfo(_message.Message):
+    __slots__ = ("name", "restart_count", "last_terminated_reason", "last_terminated_exit_code", "last_terminated_message")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    RESTART_COUNT_FIELD_NUMBER: _ClassVar[int]
+    LAST_TERMINATED_REASON_FIELD_NUMBER: _ClassVar[int]
+    LAST_TERMINATED_EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
+    LAST_TERMINATED_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    restart_count: int
+    last_terminated_reason: str
+    last_terminated_exit_code: int
+    last_terminated_message: str
+    def __init__(self, name: _Optional[str] = ..., restart_count: _Optional[int] = ..., last_terminated_reason: _Optional[str] = ..., last_terminated_exit_code: _Optional[int] = ..., last_terminated_message: _Optional[str] = ...) -> None: ...
+
+class PodRestartInfo(_message.Message):
+    __slots__ = ("namespace", "name", "restart_count", "restarted_at", "phase", "ready", "containers")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    RESTART_COUNT_FIELD_NUMBER: _ClassVar[int]
+    RESTARTED_AT_FIELD_NUMBER: _ClassVar[int]
+    PHASE_FIELD_NUMBER: _ClassVar[int]
+    READY_FIELD_NUMBER: _ClassVar[int]
+    CONTAINERS_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    name: str
+    restart_count: int
+    restarted_at: str
+    phase: str
+    ready: bool
+    containers: _containers.RepeatedCompositeFieldContainer[ContainerRestartInfo]
+    def __init__(self, namespace: _Optional[str] = ..., name: _Optional[str] = ..., restart_count: _Optional[int] = ..., restarted_at: _Optional[str] = ..., phase: _Optional[str] = ..., ready: bool = ..., containers: _Optional[_Iterable[_Union[ContainerRestartInfo, _Mapping]]] = ...) -> None: ...
+
+class ListPodRestartInfoResponse(_message.Message):
+    __slots__ = ("success", "pods", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    PODS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    pods: _containers.RepeatedCompositeFieldContainer[PodRestartInfo]
+    error: str
+    def __init__(self, success: bool = ..., pods: _Optional[_Iterable[_Union[PodRestartInfo, _Mapping]]] = ..., error: _Optional[str] = ...) -> None: ...
 
 class QueryPrometheusRequest(_message.Message):
     __slots__ = ("cluster_id", "promql", "trace_id")
@@ -358,7 +405,7 @@ class QueryPrometheusResponse(_message.Message):
     success: bool
     data: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., data: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., data: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class GetPodLogsRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "pod_name", "container", "tail_lines", "previous")
@@ -374,7 +421,7 @@ class GetPodLogsRequest(_message.Message):
     container: str
     tail_lines: int
     previous: bool
-    def __init__(self, cluster_id: _Optional[int] = ..., namespace: _Optional[str] = ..., pod_name: _Optional[str] = ..., container: _Optional[str] = ..., tail_lines: _Optional[int] = ..., previous: _Optional[bool] = ...) -> None: ...
+    def __init__(self, cluster_id: _Optional[int] = ..., namespace: _Optional[str] = ..., pod_name: _Optional[str] = ..., container: _Optional[str] = ..., tail_lines: _Optional[int] = ..., previous: bool = ...) -> None: ...
 
 class GetPodLogsResponse(_message.Message):
     __slots__ = ("success", "logs", "error")
@@ -384,7 +431,7 @@ class GetPodLogsResponse(_message.Message):
     success: bool
     logs: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., logs: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., logs: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class GetPodYamlRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "pod_name")
@@ -404,7 +451,7 @@ class GetPodYamlResponse(_message.Message):
     success: bool
     yaml: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., yaml: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., yaml: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class ApplyPodYamlRequest(_message.Message):
     __slots__ = ("cluster_id", "namespace", "yaml_content", "trace_id")
@@ -426,7 +473,7 @@ class ApplyPodYamlResponse(_message.Message):
     success: bool
     message: str
     error: str
-    def __init__(self, success: _Optional[bool] = ..., message: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class SetupRBACRequest(_message.Message):
     __slots__ = ("cluster_id", "trace_id")
@@ -450,7 +497,7 @@ class SetupRBACResponse(_message.Message):
     cluster_roles: _containers.RepeatedScalarFieldContainer[str]
     sa_created: bool
     error: str
-    def __init__(self, success: _Optional[bool] = ..., rbac_capable: _Optional[bool] = ..., impersonate_capable: _Optional[bool] = ..., cluster_roles: _Optional[_Iterable[str]] = ..., sa_created: _Optional[bool] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., rbac_capable: bool = ..., impersonate_capable: bool = ..., cluster_roles: _Optional[_Iterable[str]] = ..., sa_created: bool = ..., error: _Optional[str] = ...) -> None: ...
 
 class RoleBindingSpec(_message.Message):
     __slots__ = ("namespace", "group", "cluster_role")
@@ -484,4 +531,208 @@ class ReconcileRoleBindingsResponse(_message.Message):
     updated: int
     deleted: int
     error: str
-    def __init__(self, success: _Optional[bool] = ..., created: _Optional[int] = ..., updated: _Optional[int] = ..., deleted: _Optional[int] = ..., error: _Optional[str] = ...) -> None: ...
+    def __init__(self, success: bool = ..., created: _Optional[int] = ..., updated: _Optional[int] = ..., deleted: _Optional[int] = ..., error: _Optional[str] = ...) -> None: ...
+
+class WorkloadInfo(_message.Message):
+    __slots__ = ("kind", "name", "namespace", "replicas", "ready_replicas")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    REPLICAS_FIELD_NUMBER: _ClassVar[int]
+    READY_REPLICAS_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    name: str
+    namespace: str
+    replicas: int
+    ready_replicas: int
+    def __init__(self, kind: _Optional[str] = ..., name: _Optional[str] = ..., namespace: _Optional[str] = ..., replicas: _Optional[int] = ..., ready_replicas: _Optional[int] = ...) -> None: ...
+
+class ListWorkloadsRequest(_message.Message):
+    __slots__ = ("cluster_id", "namespace")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    namespace: str
+    def __init__(self, cluster_id: _Optional[int] = ..., namespace: _Optional[str] = ...) -> None: ...
+
+class ListWorkloadsResponse(_message.Message):
+    __slots__ = ("success", "workloads", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    WORKLOADS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    workloads: _containers.RepeatedCompositeFieldContainer[WorkloadInfo]
+    error: str
+    def __init__(self, success: bool = ..., workloads: _Optional[_Iterable[_Union[WorkloadInfo, _Mapping]]] = ..., error: _Optional[str] = ...) -> None: ...
+
+class ScaleWorkloadRequest(_message.Message):
+    __slots__ = ("cluster_id", "kind", "namespace", "name", "replicas", "trace_id")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    REPLICAS_FIELD_NUMBER: _ClassVar[int]
+    TRACE_ID_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    kind: str
+    namespace: str
+    name: str
+    replicas: int
+    trace_id: str
+    def __init__(self, cluster_id: _Optional[int] = ..., kind: _Optional[str] = ..., namespace: _Optional[str] = ..., name: _Optional[str] = ..., replicas: _Optional[int] = ..., trace_id: _Optional[str] = ...) -> None: ...
+
+class ScaleWorkloadResponse(_message.Message):
+    __slots__ = ("success", "message", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    message: str
+    error: str
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
+class RolloutWorkloadRequest(_message.Message):
+    __slots__ = ("cluster_id", "kind", "namespace", "name", "action", "revision", "trace_id")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    ACTION_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    TRACE_ID_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    kind: str
+    namespace: str
+    name: str
+    action: str
+    revision: int
+    trace_id: str
+    def __init__(self, cluster_id: _Optional[int] = ..., kind: _Optional[str] = ..., namespace: _Optional[str] = ..., name: _Optional[str] = ..., action: _Optional[str] = ..., revision: _Optional[int] = ..., trace_id: _Optional[str] = ...) -> None: ...
+
+class RolloutWorkloadResponse(_message.Message):
+    __slots__ = ("success", "message", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    message: str
+    error: str
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
+class RolloutHistoryRequest(_message.Message):
+    __slots__ = ("cluster_id", "namespace", "name")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    namespace: str
+    name: str
+    def __init__(self, cluster_id: _Optional[int] = ..., namespace: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+
+class RolloutHistoryResponse(_message.Message):
+    __slots__ = ("success", "revisions", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    REVISIONS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    revisions: _containers.RepeatedScalarFieldContainer[int]
+    error: str
+    def __init__(self, success: bool = ..., revisions: _Optional[_Iterable[int]] = ..., error: _Optional[str] = ...) -> None: ...
+
+class UpdateProbeRequest(_message.Message):
+    __slots__ = ("cluster_id", "namespace", "name", "container", "probe_type", "probe_kind", "path", "port", "command", "initial_delay_seconds", "period_seconds", "timeout_seconds", "failure_threshold", "success_threshold", "trace_id")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTAINER_FIELD_NUMBER: _ClassVar[int]
+    PROBE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    PROBE_KIND_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    COMMAND_FIELD_NUMBER: _ClassVar[int]
+    INITIAL_DELAY_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    PERIOD_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
+    SUCCESS_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
+    TRACE_ID_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    namespace: str
+    name: str
+    container: str
+    probe_type: str
+    probe_kind: str
+    path: str
+    port: int
+    command: _containers.RepeatedScalarFieldContainer[str]
+    initial_delay_seconds: int
+    period_seconds: int
+    timeout_seconds: int
+    failure_threshold: int
+    success_threshold: int
+    trace_id: str
+    def __init__(self, cluster_id: _Optional[int] = ..., namespace: _Optional[str] = ..., name: _Optional[str] = ..., container: _Optional[str] = ..., probe_type: _Optional[str] = ..., probe_kind: _Optional[str] = ..., path: _Optional[str] = ..., port: _Optional[int] = ..., command: _Optional[_Iterable[str]] = ..., initial_delay_seconds: _Optional[int] = ..., period_seconds: _Optional[int] = ..., timeout_seconds: _Optional[int] = ..., failure_threshold: _Optional[int] = ..., success_threshold: _Optional[int] = ..., trace_id: _Optional[str] = ...) -> None: ...
+
+class UpdateProbeResponse(_message.Message):
+    __slots__ = ("success", "message", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    message: str
+    error: str
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
+class RecreateWorkloadRequest(_message.Message):
+    __slots__ = ("cluster_id", "kind", "namespace", "name", "trace_id")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    TRACE_ID_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    kind: str
+    namespace: str
+    name: str
+    trace_id: str
+    def __init__(self, cluster_id: _Optional[int] = ..., kind: _Optional[str] = ..., namespace: _Optional[str] = ..., name: _Optional[str] = ..., trace_id: _Optional[str] = ...) -> None: ...
+
+class RecreateWorkloadResponse(_message.Message):
+    __slots__ = ("success", "message", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    message: str
+    error: str
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
+class ExecPodStreamFrame(_message.Message):
+    __slots__ = ("cluster_id", "namespace", "pod_name", "container", "tty", "stdin", "rows", "cols", "stdout", "stderr", "exit_code", "closed", "error")
+    CLUSTER_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    POD_NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTAINER_FIELD_NUMBER: _ClassVar[int]
+    TTY_FIELD_NUMBER: _ClassVar[int]
+    STDIN_FIELD_NUMBER: _ClassVar[int]
+    ROWS_FIELD_NUMBER: _ClassVar[int]
+    COLS_FIELD_NUMBER: _ClassVar[int]
+    STDOUT_FIELD_NUMBER: _ClassVar[int]
+    STDERR_FIELD_NUMBER: _ClassVar[int]
+    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
+    CLOSED_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    cluster_id: int
+    namespace: str
+    pod_name: str
+    container: str
+    tty: bool
+    stdin: bytes
+    rows: int
+    cols: int
+    stdout: bytes
+    stderr: bytes
+    exit_code: int
+    closed: bool
+    error: str
+    def __init__(self, cluster_id: _Optional[int] = ..., namespace: _Optional[str] = ..., pod_name: _Optional[str] = ..., container: _Optional[str] = ..., tty: bool = ..., stdin: _Optional[bytes] = ..., rows: _Optional[int] = ..., cols: _Optional[int] = ..., stdout: _Optional[bytes] = ..., stderr: _Optional[bytes] = ..., exit_code: _Optional[int] = ..., closed: bool = ..., error: _Optional[str] = ...) -> None: ...
