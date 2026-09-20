@@ -146,7 +146,7 @@ func (w *NodeWatcher) handleNodeEvent(event watch.Event) {
 }
 
 // resolveNodeFaultAlerts 节点故障恢复 → 关闭该节点的活跃告警（pending/awaiting_approval）。
-// pending → self_healed（未转人工，恢复即自愈）；awaiting_approval → resolved（已转人工，恢复即人工解决）。
+// 一律 resolved（老板口径：非 AI 处理的都算「已解决」，只有 AI 自动修复验证通过才标 self_healed）。
 // 告警关闭后，api-server 的审批检查循环（timeout_handler）会据 resolved/self_healed 状态自动解除关联审批单。
 func (w *NodeWatcher) resolveNodeFaultAlerts(nodeName, faultType string) {
 	db := database.GetDB()
@@ -158,12 +158,9 @@ func (w *NodeWatcher) resolveNodeFaultAlerts(nodeName, faultType string) {
 		return
 	}
 	for _, a := range alerts {
-		newStatus := "self_healed"
-		suffix := "（节点已恢复，自愈）"
-		if a.Status == "awaiting_approval" {
-			newStatus = "resolved"
-			suffix = "（节点已恢复，人工解决）"
-		}
+		// 非 AI 处理：节点自行恢复 → 一律「已解决」
+		newStatus := "resolved"
+		suffix := "（节点已恢复，系统自动关闭）"
 		if err := db.Model(&database.Alert{}).Where("id = ?", a.ID).Updates(map[string]interface{}{
 			"status":      newStatus,
 			"resolved_at": now,

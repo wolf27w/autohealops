@@ -428,3 +428,15 @@
 - 现象：集群详情选 kube-system → 对 Pod 操作 → 返回后列表变回全部命名空间
 - 原因：命名空间只是页面内存状态，页面重新挂载即回默认 `_all_`
 - 修复：选择写入 URL `?ns=`（支持返回/刷新/深链）+ localStorage 记忆（按集群），进页面时自动同步
+
+### 口径修正：不是 AI 处理的都算「已解决」✅ 2026-09-20（老板口径）
+- **规则**：只有 **AI 自动修复并验证通过** 才标「已自愈」；其余（资源自行恢复 / watcher 自动处理 / 人工 / 审批解除）**一律「已解决」**
+- 代码：
+  - `alert_auto_service._mark_alert_recovered` → 统一置 resolved（不再 pending→self_healed）
+  - 新增「恢复收敛扫描」（60s）：待处理 / 审批中的 Pod 告警，资源恢复即关闭并解除审批单
+  - 执行器 Go：`emitSelfHealed`→`emitAutoResolved`（status=resolved）；TerminatingStuck 强删留痕、node_watcher 恢复关闭 均改为 resolved
+  - 处理记录展示：AI 自愈→处理人「AI 自愈」；系统恢复→「系统恢复」
+- **历史数据订正**：144 条 self_healed 中，**136 条无 AI 处理痕迹**（无 completed 计划/成功执行）→ 改为 resolved；保留 8 条真 AI 自愈。备份 `logs/archive/self_healed_backfill_20260920.json`
+- 仪表盘：
+  - 「异常 Pod Top20」只列**未恢复**的（待处理/审批中），不再混入历史状态
+  - 「AI 诊断结果分布」改为**当前态 + 随所选时间范围**（历史已关闭的不再堆在环里）

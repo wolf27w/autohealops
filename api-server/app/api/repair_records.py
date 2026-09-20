@@ -125,11 +125,11 @@ async def list_records(page: int = 1, page_size: int = 50, user=Depends(require_
             resolved_by = a.resolved_by or ""
             if not resolved_by:
                 if a.status == "self_healed":
-                    resolved_by = "系统自愈"
+                    resolved_by = "AI 自愈"
                 elif a.status == "resolved" and a.manual_required:
                     resolved_by = approver_from_approval or "人工解决"
                 elif a.status == "resolved":
-                    resolved_by = "系统执行"
+                    resolved_by = "系统恢复"
 
             # 修复计划完整步骤（#6-②：处理记录里展示完整计划 + 执行步骤，不再断断续续）
             plan_status = ""

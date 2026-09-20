@@ -300,7 +300,7 @@ func (w *PodWatcher) tickObservations() {
 	for _, item := range due {
 		recovered, _ := w.checkRecovered(item)
 		if recovered {
-			w.emitSelfHealed(item)
+			w.emitAutoResolved(item)
 		} else {
 			w.emitPendingAlert(item)
 		}
@@ -335,10 +335,10 @@ func (w *PodWatcher) emitPendingAlert(item *observedFault) {
 	w.createAlert(item.namespace, item.podName, item.faultType, item.severity, item.message, item.occurredAt, "pending")
 }
 
-// emitSelfHealed 自愈留痕（status=self_healed，不触发通知/AI 诊断）
-func (w *PodWatcher) emitSelfHealed(item *observedFault) {
+// emitAutoResolved 自动恢复留痕（status=resolved；非 AI 处理，只是观察窗内已自行恢复）
+func (w *PodWatcher) emitAutoResolved(item *observedFault) {
 	w.createAlert(item.namespace, item.podName, item.faultType, item.severity,
-		item.message+"（已自动恢复，无需处理）", item.occurredAt, "self_healed")
+		item.message+"（已自行恢复，无需处理）", item.occurredAt, "resolved")
 }
 
 // inferDeploymentName 从 Pod 名推断 Deployment 名（Pod 名格式：{deployment}-{rs-hash}-{pod-hash}，去最后两段）
@@ -426,7 +426,7 @@ func (w *PodWatcher) createAlert(namespace, name, faultType, severity, message s
 		OccurredAt:     occurredAt,
 		DetectedAt:     time.Now(),
 	}
-	if status == "self_healed" {
+	if status == "resolved" {
 		now := time.Now()
 		alert.ResolvedAt = &now
 	}
@@ -586,7 +586,7 @@ func (w *PodWatcher) forceDeletePod(pod *corev1.Pod) {
 	now := time.Now()
 	db.Model(&database.Alert{}).Where("cluster_id = ? AND resource_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')",
 		w.clusterID, pod.Name, "TerminatingStuck").Updates(map[string]interface{}{
-		"status":      "self_healed",
+		"status":      "resolved",
 		"resolved_at": &now,
 		"message":     fmt.Sprintf("Pod %s 卡 Terminating 已自动强删（force + grace 0）", pod.Name),
 	})

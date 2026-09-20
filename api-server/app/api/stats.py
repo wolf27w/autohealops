@@ -368,17 +368,21 @@ async def dashboard(
                                     "self_healed": self_healed_map.get(bk, 0)})
                 t += timedelta(days=7)
 
-        # --- ai_result_dist（Alert.status + manual_required 归类） ---
-        # 口径假设：Alert 无显式 failed 状态；
-        #   self_heal=自愈成功 / approval=待审批(未转人工) / manual=已转人工 /
-        #   failed=仍 pending 且未转人工（作为「尚未成功自动处理」兜底桶）。
+        # --- ai_result_dist（**当前态**分布，随告警关闭自动收敛） ---
+        #   self_heal = AI 自愈成功（status=self_healed）
+        #   approval  = 当前待审批（awaiting_approval）
+        #   manual    = 当前需人工（manual_required 且未关闭）
+        #   failed    = 当前未处理且未转人工（pending 且非 manual_required）
+        # 注：统计口径随「时间范围」；已解决的历史告警不计入，避免"分布"看着像没处理
         ai_dist = (await session.execute(
             _filter(select(
                 func.coalesce(func.sum(func.if_(Alert.status == "self_healed", 1, 0)), 0).label("self_heal"),
-                func.coalesce(func.sum(func.if_(and_(Alert.status == "awaiting_approval", Alert.manual_required.is_(False)), 1, 0)), 0).label("approval"),
-                func.coalesce(func.sum(func.if_(Alert.manual_required.is_(True), 1, 0)), 0).label("manual"),
-                func.coalesce(func.sum(func.if_(and_(Alert.status == "pending", Alert.manual_required.is_(False)), 1, 0)), 0).label("failed"),
-            ))
+                func.coalesce(func.sum(func.if_(Alert.status == "awaiting_approval", 1, 0)), 0).label("approval"),
+                func.coalesce(func.sum(func.if_(and_(Alert.manual_required.is_(True),
+                                                    Alert.status.in_(["pending", "awaiting_approval"])), 1, 0)), 0).label("manual"),
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "pending",
+                                                    Alert.manual_required.is_(False)), 1, 0)), 0).label("failed"),
+            ).where(Alert.detected_at >= range_since))
         )).one()
         ai_result_dist = [
             {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},

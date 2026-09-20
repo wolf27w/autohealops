@@ -376,18 +376,16 @@ def _is_application_crash(diag_text: str) -> bool:
 
 
 def _mark_alert_recovered(a: Alert, now: str) -> None:
-    """告警资源已恢复：按是否已转人工审批区分「自愈」与「人工解决」
+    """告警资源已恢复（**非 AI 处理**）→ 一律置「已解决」
 
-    - awaiting_approval（已转人工审核）→ resolved（人工解决，不算自愈）
-    - 其他（pending 等未转人工）→ self_healed（自愈）
+    老板口径（2026-09-20）：不是 AI 处理的都算「已解决」；只有 AI 自动修复并验证通过的
+    才标「已自愈」（在 _execute_auto_plan → _verify_auto_repair 成功路径里单独设置）。
     """
-    if a.status == "awaiting_approval":
-        a.status = "resolved"
-        a.message = (a.message or "") + "（已转人工审核，服务恢复，人工解决）"
-    else:
-        a.status = "self_healed"
-        a.message = (a.message or "") + "（服务已恢复，自愈）"
+    a.status = "resolved"
+    a.message = (a.message or "") + "（服务已恢复，系统自动关闭）"
     a.resolved_at = now
+    if not a.resolved_by:
+        a.resolved_by = "system"
 
 
 async def _close_related_alerts(alert: Alert) -> int:
