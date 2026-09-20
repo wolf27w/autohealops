@@ -398,7 +398,7 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
     // 拉取容器列表（多容器时可直接切换；空=自动选主容器）
     if (pod) {
       getPodContainers(pod.clusterId, pod.namespace, pod.name)
-        .then((d) => setContainers((d as unknown as string[]) || []))
+        .then((d) => setContainers((d as unknown as { containers?: string[] }).containers || []))
         .catch(() => setContainers([]))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -429,8 +429,8 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
         <Select
           style={{ width: 220 }} value={container || undefined} allowClear placeholder="容器（空=自动选主容器）"
           onChange={(v) => setContainer((v as string) || '')}
-          options={containers.map((c) => ({ value: c, label: c }))}
-          onDropdownVisibleChange={(open) => { if (open && containers.length === 0 && pod) getPodContainers(pod.clusterId, pod.namespace, pod.name).then((d) => setContainers((d as unknown as string[]) || [])).catch(() => {}) }}
+          options={(Array.isArray(containers) ? containers : []).map((c) => ({ value: c, label: c }))}
+          onDropdownVisibleChange={(open) => { if (open && containers.length === 0 && pod) getPodContainers(pod.clusterId, pod.namespace, pod.name).then((d) => setContainers((d as unknown as { containers?: string[] }).containers || [])).catch(() => {}) }}
         />
         <Button type="primary" onClick={load}>查询</Button>
         <Space size={6}>
