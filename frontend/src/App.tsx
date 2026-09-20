@@ -2,7 +2,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import MainLayout from './components/MainLayout'
 import Login from './pages/Login'
-import Screen from './pages/Screen'
 import Dashboard from './pages/Dashboard'
 import ClusterList from './pages/ClusterList'
 import ClusterDetail from './pages/ClusterDetail'
@@ -59,8 +58,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      {/* 大屏：独立路由（无侧栏/顶栏框架） */}
-      <Route path="/screen" element={<RequireAuth><Screen /></RequireAuth>} />
+      {/* 大屏：独立路由（无侧栏/顶栏框架），内容与仪表盘完全一致 */}
+      <Route path="/screen" element={<RequireAuth><Dashboard screen /></RequireAuth>} />
       <Route
         path="/"
         element={

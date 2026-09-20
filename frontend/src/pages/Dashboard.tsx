@@ -42,7 +42,7 @@ interface ProjectOption {
   name: string
 }
 
-export default function Dashboard() {
+export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
   const [range, setRange] = useState('24h')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
@@ -121,7 +121,11 @@ export default function Dashboard() {
   ]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 12,
+      // 大屏（/screen）：无侧栏/顶栏框架，自行补边距与底色，内容与仪表盘完全一致
+      ...(screen ? { padding: 12, minHeight: '100vh', background: '#f5f6fa', boxSizing: 'border-box' as const } : {}),
+    }}>
       {/* ===== 第 1 段 · 顶部栏 ===== */}
       <Card bodyStyle={{ padding: '10px 16px' }} style={{ marginBottom: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>

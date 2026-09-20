@@ -308,3 +308,8 @@
 - 顺带修复：`Alert.dedup_key` 生成列被 ORM 当可写列（改 `server_default=FetchedValue()`），否则日志/资源类告警建单会失败
 - 前端：`AlertList` 对 `resource_type='db'` 隐藏 Pod 专属按钮
 - 验证：py_compile ✅ / tsc ✅；临时不可达 DBConnection 端到端实测（建单→去重→通知→恢复关闭→DBAuthFailed 分类）后**测试数据已清理**；「本机mysql」无误报
+
+### 大屏与仪表盘统一 ✅ 2026-09-20（老板：大屏要和仪表盘一样）
+- `/screen` 直接复用 `Dashboard` 组件（新增 `screen` 属性：无侧栏/顶栏框架，自行补边距与底色铺满视口），**内容/布局/数据/5s 轮询与 /dashboard 完全一致**
+- 旧独立大屏实现 `pages/Screen.tsx`（深色/单屏/15s/轮播）已移除
+- 验证：`tsc -b` 0 error、`vite build` 通过
