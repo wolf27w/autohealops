@@ -446,3 +446,9 @@
 - 告警列表：状态列对「已解决 + 有关联通过的审批」显示 **已审核**；被驳回显示 **已驳回**（接口新增 `approval_status` 字段，按 alert_id 直连 + repair_plans 关联兜底）
 - 完整口径：AI 修复验证通过 →「已自愈」；人工审核通过 →「已审核」；人工驳回 →「已驳回」；资源自行恢复/系统处理 →「已解决」；在途 →「待处理 / 审核中」
 - 实测：告警 512/510/508/417 → 处理记录「已审核」（处理人 admin）；告警列表返回 approval_status=approved
+
+### 仪表盘「集群资源水位」新增「负载均衡」✅ 2026-09-20
+- 列显示 `LB 数 / 服务总数`（悬停显示「服务总数 N（其中 type=LoadBalancer M）」）
+- 数据来源：执行器采集时统计 Service 总数 + `type=LoadBalancer` 数量，写入集群级快照（`namespace='_cluster_'` 的 `service_limit`=服务总数 / `service_used`=LB 数，复用现有字段，无需改表）
+- 接口：`/stats/dashboard` 的 `cluster_details` / `cluster_waterline` 增加 `lb_count`、`service_total`
+- 实测：测试环境 0/919（无 LoadBalancer 服务）、UAT 2/70

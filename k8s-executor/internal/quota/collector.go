@@ -49,6 +49,16 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 		}
 	}
 	cpuCap, memCap := sumNodeCapacity(nodes)
+	// 服务 / 负载均衡计数（ServiceLimit=服务总数，ServiceUsed=type=LoadBalancer 数量）
+	svcTotal, lbCount := 0, 0
+	if svcs, err := cs.CoreV1().Services("").List(ctx, metav1.ListOptions{}); err == nil {
+		svcTotal = len(svcs.Items)
+		for _, svc := range svcs.Items {
+			if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+				lbCount++
+			}
+		}
+	}
 	db.Create(&database.QuotaSnapshot{
 		ClusterID:    clusterID,
 		Namespace:    "_cluster_",
@@ -56,6 +66,8 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 		MemoryLimit:  memCap,
 		PodLimit:     len(nodes.Items),
 		PodUsed:      readyCount,
+		ServiceLimit: svcTotal,
+		ServiceUsed:  lbCount,
 		SnapshotTime: now,
 	})
 

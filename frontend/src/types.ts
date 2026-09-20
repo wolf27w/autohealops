@@ -331,6 +331,10 @@ export interface ActionTimelineItem {
 }
 
 export interface ClusterWaterline {
+  /** 负载均衡（Service type=LoadBalancer）数量 */
+  lb_count?: number
+  /** 服务总数 */
+  service_total?: number
   cluster_id: number
   cluster_name: string
   cpu_pct: number | null

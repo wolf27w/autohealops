@@ -577,7 +577,8 @@ async def dashboard(
         # 集群健康：节点数/就绪 + CPU/内存容量（QuotaSnapshot ns=_cluster_ 最新）
         quota_rows = (await session.execute(
             select(QuotaSnapshot.cluster_id, QuotaSnapshot.id, QuotaSnapshot.pod_limit, QuotaSnapshot.pod_used,
-                   QuotaSnapshot.cpu_limit, QuotaSnapshot.memory_limit)
+                   QuotaSnapshot.cpu_limit, QuotaSnapshot.memory_limit,
+                   QuotaSnapshot.service_limit, QuotaSnapshot.service_used)
             .where(QuotaSnapshot.namespace == "_cluster_")
             .order_by(QuotaSnapshot.id.desc())
         )).all()
@@ -657,11 +658,12 @@ async def dashboard(
 
     # 集群健康装配：节点 + CPU/内存水位
     q_map: dict[int, dict] = {}
-    for cid, _qid, pod_limit, pod_used, cpu_limit, mem_limit in quota_rows:
+    for cid, _qid, pod_limit, pod_used, cpu_limit, mem_limit, svc_total, lb_count in quota_rows:
         cid = int(cid)
         if cid in q_map:  # 已取最新（按 id desc）
             continue
-        q_map[cid] = {"pod_limit": pod_limit, "pod_used": pod_used, "cpu_limit": cpu_limit, "mem_limit": mem_limit}
+        q_map[cid] = {"pod_limit": pod_limit, "pod_used": pod_used, "cpu_limit": cpu_limit, "mem_limit": mem_limit,
+                      "service_total": svc_total, "lb_count": lb_count}
     u_map = {int(cid): (float(cpu or 0.0), int(mem or 0)) for cid, cpu, mem in usage_rows}
     # 集群 Pod 总数（ns=_pods_ 最新）
     pods_map: dict[int, dict] = {}
@@ -707,6 +709,8 @@ async def dashboard(
             "workloads": workloads,
             "node_total": int(q.get("pod_limit") or 0),
             "node_ready": int(q.get("pod_used") or 0),
+            "service_total": int(q.get("service_total") or 0),
+            "lb_count": int(q.get("lb_count") or 0),
             "cpu_pct": _sane_pct(cpu_used, cpu_cap),
             "mem_pct": _sane_pct(mem_used, mem_cap),
             "alert_total": sum(a.values()),
@@ -726,6 +730,8 @@ async def dashboard(
             "cluster_name": c["name"],
             "cpu_pct": c["cpu_pct"],
             "mem_pct": c["mem_pct"],
+            "lb_count": c.get("lb_count", 0),
+            "service_total": c.get("service_total", 0),
             "pods": c["pods"],
             "alert_pending": c["alert_pending"],
         } for c in _wl_src],

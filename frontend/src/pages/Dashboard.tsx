@@ -400,6 +400,12 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                   <Progress percent={clampPct(v)} size="small" strokeColor={v >= 80 ? '#ff4d4f' : v >= 60 ? '#faad14' : '#52c41a'} format={(p) => `${p ?? 0}%`} />
                 ) },
                 { title: 'Pod 数', dataIndex: 'pods', width: 80 },
+                { title: '负载均衡', dataIndex: 'lb_count', width: 100, render: (v: number, r: ClusterWaterline) => (
+                  <Tooltip title={`服务总数 ${r.service_total ?? 0}（其中 type=LoadBalancer ${v ?? 0}）`}>
+                    <span style={{ fontWeight: 600 }}>{v ?? 0}</span>
+                    <span style={{ color: '#8c8c8c', marginLeft: 4, fontSize: 12 }}>/ {r.service_total ?? 0}</span>
+                  </Tooltip>
+                ) },
                 { title: '待处理', dataIndex: 'alert_pending', width: 80, render: (v: number) => <b style={{ color: v > 0 ? '#ff4d4f' : '#52c41a' }}>{v}</b> },
               ]}
             />
