@@ -5,10 +5,8 @@ import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOut
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
-import {
-  getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents,
-} from '../services/api'
+import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 
 const KIND_LABEL: Record<string, string> = {
@@ -379,6 +377,8 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   const preRef = useRef<HTMLPreElement>(null)
   const timerRef = useRef<number | null>(null)
 
+  const [containers, setContainers] = useState<string[]>([])
+
   const fetchLogs = (tail: number) => {
     if (!pod) return
     getPodLogs(pod.clusterId, pod.namespace, pod.name, container, tail)
@@ -393,7 +393,16 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
     fetchLogs(live ? 500 : 200)
   }
 
-  useEffect(() => { setContainer(''); setLive(false); load() /* eslint-disable-next-line */ }, [pod])
+  useEffect(() => {
+    setContainer(''); setLive(false); load()
+    // 拉取容器列表（多容器时可直接切换；空=自动选主容器）
+    if (pod) {
+      getPodContainers(pod.clusterId, pod.namespace, pod.name)
+        .then((d) => setContainers((d as unknown as string[]) || []))
+        .catch(() => setContainers([]))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pod])
 
   // 实时模式：每 2 秒刷新一次（关闭时自动清理定时器）
   useEffect(() => {
@@ -417,7 +426,12 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   return (
     <Drawer title={`容器日志：${pod.name}`} open={!!pod} onClose={() => { setLive(false); onClose() }} width={900}>
       <Space style={{ marginBottom: 12 }} wrap>
-        <Input placeholder="容器名（空=第一个）" value={container} onChange={(e) => setContainer(e.target.value)} style={{ width: 200 }} />
+        <Select
+          style={{ width: 220 }} value={container || undefined} allowClear placeholder="容器（空=自动选主容器）"
+          onChange={(v) => setContainer((v as string) || '')}
+          options={containers.map((c) => ({ value: c, label: c }))}
+          onDropdownVisibleChange={(open) => { if (open && containers.length === 0 && pod) getPodContainers(pod.clusterId, pod.namespace, pod.name).then((d) => setContainers((d as unknown as string[]) || [])).catch(() => {}) }}
+        />
         <Button type="primary" onClick={load}>查询</Button>
         <Space size={6}>
           <Switch checked={live} onChange={setLive} />

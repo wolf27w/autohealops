@@ -197,7 +197,13 @@ async def pod_logs(cluster_id: int, namespace: str, pod_name: str, container: st
         return denied
     r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name, container, tail, previous)
     if not r.get("success"):
-        return {"code": 500, "message": r.get("error", "日志获取失败"), "data": None}
+        err = str(r.get("error", "") or "")
+        low = err.lower()
+        if "not found" in low or "could not find the requested resource" in low:
+            return {"code": 404, "message": f"Pod 不存在（{pod_name} 可能已被重建/删除），请刷新列表后重试", "data": None}
+        if "container name must be specified" in low or "a container name must be specified" in low:
+            return {"code": 400, "message": "该 Pod 有多个容器，请在「容器」下拉里选择一个", "data": None}
+        return {"code": 500, "message": err or "日志获取失败", "data": None}
     return {"code": 200, "message": "success", "data": {"logs": r.get("logs", "")}}
 
 

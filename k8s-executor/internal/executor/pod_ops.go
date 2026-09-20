@@ -18,6 +18,14 @@ func (e *Executor) GetPodLogs(ctx context.Context, namespace, podName, container
 	if tailLines <= 0 {
 		tailLines = 200
 	}
+	// 容器名为空时自动选容器：多容器 Pod 不指定容器会被 API Server 拒绝
+	// （报错形如 "the server rejected our request for an unknown reason"）
+	// 选择顺序：kubectl.kubernetes.io/default-container 注解 → 第一个非 sidecar 容器 → 第一个容器
+	if container == "" {
+		if pod, err := e.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{}); err == nil {
+			container = pickDefaultContainer(pod)
+		}
+	}
 	req := e.clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Container: container,
 		TailLines: &tailLines,
@@ -28,6 +36,24 @@ func (e *Executor) GetPodLogs(ctx context.Context, namespace, podName, container
 		return "", err
 	}
 	return string(data), nil
+}
+
+// pickDefaultContainer 选择默认日志容器
+func pickDefaultContainer(pod *corev1.Pod) string {
+	if pod == nil || len(pod.Spec.Containers) == 0 {
+		return ""
+	}
+	if v := pod.Annotations["kubectl.kubernetes.io/default-container"]; v != "" {
+		return v
+	}
+	// 优先非 sidecar（按常见命名跳过），否则退回第一个容器
+	sidecars := map[string]bool{"filebeat": true, "istio-proxy": true, "envoy": true, "linkerd-proxy": true, "sidecar": true}
+	for _, c := range pod.Spec.Containers {
+		if !sidecars[c.Name] {
+			return c.Name
+		}
+	}
+	return pod.Spec.Containers[0].Name
 }
 
 // GetPodYaml 获取 Pod YAML（只读；去掉 managedFields/资源版本等噪音字段）
