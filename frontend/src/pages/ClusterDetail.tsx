@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
 import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports } from '../services/api'
 
@@ -40,7 +40,17 @@ export default function ClusterDetail() {
   const navigate = useNavigate()
   const [namespaces, setNamespaces] = useState<NamespaceDetail[]>([])
   const [clusterName, setClusterName] = useState('')
-  const [activeNs, setActiveNs] = useState('_all_')
+  const [searchParams, setSearchParams] = useSearchParams()
+  // 命名空间选择持久化：优先 URL ?ns=（支持返回/刷新/深链），其次 localStorage（记住上次选择）
+  const [activeNs, setActiveNs] = useState<string>(() => {
+    const fromUrl = searchParams.get('ns')
+    if (fromUrl) return fromUrl
+    try {
+      return localStorage.getItem(`cluster_ns:${id}`) || '_all_'
+    } catch {
+      return '_all_'
+    }
+  })
   const [activeType, setActiveType] = useState('deployments')
   const [loading, setLoading] = useState(false)
   const [metricsPod, setMetricsPod] = useState<PodTarget | null>(null)
@@ -74,6 +84,20 @@ export default function ClusterDetail() {
   }
 
   useEffect(load, [id])
+
+  // URL 没有 ns 但本地记住了 → 同步进 URL，保证「返回」也停留在原命名空间
+  useEffect(() => {
+    if (searchParams.get('ns')) return
+    try {
+      const saved = localStorage.getItem(`cluster_ns:${id}`)
+      if (saved && saved !== '_all_') {
+        const next = new URLSearchParams(searchParams)
+        next.set('ns', saved)
+        setSearchParams(next, { replace: true })
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
 
   // 根据选中的 namespace 过滤
   const filteredNs = useMemo(() => {
@@ -256,7 +280,15 @@ export default function ClusterDetail() {
           <Select
             style={{ width: 260 }}
             value={activeNs}
-            onChange={(v) => setActiveNs(v)}
+            onChange={(v) => {
+              const val = (v as string) || '_all_'
+              setActiveNs(val)
+              try { localStorage.setItem(`cluster_ns:${id}`, val) } catch { /* ignore */ }
+              const next = new URLSearchParams(searchParams)
+              if (val && val !== '_all_') next.set('ns', val)
+              else next.delete('ns')
+              setSearchParams(next, { replace: true })
+            }}
             showSearch
             optionFilterProp="label"
             options={[
