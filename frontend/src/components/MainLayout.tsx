@@ -9,7 +9,7 @@ import {
   BookOutlined, AuditOutlined, BarChartOutlined, UserOutlined,
   SettingOutlined, LogoutOutlined, DownOutlined, ExperimentOutlined, MedicineBoxOutlined, KeyOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -36,6 +36,7 @@ const menuItems: MenuProps['items'] = [
     label: '告警处理', key: 'g-alert',
     children: [
       { key: '/alert-handling', icon: <AlertOutlined />, label: '告警处理' },
+      { key: '/tickets', icon: <FileTextOutlined />, label: '工单' },
     ],
   },
   {
@@ -50,8 +51,10 @@ const menuItems: MenuProps['items'] = [
   {
     label: '诊断', key: 'g-diag',
     children: [
-      { key: '/agent', icon: <ExperimentOutlined />, label: '应用诊断' },
-      { key: '/diagnostic', icon: <MedicineBoxOutlined />, label: '数据库诊断' },
+      { key: '/fault-diagnosis/cluster', icon: <ApartmentOutlined />, label: '集群故障诊断' },
+      { key: '/fault-diagnosis/app', icon: <ExperimentOutlined />, label: '应用故障诊断' },
+      { key: '/diagnostic', icon: <MedicineBoxOutlined />, label: '数据库故障诊断' },
+      { key: '/agent', icon: <MessageOutlined />, label: '应用诊断助手' },
     ],
   },
   {

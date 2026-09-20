@@ -35,6 +35,7 @@ import StatsDashboard from './pages/StatsDashboard'
 import UserManagement from './pages/UserManagement'
 import PlatformSettings from './pages/PlatformSettings'
 import LogSources from './pages/LogSources'
+import Tickets from './pages/Tickets'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -75,6 +76,7 @@ export default function App() {
         <Route path="clusters/:id" element={<ClusterDetail />} />
         <Route path="clusters/:id/workloads/:kind/:namespace/:name" element={<ServiceDetail />} />
         <Route path="alerts" element={<AlertList />} />
+        <Route path="tickets" element={<Tickets />} />
         <Route path="approvals" element={<ApprovalList />} />
         <Route path="records" element={<ProcessingRecords />} />
         <Route path="alert-handling" element={<AlertHandling />} />
@@ -93,6 +95,8 @@ export default function App() {
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
         <Route path="fault-diagnosis" element={<FaultDiagnosis />} />
+        <Route path="fault-diagnosis/cluster" element={<FaultDiagnosis category="cluster" />} />
+        <Route path="fault-diagnosis/app" element={<FaultDiagnosis category="app" />} />
         <Route path="permissions" element={<RequireRole role="admin"><Permissions /></RequireRole>} />
         <Route path="knowledge" element={<KnowledgeBase />} />
         <Route path="audit" element={<AuditTrace />} />

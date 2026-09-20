@@ -24,6 +24,8 @@ class KnowledgeEntry(Base):
     tags: Mapped[str] = mapped_column(String(500), default="")
     # 分类：pod_crash（Pod 崩溃）/ db（数据库）/ application（应用）/ resource（资源）/ infra（基础设施）/ other
     category: Mapped[str] = mapped_column(String(20), default="other", index=True)
+    # 诊断域（N3 三类分离）：cluster / app / db（由 fault_type 推导，写入时由 diag_category.category_of 赋值）
+    diag_category: Mapped[str] = mapped_column(String(10), default="app", index=True)
     # 条目来源：ai=AI 自动沉淀 / manual=人工录入；AI 沉淀默认锁定（编辑需 admin 解锁）
     source: Mapped[str] = mapped_column(String(10), default="manual", index=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False)

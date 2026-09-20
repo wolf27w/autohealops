@@ -7,8 +7,9 @@ from app.core.database import async_session
 from app.models import KnowledgeEntry
 
 
-async def search_knowledge(query: str, top_k: int = 5, trace_id: str = "") -> list:
-    return (await ai_client.search_similar(query, top_k, trace_id)).get("results", [])
+async def search_knowledge(query: str, top_k: int = 5, trace_id: str = "", category: str | None = None) -> list:
+    """知识库检索（N3：category=cluster/app/db 时只在该诊断域内检索，不跨类复用）"""
+    return (await ai_client.search_similar(query, top_k, trace_id, category)).get("results", [])
 
 
 async def add_knowledge(fault_type: str, root_cause: str, repair_steps: str, tags: str = "", execution_steps: str = "",

@@ -38,6 +38,7 @@ from app.models.slow_sql import SlowSQLRecord
 from app.models.stats import AIEffectivenessStat, ModelAccuracyStat
 from app.models.system_setting import SystemSetting
 from app.models.task import Task, TaskAuditLog
+from app.models.ticket import Ticket, TicketComment
 from app.models.user import Role, User
 from app.models.verification import RepairVerification
 
@@ -103,4 +104,6 @@ __all__ = [
     "AIEffectivenessStat",
     "ModelAccuracyStat",
     "SystemSetting",
+    "Ticket",
+    "TicketComment",
 ]

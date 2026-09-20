@@ -1,0 +1,327 @@
+// 工单列表 + 详情抽屉 + 新建工单（N1 平台内部工单）
+import { useEffect, useState } from 'react'
+import { Button, Drawer, Empty, Form, Input, List, Modal, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { PlusOutlined, UserOutlined, CommentOutlined } from '@ant-design/icons'
+import api from '../services/api'
+import { getUsers, getClusters } from '../services/api'
+import type { Cluster, User } from '../types'
+
+// ============ 本地类型（不修改 api.ts/types.ts，避免与并行任务冲突） ============
+interface Ticket {
+  id: number
+  ticket_no: string
+  title: string
+  description: string
+  source: string
+  alert_id: number | null
+  approval_id: number | null
+  cluster_id: number | null
+  cluster_name: string
+  namespace: string
+  resource_name: string
+  priority: string
+  status: string
+  assignee_id: number | null
+  assignee_name: string
+  created_by: number | null
+  creator_name: string
+  resolved_at: string
+  closed_at: string
+  created_at: string
+  updated_at: string
+}
+
+interface TicketComment {
+  id: number
+  ticket_id: number
+  user_id: number | null
+  username: string
+  type: string
+  content: string
+  created_at: string
+}
+
+interface TicketDetail {
+  ticket: Ticket
+  comments: TicketComment[]
+}
+
+interface TicketListResult {
+  items: Ticket[]
+  total: number
+  page: number
+  page_size: number
+}
+
+// ============ 常量（与后端口径一致） ============
+const STATUS_LABEL: Record<string, string> = {
+  open: '待受理', processing: '处理中', resolved: '已解决', closed: '已关闭',
+}
+const STATUS_COLOR: Record<string, string> = {
+  open: 'default', processing: 'blue', resolved: 'green', closed: 'default',
+}
+const PRIORITY_LABEL: Record<string, string> = {
+  low: '低', medium: '中', high: '高', urgent: '紧急',
+}
+const PRIORITY_COLOR: Record<string, string> = {
+  low: 'default', medium: 'blue', high: 'orange', urgent: 'red',
+}
+const SOURCE_LABEL: Record<string, string> = {
+  alert: '告警', approval: '审批', manual: '手动',
+}
+const NEXT_STATUS: Record<string, string[]> = {
+  open: ['processing', 'resolved', 'closed'],
+  processing: ['resolved', 'closed'],
+  resolved: ['closed'],
+  closed: [],
+}
+
+// ============ 类型化请求门面（复用默认 api 实例，拦截器已解包 body.data） ============
+const http = {
+  get: <T,>(url: string, params?: Record<string, unknown>) => api.get(url, { params }) as Promise<T>,
+  post: <T,>(url: string, data?: unknown) => api.post(url, data) as Promise<T>,
+  patch: <T,>(url: string, data?: unknown) => api.patch(url, data) as Promise<T>,
+}
+
+export default function Tickets() {
+  const [items, setItems] = useState<Ticket[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize] = useState(20)
+  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState<string | undefined>()
+  const [priority, setPriority] = useState<string | undefined>()
+  const [source, setSource] = useState<string | undefined>()
+  const [clusterId, setClusterId] = useState<number | undefined>()
+
+  const [detail, setDetail] = useState<TicketDetail | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [commentText, setCommentText] = useState('')
+  const [assignModalOpen, setAssignModalOpen] = useState(false)
+  const [assignUserId, setAssignUserId] = useState<number | undefined>()
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createForm] = Form.useForm()
+
+  const [users, setUsers] = useState<User[]>([])
+  const [clusters, setClusters] = useState<Cluster[]>([])
+
+  const loadList = () => {
+    setLoading(true)
+    const params: Record<string, unknown> = { page, page_size: pageSize }
+    if (status) params.status = status
+    if (priority) params.priority = priority
+    if (source) params.source = source
+    if (clusterId) params.cluster_id = clusterId
+    http.get<TicketListResult>('/tickets', params)
+      .then((d) => { setItems(d?.items ?? []); setTotal(d?.total ?? 0) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }
+
+  const loadDetail = (id: number) => {
+    http.get<TicketDetail>(`/tickets/${id}`)
+      .then((d) => setDetail(d))
+      .catch(() => {})
+  }
+
+  useEffect(() => { loadList() }, [page, status, priority, source, clusterId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    getUsers().then((d) => setUsers(d ?? [])).catch(() => {})
+    getClusters().then((d) => setClusters(d ?? [])).catch(() => {})
+  }, [])
+
+  const openDetail = (t: Ticket) => {
+    setDetail(null)
+    setDrawerOpen(true)
+    loadDetail(t.id)
+  }
+
+  const doTransition = async (t: Ticket, next: string) => {
+    await http.patch(`/tickets/${t.id}`, { status: next })
+    message.success(`已流转到「${STATUS_LABEL[next]}」`)
+    loadDetail(t.id)
+    loadList()
+  }
+
+  const doAssign = async () => {
+    if (!detail) return
+    await http.post(`/tickets/${detail.ticket.id}/assign`, { assignee_id: assignUserId ?? null })
+    message.success('已指派')
+    setAssignModalOpen(false)
+    setAssignUserId(undefined)
+    loadDetail(detail.ticket.id)
+    loadList()
+  }
+
+  const doComment = async () => {
+    if (!detail || !commentText.trim()) { message.warning('请输入留言内容'); return }
+    await http.post(`/tickets/${detail.ticket.id}/comments`, { content: commentText.trim() })
+    message.success('已留言')
+    setCommentText('')
+    loadDetail(detail.ticket.id)
+  }
+
+  const doCreate = async () => {
+    const v = await createForm.validateFields()
+    await http.post('/tickets', v)
+    message.success('已建单')
+    setCreateOpen(false)
+    createForm.resetFields()
+    loadList()
+  }
+
+  const columns = [
+    { title: '工单号', dataIndex: 'ticket_no', width: 160, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+    { title: '标题', dataIndex: 'title', ellipsis: true },
+    {
+      title: '来源', dataIndex: 'source', width: 80,
+      render: (v: string) => <Tag>{SOURCE_LABEL[v] ?? v}</Tag>,
+    },
+    {
+      title: '优先级', dataIndex: 'priority', width: 80,
+      render: (v: string) => <Tag color={PRIORITY_COLOR[v]}>{PRIORITY_LABEL[v] ?? v}</Tag>,
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 90,
+      render: (v: string) => <Tag color={STATUS_COLOR[v]}>{STATUS_LABEL[v] ?? v}</Tag>,
+    },
+    { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v: string) => v || '-' },
+    { title: '资源', dataIndex: 'resource_name', width: 160, render: (v: string) => v || '-' },
+    { title: '处理人', dataIndex: 'assignee_name', width: 100, render: (v: string) => v || '-' },
+    { title: '创建时间', dataIndex: 'created_at', width: 170 },
+    {
+      title: '操作', width: 80, fixed: 'right' as const,
+      render: (_: unknown, t: Ticket) => <Button type="link" size="small" onClick={() => openDetail(t)}>详情</Button>,
+    },
+  ]
+
+  const userOptions = users.map((u) => ({ value: u.id, label: `${u.username}（${u.role}）` }))
+  const clusterOptions = clusters.map((c) => ({ value: c.id, label: c.name }))
+
+  const current = detail?.ticket
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Select allowClear placeholder="状态" style={{ width: 120 }} value={status}
+          onChange={(v) => { setStatus(v); setPage(1) }}
+          options={Object.entries(STATUS_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
+        <Select allowClear placeholder="优先级" style={{ width: 110 }} value={priority}
+          onChange={(v) => { setPriority(v); setPage(1) }}
+          options={Object.entries(PRIORITY_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
+        <Select allowClear placeholder="来源" style={{ width: 110 }} value={source}
+          onChange={(v) => { setSource(v); setPage(1) }}
+          options={Object.entries(SOURCE_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
+        <Select allowClear showSearch optionFilterProp="label" placeholder="集群" style={{ width: 180 }}
+          value={clusterId} onChange={(v) => { setClusterId(v); setPage(1) }} options={clusterOptions} />
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建工单</Button>
+      </Space>
+
+      <Table rowKey="id" loading={loading} dataSource={items} columns={columns} scroll={{ x: 1200 }}
+        pagination={{
+          current: page, pageSize, total, showSizeChanger: false,
+          showTotal: (t) => `共 ${t} 条`, onChange: setPage,
+        }} />
+
+      {/* 详情抽屉 */}
+      <Drawer width={560} title={current ? `${current.ticket_no} · ${current.title}` : '工单详情'}
+        open={drawerOpen} onClose={() => setDrawerOpen(false)}>
+        {current && (
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Space wrap>
+              <Tag color={STATUS_COLOR[current.status]}>{STATUS_LABEL[current.status]}</Tag>
+              <Tag color={PRIORITY_COLOR[current.priority]}>{PRIORITY_LABEL[current.priority]}</Tag>
+              <Tag>{SOURCE_LABEL[current.source]}</Tag>
+            </Space>
+            <div style={{ fontSize: 13, color: '#595959' }}>
+              <div>集群：{current.cluster_name || current.cluster_id || '-'}</div>
+              <div>命名空间：{current.namespace || '-'}</div>
+              <div>资源：{current.resource_name || '-'}</div>
+              <div>处理人：{current.assignee_name || '未指派'}</div>
+              <div>创建人：{current.creator_name || '-'}</div>
+              <div>创建时间：{current.created_at}</div>
+              {current.alert_id != null && <div>关联告警：#{current.alert_id}</div>}
+              {current.approval_id != null && <div>关联审批：#{current.approval_id}</div>}
+            </div>
+            {current.description && (
+              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', background: '#fafafa', padding: 8, borderRadius: 4 }}>
+                {current.description}
+              </Typography.Paragraph>
+            )}
+
+            {/* 操作区 */}
+            <Space wrap>
+              <Button icon={<UserOutlined />} onClick={() => { setAssignUserId(current.assignee_id ?? undefined); setAssignModalOpen(true) }}>
+                {current.assignee_id ? '改派' : '指派'}
+              </Button>
+              {NEXT_STATUS[current.status]?.map((s) => (
+                <Button key={s} type={s === 'closed' ? 'default' : 'primary'} onClick={() => doTransition(current, s)}>
+                  流转到「{STATUS_LABEL[s]}」
+                </Button>
+              ))}
+            </Space>
+
+            {/* 留言区 */}
+            <div>
+              <Space.Compact style={{ width: '100%' }}>
+                <Input.TextArea rows={2} value={commentText} onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="输入留言…" />
+              </Space.Compact>
+              <Button type="primary" size="small" icon={<CommentOutlined />} style={{ marginTop: 6 }}
+                onClick={doComment}>留言</Button>
+            </div>
+
+            {/* 留言/流转记录 */}
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>动态</div>
+              {detail && detail.comments.length === 0 && <Empty description="暂无动态" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+              <List size="small" dataSource={detail?.comments ?? []}
+                renderItem={(c: TicketComment) => (
+                  <List.Item>
+                    <List.Item.Meta
+                      title={
+                        <span style={{ fontSize: 12, color: c.type === 'action' ? '#1677ff' : '#595959' }}>
+                          {c.type === 'action' ? '【流转】' : ''}{c.username || '-'} · {c.created_at}
+                        </span>
+                      }
+                      description={<span style={{ whiteSpace: 'pre-wrap' }}>{c.content}</span>}
+                    />
+                  </List.Item>
+                )} />
+            </div>
+          </Space>
+        )}
+      </Drawer>
+
+      {/* 指派 */}
+      <Modal title="指派处理人" open={assignModalOpen} onOk={doAssign} onCancel={() => setAssignModalOpen(false)} destroyOnClose>
+        <Select allowClear showSearch optionFilterProp="label" placeholder="选择处理人（留空=取消指派）"
+          style={{ width: '100%' }} value={assignUserId} onChange={setAssignUserId} options={userOptions} />
+      </Modal>
+
+      {/* 新建工单 */}
+      <Modal title="新建工单" open={createOpen} onOk={doCreate} onCancel={() => setCreateOpen(false)} destroyOnClose>
+        <Form form={createForm} layout="vertical" initialValues={{ priority: 'medium' }}>
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="工单标题" maxLength={200} />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={4} placeholder="问题描述（可选）" maxLength={5000} />
+          </Form.Item>
+          <Form.Item name="priority" label="优先级">
+            <Select options={Object.entries(PRIORITY_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
+          </Form.Item>
+          <Form.Item name="cluster_id" label="所属集群（可选）">
+            <Select allowClear showSearch optionFilterProp="label" placeholder="选择集群" options={clusterOptions} />
+          </Form.Item>
+          <Form.Item name="namespace" label="命名空间（可选）">
+            <Input placeholder="如 default" maxLength={100} />
+          </Form.Item>
+          <Form.Item name="resource_name" label="资源名（可选）">
+            <Input placeholder="如 Pod / Deployment 名" maxLength={200} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}

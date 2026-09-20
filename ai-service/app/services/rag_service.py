@@ -92,8 +92,11 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
-async def search_similar(query: str, top_k: int = 5) -> list[dict]:
-    """检索相似知识条目（内存矩阵 + 向量化余弦）"""
+async def search_similar(query: str, top_k: int = 5, category: str | None = None) -> list[dict]:
+    """检索相似知识条目（内存矩阵 + 向量化余弦）
+
+    category（N3 诊断分离）：cluster/app/db 时**只在该诊断域内检索**（不跨类复用）；None=全部。
+    """
     query_vec = np.array(await embed(query), dtype=np.float32)
     await _ensure_index()
     mat = _INDEX["mat"]
@@ -101,11 +104,18 @@ async def search_similar(query: str, top_k: int = 5) -> list[dict]:
         return []
     qn = np.linalg.norm(query_vec) or 1e-9
     sims = (mat @ query_vec) / (_INDEX["norms"] * qn)
-    k = max(1, min(int(top_k or 5), len(_INDEX["entries"])))
+    entries = _INDEX["entries"]
+    if category:
+        mask = np.array([1.0 if (getattr(e, "diag_category", None) or "app") == category else -1.0
+                         for e in entries], dtype=np.float32)
+        sims = sims * mask
+    k = max(1, min(int(top_k or 5), len(entries)))
     idx = np.argsort(-sims)[:k]
     out = []
     for i in idx:
-        e = _INDEX["entries"][int(i)]
+        if category and float(sims[int(i)]) < 0:
+            break  # 该类目下无更多命中
+        e = entries[int(i)]
         out.append({
             "id": e.id,
             "fault_type": e.fault_type,
@@ -204,6 +214,24 @@ def classify_fault_type(fault_type: str) -> str:
     return "other"
 
 
+# ============ N3 诊断三类分离：fault_type → 诊断域（与 api-server/services/diag_category.py 一致） ============
+_CLUSTER_FT = {
+    "NodeNotReady", "NodeCordoned", "NodeUncordoned", "DiskPressure", "MemoryPressure",
+    "PIDPressure", "NetworkUnavailable", "KubeletNotReady", "KubeletDown", "ClusterComponentUnhealthy",
+}
+_DB_FT = {"DBConnFailed", "DBAuthFailed", "DBSlowQuery", "DBMetricHigh"}
+
+
+def diag_category_of(fault_type: str) -> str:
+    """诊断域：cluster / app / db（未知类型归 app）"""
+    ft = (fault_type or "").strip()
+    if ft in _CLUSTER_FT:
+        return "cluster"
+    if ft in _DB_FT or ft.startswith("db_"):
+        return "db"
+    return "app"
+
+
 def is_valuable_knowledge(repair_steps: str, execution_steps: str) -> bool:
     """判断知识是否有价值：删除/重启/关闭/审批痕迹等临时操作（治标不治本）无价值
 
@@ -268,6 +296,7 @@ async def add_knowledge(fault_type: str, root_cause: str, repair_steps: str, tag
             execution_steps=execution_steps,
             tags=tags,
             category=classify_fault_type(fault_type),
+            diag_category=diag_category_of(fault_type),
             source=source,
             is_locked=is_locked,
             vector_embedding=bytes_embedding,

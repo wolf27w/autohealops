@@ -125,7 +125,7 @@ async def embed_batch(payload: dict):
 
 @router.post("/rag/search")
 async def rag_search(payload: dict):
-    results = await search_similar(payload.get("query", ""), payload.get("top_k", 5))
+    results = await search_similar(payload.get("query", ""), payload.get("top_k", 5), payload.get("category"))
     return {"code": 200, "message": "success", "data": {"results": results}}
 
 

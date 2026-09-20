@@ -45,8 +45,12 @@ class AIClient:
             "after_snapshot": after_snapshot, "metrics_comparison": metrics_comparison,
         }, trace_id)
 
-    async def search_similar(self, query: str, top_k: int = 5, trace_id: str = "") -> dict:
-        return await self._post("/api/v1/ai/rag/search", {"query": query, "top_k": top_k}, trace_id)
+    async def search_similar(self, query: str, top_k: int = 5, trace_id: str = "", category: str | None = None) -> dict:
+        """知识库相似检索；category（N3）= cluster/app/db 时只在该诊断域内检索（不跨类复用）"""
+        payload: dict = {"query": query, "top_k": top_k}
+        if category:
+            payload["category"] = category
+        return await self._post("/api/v1/ai/rag/search", payload, trace_id)
 
     async def add_knowledge(self, fault_type: str, root_cause: str, repair_steps: str, tags: str = "", execution_steps: str = "",
                             source: str = "ai", is_locked: bool = True, trace_id: str = "") -> dict:

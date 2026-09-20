@@ -17,11 +17,21 @@ router = APIRouter(prefix="/api/v1/fault-diagnoses")
 
 
 @router.get("")
-async def list_fault_diagnoses(page: int = 1, page_size: int = 50, user=Depends(require_any_user)):
-    """列出告警及其诊断状态（故障诊断列表）"""
+async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str = "",
+                              user=Depends(require_any_user)):
+    """列出告警及其诊断状态（故障诊断列表）
+
+    category（N3 诊断分离）：cluster=集群故障 / app=应用故障 / db=数据库故障；空=全部。
+    按 alerts.diag_category（STORED 生成列）过滤，三类互不串。
+    """
+    if category not in ("", "cluster", "app", "db"):
+        return {"code": 400, "message": "category 仅支持 cluster/app/db", "data": None}
     async with async_session() as session:
+        stmt = select(Alert)
+        if category:
+            stmt = stmt.where(Alert.diag_category == category)
         alerts = list((await session.execute(
-            select(Alert).order_by(Alert.detected_at.desc(), Alert.id.desc())
+            stmt.order_by(Alert.detected_at.desc(), Alert.id.desc())
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars())
         alert_ids = [a.id for a in alerts]
@@ -49,6 +59,7 @@ async def list_fault_diagnoses(page: int = 1, page_size: int = 50, user=Depends(
             "alert_id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
             "resource_type": a.resource_type, "resource_name": a.resource_name, "namespace": a.namespace,
             "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
+            "diag_category": a.diag_category,
             "message": (a.message or "")[:200], "detected_at": str(a.detected_at),
             "has_diagnosis": d is not None,
             "confidence": d.confidence if d else None,

@@ -325,7 +325,7 @@ export const runDiagnosticTask = (id: number) => http.post(`/diagnostic-tasks/${
 export const getDiagnosticReports = (taskId?: number) => http.get('/diagnostic-reports', { params: taskId ? { task_id: taskId } : {} })
 
 // ============ 故障诊断（针对告警的 AI 诊断）============
-export const getFaultDiagnoses = (params?: PageParams) => http.get<FaultDiagnosisItem[]>('/fault-diagnoses', { params })
+export const getFaultDiagnoses = (params?: PageParams & { category?: string }) => http.get<FaultDiagnosisItem[]>('/fault-diagnoses', { params })
 export const getFaultDiagnosis = (alertId: number) => http.get<FaultDiagnosisItem>(`/fault-diagnoses/${alertId}`)
 
 // ============ 数据库连接管理 ============

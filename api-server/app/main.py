@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.api import (
     agent, ai_proxy, alert_policies, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
     db_diagnosis, decisions, diagnostic, executions, fault_diagnosis, im_groups, in_app_messages, knowledge, log_alert_rules, log_sources, logs, notifications, on_duty, permissions,
-    projects, repair_records, report_schedules, resource_alert_rules, resources, self_heal_rules, stats, tasks, terminal, users, webhooks,
+    projects, repair_records, report_schedules, resource_alert_rules, resources, self_heal_rules, stats, tasks, terminal, tickets, users, webhooks,
 )
 from app.api import settings as settings_api
 from app.core.config import settings
@@ -346,6 +346,7 @@ app.include_router(logs.router)
 app.include_router(repair_records.router)
 app.include_router(log_alert_rules.router)
 app.include_router(log_sources.router)
+app.include_router(tickets.router)
 app.include_router(settings_api.router)
 app.include_router(permissions.router)
 app.include_router(projects.router)

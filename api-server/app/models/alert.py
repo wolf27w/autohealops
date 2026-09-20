@@ -46,6 +46,9 @@ class Alert(Base):
     # ===== 去重键（D2）：STORED 生成列，活跃时非空、解决后自动 NULL，仅 DB 唯一索引用 =====
     # server_default=FetchedValue()：让 ORM 不把该列写入 INSERT/UPDATE（MySQL 生成列禁止显式赋值）
     dedup_key: Mapped[str | None] = mapped_column(String(255), server_default=FetchedValue(), nullable=True)
+    # ===== 诊断域（N3）：cluster/app/db，STORED 生成列（由 fault_type+resource_type 推导） =====
+    # 同样禁止 ORM 写入；过滤/统计时可直接用 Alert.diag_category
+    diag_category: Mapped[str | None] = mapped_column(String(10), server_default=FetchedValue(), index=True, nullable=True)
 
 
 class AlertComment(Base):

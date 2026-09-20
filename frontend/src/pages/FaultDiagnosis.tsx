@@ -7,11 +7,12 @@ import type { AiFeedbackData, FaultDiagnosisItem } from '../types'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 
-export default function FaultDiagnosis() {
+export default function FaultDiagnosis({ category = '' }: { category?: string }) {
+  // N3 诊断分离：category = cluster / app / ''（空=全部）
   // react-query：诊断台账（15s 轮询）
   const { data: data = [], isLoading: loading, refetch } = useQuery({
-    queryKey: ['fault-diagnoses'],
-    queryFn: () => getFaultDiagnoses({ page: 1, page_size: 100 }),
+    queryKey: ['fault-diagnoses', category],
+    queryFn: () => getFaultDiagnoses({ page: 1, page_size: 100, category }),
     refetchInterval: 15000,
   })
   const [detail, setDetail] = useState<FaultDiagnosisItem | null>(null)
@@ -55,7 +56,11 @@ export default function FaultDiagnosis() {
   return (
     <div>
       <div style={{ marginBottom: 12, color: '#666' }}>
-        故障诊断：针对<strong>告警</strong>的 AI 诊断结果台账（处理闭环记录见「告警处理 → 处理记录」）。
+        {(category === 'cluster' ? '集群故障诊断' : category === 'app' ? '应用故障诊断' : '故障诊断')}
+        ：针对<strong>告警</strong>的 AI 诊断结果台账
+        {category === 'cluster' && '（只含节点 / 集群层故障）'}
+        {category === 'app' && '（只含 Pod / 工作负载 / 容器 / 日志故障）'}
+        （处理闭环记录见「告警处理 → 处理记录」）。
       </div>
       <Table rowKey="alert_id" loading={loading} dataSource={data}
         columns={[
