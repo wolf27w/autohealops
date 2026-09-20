@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import MainLayout from './components/MainLayout'
 import Login from './pages/Login'
 import Screen from './pages/Screen'
+import Dashboard from './pages/Dashboard'
 import ClusterList from './pages/ClusterList'
 import ClusterDetail from './pages/ClusterDetail'
 import ServiceDetail from './pages/ServiceDetail'
@@ -69,7 +70,7 @@ export default function App() {
         }
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Screen embedded />} />
+        <Route path="dashboard" element={<Dashboard />} />
         <Route path="clusters" element={<ClusterList />} />
         <Route path="clusters/:id" element={<ClusterDetail />} />
         <Route path="clusters/:id/workloads/:kind/:namespace/:name" element={<ServiceDetail />} />

@@ -3,7 +3,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
-  FaultDiagnosisItem, KnowledgeEntry, NotificationConfig, OpResult, PageParams, PageResult, User, Workload,
+  FaultDiagnosisItem, KnowledgeEntry, NotificationConfig, OpResult, PageParams, PageResult, PlatformHealth, User, Workload,
 } from '../types'
 
 const api = axios.create({
@@ -204,8 +204,16 @@ export const verifyAuditChain = () => http.post('/audit/verify-chain')
 
 // ============ 统计 ============
 export const getStatsOverview = () => http.get('/stats/overview')
-export const getDashboard = () => http.get<DashboardData>('/stats/dashboard')
-export const getPlatformHealth = () => http.get('/stats/platform-health')
+
+export interface DashboardParams {
+  range?: string
+  cluster_id?: number
+  project_id?: number
+}
+
+export const getDashboard = (params?: DashboardParams) =>
+  http.get<DashboardData>('/stats/dashboard', { params })
+export const getPlatformHealth = () => http.get<PlatformHealth>('/stats/platform-health')
 export const getAIEffectiveness = (range: string = '7d') => http.get('/stats/ai-effectiveness', { params: { range } })
 export const getModelCost = (range: string = '7d') => http.get('/stats/model-cost', { params: { range } })
 export const getRepairSuccessRate = () => http.get('/stats/repair-success-rate')

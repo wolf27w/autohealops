@@ -215,9 +215,127 @@ export interface DashboardData {
   cluster_details: ClusterHealthDetail[]
   recent_alerts: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
+  fault_top?: Array<{ fault_type: string; count: number }>
   health: { api_server: boolean; database: boolean; redis: boolean }
-  clusters: Array<Record<string, unknown>>
+  clusters: DashboardCluster[]
+  // ===== v2 新增区块（向后兼容，可选） =====
+  health_score?: HealthScore
+  kpi?: DashboardKpi
+  alert_trend?: AlertTrendPoint[]
+  ai_result_dist?: AiResultDistItem[]
+  realtime_alerts?: RealtimeAlert[]
+  abnormal_pods?: AbnormalPod[]
+  db_health?: DbHealthItem[]
+  action_stat?: ActionStat
+  action_timeline?: ActionTimelineItem[]
+  cluster_waterline?: ClusterWaterline[]
   [key: string]: unknown
+}
+
+// ============ 仪表盘 v2 ============
+export interface HealthScore {
+  total: number
+  cluster_score: number
+  alert_score: number
+  db_score: number
+}
+
+export interface DashboardKpi {
+  cluster_total: number
+  alert_pending: number
+  auto_processed_1y: number
+  manual_pending: number
+  db_abnormal: number
+  heal_rate: number
+  mttr_minutes: number
+}
+
+export interface AlertTrendPoint {
+  bucket: string
+  new: number
+  resolved: number
+  self_healed: number
+}
+
+export type AiResultKey = 'self_heal' | 'approval' | 'manual' | 'failed'
+
+export interface AiResultDistItem {
+  key: AiResultKey
+  count?: number
+  value?: number
+}
+
+export interface RealtimeAlert {
+  id: number
+  cluster_name: string
+  resource_name: string
+  namespace: string
+  fault_type: string
+  severity: string
+  status: string
+  detected_at: string
+}
+
+export interface AbnormalPod {
+  cluster_name: string
+  namespace: string
+  pod_name: string
+  fault_type: string
+  severity: string
+  status: string
+  detected_at: string
+}
+
+export interface DbHealthItem {
+  id: number
+  name: string
+  db_type: string
+  status: string
+  conn_used: number
+  conn_max: number
+  usage_pct: number
+  qps: number
+  tps: number
+  cache_hit: number
+  sampled_at: string
+}
+
+export interface ActionStat {
+  self_heal: number
+  restart: number
+  scale: number
+  rollback: number
+}
+
+export interface ActionTimelineItem {
+  time: string
+  action: string
+  target: string
+  status: string
+}
+
+export interface ClusterWaterline {
+  cluster_id: number
+  cluster_name: string
+  cpu_pct: number | null
+  mem_pct: number | null
+  pods: number
+  alert_pending: number
+}
+
+export interface PlatformHealth {
+  api_server: boolean
+  database: boolean
+  redis: boolean
+  time?: string
+}
+
+export interface DashboardCluster {
+  id: number
+  name: string
+  status: string
+  version?: string
+  rbac_mode?: string
 }
 
 // ============ 值班 ============
