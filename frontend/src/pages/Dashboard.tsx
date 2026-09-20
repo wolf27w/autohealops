@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker,
+  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch,
 } from 'antd'
 import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { Line, Pie, Bar } from '@ant-design/charts'
@@ -40,25 +40,23 @@ const fmtTime = (t: string | null | undefined) => (t ? String(t).slice(5, 16) : 
 
 export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
-  // 时间范围：快捷预设（10m/3h/8h/24h，随最新滑动）或自定义起止时间
-  const [preset, setPreset] = useState<string>('10m')
+  // 时间范围：默认【实时】（跟随最新，滚动窗口），也可自定义起止时间段
+  const [live, setLive] = useState(true)
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null)
-  const presetSpan: Record<string, [number, string]> = { '10m': [10, 'minute'], '3h': [3, 'hour'], '8h': [8, 'hour'], '24h': [24, 'hour'] }
+  const RANGE_MINUTES = 10  // 实时模式滚动窗口（最近 10 分钟，5s 刷新）
   const presetValue = (key: string): [Dayjs, Dayjs] => {
-    const [n, unit] = presetSpan[key] || presetSpan['10m']
+    const span: Record<string, [number, string]> = { '10m': [10, 'minute'], '3h': [3, 'hour'], '8h': [8, 'hour'], '24h': [24, 'hour'] }
+    const [n, unit] = span[key] || span['10m']
     return [dayjs().subtract(n, unit as dayjs.ManipulateType), dayjs()]
   }
   const applyPick = (v: [Dayjs | null, Dayjs | null] | null) => {
     if (!v || !v[0] || !v[1]) return
-    const mins = v[1].diff(v[0], 'minute')
-    const nearNow = Math.abs(dayjs().diff(v[1], 'minute')) <= 1
-    const map: Record<number, string> = { 10: '10m', 180: '3h', 480: '8h', 1440: '24h' }
-    if (nearNow && map[mins]) { setPreset(map[mins]); setCustomRange(null) }
-    else { setCustomRange([v[0], v[1]]); setPreset('custom') }
+    setCustomRange([v[0], v[1]])
+    setLive(false)  // 选了具体时间段 → 退出实时模式
   }
-  const rangeLabel = customRange
-    ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}`
-    : (preset === '10m' ? '最近 10 分钟' : preset === '3h' ? '最近 3 小时' : preset === '8h' ? '最近 8 小时' : '最近 24 小时')
+  const rangeLabel = live
+    ? `实时（最近 ${RANGE_MINUTES} 分钟，自动刷新）`
+    : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
 
@@ -81,14 +79,14 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
 
   // 仪表盘主数据（5s 轮询；筛选变化自动重查）
   const { data, isFetching, refetch } = useQuery<DashboardData>({
-    queryKey: ['dashboard-v2', preset, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
-    queryFn: () => (customRange
+    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
+    queryFn: () => (!live && customRange
       ? getDashboard({
           start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
           end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
           cluster_id: clusterId,
         })
-      : getDashboard({ range: preset, cluster_id: clusterId })),
+      : getDashboard({ range: '10m', cluster_id: clusterId })),
     refetchInterval: 5000,
   })
 
@@ -161,11 +159,17 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               onChange={(v) => setClusterId(v)}
               options={clusters.map((c) => ({ value: c.id, label: c.name }))}
             />
+            <Space size={6}>
+              <Switch checked={live} onChange={(v: boolean) => setLive(v)} />
+              <span style={{ fontSize: 13 }}>实时</span>
+            </Space>
             <DatePicker.RangePicker
               showTime={{ format: 'HH:mm' }}
               format="MM-DD HH:mm"
               allowClear={false}
-              value={customRange ?? presetValue(preset)}
+              disabled={live}
+              value={live ? null : customRange}
+              placeholder={['实时（跟随最新）', '实时（跟随最新）']}
               onChange={(v) => applyPick(v as [Dayjs | null, Dayjs | null] | null)}
               presets={[
                 { label: '最近 10 分钟', value: presetValue('10m') },
@@ -173,9 +177,9 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 { label: '最近 8 小时', value: presetValue('8h') },
                 { label: '最近 24 小时', value: presetValue('24h') },
               ]}
-              style={{ width: 260 }}
+              style={{ width: 250 }}
             />
-            <span style={{ fontSize: 12, color: '#8c8c8c' }}>{rangeLabel}{customRange ? '（自定义）' : ''}</span>
+            <span style={{ fontSize: 12, color: '#8c8c8c' }}>{rangeLabel}</span>
           </Space>
 
           <div style={{ flex: 1 }} />
