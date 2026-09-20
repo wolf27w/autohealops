@@ -105,6 +105,18 @@ async def list_records(page: int = 1, page_size: int = 50, user=Depends(require_
             # 有效审批单（非 cancelled/解除）→ 审核；其余按告警状态兜底
             if a.status == "self_healed":
                 handle_type = "自愈"
+            elif approval and approval.status == "approved":
+                handle_type = "已审核"          # 人工审核通过
+                approver = approver_from_approval
+                approval_status = approval.status
+            elif approval and approval.status == "rejected":
+                handle_type = "已驳回"          # 人工裁定无需处理
+                approver = approver_from_approval
+                approval_status = approval.status
+            elif approval and approval.status == "pending":
+                handle_type = "审核中"
+                approver = approver_from_approval
+                approval_status = approval.status
             elif approval and approval.status != "cancelled":
                 handle_type = "审核"
                 approver = approver_from_approval

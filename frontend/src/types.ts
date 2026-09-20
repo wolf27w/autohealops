@@ -48,6 +48,8 @@ export interface Cluster {
 
 // ============ 告警 ============
 export interface Alert {
+  /** 关联审批状态（approved/rejected/pending），用于展示「已审核/已驳回」 */
+  approval_status?: string
   id: number
   cluster_id: number
   resource_type: string // pod / node

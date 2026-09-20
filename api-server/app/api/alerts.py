@@ -13,7 +13,7 @@ from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.security import generate_trace_id
 from app.middleware.permission import require_any_user, require_operator
-from app.models import AIDiagnosisResult, Alert, AlertComment, Cluster
+from app.models import AIDiagnosisResult, Alert, AlertComment, Approval, Cluster, RepairPlan
 from app.services import audit_service
 
 router = APIRouter(prefix="/api/v1/alerts")
@@ -52,10 +52,29 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
         # 查集群名称（多集群区分）
         cluster_result = await session.execute(select(Cluster))
         cluster_names = {c.id: c.name for c in cluster_result.scalars()}
+        # 审批状态（用于「已审核/已驳回」展示）：优先 alert_id 直连，其次经 repair_plans 关联
+        ap_status_by_alert: dict[int, str] = {}
+        if alerts:
+            a_ids = [a.id for a in alerts]
+            for ap in (await session.execute(
+                select(Approval).where(Approval.alert_id.in_(a_ids)).order_by(Approval.id.desc())
+            )).scalars():
+                if ap.alert_id and ap.alert_id not in ap_status_by_alert:
+                    ap_status_by_alert[ap.alert_id] = ap.status
+            plan_rows = (await session.execute(
+                select(RepairPlan.alert_id, Approval)
+                .join(Approval, Approval.plan_id == RepairPlan.id)
+                .where(RepairPlan.alert_id.in_(a_ids))
+                .order_by(Approval.id.desc())
+            )).all()
+            for aid, ap in plan_rows:
+                if aid and aid not in ap_status_by_alert:
+                    ap_status_by_alert[aid] = ap.status
     return {"code": 200, "message": "success", "data": [
         {"id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
          "resource_type": a.resource_type, "resource_name": a.resource_name,
          "namespace": a.namespace, "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
+         "approval_status": ap_status_by_alert.get(a.id, ""),
          "message": a.message, "event_count": a.event_count,
          "manual_required": bool(a.manual_required), "manual_reason": a.manual_reason or "",
          "resolved_by": a.resolved_by or "",

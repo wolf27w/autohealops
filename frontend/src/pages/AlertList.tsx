@@ -171,7 +171,14 @@ export default function AlertList() {
           { title: '级别', dataIndex: 'severity', render: (s) => <SeverityTag severity={s} /> },
           { title: '状态', dataIndex: 'status', render: (s, r: Alert) => (
             <Space size={4}>
-              <StatusTag status={s} />
+              <StatusTag
+                status={s}
+                label={
+                  s === 'resolved' && r.approval_status === 'approved' ? '已审核'
+                    : s === 'resolved' && r.approval_status === 'rejected' ? '已驳回'
+                      : undefined
+                }
+              />
               {r.manual_required && (
                 <Tooltip title={r.manual_reason || '平台/AI 无法自动解决，需人工协助'}>
                   <Tag color="red">需人工协助</Tag>
