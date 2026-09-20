@@ -83,6 +83,8 @@
 | A2 孤立路由 14 条 | ✅ 改为重定向到合并页（`/alerts→/alert-handling` 等），外部深链仍可用 |
 | D5 `Tickets.tsx` 自建 http | ✅ 改用 `services/api.ts`（含新增 patch 与工单接口） |
 | D6 工单本地类型 | ✅ 收敛到 `types.ts`（Ticket/TicketComment/TicketDetail） |
+| D6+ 跨页重复类型 | ✅ `PodTarget`(2页)、`MetricPoint`(2页)、`AICallLog`(2页)、`DBConn/DBConnection`(3页) 合并为 types.ts 共用类型；跨页重复已归零 |
+| D6 其余本地 interface | 🟢 保留：62 个均为**单页自有视图模型**（名字不重复），搬进 types.ts 只是换位置、不减重复 |
 | B2 日志索引两处 | ✅ 消除歧义：**选了日志源以源索引为准**，未选才用规则索引；告警文案显示实际生效索引；前端加提示 |
 | B4 静默窗口两套 | ✅ 保留两层，前端明确「两者任一命中即静默」的优先级说明 |
 | E1 `PROMPT.md` 旧版 | ✅ 删除（归档副本在 backup 目录） |
