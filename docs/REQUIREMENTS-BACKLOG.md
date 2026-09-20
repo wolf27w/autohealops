@@ -452,3 +452,8 @@
 - 数据来源：执行器采集时统计 Service 总数 + `type=LoadBalancer` 数量，写入集群级快照（`namespace='_cluster_'` 的 `service_limit`=服务总数 / `service_used`=LB 数，复用现有字段，无需改表）
 - 接口：`/stats/dashboard` 的 `cluster_details` / `cluster_waterline` 增加 `lb_count`、`service_total`
 - 实测：测试环境 0/919（无 LoadBalancer 服务）、UAT 2/70
+
+### 仪表盘时间范围改版：10分钟 / 3小时 / 8小时 / 24小时 ✅ 2026-09-20
+- 前端 Segmented 选项 `['10m','3h','8h','24h']`，默认 **10m**
+- 后端分桶：10m→1 分钟/桶、3h→5 分钟/桶、8h→15 分钟/桶、24h→小时/桶（旧 7d/30d/90d/1y 保留兼容）
+- 实测：10m=11 桶、3h=37 桶、8h=33 桶、24h=25 桶，KPI/健康分正常

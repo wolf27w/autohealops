@@ -232,7 +232,13 @@ async def dashboard(
 
         # 时间窗（趋势/成功率/MTTR 用）
         range_since = now - timedelta(hours=24)
-        if range_ == "7d":
+        if range_ == "10m":
+            range_since = now - timedelta(minutes=10)
+        elif range_ == "3h":
+            range_since = now - timedelta(hours=3)
+        elif range_ == "8h":
+            range_since = now - timedelta(hours=8)
+        elif range_ == "7d":
             range_since = now - timedelta(days=7)
         elif range_ == "30d":
             range_since = now - timedelta(days=30)
@@ -310,8 +316,19 @@ async def dashboard(
             "db_score": db_score,
         }
 
-        # --- alert_trend（按 range 分桶：24h→小时，7d/30d→天，90d/1y→周） ---
-        if range_ == "24h":
+        # --- alert_trend（按 range 分桶）---
+        # 新口径：10m→1 分钟/桶、3h→5 分钟/桶、8h→15 分钟/桶；24h→小时/桶；7d/30d→天；90d/1y→周
+        _minute_spec = {"10m": (60, timedelta(minutes=10)),
+                        "3h": (300, timedelta(hours=3)),
+                        "8h": (900, timedelta(hours=8))}
+        if range_ in _minute_spec:
+            step, span = _minute_spec[range_]
+            bucket_mode = "minute"
+            _bucket_col = lambda col: func.from_unixtime(  # noqa: E731
+                func.floor(func.unix_timestamp(col) / step) * step)
+            grp_new = func.date_format(_bucket_col(Alert.detected_at), "%Y-%m-%d %H:%i")
+            grp_res = func.date_format(_bucket_col(Alert.resolved_at), "%Y-%m-%d %H:%i")
+        elif range_ == "24h":
             bucket_mode = "hour"
             grp_new = func.date_format(Alert.detected_at, "%Y-%m-%d %H:00")
             grp_res = func.date_format(Alert.resolved_at, "%Y-%m-%d %H:00")
@@ -342,7 +359,18 @@ async def dashboard(
         resolved_map = {str(k): int(c) for k, c in resolved_rows}
         self_healed_map = {str(k): int(c) for k, c in self_healed_rows}
         alert_trend: list = []
-        if bucket_mode == "hour":
+        if bucket_mode == "minute":
+            step, _ = _minute_spec[range_]
+            epoch = int(range_since.timestamp())
+            t0 = datetime.fromtimestamp(epoch - (epoch % step))
+            t = t0
+            while t <= now:
+                bk = t.strftime("%Y-%m-%d %H:%M")
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                t += timedelta(seconds=step)
+        elif bucket_mode == "hour":
             t = range_since.replace(minute=0, second=0, microsecond=0)
             while t <= now:
                 bk = t.strftime("%Y-%m-%d %H:00")

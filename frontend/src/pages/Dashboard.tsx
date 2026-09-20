@@ -43,7 +43,7 @@ interface ProjectOption {
 
 export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
-  const [range, setRange] = useState('24h')
+  const [range, setRange] = useState('10m')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [projectId, setProjectId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
@@ -152,7 +152,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             <Segmented
               value={range}
               onChange={(v) => setRange(v as string)}
-              options={['24h', '7d', '30d', '90d', '1y']}
+              options={['10m', '3h', '8h', '24h']}
             />
           </Space>
 
