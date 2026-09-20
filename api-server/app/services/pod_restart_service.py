@@ -28,7 +28,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from app.clients.ai_client import ai_client
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import acquire_lock, redis_pool, release_lock
@@ -38,7 +38,6 @@ from app.services import notification_service
 
 logger = get_logger("api-server.pod_restart")
 
-executor_client = ExecutorClient()
 
 # 扫描周期（秒）
 SCAN_INTERVAL = 60
@@ -66,12 +65,7 @@ PROBE_MARKERS = (
 )
 
 
-def infer_deployment_name(pod_name: str) -> str:
-    """从 Pod 名推断 Deployment 名（Pod 名格式：{deployment}-{rs-hash}-{pod-hash}）"""
-    parts = (pod_name or "").split("-")
-    if len(parts) >= 3:
-        return "-".join(parts[:-2])
-    return pod_name or ""
+from app.utils.pod import infer_deployment_name  # 去重：统一实现（原三处各一份）
 
 
 def _oom_container_names(pod: dict) -> list[str]:

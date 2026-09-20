@@ -8,14 +8,13 @@
 """
 from sqlalchemy import select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.models import Project, ProjectClusterNS, User, UserProjectPermission
 
 logger = get_logger("api-server.rbac_service")
 
-executor_client = ExecutorClient()
 
 # 项目角色 → ClusterRole 映射
 ROLE_TO_CLUSTER_ROLE = {

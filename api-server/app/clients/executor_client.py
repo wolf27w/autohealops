@@ -514,3 +514,7 @@ class ExecutorClient:
         except Exception as e:  # noqa: BLE001
             logger.error("recreate_workload 失败: %s", e)
             return {"success": False, "message": "", "error": str(e)}
+
+
+# ============ 进程级单例（去重：原 14 处各自实例化，导致 14 条 gRPC 通道） ============
+executor_client = ExecutorClient()

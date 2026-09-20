@@ -26,11 +26,10 @@ context 约定（由调用方传入）：
 """
 import json
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.services import db_collector
 from app.clients.ai_client import ai_client
 
-executor_client = ExecutorClient()
 
 # ============ 参数校验（P0-3 基础版：类型 + 必填，不引外部依赖） ============
 

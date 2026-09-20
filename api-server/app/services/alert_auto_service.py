@@ -10,7 +10,7 @@ from datetime import datetime
 from sqlalchemy import or_, select
 
 from app.clients.ai_client import ai_client
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -21,7 +21,6 @@ from app.services import audit_service, knowledge_service
 
 logger = get_logger("api-server.alert_auto")
 
-executor_client = ExecutorClient()
 
 # 可自动判定"已恢复"的 Pod 故障类型（观察期外兜底）
 POD_RECOVERABLE_FAULTS = {"CrashLoopBackOff", "OOMKilled", "ImagePullBackOff", "ErrImagePull", "PendingTimeout"}
@@ -38,12 +37,7 @@ KB_REF_SIMILARITY = 0.6
 PER_ALERT_LOCK_MS = 180000
 
 
-def infer_deployment_name(pod_name: str) -> str:
-    """从 Pod 名推断 Deployment 名（Pod 名格式：{deployment}-{rs-hash}-{pod-hash}）"""
-    parts = pod_name.split("-")
-    if len(parts) >= 3:
-        return "-".join(parts[:-2])
-    return pod_name
+from app.utils.pod import infer_deployment_name  # 去重：统一实现（原三处各一份）
 
 
 # ============ 知识库命令模板：占位符填充 + 安全校验（P1-3） ============

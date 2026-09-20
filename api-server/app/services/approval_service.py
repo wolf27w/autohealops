@@ -11,7 +11,7 @@ import time
 
 from sqlalchemy import select, update
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import redis_pool
@@ -21,7 +21,6 @@ from app.services import audit_service, knowledge_service, notification_service
 
 logger = get_logger("api-server.approval")
 
-executor_client = ExecutorClient()
 
 
 # ============ 流程加载与展开 ============

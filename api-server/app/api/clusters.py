@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.security import encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_any_user, require_operator
@@ -12,7 +12,6 @@ from app.services import user_permission_service
 
 router = APIRouter(prefix="/api/v1/clusters")
 
-executor_client = ExecutorClient()
 
 
 @router.post("")

@@ -6,7 +6,7 @@ import time
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.middleware.permission import require_any_user, require_operator
@@ -15,7 +15,6 @@ from app.services import audit_service
 
 router = APIRouter(prefix="/api/v1/executions")
 
-executor_client = ExecutorClient()
 logger = get_logger("api-server.executions")
 
 # 可回滚的计划状态

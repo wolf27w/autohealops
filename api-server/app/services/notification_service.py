@@ -175,12 +175,7 @@ async def _notify_limited(alert_id: int) -> bool:
     return not ok  # 已存在则限频
 
 
-def _infer_deployment_name(pod_name: str) -> str:
-    """从 Pod 名推断 Deployment 名（去最后两段随机后缀）"""
-    parts = (pod_name or "").split("-")
-    if len(parts) >= 3:
-        return "-".join(parts[:-2])
-    return pod_name or ""
+from app.utils.pod import infer_deployment_name as _infer_deployment_name  # 去重：统一实现
 
 
 async def _storm_suppressed(alert: Alert) -> bool:

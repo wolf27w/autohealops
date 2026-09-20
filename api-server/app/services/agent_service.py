@@ -13,7 +13,7 @@ import json
 from sqlalchemy import select
 
 from app.clients.ai_client import ai_client
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.models import DiagnosisMessage, DiagnosisSession
@@ -22,7 +22,6 @@ from app.services.es_client import es_client as api_es_client
 
 logger = get_logger("api-server.agent")
 
-executor_client = ExecutorClient()
 
 DEFAULT_MAX_TOOL_STEPS = 12  # 深度诊断：单次对话最多「有效」工具执行步数（重复调用不占额，可在系统设置覆盖）
 MAX_DECIDE_ROUNDS = 24  # LLM 决策轮数硬上限（防止重复调用空转，兜底）

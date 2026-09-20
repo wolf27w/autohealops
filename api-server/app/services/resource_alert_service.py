@@ -18,7 +18,7 @@ import time
 
 from sqlalchemy import select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -28,7 +28,6 @@ from app.services import notification_service
 
 logger = get_logger("api-server.resource_alert")
 
-executor_client = ExecutorClient()
 
 # 扫描周期（秒）
 SCAN_INTERVAL = 60

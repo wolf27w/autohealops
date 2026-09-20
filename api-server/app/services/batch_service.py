@@ -5,7 +5,7 @@ import json
 
 from sqlalchemy import select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import acquire_lock, redis_pool, release_lock
@@ -13,7 +13,6 @@ from app.models import Alert, BatchOperation, BatchOperationItem, RepairPlan
 
 logger = get_logger("api-server.batch")
 
-executor_client = ExecutorClient()
 
 
 async def create_batch_operation(name: str, cluster_ids: list[int], plan_id: int | None,

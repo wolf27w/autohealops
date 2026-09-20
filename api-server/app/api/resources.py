@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.redis_client import redis_pool
 from app.middleware.permission import require_any_user, require_operator
@@ -17,7 +17,6 @@ from app.services.user_permission_service import check_cluster_permission
 
 router = APIRouter(prefix="/api/v1/resources")
 
-executor_client = ExecutorClient()
 
 NS_CACHE_TTL = 300  # namespace 列表缓存秒数（批二·提速）
 

@@ -7,14 +7,13 @@ from datetime import datetime
 from sqlalchemy import select
 
 from app.clients.ai_client import ai_client
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.models import DiagnosticReport, DiagnosticTask
 
 logger = get_logger("api-server.diagnostic")
 
-executor_client = ExecutorClient()
 
 # 应用诊断采集命令（只读白名单内）
 DIAG_COMMANDS = [

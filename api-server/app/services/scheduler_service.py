@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import acquire_lock, redis_pool, release_lock
@@ -15,7 +15,6 @@ from app.models import CustomTask, CustomTaskLog
 logger = get_logger("api-server.scheduler")
 
 scheduler = AsyncIOScheduler()
-executor_client = ExecutorClient()
 
 
 def register_task(task: CustomTask) -> None:

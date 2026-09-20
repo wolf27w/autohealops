@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 
 from app.clients.ai_client import ai_client
-from app.clients.executor_client import ExecutorClient
+from app.clients.executor_client import executor_client
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -20,7 +20,6 @@ router = APIRouter(prefix="/api/v1/alerts")
 
 logger = get_logger("api-server.alerts")
 
-executor_client = ExecutorClient()
 
 
 @router.get("")
