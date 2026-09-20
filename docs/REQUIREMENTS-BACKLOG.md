@@ -313,3 +313,10 @@
 - `/screen` 直接复用 `Dashboard` 组件（新增 `screen` 属性：无侧栏/顶栏框架，自行补边距与底色铺满视口），**内容/布局/数据/5s 轮询与 /dashboard 完全一致**
 - 旧独立大屏实现 `pages/Screen.tsx`（深色/单屏/15s/轮播）已移除
 - 验证：`tsc -b` 0 error、`vite build` 通过
+
+### B8 重复建单修复 ✅ 2026-09-20（当日发现当日修）
+- 现象：告警 502（TerminatingStuck）每 30s 被后台扫描重新决策 → 累计 101 张审批单（99 张重复）
+- 根因：`auto_process_alerts()` 选取条件含 `awaiting_approval`，`_process_one` 对「待审批」告警又跑一遍风险决策并 `create_approval`，无幂等保护
+- 修复（`alert_auto_service.py`）：① 待审批告警若已有在途（pending）审批单 → 直接跳过（恢复关闭逻辑在此之前，不受影响）② 建单前二次校验已有在途单则不再建，仅对齐告警状态
+- 数据修正：502 的 101 张单 → 2 张 approved + 99 张 cancelled；告警 502 → resolved。备份 `logs/archive/approvals_alert502_dups_backup_20260920.json`
+- 验证：api-server 重启后 >45s 无新增审批单，pending 审批 0

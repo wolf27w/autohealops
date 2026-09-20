@@ -657,6 +657,17 @@ async def _process_one(alert: Alert) -> bool:
             logger.info("告警 %d 恢复，关闭同源未关闭告警 %d 条", alert.id, closed)
             return True
 
+    # 已待审批（awaiting_approval）：若已有在途待审批单，直接跳过。
+    # 防止后台每轮扫描把「待审批」告警重新决策一遍 → 不断新建审批单（B8：502 告警 30s 一张）。
+    # 资源已恢复的情况在上面已处理（恢复就关闭），此处只挡住重复决策。
+    if alert.status == "awaiting_approval":
+        async with async_session() as session:
+            inflight = (await session.execute(
+                select(Approval).where(Approval.alert_id == alert.id, Approval.status == "pending").limit(1)
+            )).scalar_one_or_none()
+        if inflight:
+            return False
+
     # 已转人工（需人工协助）的告警跳过（不再重复诊断/处理）
     if alert.manual_required or "已转人工" in (alert.message or ""):
         return False
@@ -895,6 +906,19 @@ async def _process_one(alert: Alert) -> bool:
         from app.models import User
         from app.services.approval_service import create_approval
         from app.services.decision_engine import DecisionLevel
+        # 幂等兜底（B8）：已有在途待审批单就不再建单，只把告警状态对齐
+        async with async_session() as session:
+            dup = (await session.execute(
+                select(Approval).where(Approval.alert_id == alert.id, Approval.status == "pending").limit(1)
+            )).scalar_one_or_none()
+        if dup:
+            logger.info("告警 %d 已有在途审批单 %d，跳过重复建单", alert.id, dup.id)
+            async with async_session() as session:
+                a = await session.get(Alert, alert.id)
+                if a and a.status != "awaiting_approval":
+                    a.status = "awaiting_approval"
+                    await session.commit()
+            return True
         async with async_session() as session:
             admin = (await session.execute(
                 select(User).where(User.role == "admin")

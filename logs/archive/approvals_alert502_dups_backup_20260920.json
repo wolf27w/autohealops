@@ -1,0 +1,813 @@
+{
+ "alert_id": 502,
+ "rows": [
+  {
+   "id": "136",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:37:33"
+  },
+  {
+   "id": "137",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:37:53"
+  },
+  {
+   "id": "138",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:38:23"
+  },
+  {
+   "id": "139",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:38:54"
+  },
+  {
+   "id": "140",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:39:25"
+  },
+  {
+   "id": "141",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:39:55"
+  },
+  {
+   "id": "142",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:40:26"
+  },
+  {
+   "id": "143",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:40:57"
+  },
+  {
+   "id": "144",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:41:27"
+  },
+  {
+   "id": "145",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:41:58"
+  },
+  {
+   "id": "146",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:42:29"
+  },
+  {
+   "id": "147",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:43:00"
+  },
+  {
+   "id": "148",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:43:31"
+  },
+  {
+   "id": "149",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:44:02"
+  },
+  {
+   "id": "150",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:44:33"
+  },
+  {
+   "id": "151",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:45:03"
+  },
+  {
+   "id": "152",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:45:34"
+  },
+  {
+   "id": "153",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:46:05"
+  },
+  {
+   "id": "154",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:46:35"
+  },
+  {
+   "id": "155",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:47:06"
+  },
+  {
+   "id": "156",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:47:36"
+  },
+  {
+   "id": "157",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:48:07"
+  },
+  {
+   "id": "158",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:48:38"
+  },
+  {
+   "id": "159",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:49:08"
+  },
+  {
+   "id": "160",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:49:39"
+  },
+  {
+   "id": "161",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:50:10"
+  },
+  {
+   "id": "162",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:50:41"
+  },
+  {
+   "id": "163",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:51:38"
+  },
+  {
+   "id": "164",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:52:09"
+  },
+  {
+   "id": "165",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:52:40"
+  },
+  {
+   "id": "166",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:53:10"
+  },
+  {
+   "id": "167",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:53:41"
+  },
+  {
+   "id": "168",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:54:11"
+  },
+  {
+   "id": "169",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:54:42"
+  },
+  {
+   "id": "170",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:55:13"
+  },
+  {
+   "id": "171",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:55:44"
+  },
+  {
+   "id": "172",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:56:14"
+  },
+  {
+   "id": "173",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:56:45"
+  },
+  {
+   "id": "174",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:57:16"
+  },
+  {
+   "id": "175",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:57:46"
+  },
+  {
+   "id": "176",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:58:17"
+  },
+  {
+   "id": "177",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:58:48"
+  },
+  {
+   "id": "178",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:59:18"
+  },
+  {
+   "id": "179",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 09:59:49"
+  },
+  {
+   "id": "180",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:00:20"
+  },
+  {
+   "id": "181",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:00:50"
+  },
+  {
+   "id": "182",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:01:21"
+  },
+  {
+   "id": "183",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:01:51"
+  },
+  {
+   "id": "184",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:02:22"
+  },
+  {
+   "id": "185",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:02:53"
+  },
+  {
+   "id": "186",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:03:24"
+  },
+  {
+   "id": "187",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:03:54"
+  },
+  {
+   "id": "188",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:04:25"
+  },
+  {
+   "id": "189",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:04:56"
+  },
+  {
+   "id": "190",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:05:27"
+  },
+  {
+   "id": "191",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:05:58"
+  },
+  {
+   "id": "192",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:06:28"
+  },
+  {
+   "id": "193",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:06:59"
+  },
+  {
+   "id": "194",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:07:30"
+  },
+  {
+   "id": "195",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:08:00"
+  },
+  {
+   "id": "196",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:08:31"
+  },
+  {
+   "id": "197",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:09:02"
+  },
+  {
+   "id": "198",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:09:32"
+  },
+  {
+   "id": "199",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:10:03"
+  },
+  {
+   "id": "200",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:10:34"
+  },
+  {
+   "id": "201",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:11:04"
+  },
+  {
+   "id": "202",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:11:35"
+  },
+  {
+   "id": "203",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:12:06"
+  },
+  {
+   "id": "204",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:12:37"
+  },
+  {
+   "id": "205",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:13:07"
+  },
+  {
+   "id": "206",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:13:45"
+  },
+  {
+   "id": "207",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:14:15"
+  },
+  {
+   "id": "208",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:14:46"
+  },
+  {
+   "id": "209",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:15:17"
+  },
+  {
+   "id": "210",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:15:48"
+  },
+  {
+   "id": "211",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:16:18"
+  },
+  {
+   "id": "212",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:16:49"
+  },
+  {
+   "id": "213",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:17:20"
+  },
+  {
+   "id": "214",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:17:51"
+  },
+  {
+   "id": "215",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:18:22"
+  },
+  {
+   "id": "216",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:18:53"
+  },
+  {
+   "id": "217",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:19:23"
+  },
+  {
+   "id": "218",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:19:54"
+  },
+  {
+   "id": "219",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:20:25"
+  },
+  {
+   "id": "220",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:21:00"
+  },
+  {
+   "id": "221",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:21:31"
+  },
+  {
+   "id": "222",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:22:02"
+  },
+  {
+   "id": "223",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:22:33"
+  },
+  {
+   "id": "224",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:23:03"
+  },
+  {
+   "id": "225",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:23:55"
+  },
+  {
+   "id": "226",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:24:26"
+  },
+  {
+   "id": "227",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:24:57"
+  },
+  {
+   "id": "228",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:25:28"
+  },
+  {
+   "id": "229",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:25:59"
+  },
+  {
+   "id": "230",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:26:29"
+  },
+  {
+   "id": "231",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:27:00"
+  },
+  {
+   "id": "232",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:27:30"
+  },
+  {
+   "id": "233",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:28:01"
+  },
+  {
+   "id": "234",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "cancelled",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:28:32"
+  },
+  {
+   "id": "235",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "approved",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:29:03"
+  },
+  {
+   "id": "236",
+   "alert_id": "502",
+   "plan_id": "84",
+   "status": "approved",
+   "kind": "risk_approval",
+   "created_at": "2026-09-20 10:29:33"
+  }
+ ]
+}
