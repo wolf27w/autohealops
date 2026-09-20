@@ -288,6 +288,38 @@ async def _resolve_pod_alerts(cluster_id: int, pod: dict) -> int:
         return len(alerts)
 
 
+async def _close_alerts_for_missing_pods(cluster_id: int, live_pods: set[str]) -> int:
+    """关闭「Pod 已不存在」的在途 PodRestart* 告警
+
+    场景：Pod 被删除 / 缩容 / 重建换了名字 → 原告警会永远挂在待处理（无恢复关闭时机）。
+    只处理本集群、本类 fault_type 的在途告警；live_pods 为空时调用方应跳过（避免把不可达集群的告警全关）。
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    async with async_session() as session:
+        rows = list((await session.execute(
+            select(Alert).where(
+                Alert.cluster_id == cluster_id,
+                Alert.resource_type == "pod",
+                Alert.fault_type.in_(POD_RESTART_FAULT_TYPES),
+                Alert.status.in_(["pending", "awaiting_approval"]),
+            )
+        )).scalars())
+        closed = 0
+        for a in rows:
+            key = f"{a.namespace or ''}/{a.resource_name or ''}"
+            if key in live_pods:
+                continue
+            a.status = "resolved"
+            a.resolved_at = now
+            a.resolved_by = "system"
+            if "已不存在" not in (a.message or ""):
+                a.message = (a.message or "") + "（Pod 已不存在（删除/缩容/重建），系统自动关闭）"
+            closed += 1
+        if closed:
+            await session.commit()
+        return closed
+
+
 async def scan_cluster(cluster_id: int) -> int:
     """扫描单集群：基线对比 + 增量判定 + 建单诊断通知 + 恢复关闭；返回新建告警数"""
     result = await executor_client.acall(executor_client.list_pod_restart_info, cluster_id)
@@ -331,6 +363,15 @@ async def scan_cluster(cluster_id: int) -> int:
             await _resolve_pod_alerts(cluster_id, p)
         except Exception as e:  # noqa: BLE001
             logger.warning("Pod %s 恢复关闭异常: %s", field, e)
+
+    # 回收：Pod 已不存在（删除/缩容/重建换名）→ 关闭其在途告警，避免长期挂单
+    try:
+        live = {f"{p.get('namespace', '')}/{p.get('name', '')}" for p in pods}
+        closed = await _close_alerts_for_missing_pods(cluster_id, live)
+        if closed:
+            logger.info("集群 %d 回收「Pod 已不存在」的重启告警 %d 条", cluster_id, closed)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Pod 回收关闭异常: %s", e)
     return new_alerts
 
 
