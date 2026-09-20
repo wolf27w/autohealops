@@ -23,7 +23,6 @@
 参考 db_alert_service.py（N6 建单/去重/恢复范式）。
 """
 import asyncio
-import time
 from datetime import datetime
 
 from sqlalchemy import select
@@ -48,6 +47,13 @@ SCAN_INTERVAL = 60
 POD_RESTART_OOM = "PodRestartOOM"
 POD_RESTART_PROBE = "PodRestartProbeFail"
 POD_RESTART_FAULT_TYPES = (POD_RESTART_OOM, POD_RESTART_PROBE)
+
+# 诊断上下文 fault_type 映射：让 ai-service 命中 pod_crash_diagnosis 模板
+# （ai-service POD_FAULTS 含 OOMKilled/CrashLoopBackOff，不含 N5 自定义 fault_type）
+_DIAGNOSIS_FAULT_TYPE = {
+    POD_RESTART_OOM: "OOMKilled",
+    POD_RESTART_PROBE: "CrashLoopBackOff",
+}
 
 # 手动重启注解：kubectl rollout restart 给新 Pod 打的标记
 RESTARTED_AT_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
@@ -134,20 +140,26 @@ async def _describe_pod(cluster_id: int, namespace: str, pod_name: str) -> str:
 
 async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
                         restart: int, prev_r: int, extra: str = "") -> int:
-    """建单/聚合：同 Pod 同 fault_type 在途不重复建单；返回新建告警 id（0=在途聚合未新建）"""
+    """建单/聚合：同 Deployment 同 fault_type 在途不重复建单；返回新建告警 id（0=在途聚合未新建）
+
+    按 deployment_name 维度聚合（与 alerts.dedup_key 唯一索引 + watcher 去重口径一致，
+    避免同服务多 Pod 同时 OOM 时撞 1062 唯一索引）；聚合时把 resource_name 更新为最新出问题的 Pod。
+    """
     now = datetime.now()
+    dep = infer_deployment_name(pod["name"])
     async with async_session() as session:
         existing = (await session.execute(
             select(Alert).where(
                 Alert.cluster_id == cluster_id,
                 Alert.resource_type == "pod",
-                Alert.resource_name == pod["name"],
+                Alert.deployment_name == dep,
                 Alert.fault_type == fault_type,
                 Alert.status == "pending",
             ).order_by(Alert.id.desc()).limit(1)
         )).scalar_one_or_none()
         if existing:
             existing.event_count = (existing.event_count or 0) + 1
+            existing.resource_name = pod["name"]  # 更新为最新出问题的 Pod
             existing.message = _build_message(pod, fault_type, prev_r, restart, extra)
             await session.commit()
             return 0
@@ -155,7 +167,7 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
             cluster_id=cluster_id,
             resource_type="pod",
             resource_name=pod["name"],
-            deployment_name=infer_deployment_name(pod["name"]),
+            deployment_name=dep,
             namespace=pod["namespace"],
             fault_type=fault_type,
             severity="high",
@@ -166,7 +178,11 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
             occurred_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         session.add(alert)
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception:  # noqa: BLE001  唯一索引竞态兑底 → 转聚合，不重复建单
+            await session.rollback()
+            return 0
         await session.refresh(alert)
         return alert.id
 
@@ -185,7 +201,7 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         "cluster_name": str(cluster_id),
         "namespace": pod["namespace"],
         "pod_name": pod["name"],
-        "fault_type": fault_type,
+        "fault_type": _DIAGNOSIS_FAULT_TYPE.get(fault_type, fault_type),
         "severity": alert.severity,
         "restart_count": str(restart),
         "status_info": f"重启次数 {prev_r} -> {restart}",
@@ -243,13 +259,19 @@ async def _process_increment(cluster_id: int, pod: dict, restart: int, prev_r: i
 
 
 async def _resolve_pod_alerts(cluster_id: int, pod: dict) -> int:
-    """Pod 已恢复 → 关闭该 Pod 在途 PodRestart* 告警"""
+    """Pod 已恢复 → 关闭该 Pod 对应的在途 PodRestart* 告警
+
+    按 deployment_name + resource_name 精确匹配（告警 resource_name 指向最新出问题的 Pod），
+    避免多副本场景下单个 Pod 恢复就误关同服务其它仍在故障的告警。
+    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    dep = infer_deployment_name(pod["name"])
     async with async_session() as session:
         result = await session.execute(
             select(Alert).where(
                 Alert.cluster_id == cluster_id,
                 Alert.resource_type == "pod",
+                Alert.deployment_name == dep,
                 Alert.resource_name == pod["name"],
                 Alert.fault_type.in_(POD_RESTART_FAULT_TYPES),
                 Alert.status == "pending",

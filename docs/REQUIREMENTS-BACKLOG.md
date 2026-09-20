@@ -327,3 +327,11 @@
 - 实测：auto_processed_1y 195 → **144**（142 自愈 + 2 有成功执行动作）；action_stat self_heal=15；action_failed=182
 - 项目筛选核查：项目 1 不存在（库里唯一项目 = #8 demo，绑 cluster 2 / ns jenkins）→ 之前「project_id=1 集群数 0」非 bug
 - 待老板确认：是否改为纯「自愈告警条数」口径
+
+### N5 异常 Pod 重启原因 AI 诊断 + 告警通知 ✅ 2026-09-20
+- executor（Go）：新增 `ListPodRestartInfo` RPC + `internal/executor/pod_restart.go`（全集群 Pod 每容器重启计数 + `lastState.terminated.reason` + `restartedAt` 注解）
+- api-server：新增 `pod_restart_service.py`（60s 扫描：重启增量检测 → 原因判定 → 建单 → AI 诊断 → 通知 → 恢复关闭）+ `executor_client.list_pod_restart_info` + 后台循环注册
+- 规则：增量对比（Redis 基线）；**排除**手动重启（restartedAt 注解）与首次发现的新 Pod（滚动发布）；OOMKilled → `PodRestartOOM`，探针失败 → `PodRestartProbeFail`；按 deployment 聚合去重；**不建审批单**；`alert_auto_service` 显式跳过这两类
+- 默认策略补 `PodRestartOOM`/`PodRestartProbeFail`（B 类，high）
+- 验证：go build / py_compile ✅；executor 重启后 RPC 正常（集群1 781 Pod、310 有重启；集群2 95 Pod、4 有重启）；无 UNIMPLEMENTED；扫描循环已启动；首轮只建基线不报（符合预期，无告警风暴）
+- 已知小缺口：Pod 被删除/缩容时其在途告警不会自动关闭（后续可补「快照外 Pod 告警回收」）
