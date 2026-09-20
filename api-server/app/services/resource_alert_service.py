@@ -33,7 +33,10 @@ logger = get_logger("api-server.resource_alert")
 SCAN_INTERVAL = 60
 
 # 资源告警 fault_type（auto_process_alerts 跳过，不自动修复）
-RESOURCE_ALERT_FAULT_TYPES = ("ContainerCpuHigh", "ContainerMemHigh")
+RESOURCE_ALERT_FAULT_TYPES = (
+    "ContainerCpuHigh", "ContainerMemHigh",
+    "ContainerNetRxHigh", "ContainerNetTxHigh",  # 网络入站/出站超阈值（2026-09-20 新增）
+)
 
 # PromQL 模板（metric_type → PromQL；扩展中间件指标时在此追加）
 # 说明：值 > 阈值即告警；百分比类直接输出 %，数值类（连接数/积压）输出原始值，阈值填对应数值
@@ -50,6 +53,15 @@ PROMQL_TEMPLATES = {
         '/ on(namespace, pod, container) group_left '
         'kube_pod_container_resource_limits{resource="memory"} * 100'
     ),
+    # 网络流量（cAdvisor 网卡计数器 → rate 转 MB/s；阈值单位 MB/s，与阈值字段共用 threshold_pct）
+    "net_rx": (
+        'sum by (namespace, pod, container) (rate(container_network_receive_bytes_total'
+        '{container!="POD",container!=""}[2m])) / 1048576'
+    ),
+    "net_tx": (
+        'sum by (namespace, pod, container) (rate(container_network_transmit_bytes_total'
+        '{container!="POD",container!=""}[2m])) / 1048576'
+    ),
     # 中间件（需集群部署对应 exporter 才有数据；指标名以 prometheus-community 常用 exporter 为准）
     "redis_connections": 'redis_connected_clients',  # redis_exporter
     "redis_memory_pct": 'redis_memory_used_bytes / (redis_memory_max_bytes or vector(1)) * 100',
@@ -62,7 +74,31 @@ PROMQL_TEMPLATES = {
     "rabbitmq_connections": 'rabbitmq_connections',  # rabbitmq_exporter
 }
 
-FAULT_TYPE_BY_METRIC = {"cpu": "ContainerCpuHigh", "memory": "ContainerMemHigh"}
+FAULT_TYPE_BY_METRIC = {
+    "cpu": "ContainerCpuHigh",
+    "memory": "ContainerMemHigh",
+    "net_rx": "ContainerNetRxHigh",
+    "net_tx": "ContainerNetTxHigh",
+}
+
+# 指标展示口径：metric_type → (中文名, 单位, 是否百分比)
+# 说明：阈值统一存 resource_alert_rules.threshold_pct 字段，百分比类单位为 %，网络类单位为 MB/s
+METRIC_META: dict[str, tuple[str, str, bool]] = {
+    "cpu": ("CPU 使用率", "%", True),
+    "memory": ("内存使用率", "%", True),
+    "net_rx": ("入站流量", "MB/s", False),
+    "net_tx": ("出站流量", "MB/s", False),
+}
+
+
+def metric_label(metric_type: str) -> str:
+    name, unit, pct = METRIC_META.get(metric_type, (metric_type, "", False))
+    return f"{name}（{unit}）" if unit else name
+
+
+def _fmt_value(metric_type: str, value: float) -> str:
+    _, unit, pct = METRIC_META.get(metric_type, ("", "", False))
+    return f"{value}%" if pct else f"{value} {unit or ''}".strip()
 
 
 def _ns_match(rule: ResourceAlertRule, namespace: str) -> bool:
@@ -83,7 +119,10 @@ def _container_match(rule: ResourceAlertRule, container: str) -> bool:
 
 
 def _parse_result(data_json: str) -> list[dict]:
-    """解析 Prometheus /api/v1/query 结果 → [{namespace, pod, container, usage_pct}]"""
+    """解析 Prometheus /api/v1/query 结果 → [{namespace, pod, container, usage_pct}]
+
+    注：usage_pct 是通用「指标值」字段（百分比指标存 %，网络指标存 MB/s）。
+    """
     try:
         data = json.loads(data_json)
         results = data.get("data", {}).get("result", [])
@@ -127,7 +166,11 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
             fault_type=fault_type,
             severity=rule.severity,
             status="pending",
-            message=f"容器 {item['container']} {rule.metric_type} 使用率 {usage_pct}% 超过阈值 {rule.threshold_pct}%（规则:{rule.name}）",
+            message=(
+                f"容器 {item['container']} {metric_label(rule.metric_type)} "
+                f"当前 {_fmt_value(rule.metric_type, usage_pct)}，超过阈值 {_fmt_value(rule.metric_type, rule.threshold_pct)}"
+                f"（规则:{rule.name}）"
+            ),
         )
         session.add(alert)
         await session.commit()
@@ -156,7 +199,7 @@ async def _resolve_alert(rule: ResourceAlertRule, item: dict) -> None:
         for a in result.scalars():
             a.status = "resolved"
             a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
-            a.message = (a.message or "") + "（资源使用率已恢复）"
+            a.message = (a.message or "") + "（指标已回落，系统自动关闭）"
         await session.commit()
 
 

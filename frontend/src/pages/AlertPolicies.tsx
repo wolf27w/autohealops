@@ -212,10 +212,20 @@ function LogRuleTab() {
 }
 
 // ============ 容器资源阈值规则（Prometheus） ============
+const METRIC_SHORT: Record<string, string> = {
+  cpu: 'CPU', memory: '内存', net_rx: '入站流量', net_tx: '出站流量',
+}
+const METRIC_TAG_COLOR: Record<string, string> = {
+  cpu: 'blue', memory: 'green', net_rx: 'cyan', net_tx: 'purple',
+}
+const isPercentMetric = (m?: string) => m !== 'net_rx' && m !== 'net_tx'
+
 const METRIC_OPTIONS = [
   { label: '容器资源', options: [
     { value: 'cpu', label: '容器 CPU 使用率（%）' },
     { value: 'memory', label: '容器内存使用率（%）' },
+    { value: 'net_rx', label: '容器入站流量（MB/s）' },
+    { value: 'net_tx', label: '容器出站流量（MB/s）' },
   ] },
   { label: '中间件（需集群部署对应 exporter）', options: [
     { value: 'redis_connections', label: 'Redis 连接数' },
@@ -272,8 +282,8 @@ function ResourceRuleTab() {
         { title: '集群', dataIndex: 'cluster_id', width: 110, render: (v) => clusterName(v) },
         { title: 'namespace', dataIndex: 'namespace_match', width: 120, render: (v) => v || '全部' },
         { title: '容器', dataIndex: 'container_match', width: 120, render: (v) => v || '全部' },
-        { title: '指标', dataIndex: 'metric_type', width: 80, render: (t) => <Tag color={t === 'cpu' ? 'blue' : 'green'}>{t === 'cpu' ? 'CPU' : '内存'}</Tag> },
-        { title: '阈值', dataIndex: 'threshold_pct', width: 90, render: (v) => `${v}%` },
+        { title: '指标', dataIndex: 'metric_type', width: 130, render: (t: string) => <Tag color={METRIC_TAG_COLOR[t] || 'default'}>{METRIC_SHORT[t] || t}</Tag> },
+        { title: '阈值', dataIndex: 'threshold_pct', width: 110, render: (v: number, r: ResourceAlertRule) => isPercentMetric(r.metric_type) ? `${v}%` : `${v} MB/s` },
         { title: '持续(秒)', dataIndex: 'duration_seconds', width: 90 },
         { title: '级别', dataIndex: 'severity', width: 80 },
         { title: '启用', dataIndex: 'enabled', width: 70, render: (v) => (v ? '是' : '否') },
@@ -297,7 +307,9 @@ function ResourceRuleTab() {
           <Form.Item name="metric_type" label="指标">
             <Select options={METRIC_OPTIONS} />
           </Form.Item>
-          <Form.Item name="threshold_pct" label="阈值（%）" rules={[{ required: true }]}><InputNumber min={1} max={1000} style={{ width: '100%' }} /></Form.Item>
+          <Form.Item name="threshold_pct" label={isPercentMetric(Form.useWatch('metric_type', form)) ? '阈值（%）' : '阈值（MB/s）'}
+            tooltip="百分比类指标单位是 %；网络入站/出站流量指标单位是 MB/s"
+            rules={[{ required: true }]}><InputNumber min={0.01} step={isPercentMetric(Form.useWatch('metric_type', form)) ? 1 : 0.5} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="duration_seconds" label="持续超限（秒）" tooltip="持续超阈值这么久才告警（防抖）"><InputNumber min={10} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="severity" label="告警级别"><Select options={['high', 'medium'].map((s) => ({ value: s, label: s }))} /></Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
