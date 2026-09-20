@@ -59,6 +59,14 @@ class AIClient:
             "tags": tags, "execution_steps": execution_steps, "source": source, "is_locked": is_locked,
         }, trace_id)
 
+    async def embed_test(self, cfg: dict | None = None, trace_id: str = "") -> dict:
+        """Embedding 连通性测试（cfg 可传未保存的配置做「先测再存」）"""
+        return await self._post("/api/v1/ai/rag/embed-test", {"config": cfg} if cfg else {}, trace_id)
+
+    async def reset_embed_cache(self, trace_id: str = "") -> dict:
+        """清空 ai-service 的 Embedding 配置缓存（保存配置后调用，立即生效）"""
+        return await self._post("/api/v1/ai/rag/embed-cache/reset", {}, trace_id)
+
     async def dedup_knowledge(self, trace_id: str = "") -> dict:
         """知识库存量去重（合并解决方法相同的重复条目）"""
         return await self._post("/api/v1/ai/rag/dedup", {}, trace_id)

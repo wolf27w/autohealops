@@ -97,7 +97,12 @@ async def search_similar(query: str, top_k: int = 5, category: str | None = None
 
     category（N3 诊断分离）：cluster/app/db 时**只在该诊断域内检索**（不跨类复用）；None=全部。
     """
-    query_vec = np.array(await embed(query), dtype=np.float32)
+    try:
+        query_vec = np.array(await embed(query), dtype=np.float32)
+    except Exception as e:  # noqa: BLE001
+        # 优雅降级：Embedding 未配置/不可用时，知识库检索返回空（不打断诊断主流程）
+        logger.warning("知识库检索跳过（Embedding 不可用）: %s", e)
+        return []
     await _ensure_index()
     mat = _INDEX["mat"]
     if mat is None or not _INDEX["entries"]:
@@ -106,14 +111,14 @@ async def search_similar(query: str, top_k: int = 5, category: str | None = None
     sims = (mat @ query_vec) / (_INDEX["norms"] * qn)
     entries = _INDEX["entries"]
     if category:
-        mask = np.array([1.0 if (getattr(e, "diag_category", None) or "app") == category else -1.0
-                         for e in entries], dtype=np.float32)
-        sims = sims * mask
+        # 只保留目标诊断域（不在域内置 -inf，避免负相似度/掩码乘法的排序错乱）
+        keep = np.array([((getattr(e, "diag_category", None) or "app") == category) for e in entries])
+        sims = np.where(keep, sims, -np.inf)
     k = max(1, min(int(top_k or 5), len(entries)))
     idx = np.argsort(-sims)[:k]
     out = []
     for i in idx:
-        if category and float(sims[int(i)]) < 0:
+        if not np.isfinite(sims[int(i)]):
             break  # 该类目下无更多命中
         e = entries[int(i)]
         out.append({

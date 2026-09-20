@@ -6,7 +6,7 @@ from sqlalchemy import case, func, select
 from app.core.database import async_session
 from app.core.security import encrypt_aes256_gcm
 from app.models import AICallLog, AIModelConfig
-from app.services.embedding_service import batch_embed, embed
+from app.services.embedding_service import batch_embed, embed, invalidate_config_cache, test_config
 from app.services.es_client import ESClient
 from app.services.rag_service import add_knowledge, dedup_existing, search_similar
 
@@ -243,3 +243,19 @@ async def update_prompt_template(template_id: int, payload: dict):
     from app.services.prompt_engine import update_template
     await update_template(template_id, payload.get("system_prompt", ""), payload.get("user_prompt_template", ""))
     return {"code": 200, "message": "success", "data": None}
+
+
+@router.post("/rag/embed-test")
+async def rag_embed_test(payload: dict | None = None):
+    """Embedding 连通性测试（可传配置先测再存；不传则测当前已保存配置）"""
+    payload = payload or {}
+    cfg = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+    result = await test_config(cfg if (cfg.get("base_url") or cfg.get("model")) else None)
+    return {"code": 200 if result.get("ok") else 400, "message": "success" if result.get("ok") else result.get("error", "测试失败"), "data": result}
+
+
+@router.post("/rag/embed-cache/reset")
+async def rag_embed_cache_reset():
+    """清空 Embedding 配置缓存（平台保存配置后调用，立即生效）"""
+    invalidate_config_cache()
+    return {"code": 200, "message": "success", "data": {"reset": True}}

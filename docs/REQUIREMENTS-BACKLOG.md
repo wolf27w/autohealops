@@ -379,3 +379,13 @@
 | B8 重复建单修复 | ✅ |
 | 迁移 | `g1b2c3d4e5f6` / `h1i2j3k4l5m6` / `i2j3k4l5m6n7` / `j3k4l5m6n7o8` / `k4l5m6n7o8p9` 全部已执行，head = k4l5m6n7o8p9 |
 | 未排期 | M1~M12 建议项（已采纳未排期） |
+
+### Embedding 配置能力就绪（老板：本地暂无 embedding，先把配置开发好，以后可直接配）✅ 2026-09-20
+- 配置入口：平台设置 → Embedding 配置（供应商 / API 地址 / 模型名 / API Key），存 system_settings，**改完立即生效**（保存后自动通知 ai-service 清缓存，不用等 60s）
+- **API Key 可选**：本地/内网 embedding 服务（Ollama/vLLM/LM Studio 等）无密钥也能用
+- 新增**连通性测试**：`POST /api/v1/settings/embedding/test`（支持「先测再存」传未保存配置），前端 Embedding 页有「测试连通性」按钮 + 已配置/未配置状态提示
+- **优雅降级**：未配置时知识库向量检索**自动跳过并返回空**（不再 503 打断诊断主流程）；显式调用仍返回明确指引文案
+- 修 bug：embedding 请求走了**系统代理**（macOS 系统代理导致 127.0.0.1 请求被代理返回 502）→ 改用共享客户端 `trust_env=False` 内网直连
+- 修 bug：知识库**按诊断域过滤**的相似度掩码写法错误（负数相似度 + 乘法掩码导致排序错乱、跨域误命中）→ 改为 `-inf` 屏蔽；实测 app 域命中、cluster 域 0、不传类别正常
+- 验证：用本地 mock OpenAI 兼容 /embeddings 服务端到端跑通「配置 → 测试(维度 8) → 新增带向量知识 → 分域检索 → 恢复空配置 → 降级返回空」；测试数据已清理，配置已还原为空
+- 备注：DeepSeek `deepseek-v4-flash` 模型**已在平台配置好**，Flash 接入需求关闭

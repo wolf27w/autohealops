@@ -310,6 +310,8 @@ export const deleteSelfHealRule = (id: number) => http.delete(`/self-heal-rules/
 // ============ 系统设置 ============
 export const getSettings = () => http.get<Record<string, unknown>>('/settings')
 export const updateSettings = (data: Payload) => http.put('/settings', data)
+// Embedding 配置连通性测试（可传未保存配置做「先测再存」）
+export const testEmbedding = (data?: Payload) => http.post('/settings/embedding/test', data ?? {})
 export const changePassword = (data: Payload) => http.post('/auth/change-password', data)
 
 // ============ AI 诊断助手（会话式 Agent）============

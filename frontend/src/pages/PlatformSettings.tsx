@@ -1,11 +1,14 @@
 // 系统设置页：平台级配置（Prometheus/ES/LDAP）+ 密码修改
 import { useEffect, useState } from 'react'
-import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider, Select } from 'antd'
-import { getSettings, updateSettings, changePassword } from '../services/api'
+import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider, Select, Space } from 'antd'
+import { getSettings, updateSettings, changePassword, testEmbedding } from '../services/api'
 import RiskPolicy from './RiskPolicy'
 
 export default function PlatformSettings() {
   const [settings, setSettings] = useState<Record<string, unknown>>({})
+  // Embedding 连通性测试状态（N: 配置就绪后可直接验证）
+  const [embTest, setEmbTest] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [embTesting, setEmbTesting] = useState(false)
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
 
@@ -75,6 +78,11 @@ export default function PlatformSettings() {
             children: (
               <Card>
                 <Divider orientation="left">知识库向量模型（远程 API，可随时切换）</Divider>
+                <div style={{ marginBottom: 8, fontSize: 13, color: settings.embedding_base_url && settings.embedding_model ? '#52c41a' : '#faad14' }}>
+                  当前状态：{settings.embedding_base_url && settings.embedding_model
+                    ? `已配置（${String(settings.embedding_base_url)} / ${String(settings.embedding_model)}）`
+                    : '未配置 —— 未配置时知识库向量检索自动跳过（不影响告警诊断主流程），配置好保存即可启用'}
+                </div>
                 <Form form={form} layout="vertical">
                   <Form.Item name="embedding_provider" label="供应商">
                     <Input placeholder="siliconflow / zhipu / dashscope / openai 等" />
@@ -85,10 +93,28 @@ export default function PlatformSettings() {
                   <Form.Item name="embedding_model" label="模型名">
                     <Input placeholder="BAAI/bge-m3 / text-embedding-v3" />
                   </Form.Item>
-                  <Form.Item name="embedding_api_key" label="API Key">
-                    <Input.Password placeholder="知识库检索用，非 LLM Key" />
+                  <Form.Item name="embedding_api_key" label="API Key（可选：本地/内网服务可留空）">
+                    <Input.Password placeholder="知识库检索用，非 LLM Key；本地服务无需密钥可留空" />
                   </Form.Item>
-                  <Button type="primary" onClick={handleSave}>保存配置</Button>
+                  <Space>
+                    <Button type="primary" onClick={handleSave}>保存配置</Button>
+                    <Button loading={embTesting} onClick={async () => {
+                      setEmbTesting(true) ; setEmbTest(null)
+                      try {
+                        const v = form.getFieldsValue(['embedding_provider', 'embedding_base_url', 'embedding_model', 'embedding_api_key'])
+                        const d = await testEmbedding({
+                          provider: v.embedding_provider, base_url: v.embedding_base_url,
+                          model: v.embedding_model, api_key: v.embedding_api_key,
+                        }) as { ok?: boolean; dimension?: number; error?: string }
+                        setEmbTest(d?.ok ? { ok: true, msg: `连通正常，向量维度 ${d.dimension}` } : { ok: false, msg: d?.error || '测试失败' })
+                      } catch { setEmbTest({ ok: false, msg: '测试请求失败（详情见右上角提示）' }) } finally { setEmbTesting(false) }
+                    }}>测试连通性</Button>
+                  </Space>
+                  {embTest && (
+                    <div style={{ marginTop: 8, fontSize: 13, color: embTest.ok ? '#52c41a' : '#ff4d4f' }}>
+                      {embTest.ok ? '✅ ' : '❌ '}{embTest.msg}
+                    </div>
+                  )}
                 </Form>
               </Card>
             ),
