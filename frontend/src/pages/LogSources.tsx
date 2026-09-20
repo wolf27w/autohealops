@@ -66,7 +66,7 @@ export default function LogSources() {
         密码加密存储，仅回显「是否已配置」，留空表示不修改。
       </div>
       <div style={{ marginBottom: 12, color: '#8c8c8c', fontSize: 12 }}>
-        配好源后，到「<a onClick={() => navigate('/strategy')}>策略配置 → 日志告警规则</a>」里<strong>选这个源</strong> + 关键词 / 阈值 / 时间窗，后台每约 2 分钟扫描，命中即建告警并通知。
+        配好源后，到「<a onClick={() => navigate('/strategy')}>策略配置 → 日志告警规则</a>」里<strong>选这个源</strong> + 关键词 / 阈值 / 时间窗，后台每 30 秒扫描一次，命中即建告警并通知（同一规则 5 分钟内只聚合，不刷屏）。
         非 k8s 结构的 ES：按实际索引填「时间字段 / 搜索字段」（Pod、命名空间字段可留空）。
       </div>
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }}

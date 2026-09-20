@@ -174,7 +174,7 @@ function LogRuleTab() {
     <Card>
       <div style={{ marginBottom: 12, color: '#8c8c8c', fontSize: 12 }}>
         ES 日志源在「<a onClick={() => navigate('/log-sources')}>日志源</a>」页维护（支持多实例；可分别配置时间字段 / 搜索字段等）——
-        这里每条规则可以<strong>指定使用哪个源</strong>；不指定则用默认源。扫描周期约 2 分钟。
+        这里每条规则可以<strong>指定使用哪个源</strong>；不指定则用默认源。后台每 30 秒扫描一次。
       </div>
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }} onClick={() => { setEditing(null); form.resetFields(); setOpen(true) }}>新增规则</Button>
       <Table rowKey="id" dataSource={data} columns={[
