@@ -178,6 +178,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("容器资源告警扫描启动失败: %s", e)
 
+    # 恢复收敛扫描（每 60 秒：待处理/审批中的 Pod 告警，资源恢复即关闭）
+    try:
+        from app.services.alert_auto_service import recovery_sweep_loop
+        _recovery_task = asyncio.create_task(recovery_sweep_loop())
+        logger.info("恢复收敛扫描已启动（每 60 秒：资源恢复 → 待处理/审批中告警自动关闭）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("恢复收敛扫描启动失败: %s", e)
+
     # 数据库连接故障告警扫描（每 60 秒：连接失败/认证失败 → 告警 → 统一告警策略）
     try:
         from app.services.db_alert_service import background_loop as db_alert_loop

@@ -953,6 +953,55 @@ async def process_alert(alert_id: int) -> bool:
         await release_lock(redis_pool, lock_key, value)
 
 
+async def sweep_recovered_alerts(limit: int = 50) -> int:
+    """恢复收敛扫描：对「待处理 / 审批中」的 Pod 告警，资源已恢复就自动关闭
+
+    背景（老板口径）：服务恢复了就不该还挂在「待处理」或「审批中」——
+    - 审批中（已转人工但没人处理）→ 恢复后置 resolved（并解除待审批单）
+    - 待处理 → 恢复后按原语义置 self_healed（未转人工）
+    每 60s 跑一次，与告警自动处理循环独立（互不阻塞）。
+    """
+    closed = 0
+    async with async_session() as session:
+        rows = list((await session.execute(
+            select(Alert).where(
+                Alert.resource_type == "pod",
+                Alert.status.in_(["pending", "awaiting_approval"]),
+            ).order_by(Alert.detected_at.asc()).limit(limit)
+        )).scalars())
+    for alert in rows:
+        try:
+            if not alert.resource_name:
+                continue
+            if not await check_pod_recovered(alert.cluster_id, alert.namespace or "", alert.resource_name):
+                continue
+            n = await _close_related_alerts(alert)
+            if n == 0:
+                async with async_session() as session:
+                    a = await session.get(Alert, alert.id)
+                    if a:
+                        _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                        await session.commit()
+                n = 1
+            closed += n
+            logger.info("恢复收敛：告警 %d（%s/%s）资源已恢复，关闭 %d 条", alert.id, alert.namespace, alert.resource_name, n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("恢复收敛告警 %d 异常: %s", alert.id, e)
+    return closed
+
+
+async def recovery_sweep_loop() -> None:
+    """恢复收敛后台循环（60s 一次）"""
+    while True:
+        try:
+            n = await sweep_recovered_alerts()
+            if n:
+                logger.info("恢复收敛本轮关闭 %d 条告警", n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("恢复收敛循环异常: %s", e)
+        await asyncio.sleep(60)
+
+
 async def auto_process_alerts() -> int:
     """扫描 pending 告警，逐条执行完整闭环（诊断/方案复用，断点续传）；返回处理数量"""
     value = await acquire_lock(redis_pool, "lock:alert_auto", 300000)  # 5 分钟：覆盖单批最长处理时间，防拆分后并发重叠

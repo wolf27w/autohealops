@@ -400,8 +400,11 @@ async def dashboard(
         } for a in realtime_rows]
 
         # --- abnormal_pods（有告警的 Pod Top20） ---
+        # 异常 Pod = **当前仍未恢复**的 Pod 告警（待处理 / 审批中）；
+        # 已解决 / 已自愈的不再算「异常」（否则列表里混进历史状态，看着像没处理）
         abnormal_rows = (await session.execute(
-            _filter(select(Alert).where(Alert.resource_type == "pod")
+            _filter(select(Alert).where(Alert.resource_type == "pod",
+                                        Alert.status.in_(["pending", "awaiting_approval"]))
                     .order_by(Alert.detected_at.desc()).limit(20))
         )).scalars().all()
         abnormal_pods = [{
