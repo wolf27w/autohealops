@@ -1,7 +1,7 @@
 // 服务详情页（专项 D）：工作负载概览 + 副本增减 + 探针编辑 + 回滚/重启/重建 + Pods 列表（监控/日志/进容器/YAML）
-import { useEffect, useState } from 'react'
-import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown } from 'antd'
-import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined } from '@ant-design/icons'
+import { useEffect, useRef, useState } from 'react'
+import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip } from 'antd'
+import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
@@ -334,20 +334,70 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(false)
   const [container, setContainer] = useState('')
+  // 实时查看容器标准输出（/dev/stdout）：默认关闭，开启后每 2 秒拉取最新日志
+  const [live, setLive] = useState(false)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const preRef = useRef<HTMLPreElement>(null)
+  const timerRef = useRef<number | null>(null)
+
+  const fetchLogs = (tail: number) => {
+    if (!pod) return
+    getPodLogs(pod.clusterId, pod.namespace, pod.name, container, tail)
+      .then((d) => setLogs((d as { logs?: string }).logs || '(无日志)'))
+      .catch(() => setLogs('日志获取失败'))
+      .finally(() => setLoading(false))
+  }
+
   const load = () => {
     if (!pod) return
     setLoading(true)
-    getPodLogs(pod.clusterId, pod.namespace, pod.name, container, 200).then((d) => setLogs((d as { logs?: string }).logs || '(无日志)')).catch(() => setLogs('日志获取失败')).finally(() => setLoading(false))
+    fetchLogs(live ? 500 : 200)
   }
-  useEffect(() => { setContainer(''); load() }, [pod])
+
+  useEffect(() => { setContainer(''); setLive(false); load() /* eslint-disable-next-line */ }, [pod])
+
+  // 实时模式：每 2 秒刷新一次（关闭时自动清理定时器）
+  useEffect(() => {
+    if (!pod || !live) return
+    fetchLogs(500)
+    timerRef.current = window.setInterval(() => fetchLogs(500), 2000)
+    return () => {
+      if (timerRef.current !== null) window.clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pod, live, container])
+
+  // 实时模式下自动滚动到底部
+  useEffect(() => {
+    const el = preRef.current
+    if (el && live && autoScroll) el.scrollTop = el.scrollHeight
+  }, [logs, live, autoScroll])
+
   if (!pod) return null
   return (
-    <Drawer title={`容器日志：${pod.name}`} open={!!pod} onClose={onClose} width={900}>
-      <Space style={{ marginBottom: 12 }}>
-        <Input placeholder="容器名（空=第一个）" value={container} onChange={(e) => setContainer(e.target.value)} style={{ width: 220 }} />
+    <Drawer title={`容器日志：${pod.name}`} open={!!pod} onClose={() => { setLive(false); onClose() }} width={900}>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input placeholder="容器名（空=第一个）" value={container} onChange={(e) => setContainer(e.target.value)} style={{ width: 200 }} />
         <Button type="primary" onClick={load}>查询</Button>
+        <Space size={6}>
+          <Switch checked={live} onChange={setLive} />
+          <span style={{ fontSize: 13 }}>实时查看 stdout</span>
+            <Tooltip title="开启后每 2 秒自动拉取容器标准输出（/dev/stdout）最新日志；默认关闭">
+            <QuestionCircleOutlined style={{ color: '#999' }} />
+          </Tooltip>
+        </Space>
+        {live && (
+          <Space size={6}>
+            <Switch size="small" checked={autoScroll} onChange={setAutoScroll} />
+            <span style={{ fontSize: 12, color: '#888' }}>自动滚到底部</span>
+          </Space>
+        )}
       </Space>
-      <pre style={{ maxHeight: '70vh', overflow: 'auto', background: '#f5f5f5', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>{loading ? '加载中...' : logs}</pre>
+      <div style={{ marginBottom: 8, fontSize: 12, color: live ? '#52c41a' : '#8c8c8c' }}>
+        {live ? '● 实时中（每 2 秒刷新，退出抽屉自动停止）' : '○ 实时已关闭（点「查询」看当前日志快照）'}
+      </div>
+      <pre ref={preRef} style={{ maxHeight: '70vh', overflow: 'auto', background: '#f5f5f5', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>{loading && !logs ? '加载中...' : logs}</pre>
     </Drawer>
   )
 }

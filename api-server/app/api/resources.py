@@ -188,7 +188,11 @@ async def pod_metrics(cluster_id: int, namespace: str, pod_name: str, range: str
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs")
 async def pod_logs(cluster_id: int, namespace: str, pod_name: str, container: str = "",
                    tail: int = 200, previous: bool = False, user=Depends(require_any_user)):
-    """查看 Pod 容器日志（只读）"""
+    """查看 Pod 容器日志（只读）
+
+    tail 限幅 1~2000：前端「实时查看 stdout」开关打开后会每 2 秒按 tail 拉一次。
+    """
+    tail = max(1, min(int(tail or 200), 2000))
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
     r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name, container, tail, previous)
