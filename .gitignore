@@ -24,6 +24,8 @@ build/
 
 # 日志
 *.log
+# 归档/备份数据（JSON 备份等，不入版本控制）
+logs/archive/
 
 # IDE
 .idea/

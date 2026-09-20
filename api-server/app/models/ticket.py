@@ -28,6 +28,8 @@ class Ticket(Base):
     approval_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     # 归属资源（可选）：手动建单可不填；转单时自动带出
     cluster_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # 关联数据库连接（可选）：DB 类工单按 db 权限收敛
+    db_connection_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     namespace: Mapped[str] = mapped_column(String(100), default="")
     resource_name: Mapped[str] = mapped_column(String(200), default="")
     # 优先级：low / medium / high / urgent

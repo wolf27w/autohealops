@@ -1,9 +1,9 @@
 // 工单列表 + 详情抽屉 + 新建工单（N1 平台内部工单）
 import { useEffect, useState } from 'react'
-import { Button, Drawer, Empty, Form, Input, List, Modal, Select, Space, Table, Tag, Typography, message } from 'antd'
-import { PlusOutlined, UserOutlined, CommentOutlined } from '@ant-design/icons'
+import { Button, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { PlusOutlined, UserOutlined, CommentOutlined, DeleteOutlined } from '@ant-design/icons'
 import api from '../services/api'
-import { getUsers, getClusters } from '../services/api'
+import { getUsers, getClusters, getDBConnections } from '../services/api'
 import type { Cluster, User } from '../types'
 
 // ============ 本地类型（不修改 api.ts/types.ts，避免与并行任务冲突） ============
@@ -17,6 +17,8 @@ interface Ticket {
   approval_id: number | null
   cluster_id: number | null
   cluster_name: string
+  db_connection_id: number | null
+  db_name: string
   namespace: string
   resource_name: string
   priority: string
@@ -81,6 +83,7 @@ const http = {
   get: <T,>(url: string, params?: Record<string, unknown>) => api.get(url, { params }) as Promise<T>,
   post: <T,>(url: string, data?: unknown) => api.post(url, data) as Promise<T>,
   patch: <T,>(url: string, data?: unknown) => api.patch(url, data) as Promise<T>,
+  delete: <T,>(url: string) => api.delete(url) as Promise<T>,
 }
 
 export default function Tickets() {
@@ -104,6 +107,8 @@ export default function Tickets() {
 
   const [users, setUsers] = useState<User[]>([])
   const [clusters, setClusters] = useState<Cluster[]>([])
+  // N1 补充：DB 类工单可关联数据库连接
+  const [dbOptions, setDbOptions] = useState<{ value: number; label: string }[]>([])
 
   const loadList = () => {
     setLoading(true)
@@ -128,6 +133,7 @@ export default function Tickets() {
   useEffect(() => {
     getUsers().then((d) => setUsers(d ?? [])).catch(() => {})
     getClusters().then((d) => setClusters(d ?? [])).catch(() => {})
+    getDBConnections().then((d) => setDbOptions(((d ?? []) as { id: number; name: string }[]).map((x) => ({ value: x.id, label: x.name })))).catch(() => {})
   }, [])
 
   const openDetail = (t: Ticket) => {
@@ -161,6 +167,19 @@ export default function Tickets() {
     loadDetail(detail.ticket.id)
   }
 
+  const isAdmin = (() => {
+    try { return (JSON.parse(localStorage.getItem('user') || '{}') as { role?: string }).role === 'admin' } catch { return false }
+  })()
+
+  const doDelete = async (id: number) => {
+    try {
+      await http.delete(`/tickets/${id}`)
+      message.success('已删除')
+      setDrawerOpen(false)
+      loadList()
+    } catch { /* 拦截器已提示 */ }
+  }
+
   const doCreate = async () => {
     const v = await createForm.validateFields()
     await http.post('/tickets', v)
@@ -186,6 +205,7 @@ export default function Tickets() {
       render: (v: string) => <Tag color={STATUS_COLOR[v]}>{STATUS_LABEL[v] ?? v}</Tag>,
     },
     { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v: string) => v || '-' },
+    { title: '数据库', dataIndex: 'db_name', width: 130, render: (v: string) => v || '-' },
     { title: '资源', dataIndex: 'resource_name', width: 160, render: (v: string) => v || '-' },
     { title: '处理人', dataIndex: 'assignee_name', width: 100, render: (v: string) => v || '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 170 },
@@ -259,6 +279,11 @@ export default function Tickets() {
                   流转到「{STATUS_LABEL[s]}」
                 </Button>
               ))}
+              {isAdmin && (
+                <Popconfirm title="删除该工单？（含留言记录，不可恢复）" onConfirm={() => doDelete(current.id)}>
+                  <Button danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
+              )}
             </Space>
 
             {/* 留言区 */}
@@ -313,6 +338,9 @@ export default function Tickets() {
           </Form.Item>
           <Form.Item name="cluster_id" label="所属集群（可选）">
             <Select allowClear showSearch optionFilterProp="label" placeholder="选择集群" options={clusterOptions} />
+          </Form.Item>
+          <Form.Item name="db_connection_id" label="数据库连接（可选）">
+            <Select allowClear placeholder="不关联数据库" options={dbOptions} />
           </Form.Item>
           <Form.Item name="namespace" label="命名空间（可选）">
             <Input placeholder="如 default" maxLength={100} />

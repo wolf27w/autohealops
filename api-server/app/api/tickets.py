@@ -2,7 +2,7 @@
 """工单 API（N1 平台内部工单）"""
 from fastapi import APIRouter, Depends
 
-from app.middleware.permission import require_any_user, require_operator
+from app.middleware.permission import require_admin, require_any_user, require_operator
 from app.services import ticket_service
 
 router = APIRouter(prefix="/api/v1/tickets")
@@ -108,3 +108,12 @@ async def add_comment(ticket_id: int, payload: dict, user=Depends(require_operat
         code = 403 if r.get("forbidden") else 400
         return {"code": code, "message": r.get("reason", "留言失败"), "data": None}
     return {"code": 200, "message": "success", "data": ticket_service._serialize_comment(r["comment"])}
+
+
+@router.delete("/{ticket_id}")
+async def delete_ticket(ticket_id: int, user=Depends(require_admin)):
+    """删除工单（仅 admin）+ 连带删除留言；不影响关联告警/审批状态"""
+    r = await ticket_service.delete_ticket(ticket_id, user)
+    if not r.get("ok"):
+        return {"code": 403 if "管理员" in r.get("reason", "") else 404, "message": r.get("reason", "删除失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"id": r["id"]}}

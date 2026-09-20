@@ -15,7 +15,7 @@ import secrets
 import time
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -58,9 +58,11 @@ async def generate_ticket_no() -> str:
 # ============ 序列化 ============
 
 def _serialize_ticket(t: Ticket, user_map: dict[int, str] | None = None,
-                      cluster_map: dict[int, str] | None = None) -> dict:
+                      cluster_map: dict[int, str] | None = None,
+                      db_map: dict[int, str] | None = None) -> dict:
     user_map = user_map or {}
     cluster_map = cluster_map or {}
+    db_map = db_map or {}
     return {
         "id": t.id,
         "ticket_no": t.ticket_no,
@@ -71,6 +73,8 @@ def _serialize_ticket(t: Ticket, user_map: dict[int, str] | None = None,
         "approval_id": t.approval_id,
         "cluster_id": t.cluster_id,
         "cluster_name": cluster_map.get(t.cluster_id, "") if t.cluster_id else "",
+        "db_connection_id": t.db_connection_id,
+        "db_name": db_map.get(t.db_connection_id, "") if t.db_connection_id else "",
         "namespace": t.namespace or "",
         "resource_name": t.resource_name or "",
         "priority": t.priority,
@@ -114,6 +118,35 @@ async def _resolve_cluster_names(cluster_ids: set[int]) -> dict[int, str]:
     async with async_session() as session:
         result = await session.execute(select(Cluster.id, Cluster.name).where(Cluster.id.in_(ids)))
         return {row[0]: row[1] for row in result.all()}
+
+async def _resolve_db_names(db_ids: set[int]) -> dict[int, str]:
+    """数据库连接 id → 名称（DB 类工单展示用）"""
+    ids = {int(i) for i in db_ids if i}
+    if not ids:
+        return {}
+    from app.models import DBConnection
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(DBConnection.id, DBConnection.name).where(DBConnection.id.in_(ids))
+        )).all()
+    return {int(i): n for i, n in rows}
+
+
+async def _permitted_db_ids(user) -> set[int]:
+    """用户有 read 权限的数据库连接 id 集合（DB 类工单可见范围用）"""
+    from app.models import DBConnection
+    from app.services.user_permission_service import check_db_permission
+    async with async_session() as session:
+        ids = [int(i) for i in (await session.execute(select(DBConnection.id))).scalars().all()]
+    out: set[int] = set()
+    for i in ids:
+        try:
+            if await check_db_permission(user, i, "read"):
+                out.add(i)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
 
 
 # ============ 通知（复用现有通知层，不另起一套） ============
@@ -183,6 +216,9 @@ async def _scope_conditions(user):
         conds.append(Ticket.cluster_id.in_(visible))
     conds.append(Ticket.created_by == user.id)
     conds.append(Ticket.assignee_id == user.id)
+    db_ids = await _permitted_db_ids(user)
+    if db_ids:
+        conds.append(Ticket.db_connection_id.in_(db_ids))
     return or_(*conds)
 
 
@@ -192,6 +228,9 @@ async def _check_visible(ticket: Ticket, user) -> bool:
         return True
     if ticket.created_by == user.id or ticket.assignee_id == user.id:
         return True
+    if ticket.db_connection_id:
+        from app.services.user_permission_service import check_db_permission
+        return await check_db_permission(user, ticket.db_connection_id, "read")
     if ticket.cluster_id:
         from app.services.user_permission_service import check_cluster_permission
         return await check_cluster_permission(user, ticket.cluster_id, ticket.namespace or "", "read")
@@ -227,6 +266,12 @@ async def create_ticket(payload: dict, user) -> dict:
     if priority not in VALID_PRIORITIES:
         return {"ok": False, "reason": f"优先级不合法：{priority}"}
     cluster_id = payload.get("cluster_id") or None
+    db_connection_id = payload.get("db_connection_id") or None
+    if db_connection_id is not None:
+        from app.services.user_permission_service import check_db_permission
+        if not await check_db_permission(user, int(db_connection_id), "read"):
+            return {"ok": False, "reason": "无该数据库连接权限"}
+        db_connection_id = int(db_connection_id)
     ticket_no = await generate_ticket_no()
     async with async_session() as session:
         t = Ticket(
@@ -235,6 +280,7 @@ async def create_ticket(payload: dict, user) -> dict:
             description=(payload.get("description") or "")[:5000],
             source="manual",
             cluster_id=cluster_id,
+            db_connection_id=db_connection_id,
             namespace=(payload.get("namespace") or "")[:100],
             resource_name=(payload.get("resource_name") or "")[:200],
             priority=priority,
@@ -325,6 +371,7 @@ async def _create_from_payload(payload: dict, user, source: str, alert_id: int |
             alert_id=alert_id,
             approval_id=approval_id,
             cluster_id=payload.get("cluster_id"),
+            db_connection_id=payload.get("db_connection_id"),
             namespace=(payload.get("namespace") or "")[:100],
             resource_name=(payload.get("resource_name") or "")[:200],
             priority=payload.get("priority") or "medium",
@@ -503,9 +550,11 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
 
     user_ids = {t.created_by for t in tickets} | {t.assignee_id for t in tickets}
     cluster_ids = {t.cluster_id for t in tickets}
+    db_ids = {t.db_connection_id for t in tickets}
     user_map = await _resolve_usernames(user_ids)
     cluster_map = await _resolve_cluster_names(cluster_ids)
-    items = [_serialize_ticket(t, user_map, cluster_map) for t in tickets]
+    db_map = await _resolve_db_names(db_ids)
+    items = [_serialize_ticket(t, user_map, cluster_map, db_map) for t in tickets]
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -524,11 +573,27 @@ async def get_ticket(ticket_id: int, user) -> dict | None:
 
     user_ids = {t.created_by, t.assignee_id} | {c.user_id for c in comments}
     cluster_ids = {t.cluster_id}
+    db_ids = {t.db_connection_id}
     user_map = await _resolve_usernames(user_ids)
     cluster_map = await _resolve_cluster_names(cluster_ids)
+    db_map = await _resolve_db_names(db_ids)
     return {
-        "ticket": _serialize_ticket(t, user_map, cluster_map),
+        "ticket": _serialize_ticket(t, user_map, cluster_map, db_map),
         "comments": [_serialize_comment(c) for c in comments],
     }
 
 
+# ============ 删除（N1 补充：manager/admin 可删除；仅 admin 落地） ============
+
+async def delete_ticket(ticket_id: int, user) -> dict:
+    """删除工单（仅 admin）+ 连带删除留言留痕；工单与告警/审批解耦，不影响其状态"""
+    if getattr(user, "role", "") != "admin":
+        return {"ok": False, "reason": "仅管理员可删除工单"}
+    async with async_session() as session:
+        t = await session.get(Ticket, ticket_id)
+        if not t:
+            return {"ok": False, "reason": "工单不存在"}
+        await session.execute(delete(TicketComment).where(TicketComment.ticket_id == ticket_id))
+        await session.delete(t)
+        await session.commit()
+    return {"ok": True, "id": ticket_id}
