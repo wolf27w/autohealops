@@ -1,0 +1,487 @@
+# -*- coding: utf-8 -*-
+"""k8s-executor gRPC 客户端（api-server → executor 通信）
+
+注意：gRPC 同步调用会**阻塞事件循环**，在 async 代码里必须用 `acall(...)` 包一层
+（内部走 asyncio.to_thread），否则一个慢调用（最长 30s）会把整个 API 锁死。
+"""
+import asyncio
+import grpc
+
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.proto import executor_pb2, executor_pb2_grpc
+
+logger = get_logger("api-server.executor_client")
+
+# 全局 channel（懒初始化）
+_channel = None
+_stub = None
+
+# A4：gRPC 并发上限。asyncio.to_thread 用默认线程池（worker 有限），
+# 后台循环若同时发起大量慢调用（最长 30s）会耗尽线程池 → 用信号量限制并发。
+_grpc_semaphore = asyncio.Semaphore(max(1, int(getattr(settings, "EXECUTOR_MAX_CONCURRENCY", 8))))
+
+
+async def acall(fn, *args, **kwargs):
+    """在 async 上下文调用同步 gRPC 方法：丢到线程池，避免阻塞事件循环。
+
+    用法：await acall(executor_client.query_prometheus, cluster_id, promql)
+    """
+    async with _grpc_semaphore:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+def _get_stub():
+    """懒初始化 gRPC stub"""
+    global _channel, _stub
+    if _stub is None:
+        _channel = grpc.insecure_channel(settings.K8S_EXECUTOR_GRPC_ADDR)
+        _stub = executor_pb2_grpc.ExecutorServiceStub(_channel)
+    return _stub
+
+
+def _metadata(trace_id: str = ""):
+    """构造 gRPC metadata（携带 trace_id）"""
+    return (("trace-id", trace_id),) if trace_id else None
+
+
+class ExecutorClient:
+    """k8s-executor gRPC 客户端封装（含超时控制 + 错误处理 + 日志）"""
+
+    TIMEOUT = 30  # 默认超时秒
+
+    async def acall(self, fn, *args, **kwargs):
+        """在 async 上下文调用本客户端的同步 gRPC 方法（走线程池，不阻塞事件循环）
+
+        用法：await executor_client.acall(executor_client.query_prometheus, cluster_id, promql)
+        """
+        async with _grpc_semaphore:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+
+    def start_watch(self, cluster_id: int, trace_id: str = "") -> bool:
+        try:
+            resp = _get_stub().StartWatch(
+                executor_pb2.StartWatchRequest(cluster_id=cluster_id),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return resp.success
+        except Exception as e:  # noqa: BLE001
+            logger.error("start_watch 失败: %s", e)
+            return False
+
+    def stop_watch(self, cluster_id: int, trace_id: str = "") -> bool:
+        try:
+            resp = _get_stub().StopWatch(
+                executor_pb2.StopWatchRequest(cluster_id=cluster_id),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return resp.success
+        except Exception as e:  # noqa: BLE001
+            logger.error("stop_watch 失败: %s", e)
+            return False
+
+    def execute_command(self, cluster_id: int, namespace: str, command: str, trace_id: str = "") -> dict:
+        """执行单条命令，返回 {success, output, error}"""
+        try:
+            resp = _get_stub().ExecuteCommand(
+                executor_pb2.ExecuteCommandRequest(
+                    cluster_id=cluster_id, namespace=namespace, command=command, trace_id=trace_id
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "output": resp.output, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("execute_command 失败: %s", e)
+            return {"success": False, "output": "", "error": str(e)}
+
+    def execute_plan(self, cluster_id: int, plan_id: int, plan_json: str, trace_id: str = ""):
+        """流式执行修复计划，yield 每步进度"""
+        try:
+            for resp in _get_stub().ExecutePlan(
+                executor_pb2.ExecutePlanRequest(
+                    cluster_id=cluster_id, plan_id=plan_id, plan_json=plan_json, trace_id=trace_id
+                ),
+                timeout=600,
+                metadata=_metadata(trace_id),
+            ):
+                yield {
+                    "step_index": resp.step_index,
+                    "command": resp.step_command,
+                    "success": resp.success,
+                    "output": resp.output,
+                    "message": resp.message,
+                    "finished": resp.finished,
+                    "circuit_triggered": resp.circuit_triggered,
+                    "rollback_command": resp.rollback_command,
+                }
+        except Exception as e:  # noqa: BLE001
+            logger.error("execute_plan 失败: %s", e)
+            yield {"step_index": -1, "success": False, "message": f"执行失败: {e}", "finished": True}
+
+    def rollback_plan(self, cluster_id: int, plan_id: int, plan_json: str, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().RollbackPlan(
+                executor_pb2.RollbackPlanRequest(
+                    cluster_id=cluster_id, plan_id=plan_id, plan_json=plan_json, trace_id=trace_id
+                ),
+                timeout=600,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "executed": list(resp.executed_rollbacks)}
+        except Exception as e:  # noqa: BLE001
+            logger.error("rollback_plan 失败: %s", e)
+            return {"success": False, "message": str(e), "executed": []}
+
+    def health_check(self, cluster_id: int, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().HealthCheck(
+                executor_pb2.HealthCheckRequest(cluster_id=cluster_id, trace_id=trace_id),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "status": resp.status, "version": resp.version, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("health_check 失败: %s", e)
+            return {"success": False, "status": "unreachable", "version": "", "error": str(e)}
+
+    def get_pod_status(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
+        """查询 Pod 结构化状态（恢复判定：phase/ready/restartCount/容器状态）"""
+        try:
+            resp = _get_stub().GetPodStatus(
+                executor_pb2.GetPodStatusRequest(
+                    cluster_id=cluster_id, namespace=namespace, pod_name=pod_name
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {
+                "success": resp.success,
+                "phase": resp.phase,
+                "ready": resp.ready,
+                "restart_count": resp.restart_count,
+                "message": resp.message,
+                "containers": [
+                    {
+                        "name": c.name, "state": c.state, "ready": c.ready,
+                        "restart_count": c.restart_count, "reason": c.reason,
+                    }
+                    for c in resp.container_statuses
+                ],
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_pod_status 失败: %s", e)
+            return {"success": False, "phase": "", "ready": False, "restart_count": 0, "message": str(e), "containers": []}
+
+    def repair_image_pull(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
+        """修复镜像拉取失败：定位 Deployment → 补 imagePullSecrets"""
+        try:
+            resp = _get_stub().RepairImagePull(
+                executor_pb2.RepairImagePullRequest(
+                    cluster_id=cluster_id, namespace=namespace, pod_name=pod_name
+                ),
+                timeout=60,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "fixed": resp.fixed}
+        except Exception as e:  # noqa: BLE001
+            logger.error("repair_image_pull 失败: %s", e)
+            return {"success": False, "message": str(e), "fixed": False}
+
+    def get_deployment_status(self, cluster_id: int, namespace: str, deployment_name: str, trace_id: str = "") -> dict:
+        """查询 Deployment 副本状态（Pod 重建后判断是否恢复）"""
+        try:
+            resp = _get_stub().GetDeploymentStatus(
+                executor_pb2.GetDeploymentStatusRequest(
+                    cluster_id=cluster_id, namespace=namespace, deployment_name=deployment_name
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "ready": resp.ready, "replicas": resp.replicas,
+                    "ready_replicas": resp.ready_replicas, "message": resp.message}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_deployment_status 失败: %s", e)
+            return {"success": False, "ready": False, "replicas": 0, "ready_replicas": 0, "message": str(e)}
+
+    def exec_in_pod(self, cluster_id: int, namespace: str, pod_name: str, command: str,
+                    container: str = "", trace_id: str = "") -> dict:
+        """容器内只读诊断命令执行（应用诊断）"""
+        try:
+            resp = _get_stub().ExecInPod(
+                executor_pb2.ExecInPodRequest(
+                    cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
+                    container=container, command=command, trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "output": resp.output, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("exec_in_pod 失败: %s", e)
+            return {"success": False, "output": "", "error": str(e)}
+
+    def list_deployment_pods(self, cluster_id: int, namespace: str, deployment_name: str) -> dict:
+        """列出 Deployment 所有 Pod 状态（含新旧版本，验证修复是否真正恢复）"""
+        try:
+            resp = _get_stub().ListDeploymentPods(
+                executor_pb2.ListDeploymentPodsRequest(
+                    cluster_id=cluster_id, namespace=namespace, deployment_name=deployment_name
+                ),
+                timeout=self.TIMEOUT,
+            )
+            pods = [{"name": p.name, "phase": p.phase, "ready": p.ready, "restart_count": p.restart_count}
+                    for p in resp.pods]
+            return {"success": resp.success, "pods": pods, "all_ready": resp.all_ready, "message": resp.message}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_deployment_pods 失败: %s", e)
+            return {"success": False, "pods": [], "all_ready": False, "message": str(e)}
+
+    def collect_quota(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> bool:
+        try:
+            resp = _get_stub().CollectQuota(
+                executor_pb2.CollectQuotaRequest(cluster_id=cluster_id, namespace=namespace, trace_id=trace_id),
+                timeout=120,
+                metadata=_metadata(trace_id),
+            )
+            return resp.success
+        except Exception as e:  # noqa: BLE001
+            logger.error("collect_quota 失败: %s", e)
+            return False
+
+    def run_script(self, cluster_id: int, script_content: str, parameters: str, task_id: int, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().RunScript(
+                executor_pb2.RunScriptRequest(
+                    cluster_id=cluster_id, script_content=script_content, parameters=parameters,
+                    task_id=task_id, trace_id=trace_id,
+                ),
+                timeout=360,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "output": resp.output, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("run_script 失败: %s", e)
+            return {"success": False, "output": "", "error": str(e)}
+
+    def batch_execute(self, cluster_ids: list[int], namespace: str, command: str, trace_id: str = ""):
+        """流式批量执行，yield 每集群结果"""
+        try:
+            for resp in _get_stub().BatchExecute(
+                executor_pb2.BatchExecuteRequest(
+                    cluster_ids=cluster_ids, namespace=namespace, command=command, trace_id=trace_id
+                ),
+                timeout=600,
+                metadata=_metadata(trace_id),
+            ):
+                yield {"cluster_id": resp.cluster_id, "success": resp.success, "output": resp.output, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("batch_execute 失败: %s", e)
+
+    def query_prometheus(self, cluster_id: int, promql: str, trace_id: str = "") -> dict:
+        """查询集群内 Prometheus（executor port-forward 代理）→ 返回 {success, data(JSON), error}"""
+        try:
+            resp = _get_stub().QueryPrometheus(
+                executor_pb2.QueryPrometheusRequest(cluster_id=cluster_id, promql=promql, trace_id=trace_id),
+                timeout=60,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "data": resp.data, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("query_prometheus 失败: %s", e)
+            return {"success": False, "data": "", "error": str(e)}
+
+    def get_pod_logs(self, cluster_id: int, namespace: str, pod_name: str,
+                     container: str = "", tail_lines: int = 200, previous: bool = False, trace_id: str = "") -> dict:
+        """查看 Pod 容器日志 → 返回 {success, logs, error}"""
+        try:
+            resp = _get_stub().GetPodLogs(
+                executor_pb2.GetPodLogsRequest(
+                    cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
+                    container=container, tail_lines=tail_lines, previous=previous,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "logs": resp.logs, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_pod_logs 失败: %s", e)
+            return {"success": False, "logs": "", "error": str(e)}
+
+    def get_pod_yaml(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
+        """获取 Pod YAML → 返回 {success, yaml, error}"""
+        try:
+            resp = _get_stub().GetPodYaml(
+                executor_pb2.GetPodYamlRequest(cluster_id=cluster_id, namespace=namespace, pod_name=pod_name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "yaml": resp.yaml, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_pod_yaml 失败: %s", e)
+            return {"success": False, "yaml": "", "error": str(e)}
+
+    def apply_pod_yaml(self, cluster_id: int, namespace: str, yaml_content: str, trace_id: str = "") -> dict:
+        """应用 Pod YAML → 返回 {success, message, error}"""
+        try:
+            resp = _get_stub().ApplyPodYaml(
+                executor_pb2.ApplyPodYamlRequest(
+                    cluster_id=cluster_id, namespace=namespace, yaml_content=yaml_content, trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("apply_pod_yaml 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
+    def setup_rbac(self, cluster_id: int, trace_id: str = "") -> dict:
+        """云原生 RBAC 接入：能力探测 + 下发 ClusterRole + 自举 automation SA
+        → 返回 {success, rbac_capable, impersonate_capable, cluster_roles, sa_created, error}
+        """
+        try:
+            resp = _get_stub().SetupRBAC(
+                executor_pb2.SetupRBACRequest(cluster_id=cluster_id, trace_id=trace_id),
+                timeout=60,
+                metadata=_metadata(trace_id),
+            )
+            return {
+                "success": resp.success,
+                "rbac_capable": resp.rbac_capable,
+                "impersonate_capable": resp.impersonate_capable,
+                "cluster_roles": list(resp.cluster_roles),
+                "sa_created": resp.sa_created,
+                "error": resp.error,
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.error("setup_rbac 失败: %s", e)
+            return {"success": False, "rbac_capable": False, "impersonate_capable": False,
+                    "cluster_roles": [], "sa_created": False, "error": str(e)}
+
+    def reconcile_role_bindings(self, cluster_id: int, bindings: list[dict], trace_id: str = "") -> dict:
+        """项目/成员变更 → reconcile RoleBinding（绑组）
+
+        bindings: [{"namespace": "qa-eft", "group": "apiops:proj:1:read", "cluster_role": "apiops-read"}, ...]
+        → 返回 {success, created, updated, deleted, error}
+        """
+        try:
+            specs = [
+                executor_pb2.RoleBindingSpec(
+                    namespace=b.get("namespace", ""),
+                    group=b.get("group", ""),
+                    cluster_role=b.get("cluster_role", ""),
+                )
+                for b in bindings
+            ]
+            resp = _get_stub().ReconcileRoleBindings(
+                executor_pb2.ReconcileRoleBindingsRequest(cluster_id=cluster_id, bindings=specs, trace_id=trace_id),
+                timeout=60,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "created": resp.created, "updated": resp.updated,
+                    "deleted": resp.deleted, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("reconcile_role_bindings 失败: %s", e)
+            return {"success": False, "created": 0, "updated": 0, "deleted": 0, "error": str(e)}
+
+    # ============ 工作负载运维（专项 D） ============
+
+    def list_workloads(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> dict:
+        """列出工作负载（无状态/有状态/守护集/定时任务）→ {success, workloads, error}"""
+        try:
+            resp = _get_stub().ListWorkloads(
+                executor_pb2.ListWorkloadsRequest(cluster_id=cluster_id, namespace=namespace),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "error": resp.error, "workloads": [
+                {"kind": w.kind, "name": w.name, "namespace": w.namespace,
+                 "replicas": w.replicas, "ready_replicas": w.ready_replicas}
+                for w in resp.workloads
+            ]}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_workloads 失败: %s", e)
+            return {"success": False, "error": str(e), "workloads": []}
+
+    def scale_workload(self, cluster_id: int, kind: str, namespace: str, name: str, replicas: int, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().ScaleWorkload(
+                executor_pb2.ScaleWorkloadRequest(
+                    cluster_id=cluster_id, kind=kind, namespace=namespace, name=name, replicas=replicas, trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("scale_workload 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
+    def rollout_workload(self, cluster_id: int, kind: str, namespace: str, name: str, action: str, revision: int = 0, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().RolloutWorkload(
+                executor_pb2.RolloutWorkloadRequest(
+                    cluster_id=cluster_id, kind=kind, namespace=namespace, name=name,
+                    action=action, revision=revision, trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("rollout_workload 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
+    def rollout_history(self, cluster_id: int, namespace: str, name: str) -> dict:
+        try:
+            resp = _get_stub().RolloutHistory(
+                executor_pb2.RolloutHistoryRequest(cluster_id=cluster_id, namespace=namespace, name=name),
+                timeout=self.TIMEOUT,
+            )
+            return {"success": resp.success, "revisions": list(resp.revisions), "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("rollout_history 失败: %s", e)
+            return {"success": False, "revisions": [], "error": str(e)}
+
+    def update_probe(self, cluster_id: int, namespace: str, name: str, probe: dict, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().UpdateProbe(
+                executor_pb2.UpdateProbeRequest(
+                    cluster_id=cluster_id, namespace=namespace, name=name,
+                    container=probe.get("container", ""),
+                    probe_type=probe.get("probe_type", ""),
+                    probe_kind=probe.get("probe_kind", ""),
+                    path=probe.get("path", ""),
+                    port=probe.get("port", 0),
+                    command=probe.get("command", []),
+                    initial_delay_seconds=probe.get("initial_delay_seconds", 0),
+                    period_seconds=probe.get("period_seconds", 0),
+                    timeout_seconds=probe.get("timeout_seconds", 0),
+                    failure_threshold=probe.get("failure_threshold", 0),
+                    success_threshold=probe.get("success_threshold", 0),
+                    trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("update_probe 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
+    def recreate_workload(self, cluster_id: int, kind: str, namespace: str, name: str, trace_id: str = "") -> dict:
+        try:
+            resp = _get_stub().RecreateWorkload(
+                executor_pb2.RecreateWorkloadRequest(
+                    cluster_id=cluster_id, kind=kind, namespace=namespace, name=name, trace_id=trace_id,
+                ),
+                timeout=180,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("recreate_workload 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}

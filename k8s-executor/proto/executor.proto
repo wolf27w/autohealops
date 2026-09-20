@@ -1,0 +1,459 @@
+// gRPC 协议定义：k8s-executor 对外服务（仅 api-server 调用）
+syntax = "proto3";
+
+package executor;
+
+option go_package = "github.com/api-ops-platform/k8s-executor/proto;executor";
+
+// ExecutorService：K8s 交互、故障检测、命令执行
+service ExecutorService {
+  // 启动集群 Watch（Pod/Node 事件监听）
+  rpc StartWatch(StartWatchRequest) returns (StartWatchResponse);
+  // 停止集群 Watch
+  rpc StopWatch(StopWatchRequest) returns (StopWatchResponse);
+  // 执行单条命令（白名单+dry-run+安全检查）
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
+  // 执行修复计划（流式返回每步进度）
+  rpc ExecutePlan(ExecutePlanRequest) returns (stream ExecutePlanResponse);
+  // 回滚修复计划（逆序执行 rollback_command）
+  rpc RollbackPlan(RollbackPlanRequest) returns (RollbackPlanResponse);
+  // 集群健康检查（ServerVersion + 更新状态）
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  // 采集配额快照
+  rpc CollectQuota(CollectQuotaRequest) returns (CollectQuotaResponse);
+  // 执行脚本（自定义任务 script 类型）
+  rpc RunScript(RunScriptRequest) returns (RunScriptResponse);
+  // 批量执行（流式返回每集群结果）
+  rpc BatchExecute(BatchExecuteRequest) returns (stream BatchExecuteResponse);
+  // 查询 Pod 状态（恢复判定：phase/ready/restartCount/容器状态）
+  rpc GetPodStatus(GetPodStatusRequest) returns (GetPodStatusResponse);
+  // 修复镜像拉取失败：定位 Deployment → 参考集群内其他服务的 imagePullSecrets → 补上
+  rpc RepairImagePull(RepairImagePullRequest) returns (RepairImagePullResponse);
+  // 查询 Deployment 副本状态（Pod 重建后判断是否恢复）
+  rpc GetDeploymentStatus(GetDeploymentStatusRequest) returns (GetDeploymentStatusResponse);
+  // 容器内只读命令执行（应用诊断：ps/env/cat/ss/df 等白名单命令）
+  rpc ExecInPod(ExecInPodRequest) returns (ExecInPodResponse);
+  // 列出 Deployment 所有 Pod 状态（验证修复是否真正恢复，区分新旧版本副本）
+  rpc ListDeploymentPods(ListDeploymentPodsRequest) returns (ListDeploymentPodsResponse);
+
+  rpc QueryPrometheus(QueryPrometheusRequest) returns (QueryPrometheusResponse);
+
+  // 查看 Pod 容器日志（logs）
+  rpc GetPodLogs(GetPodLogsRequest) returns (GetPodLogsResponse);
+  // 获取 Pod YAML（只读）
+  rpc GetPodYaml(GetPodYamlRequest) returns (GetPodYamlResponse);
+  // 应用 Pod YAML（修改配置后应用）
+  rpc ApplyPodYaml(ApplyPodYamlRequest) returns (ApplyPodYamlResponse);
+
+  // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
+  rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
+  // 项目/成员变更 → reconcile RoleBinding（绑组）
+  rpc ReconcileRoleBindings(ReconcileRoleBindingsRequest) returns (ReconcileRoleBindingsResponse);
+
+  // 工作负载运维（专项 D：集群管理云原生改造）
+  rpc ListWorkloads(ListWorkloadsRequest) returns (ListWorkloadsResponse);
+  rpc ScaleWorkload(ScaleWorkloadRequest) returns (ScaleWorkloadResponse);
+  rpc RolloutWorkload(RolloutWorkloadRequest) returns (RolloutWorkloadResponse);
+  rpc RolloutHistory(RolloutHistoryRequest) returns (RolloutHistoryResponse);
+  rpc UpdateProbe(UpdateProbeRequest) returns (UpdateProbeResponse);
+  rpc RecreateWorkload(RecreateWorkloadRequest) returns (RecreateWorkloadResponse);
+
+  // 交互式终端（TTY）：双向流（stdin/stdout/resize）
+  rpc ExecPodStream(stream ExecPodStreamFrame) returns (stream ExecPodStreamFrame);
+}
+
+// ---------- StartWatch ----------
+message StartWatchRequest {
+  int64 cluster_id = 1;
+}
+message StartWatchResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ---------- StopWatch ----------
+message StopWatchRequest {
+  int64 cluster_id = 1;
+}
+message StopWatchResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ---------- ExecuteCommand ----------
+message ExecuteCommandRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string command = 3;
+  string trace_id = 4; // 链路追踪
+}
+message ExecuteCommandResponse {
+  bool success = 1;
+  string output = 2;
+  string error = 3;
+}
+
+// ---------- ExecutePlan ----------
+message ExecutePlanRequest {
+  int64 cluster_id = 1;
+  int64 plan_id = 2;
+  string plan_json = 3; // 修复方案 JSON（含 steps）
+  string trace_id = 4;
+}
+message ExecutePlanResponse {
+  int32 step_index = 1;
+  string step_command = 2;
+  bool success = 3;
+  string output = 4;
+  string message = 5;
+  bool finished = 6;       // 全部步骤完成
+  bool circuit_triggered = 7; // 熔断触发
+  string rollback_command = 8;
+}
+
+// ---------- RollbackPlan ----------
+message RollbackPlanRequest {
+  int64 cluster_id = 1;
+  int64 plan_id = 2;
+  string plan_json = 3;
+  string trace_id = 4;
+}
+message RollbackPlanResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string executed_rollbacks = 3;
+}
+
+// ---------- HealthCheck ----------
+message HealthCheckRequest {
+  int64 cluster_id = 1;
+  string trace_id = 2;
+}
+message HealthCheckResponse {
+  bool success = 1;
+  string status = 2;   // healthy/unreachable
+  string version = 3;  // K8s 版本
+  string error = 4;
+}
+
+// ---------- CollectQuota ----------
+message CollectQuotaRequest {
+  int64 cluster_id = 1;
+  string namespace = 2; // 空=全集群
+  string trace_id = 3;
+}
+message CollectQuotaResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ---------- RunScript ----------
+message RunScriptRequest {
+  int64 cluster_id = 1;
+  string script_content = 2;
+  string parameters = 3; // JSON
+  int64 task_id = 4;
+  string trace_id = 5;
+}
+message RunScriptResponse {
+  bool success = 1;
+  string output = 2;
+  string error = 3;
+}
+
+// ---------- BatchExecute ----------
+message BatchExecuteRequest {
+  repeated int64 cluster_ids = 1;
+  string namespace = 2;
+  string command = 3;
+  string trace_id = 4;
+}
+message BatchExecuteResponse {
+  int64 cluster_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+}
+
+// ---------- GetPodStatus ----------
+message GetPodStatusRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+}
+message ContainerStatusInfo {
+  string name = 1;
+  string state = 2;        // running/waiting/terminated
+  bool ready = 3;
+  int32 restart_count = 4;
+  string reason = 5;       // waiting/terminated 的 reason（空=无）
+}
+message GetPodStatusResponse {
+  bool success = 1;
+  string phase = 2;               // Pod phase
+  bool ready = 3;                 // 所有容器是否 Ready
+  int32 restart_count = 4;        // 重启总次数（全部容器之和）
+  string message = 5;             // 补充信息 / 错误
+  repeated ContainerStatusInfo container_statuses = 6;
+}
+
+// ---------- RepairImagePull ----------
+message RepairImagePullRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+}
+message RepairImagePullResponse {
+  bool success = 1;
+  string message = 2;   // 修复结果 / 错误信息
+  bool fixed = 3;       // 是否实际修改了 Deployment
+}
+
+// ---------- GetDeploymentStatus ----------
+message GetDeploymentStatusRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string deployment_name = 3;
+}
+message GetDeploymentStatusResponse {
+  bool success = 1;
+  int32 replicas = 2;
+  int32 ready_replicas = 3;
+  bool ready = 4;       // 所有副本 Ready
+  string message = 5;
+}
+
+// ---------- ExecInPod ----------
+message ExecInPodRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+  string container = 4;   // 空=第一个容器
+  string command = 5;     // 只读诊断命令（白名单）
+  string trace_id = 6;
+}
+message ExecInPodResponse {
+  bool success = 1;
+  string output = 2;
+  string error = 3;
+}
+
+// ---------- ListDeploymentPods ----------
+message ListDeploymentPodsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string deployment_name = 3;
+}
+message DeploymentPodInfo {
+  string name = 1;
+  string phase = 2;       // Running/Pending/Failed
+  bool ready = 3;
+  int32 restart_count = 4;
+}
+message ListDeploymentPodsResponse {
+  bool success = 1;
+  repeated DeploymentPodInfo pods = 2;
+  bool all_ready = 3;      // 所有 Pod 都 Running+Ready（含新版本副本）
+  string message = 4;
+}
+
+// ---------- QueryPrometheus（集群内 Prometheus 查询代理，port-forward） ----------
+message QueryPrometheusRequest {
+  int64 cluster_id = 1;
+  string promql = 2;       // PromQL 查询语句
+  string trace_id = 3;
+}
+message QueryPrometheusResponse {
+  bool success = 1;
+  string data = 2;         // Prometheus /api/v1/query 返回 JSON（含 result 数组）
+  string error = 3;
+}
+
+// ---------- GetPodLogs ----------
+message GetPodLogsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+  string container = 4;    // 空=第一个容器
+  int64 tail_lines = 5;    // 返回最近 N 行（默认 200）
+  bool previous = 6;       // 是否取上一次崩溃日志
+}
+message GetPodLogsResponse {
+  bool success = 1;
+  string logs = 2;
+  string error = 3;
+}
+
+// ---------- GetPodYaml ----------
+message GetPodYamlRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+}
+message GetPodYamlResponse {
+  bool success = 1;
+  string yaml = 2;
+  string error = 3;
+}
+
+// ---------- ApplyPodYaml ----------
+message ApplyPodYamlRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string yaml_content = 3; // 修改后的 YAML
+  string trace_id = 4;
+}
+message ApplyPodYamlResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+// ---------- SetupRBAC（云原生 RBAC 接入） ----------
+message SetupRBACRequest {
+  int64 cluster_id = 1;
+  string trace_id = 2;
+}
+message SetupRBACResponse {
+  bool success = 1;
+  bool rbac_capable = 2;        // 能否 create RBAC（下发 ClusterRole/RoleBinding）
+  bool impersonate_capable = 3; // 能否 impersonate（透传用户身份）
+  repeated string cluster_roles = 4; // 已下发/更新的 ClusterRole 名
+  bool sa_created = 5;          // 是否自举 automation SA + binding
+  string error = 6;
+}
+
+// ---------- ReconcileRoleBindings（项目/成员变更 → 绑组） ----------
+message RoleBindingSpec {
+  string namespace = 1;
+  string group = 2;        // apiops:proj:<id>:<read|operate|manager>
+  string cluster_role = 3; // apiops-read / apiops-operate / apiops-manager
+}
+message ReconcileRoleBindingsRequest {
+  int64 cluster_id = 1;
+  repeated RoleBindingSpec bindings = 2;
+  string trace_id = 3;
+}
+message ReconcileRoleBindingsResponse {
+  bool success = 1;
+  int32 created = 2;
+  int32 updated = 3;
+  int32 deleted = 4;
+  string error = 5;
+}
+
+// ---------- 工作负载运维（专项 D） ----------
+message WorkloadInfo {
+  string kind = 1;           // deployment/statefulset/daemonset/cronjob
+  string name = 2;
+  string namespace = 3;
+  int32 replicas = 4;
+  int32 ready_replicas = 5;
+}
+message ListWorkloadsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;      // 空=全部
+}
+message ListWorkloadsResponse {
+  bool success = 1;
+  repeated WorkloadInfo workloads = 2;
+  string error = 3;
+}
+
+message ScaleWorkloadRequest {
+  int64 cluster_id = 1;
+  string kind = 2;           // deployment/statefulset
+  string namespace = 3;
+  string name = 4;
+  int32 replicas = 5;        // 允许降到 0
+  string trace_id = 6;
+}
+message ScaleWorkloadResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+message RolloutWorkloadRequest {
+  int64 cluster_id = 1;
+  string kind = 2;
+  string namespace = 3;
+  string name = 4;
+  string action = 5;         // restart / undo
+  int64 revision = 6;        // undo 时指定 revision（0=上一版本）
+  string trace_id = 7;
+}
+message RolloutWorkloadResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+message RolloutHistoryRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;           // deployment 名
+}
+message RolloutHistoryResponse {
+  bool success = 1;
+  repeated int64 revisions = 2;
+  string error = 3;
+}
+
+message UpdateProbeRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;           // deployment 名
+  string container = 4;      // 容器名（空=第一个）
+  string probe_type = 5;     // liveness/readiness/startup
+  string probe_kind = 6;     // httpGet/tcpSocket/exec/none
+  string path = 7;
+  int32 port = 8;
+  repeated string command = 9;
+  int32 initial_delay_seconds = 10;
+  int32 period_seconds = 11;
+  int32 timeout_seconds = 12;
+  int32 failure_threshold = 13;
+  int32 success_threshold = 14;
+  string trace_id = 15;
+}
+message UpdateProbeResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+message RecreateWorkloadRequest {
+  int64 cluster_id = 1;
+  string kind = 2;
+  string namespace = 3;
+  string name = 4;
+  string trace_id = 5;
+}
+message RecreateWorkloadResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+// ---------- 交互式终端（TTY 双向流） ----------
+// 客户端 → executor：首帧带会话参数（cluster/namespace/pod/container/tty）；后续帧带 stdin 数据或 resize
+// executor → 客户端：stdout/stderr 输出帧；结束帧带 exit_code + closed
+message ExecPodStreamFrame {
+  // 会话参数（客户端首帧填充）
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+  string container = 4;
+  bool tty = 5;
+  // 客户端 → executor
+  bytes stdin = 6;          // 键盘输入
+  uint32 rows = 7;          // resize：终端行数（0=不调整）
+  uint32 cols = 8;          // resize：终端列数
+  // executor → 客户端
+  bytes stdout = 9;
+  bytes stderr = 10;
+  int32 exit_code = 11;     // 退出码（结束帧）
+  bool closed = 12;         // 会话已结束
+  string error = 13;        // 错误信息（可选）
+}

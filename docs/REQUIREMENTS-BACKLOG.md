@@ -1,0 +1,272 @@
+# API-OPS 平台 —— 需求总账（Backlog）
+
+> 整理：小吴　更新：2026-09-15　依据：DESIGN-2026-09-10.md + 工作日志 + 代码核查
+> 用途：一张表看清「已做 / 待做 / 待确认」。状态以代码为准，未核实项标 ❓。
+
+**状态图例**：✅ 已完成 ｜ ⏳ 待办 ｜ ❓ 待确认（老板拍板 / 状态不明） ｜ ⏸ 暂缓
+
+---
+
+## 一、已完成（截至 2026-09-11）
+
+| 阶段 / 专项 | 内容 | 状态 |
+|---|---|---|
+| 阶段0 安全兜底 | P0 三项（Prompt 注入、Mass Assignment、告警去重竞态）| ✅ |
+| 阶段1 权限地基 | 专项 A：权限↔项目管理合并（成员三级 只读/可操作/管理员）| ✅ |
+| 阶段2 审核闭环 | 批一 7 条（人工协助/高风险审批、站内消息、IM 模板按渠道、处理记录处理人）| ✅ |
+| 阶段3 云原生 RBAC | 专项 B：Impersonation、自动下发三档 ClusterRole、reconcile RoleBinding、存量自动接入 | ✅ |
+| 阶段4 集群改造 + 终端 | 专项 D：去 Pod Tab、服务详情、工作负载操作、xterm.js 交互终端、静默 5 分钟断开 | ✅ |
+| 阶段5 状态检测补全 | 批三：容器级 8 类 + 节点级 2 类、TerminatingStuck 60s 告警/120s 强删 | ✅ |
+| 阶段6 体验优化（核心项） | 菜单折叠、15s 自动刷新、AI 配置合并、幽灵页部分清理、告警静默/维护窗口、平台 /metrics | ✅ |
+| 9-11 追加 | 集群详情分页+搜索、审批去 admin 节点、诊断三分类（故障/应用/数据库）、developer 角色、DB 连接测试、消息显示名称、处理记录倒序、状态列含副本数、更新时间列 | ✅ |
+
+---
+
+## 二、待办（明确未完成，代码已核实）
+
+| # | 需求 | 落点 | 核实结论 |
+|---|---|---|---|
+| 1 | **专项 C · 仪表盘 / 大屏驾驶舱** | 前端 Dashboard 重构 + 新增 `/screen` 大屏路由 | ✅ 2026-09-12（见第五节） |
+| 2 | **批二 · AI 诊断提速**（默认单轮、深度诊断开关） | ai-service/agent_service | ✅ 2026-09-12（知识库优先 + 单轮预采集 + 深度开关） |
+| 3 | **批二 · 命名空间加载提速** | resources 接口 | ✅ 2026-09-12（Redis 短缓存 + (cluster_id,namespace) 联合索引，索引迁移待执行） |
+| 4 | **一键回滚修复** | 处理记录 / 执行详情 行内按钮 | ✅ 2026-09-12（复用 executor RollbackPlan 逆序回滚 + 审计） |
+| 5 | **RAG 向量索引**（现为 O(N) 全表余弦） | ai-service 知识库检索 | ⏳ 无 faiss/hnsw |
+| 6 | **httpx 连接池复用**（现每请求新建） | api-server / ai-service 多处 | ✅ 2026-09-12（共享客户端，见下） |
+| 7 | **CI/CD + 日志归档策略** | 仓库级 | ⏳ 无 CI；保留/归档策略未定 |
+| 8 | **菜单合并 23→~12** | MainLayout 菜单 IA | ✅ 2026-09-12（合并为 15 项：告警处理/策略配置/通知配置/用户与权限 合并页） |
+| 9 | **幽灵页清理** | `OnDuty.tsx`（无路由无菜单） | ✅ 2026-09-12（已移除，未引用） |
+| 10 | **P3 工程化**：类型化（any 227 处）、重复收敛、react-query、关键路径单测 | 全栈 | ✅ 基本完成：any 全清(0)、react-query(4 轮询页)、单测+CI；仅剩深层次重复收敛 |
+
+---
+
+## 三、待确认（需老板拍板 / 澄清）
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | **专项 E · 砍自愈策略死代码** | `SelfHealPolicy`/`current_mode()` 确认死代码，删除属破坏性操作，等拍板。规则（SelfHealRule）保留 |
+| 2 | **安全复查「仍待修」5 项** | Prompt 注入清洗（`diagnosis_service.py` 未见）、资源/日志接口鉴权覆盖、IM 回调验签（飞书官方签名）等是否随阶段0 已覆盖 → 需复核 | ✅ 2026-09-12 复核：①Prompt 注入已做（`_sanitize_external/_ident`）②Mass Assignment 已做（custom_tasks/decisions 显式白名单）④资源/日志鉴权已做（`_deny_cluster`/`check_cluster_permission`）⑤钉钉/企微/飞书（X-Lark-Request-Token）验签已做。③告警去重并发：已用进程内 dedupLocks（同进程安全；水平扩容需 DB 唯一索引兑底，代码已注释）；飞书 `X-Lark-Signature`（Encrypt Key 模式）为可选加固。 |
+| 3 | **V4.1-Flash 模型** | 9-11 待办：加模型（待确认 model_name，复用现有 DeepSeek key/base） |
+| 4 | **诊断分离口径** | 老板说「故障诊断 / 应用诊断」应分开；已做三分类页面，是否即达标待确认 |
+| 5 | **批二/批一遗留小项** | 见 DESIGN 第 9 节功能清单（告警协作、审批增强、知识库治理、报表导出、AI 反馈闭环/成本看板、值班换班/日历、LDAP 切换）|
+
+---
+
+## 四、产品向「功能缺失」清单（DESIGN 第 9 节，未排期）
+
+- 告警协作（确认 / 认领 / 备注 / 工单）
+- 审批增强（批量 / 加签 / 转办 / 意见模板）
+- 知识库治理（命中率 / 失效 / 导入导出）
+- 报表 / 导出 / 定时推送
+- AI 反馈闭环 / 成本看板
+- 值班换班 / 代班 / 日历
+- LDAP / 本地登录切换（`auth_type` 已有）
+- 平台自监控（仪表盘卡片，后端 `/metrics` 已做）
+
+---
+
+## 五、2026-09-12 本轮完成（离线开发，未动数据库）
+
+1. **AI 诊断提速（批二-1）**：`run_agent_turn(deep=False)` 默认走快速诊断——① 知识库优先（相似度 ≥0.9 直接复用，零 AI 调用）；② 未命中则平台预采集 describe/日志/指标 → 单轮 AI 出结论；`deep=true` 保留原多轮工具循环。ai-service 新增 `/api/v1/ai/agent/diagnose`；前端 AgentChat 加「深度诊断」开关 + 「知识库复用」标记。
+2. **命名空间加载提速（批二-2）**：`namespace-list` 加 Redis 短缓存（300s，Redis 不可用自动降级直查）；新增迁移 `b8c9d0e1f2a3` 加 `resource_snapshots(cluster_id, namespace)` 联合索引。
+3. **一键回滚（批二/第9节）**：`POST /api/v1/executions/{plan_id}/rollback`（operator+）→ 调 executor `RollbackPlan` 逆序执行 `rollback_command`，成功后步骤置 `rolled_back`，写审计；处理记录/执行详情加「一键回滚」按钮。
+4. **幽灵页清理**：移除未引用的 `pages/OnDuty.tsx`。
+5. **httpx 连接池复用**（本轮追加）：新增 `app/core/http_client.py`（两服务各一份）——按 `trust_env` 分组的进程级共享 `AsyncClient`（连接池 100/keepalive 20、单请求 timeout 可覆盖）；改造 8 个文件共 20 处调用（messaging/notification_service/feishu_service/es_client/ai_client/ai_proxy + ai-service model_deepseek/prometheus_client/es_client）；lifespan 退出时 `close_http_clients()`；行为兼容（保留各请求原 timeout / auth / trust_env）。
+6. **专项 C 仪表盘/大屏（本轮追加）**：
+   - 后端 `GET /stats/dashboard`（聚合：核心指标含 AI 自愈成功率/MTTR/今日处理数 + 24h 趋势 + 集群墙 + 实时告警 + 审批流水 + AI 运行区 + 平台健康）与 `GET /stats/platform-health`（DB/Redis 探活）。
+   - 前端 `Dashboard.tsx` 重写：响应式 Grid 铺满 + 核心指标卡 + 24h 折线（@ant-design/charts，已内置依赖）+ 集群健康墙 + 实时告警 + 流水 + AI 运行区 + 平台健康；15s 轮询；**全屏按钮**（Fullscreen API）。
+   - 新增独立大屏路由 `/screen`（无侧栏/顶栏框架，深色、多页 20s 轮播、15s 轮询）。
+   - `MainLayout`：Header 加「大屏」入口 + 全屏按钮；Content 去固定 padding 自适应。
+7. **菜单合并 23→15（本轮追加）**：新增合并页 `AlertHandling/StrategyConfig/NotificationCenter/UserPermission`（Tabs），菜单改为 告警处理 / 策略配置 / 通知配置 / 用户与权限 四项；旧路由保留（兼容内部跳转/深链）。
+8. **安全「仍待修」5 项复核**：①Prompt 注入、②Mass Assignment、④资源/日志鉴权、⑤IM 回调验签 均已闭环；③告警去重并发已有进程内锁（水平扩容需 DB 索引兜底，注释已标）。
+9. **C1 告警协作（确认/认领/备注）**：`alerts` 加 assigned_to/assigned_at/acknowledged/acknowledged_by/acknowledged_at；新增 `alert_comments` 表（迁移 `c9d0e1f2a3b4`）；API `POST /alerts/{id}/assign|/ack`、`GET|POST /alerts/{id}/comments`；列表返回协作字段；前端 AlertList 加「协作」列 + 认领/确认/备注按钮 + 备注抽屉（协作记录）。工单未做。
+
+> 待环境恢复后执行：`cd api-server && ./.venv/bin/python -m alembic upgrade head`（新迁移 `b8c9d0e1f2a3` + `c9d0e1f2a3b4`）。
+
+---
+
+## 六、未开发清单（2026-09-12 11:50 复核）
+
+> 已完成（今日追加）：C1 告警协作（确认/认领/备注）｜专项 C 仪表盘/大屏（`/dashboard` 即大屏，实时数据）｜菜单合并+导航伸缩｜故障诊断/处理记录去重｜性能：dashboard 缓存+索引、处理记录 N+1 修复｜迁移 `b8c9d0e1f2a3` / `c9d0e1f2a3b4` / `d0e1f2a3b4c5` 已执行。
+
+### A. 工程/平台类| # | 项 | 现状 |
+|---|---|---|
+| A1 | RAG 向量索引（现 O(N) 全表余弦） | ✅ 2026-09-12（内存归一化矩阵 + 向量化余弦 + TTL/失效） |
+| A2 | CI/CD + 日志轮转/归档 | ✅ 2026-09-12（ci_check.sh + GH Actions + rotate_logs.sh + 文档） |
+| A3 | P3 工程化：`any` 类型化、重复实现收敛、react-query、关键路径单测 | 🟡 已做：单测+入 CI、types.ts+api.ts 类型化、**组件 any 全清（357→0，opencode 批量）**、react-query（provider + AlertList/Screen/ApprovalList/FaultDiagnosis 4 页）；**未做**：深层次重复实现收敛（仅收敛了 webhooks `_get_channel_field`） |
+| A4 | 后台循环超时/隔离（gRPC 已改 to_thread，但 30s 超时仍占线程池；建议后续给后台循环加并发上限/更短超时） | ✅ 2026-09-12 已做：executor_client `acall` 加全局信号量（`EXECUTOR_MAX_CONCURRENCY` 默认 8）限并发 |
+
+### B. 待老板拍板/确认
+| # | 项 |
+|---|---|
+| B1 | 专项 E：砍 `SelfHealPolicy` 死代码（破坏性） | ✅ 2026-09-12 已删（模型/路由/服务/引用/前端 api + 迁移 drop 表） |
+| B2 | V4.1-Flash 模型（待确认 model_name） |
+| B3 | 诊断分离口径（三分类+去重已做，是否达标） |
+
+### C. 产品向功能（代码核实无实现）
+| # | 项 | 现状 |
+|---|---|---|
+| C2 | 审批增强（批量 / 加签 / 转办 / 意见模板） | ✅ 2026-09-12（批量通过/拒绝、加签、转办、意见模板） |
+| C3 | 知识库治理（命中率 / 失效 / 导入导出） | ✅ 2026-09-12（命中统计、失效停用、导入导出、统计卡） |
+| C4 | 报表 / 导出 / 定时推送 | ✅ 2026-09-12（趋势/成本 CSV 导出 + 报表定时推送） |
+| C5 | AI 反馈闭环 / 成本看板 | ✅ 2026-09-12（AI 运行/成本看板 Tab + 诊断有用/无用反馈） |
+| C6 | 值班换班 / 代班 / 日历 | ✅ 2026-09-12（值班日历 + 换班/代班覆盖） |
+
+### D. 可选安全加固
+- D1 飞书 `X-Lark-Signature`（Encrypt Key 模式）验签 — ✅ 2026-09-12 已做（`encrypt_key` 字段 + 签名校验 + AES 解密；空则回退 token 模式）
+- D2 告警去重 DB 层兜底（水平扩容）— ✅ 2026-09-12 已做（`alerts.dedup_key` STORED 生成列 + 唯一索引 + Go 侧 duplicate 合并）
+
+### F. 已修 Bug（2026-09-12）
+| 编号 | 内容 | 状态 |
+|---|---|---|
+| B1 | **集群连接检查失败时不写回状态**（UAT 明明连不上却显示 healthy）→ 已改为成功/失败都写回 + 连续 2 次才判失败 | ✅ |
+| B2 | **同步 gRPC 跑在 async 事件循环**（`query_prometheus`/`collect_quota`/`execute_plan` 等）→ 一个慢调用（最长 30s）把整个 API 锁死（实测 14:07 起无响应、SIGTERM 也杀不掉，只能 kill -9）→ 新增 `executor_client.acall()`，39 处调用改写 + 3 个生成器循环改 `asyncio.to_thread` | ✅ |
+
+### E. 环境/数据问题（2026-09-12 发现）
+- E1 ~~**UAT 集群（cluster 2）快照/指标自 09-11 18:09 停更** → 需排查采集/连通~~ ✅ 2026-09-12 定位：UAT API `10.10.75.253:6443` 网络不可达（非平台问题）；已修健康检查失败不写回状态的 Bug，并加大屏“数据陈旧”标记
+- E2 executor 指标采集疑似单位 bug（个别 Pod `cpu_usage` 报 5 万+ 核）→ ✅ 2026-09-12 已修：根因=metrics-server 偶发返回异常 CPU（rocketmq-broker-0-master-0 实测最高 440 万核，非代码单位 bug，`AsApproximateFloat64` 本身正确）；在 collector.go 加脏数据防护（单 Pod CPU>256 核 / 内存>2TiB 置 0 + 告警日志），Go 重编译重启。历史脏数据保留（api-server 侧已过滤）。
+
+> 数据保留：已有 `cleanup_old_snapshots(retention_days=7)`（启动+每日），非缺失项。
+
+---
+
+## 七、环境备注（2026-09-12）
+
+- 本机 IP = `192.168.1.10`；`192.168.6.99`（MySQL/Redis）、`192.168.6.36` 均 **不可达**（无路由，疑似 VPN/网络切换）→ 与平台代码无关。
+- 本地四服务（api-server:8080 / ai-service:9000 / executor:9090 / vite）**当前全部未运行**。
+- 项目无 git 仓库（改动未纳入版本控制）。
+
+---
+
+## 八、2026-09-15 本轮（环境恢复：四服务已启动）
+
+> 本地环境已恢复（MySQL/Redis `192.168.6.99` 可达），四服务已起：api-server:8080 / ai-service:9000 / executor:9090 / vite:5173。
+
+### 8.1 已修 Bug
+
+| 编号 | 内容 | 落点 | 状态 |
+|---|---|---|---|
+| **B3** | **应用诊断「新建诊断会话」点确定后窗口不关，但会话已建成**。后端在 `POST /agent/sessions` 里同步跑完首轮诊断（KB 预检 + 3 个取证工具 + LLM，实测 145s），前端 axios 超时 30s 先中止 → `await createAgentSession()` 抛错 → `setModalOpen(false)` 执行不到。实测 09:35 连点 4 次生成 12–15 号同内容重复会话 | `api-server/app/api/agent.py`、`frontend/src/pages/AgentChat.tsx` | ✅ **方案A**：创建接口只建会话并立即返回（新增 `diagnosing` 标记），首轮诊断 `asyncio.create_task` 后台执行（带异常兜底 + 任务引用集合防 GC）；前端拿到 id 立刻关窗 + 打开会话 + 每 2.5s 轮询 `/messages` 直到出 assistant 结论（切走自动停）；`handleCreate` 加 try/catch，失败保留窗口可重试 |
+| **B4** | **深度诊断动不动就「诊断未完成（达到最大工具步数 12）」**。实测会话 12：12 步里 5 步是同一工具同参数的重复调用（被去重拦截但**仍占轮数**）、2 步参数类型报错（`{"tail":"100"}` 期望 int）、2 步容器内命令不存在，有效信息只有 5 步 → 模型始终不收敛 | `api-server/app/services/agent_service.py`、`app/services/tool_registry.py` | ✅ 三修：①`used_steps` 只在真实执行时 +1，**重复调用不占额**；连续 2 次重复（`MAX_CONSECUTIVE_DUP`）强制收敛；`MAX_DECIDE_ROUNDS=24` 防其他空转 ②新增 `coerce_args()` 参数类型容错（`"100"`→`100`、`"5"`→`5`、`"true"`→`True`），`execute_tool` 校验前归一化，编排循环用归一化后的参数做去重键；`list_tools()` 给 LLM 的工具描述带上「类型：int，必填」 ③剩余预算 ≤2 步注入收敛提示，循环结束仍无结论时追加一次「强制收敛」LLM 调用；兜底文案带真实原因（重复调用/未知工具/决策失败）|
+| **B5** | **审批列表出现不该有的「审核超时」**：人工协助单（`manual_assist`）关联告警已自愈，单据仍一路升级到 `timeout` | `api-server/app/services/approval_service.py`、`app/services/alert_auto_service.py` | ✅ 根因两条：①`_cancel_related_approvals()` 只 `JOIN repair_plans ON id = approvals.plan_id`，而人工协助单 `plan_id` 为 NULL → **被 inner join 整个漏掉**（该函数本就是「资源已恢复→取消 pending 审批单」用的）②`k8s-executor` 强删卡死 Pod 后**直接写库** `alerts.status='self_healed'`（`pod_watcher.go:584`），api-server 完全感知不到，且 `TerminatingStuck` 不在 `POD_RECOVERABLE_FAULTS` 里，恢复关闭路径也不会跑。修：①`_cancel_related_approvals` 改 `outerjoin` + `or_(RepairPlan.alert_id, Approval.alert_id)` 覆盖人工协助单 ②`timeout_handler` 每轮先查关联告警，`self_healed/resolved` 则置 `cancelled`（原因写「关联告警已恢复」）而非 `timeout`；日志加「恢复取消 N 条」。历史脏数据已补偿修正 4 张（#17/18/24/28），备份 `logs/archive/approval_timeout_fix_backup_20260915.json` |
+
+| **B6** | **审批终态未同步关联告警 → 僵尸单**（原计划 P5）。两类：①人工协助单整轮超时后告警仍挂 `awaiting_approval`，但已无 pending 单可审 → 从「待审批」列表消失又回不到自动处理池（告警 309）②人工协助单已 `approved` 但告警仍挂 `awaiting_approval`（告警 308，`execute_approved_plan(None)` 是空跑）| `api-server/app/services/approval_service.py` | ✅ 新增 `_settle_alert_for_manual()`：人工协助单 `approved`（值班人已受理）/`rejected`（人工裁定无需处理）→ 关联告警置 `resolved` + 记 `resolved_by` + 留言留痕；`approved` 且无 plan 时不再调 `execute_approved_plan(None)`。实践验证：老板拒绝 #36（告警 309）→ 告警自动置 `resolved` |
+| **B7** | **审批不该有「超时」**（老板 09-15 口径）：人工协助未恢复又没人处理 → 值班人 **40 分钟**未处理 → **通知所有人**，但**不超时**；之后服务自愈 → **审批流程解除**。原实现会一路升级到 `timeout` 把单子关掉 | `api-server/app/services/approval_service.py`、`app/models/approval_flow.py`、`frontend/src/pages/ApprovalFlows.tsx`、`pages/ApprovalList.tsx`、`components/StatusTag.tsx` | ✅ ①`timeout_handler` 重写：**取消 `timeout` 状态**；当前节点到「提醒时间」→ 推进下一节点并重新通知；到**最后一节点**后保持 `pending`（不再提醒、不判超时）；关联告警自愈/已解决 → `cancelled`（解除）②默认流程：值班人 20→**40** 分钟、末节点不再参与推进；③前端：审批列表 `cancelled` 显示「**解除**」（`StatusTag` 加 `label` 可选项）；审批流程页「超时(分钟)」→「**提醒时间(分钟)**」+ 说明文案；④历史 `timeout` 单 #27 → 解除；⑤删除上轮加的「超时重开单」逻辑（已无超时，无需重开）|
+
+### 8.2 验证与回归
+
+- 新增单测 10 个（`api-server/tests/test_units.py`）：`coerce_args` 7 项 + 深度循环预算行为 3 项（重复不占额 / 预算用尽强制收敛 / 收敛失败兜底带原因）。
+- `./scripts/ci_check.sh` 全绿：py_compile ×2 / frontend tsc / k8s-executor go build / 单测（api-server 17、ai-service 5）/ 跨语言加密互测。
+- B5 用真实库双路径验证：`timeout_handler` 与 `_cancel_related_approvals` 各跑一遍，已自愈告警的 pending 单 → `cancelled`；未恢复告警（对照组）保持 `pending`。
+- B6 用真实库验证：告警 308（审批已通过）→ `resolved`；告警 309（超时无单）→ 重开 pending 单 #36；后续老板拒绝 #36 → 告警 309 自动 `resolved`（新逻辑生效）。
+- B7 用真实库双场景验证：A) 单子已在末节点、3 小时前通知过 → 保持 `pending`（**不判超时**）；B) 单子在值班人节点、41 分钟前通知过 → 自动推进到节点 2（@群所有人）并重新通知。均已断言通过。
+
+### 8.3 待办 / 待确认（2026-09-17：P1 老板定不做，P2/P4/P6 已做）
+
+| # | 事项 | 说明 |
+|---|---|---|
+| **P1** | 真实 E2E 验证 | ❌ 老板 09-17 定「不做了」 |
+| **P2** | `MAX_TOOL_STEPS` 可配置 | ✅ 2026-09-17：新增 system_settings `agent_max_tool_steps`（默认 12，1~100 限幅）+ `agent_service._get_max_tool_steps()` 读配置 + 前端「AI 诊断」Tab 可调 |
+| **P3** | ~~历史重复诊断会话清理~~ | ✅ 2026-09-15 已清 8 个会话 / 77 条消息（4–11 号），备份 `logs/archive/diagnosis_sessions_backup_20260915_4-11.json`（⚠️ 12–15 号的备份文件被同名覆盖丢失，均为重复垃圾数据）|
+| **P4** | 处理记录把「自愈」显示成「审核」 | ✅ 2026-09-17：`repair_records.py` 改为自愈优先 + 忽略 `cancelled` 审批单；实测 3 条自愈告警（297/298/307）原误显「审核」现正确显示「自愈」 |
+| **P5** | ~~超时后告警僵尸态~~ | ✅ 2026-09-15 已处理（见 B6/B7）|
+| **P6** | 后台 30s 循环被慢任务拖后 | ✅ 2026-09-17：`main.py` 拆分为独立循环（审批超时 30s/60s 超时、告警自动处理 30s/150s、日志告警扫描 30s/120s）+ 独立维护循环；`lock:alert_auto` TTL 30s→300s 防重叠 |
+| **P7** | ~~人工协助单终态语义确认~~ | ✅ 2026-09-15 已明确：`approved`/`rejected` → 告警 `resolved`（留痕）；审批**无超时**，仅 40 分钟未处理时通知所有人（见 B7）|
+| **P8** | ~~`DecisionPolicy.approval_timeout` 字段已无实际作用~~ | ✅ 2026-09-15 已清理：删除模型字段 + `decisions` API 白名单/响应 + 前端列表列/表单项；迁移 `e0f1a2b3c4d5_drop_decision_approval_timeout`（`upgrade head` 已执行，列已删），备份 `logs/archive/decision_policies_backup_20260915.txt` |
+
+### 8.4 本轮数据/配置操作（均已备份）
+
+| 操作 | 说明 | 备份 |
+|---|---|---|
+| 默认审批流程调参 | 值班人 20→**40** 分钟；末节点 `timeout` 30→**0**（不再参与推进） | `logs/archive/approval_flow_backup_20260915.json` |
+| 在途单 #39 快照刷新 | 与上述流程对齐（20/30→40/0），避免旧快照提前提醒 | — |
+| 历史 `timeout` 单 #27 | 按「审批无超时」语义置为解除 | `logs/archive/approval_timeout_legacy_backup_20260915.txt` |
+| 历史误报 timeout 单 #17/18/24/28 | 关联告警已自愈 → 解除 | `logs/archive/approval_timeout_fix_backup_20260915.json` |
+| 告警 308/309 僵尸态 | 308 → resolved；309 → 重开 #36（后被老板拒绝→ 自动 resolved） | — |
+| 历史重复诊断会话 4–11 | 删除 8 单 / 77 条消息 | `logs/archive/diagnosis_sessions_backup_20260915_4-11.json` |
+| 迁移 | `e0f1a2b3c4d5`（删除 `decision_policies.approval_timeout`）已 `upgrade head` | — |
+
+---
+
+## 九、2026-09-17 老板新增需求（待排期）
+
+> 老板原话 8 条，按模块归并。状态：待确认/待开发。
+
+### A. 告警处理 · 审批列表
+| # | 需求 | 说明 / 现状 |
+|---|---|---|
+| 1 | 同一 pod 的审批去重 | 现状：`list_approvals` 按 `Approval` 逐条返回，同一 pod（同一告警）的多张审批单会重复罗列。需按 pod/resource 去重，只保留最新一张（或合并展示） |
+| 2 | 审批列表翻页 | 现状：无分页，一次性拉全量。需加 `page/page_size/total` + 前端翻页 |
+| 6 | 人工协助/处理记录闭环修复（3 子项） | ① 人工协助单：人工未处理、告警已恢复 → **提醒应解除**（审批置 cancelled）。此点在 B5/B7 已做过，老板反馈仍不生效，需重新核查触发路径；② 已处理计划应**完整**，不能断断续续（修复计划/执行步骤展示不完整）；③ 处理记录里「审核人/处理人」字段断断续续（部分行空） |
+
+### B. 仪表盘
+| # | 需求 | 说明 / 现状 |
+|---|---|---|
+| 3 | 去掉「告警状态」板块 | 该板块展示正常/异常（已解决/已自愈），与上面的「审批流水」信息重复，删除 |
+| 4 | MTTR 释义（问答） | **MTTR = Mean Time To Repair（平均修复时长）**。当前算法：近 24h 内已解决告警的 `resolved_at − detected_at` 取平均值，单位分钟（`stats.py` mttr_minutes） |
+| 5 | 集群概览 pod 数/负载不准 | 现状：pod 数取 `resource_snapshots`「每集群×资源类型最新一次快照」的 pod 计数，但该快照是**分批落库**的，最新快照批次可能只含部分 pod → 计数在 60~100 间波动；真实集群 ~782。负载（CPU/内存）同理受采样影响。需改用真实采集口径（如 executor 实时工作负载数/节点资源） |
+
+### C. 数据库诊断
+| # | 需求 | 说明 / 现状 |
+|---|---|---|
+| 7 | 数据库采集指标多样化 + 巡检报告 + 开关 | 现状：`db_collector` 健康采集仅连接数（used/max/usage_pct）。需扩展：当前连接数、活跃连接数、连接使用率、QPS、TPS、慢查询、缓存命中率等；支持生产库巡检报告内容可配；数据库巡检增加开关 |
+
+### D. 集群管理
+| # | 需求 | 说明 / 现状 |
+|---|---|---|
+| 8 | 集群巡检 + 自动生成巡检报告 + 开关 | 现状：无集群巡检功能（`inspection` 无实现）。需新增：集群巡检（节点/资源/异常等体检），可设置自动生成巡检报告，巡检报告加开关 |
+
+### 待老板拍板/确认
+- #5：确认「真实 pod 数」以哪个口径为准（`kubectl get pods -A` 全量 782？），以便对齐概览卡数字。
+- #6-②：「已处理计划断断续续」具体指哪里的展示（执行详情步骤？处理记录？），需给个截图/示例定位。
+- #7/#8：巡检报告是否需要定时（cron）自动生成并推送？还是仅手动触发 + 界面查看？开关是全局还是按库/按集群？
+- #1 去重口径：按「告警/pod」去重，还是按「资源名+命名空间」去重？
+
+---
+
+## 2026-09-18 落地记录（老板拍板后全部完成）
+
+> 拍板口径：① pod 数用 `kubectl get pods -A` 全量 ② #6-② 指处理记录 ③ 巡检报告按库开关 ④ 集群巡检按集群开关、不定时推送。
+
+| # | 需求 | 状态（09-18） |
+|---|---|---|
+| 1 | 审批去重 | ✅ 09-17 已做（命名空间+资源名去重） |
+| 2 | 审批翻页 | ✅ 09-17 已做（page/page_size/total） |
+| 3 | 去「告警状态」板块 | ✅ 09-17 已做（Screen.tsx 无此板块） |
+| 4 | MTTR 释义 | ✅ 问答：近24h已解决告警 resolved_at−detected_at 均值（分钟） |
+| 5 | pod 数/负载真实口径 | ✅ executor 新增 `_pods_` 快照（kubectl get pods -A 全量），stats.py 读它；实测集群1=778 |
+| 6-① | 人工协助恢复解除 | ✅ 根因=node_watcher 无恢复关闭逻辑；新增 resolveNodeFaultAlerts，实测告警425→resolved、审批134→cancelled |
+| 6-② | 处理记录计划完整 | ✅ repair_records 返回 plan_steps+execution_steps，前端展开行展示 |
+| 6-③ | 审核人/处理人补全 | ✅ resolved+manual 且空时从审批单取审批人 |
+| 7 | 数据库指标+巡检开关 | ✅ 加活跃连接数/QPS/TPS/缓存命中率 + DBConnection.inspect_enabled（按库） |
+| 8 | 集群巡检+开关 | ✅ 新增 inspection_service + Cluster.inspect_enabled（按集群，不定时推送） |
+
+迁移：`f1a2b3c4d5e6_add_inspect_enabled`（已 upgrade head）。
+
+
+---
+
+---
+
+## 2026-09-18 新增需求（讨论定稿）
+
+> 巡检定时补充：`Cluster`/`DBConnection` 加 `inspect_cron`（可设置定期，空=仅手动点击巡检）；迁移 `f2b3c4d5e6f7`。
+> 仪表盘改造详见 `docs/DASHBOARD-V2-REQUIREMENTS.md`。
+
+### A. 仪表盘改造（Dashboard v2，改造现有 `/dashboard`）
+- **布局 6 段**：① 顶部（项目/集群筛选·时间范围·刷新·全局健康分）② KPI 7 项 ③ 告警趋势 + AI 诊断结果分布（环形）④ 实时告警流 + Top 告警类型 ⑤ 异常 Pod Top N + 数据库健康概览 ⑥ 自动处理动作统计·时间线 + 集群资源水位 Top
+- **刷新**：前端 5s / 后端缓存 15s
+- **全局健康分**：集群健康 40% + 活跃告警 30% + DB 健康 30%
+- **KPI 口径**：自动处理=近一年累计；其余当前态，成功率/MTTR 随时间范围
+- **异常 Pod** = 有告警的 Pod（含刚重启）；**移除**「项目健康评分」；项目不做告警
+
+### B. 待办需求
+| # | 需求 | 说明 |
+|---|---|---|
+| N1 | 工单 | 告警/审批转工单（派基础设施团队 / 对接外部工单系统） |
+| N2 | 深层次重复实现收敛 | infer_deployment_name×3、ExecutorClient()×13、值班 Tab、IM 发送层、AI JSON 解析 |
+| N3 | 诊断分离口径确认 | 故障/应用诊断三分类是否达标 |
+| N4 | 健康检查 readiness/liveness | 拆就绪/存活探针 |
+| N5 | 异常 Pod 重启原因 AI 诊断 + 告警通知 | RESTARTS 增加（OOM/探针，排除手动）→ 自动 AI 诊断 → 诊断结果告警通知（不审批） |
+| N6 | DB 报错告警接入告警策略 | 数据库报错（连接失败等）走告警策略 |
+| N7 | 日志源自定义（多实例） | 支持自定义多个日志源（ES 地址/索引/账号），不强绑环境；日志告警规则可选日志源；兼容现有全局 ES |
+| N8 | 统一告警通知策略 | 集群告警 + 日志告警全部走同一套告警通知策略（全平台统一一份） |

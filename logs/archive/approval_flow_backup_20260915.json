@@ -1,0 +1,11 @@
+{
+  "time": "2026-09-15T13:38:00.056173",
+  "reason": "值班人提醒时间 20→40；末节点不设超时 30→0",
+  "before": [
+    {
+      "id": 1,
+      "name": "默认流程（值班人 → @群所有人+admin）",
+      "nodes": "[{\"type\": \"duty\", \"timeout\": 20, \"approve_count\": 0, \"on_empty\": \"next\", \"group_id\": 0, \"at_duty\": false}, {\"type\": \"group_all\", \"timeout\": 30, \"approve_count\": 0, \"group_id\": 0, \"include_admin\": true, \"at_duty\": false}]"
+    }
+  ]
+}

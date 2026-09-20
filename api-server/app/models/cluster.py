@@ -1,0 +1,39 @@
+# -*- coding: utf-8 -*-
+"""集群模型：kubeconfig 加密存储，中心化管理"""
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.database import Base
+
+
+class Cluster(Base):
+    """Kubernetes 集群"""
+
+    __tablename__ = "clusters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    # kubeconfig 密文（AES-256-GCM 加密，见 docs/ENCRYPTION.md）
+    kubeconfig_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/healthy/unreachable
+    version: Mapped[str] = mapped_column(String(50), default="")
+    # 环境标签：qa(测试)/release(预生产)/prod(生产)，admin 创建/编辑集群时配置，一个集群一个环境
+    env_tag: Mapped[str] = mapped_column(String(20), default="prod", index=True)
+    # 维护窗口配置 JSON：{"enabled": true, "start": "02:00", "end": "04:00", "days": "1,2,3,4,5"}
+    maintenance_window: Mapped[str] = mapped_column(Text, default="{}")
+    # 云原生 RBAC（专项 B）：接入状态
+    rbac_enabled: Mapped[bool] = mapped_column(Boolean, default=False)  # 是否启用 impersonation（默认关，接入后按能力自动开）
+    rbac_mode: Mapped[str] = mapped_column(String(20), default="off")   # off=未接入 / rbac=impersonation / fallback=平台权限+白名单
+    rbac_status: Mapped[str] = mapped_column(String(255), default="")  # 接入结果说明（能力探测结论/错误）
+    # 连接检查（定时）：上次检查时间 + 错误（成功则清空）
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_check_error: Mapped[str] = mapped_column(String(255), default="")
+    # 巡检开关（按集群）：关闭后该集群不参与巡检/报告生成
+    inspect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 定时巡检 cron（分 时 日 月 周；空=不定时，仅手动点击巡检）
+    inspect_cron: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

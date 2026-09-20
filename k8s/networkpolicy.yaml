@@ -1,0 +1,32 @@
+# 网络策略：ai-service 和 k8s-executor 只允许 api-server 命名空间的入站
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-executor
+  namespace: api-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: k8s-executor
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-server
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-ai-service
+  namespace: api-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-service
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-server

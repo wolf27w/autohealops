@@ -1,0 +1,313 @@
+# -*- coding: utf-8 -*-
+"""API-OPS 平台入口（唯一对外 API 入口）"""
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
+
+from app.api import (
+    agent, ai_proxy, alert_policies, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
+    db_diagnosis, decisions, diagnostic, executions, fault_diagnosis, im_groups, in_app_messages, knowledge, log_alert_rules, logs, notifications, on_duty, permissions,
+    projects, repair_records, report_schedules, resource_alert_rules, resources, self_heal_rules, stats, tasks, terminal, users, webhooks,
+)
+from app.api import settings as settings_api
+from app.core.config import settings
+from app.core.database import async_session
+from app.core.logging import get_logger
+from app.core.security import generate_trace_id, hash_password
+from app.models import User
+
+logger = get_logger("api-server.main")
+
+
+async def seed_default_users() -> None:
+    """初始化默认用户 admin/operator/viewer
+
+    安全：不再使用硬编码弱口令。admin 密码优先取 ADMIN_INITIAL_PASSWORD（环境变量），
+    否则生成随机强密码；operator/viewer 一律随机密码。
+    初始密码仅打印到日志一次（仅当用户为新创建时），提示首次登录后立即修改。
+    """
+    import secrets
+
+    def _random_pw() -> str:
+        return secrets.token_urlsafe(12)
+
+    defaults = [
+        ("admin", (settings.ADMIN_INITIAL_PASSWORD or _random_pw()), "admin"),
+        ("operator", _random_pw(), "operator"),
+        ("viewer", _random_pw(), "viewer"),
+    ]
+    async with async_session() as session:
+        result = await session.execute(select(User))
+        existing = {u.username for u in result.scalars()}
+        for username, password, role in defaults:
+            if username in existing:
+                continue
+            session.add(User(username=username, password_hash=hash_password(password), role=role))
+            logger.warning("已创建默认用户 %s，初始密码: %s（请首次登录后立即修改）", username, password)
+        await session.commit()
+
+
+async def _interval_worker(name: str, interval: float, fn, timeout: float | None) -> None:
+    """独立后台任务：按固定间隔调度 fn，单次执行加超时隔离，异常自愈（不阻塞其他任务）"""
+    import asyncio
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            if timeout:
+                await asyncio.wait_for(fn(), timeout=timeout)
+            else:
+                await fn()
+        except asyncio.TimeoutError:
+            logger.warning("%s 执行超时（>%.0fs），中断本轮，下轮继续", name, timeout)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("%s 异常: %s", name, e)
+
+
+async def _maintenance_loop() -> None:
+    """周期维护任务：慢 SQL 采集（每 5 分钟）+ 资源快照清理（每日）"""
+    import asyncio
+    from app.services.db_collector import scan_all_connections
+    loop_count = 0
+    while True:
+        await asyncio.sleep(30)
+        loop_count += 1
+        # 慢 SQL 采集：每 5 分钟（10 个 30s 周期）
+        if loop_count % 10 == 0:
+            try:
+                n = await scan_all_connections()
+                if n:
+                    logger.info("慢 SQL 采集完成：%d 条", n)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("慢SQL采集 异常: %s", e)
+        # 资源快照清理：首次启动清理一次 + 每天一次（2880 个 30s 周期）
+        if loop_count == 1 or loop_count % 2880 == 0:
+            try:
+                from app.services.resource_service import cleanup_old_snapshots
+                n = await cleanup_old_snapshots()
+                if n:
+                    logger.info("资源快照清理完成：删除 %d 条历史记录", n)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("资源快照清理 异常: %s", e)
+
+
+# 后台循环 task（模块级引用，防 GC）
+_background_tasks = []
+
+
+async def _auto_setup_rbac_on_startup() -> None:
+    """启动时自动接入存量集群的云原生 RBAC（未接入的自动补上，无需人工触发）"""
+    import asyncio
+    from app.models import Cluster
+    from app.services import rbac_service
+    await asyncio.sleep(3)  # 等 executor 客户端池就绪
+    try:
+        async with async_session() as session:
+            result = await session.execute(select(Cluster).where(Cluster.rbac_mode == "off"))
+            clusters = list(result.scalars())
+        for c in clusters:
+            try:
+                await rbac_service.setup_cluster_rbac(c.id)
+                logger.info("存量集群 %d 已自动接入 RBAC", c.id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("存量集群 %d 自动接入 RBAC 失败: %s", c.id, e)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("启动时 RBAC 自动接入失败: %s", e)
+
+
+async def startup_tasks() -> None:
+    """启动时的异步初始化任务"""
+    global _background_task
+    from app.services import scheduler_service
+
+    await seed_default_users()
+    from app.api.alert_policies import seed_default_policies as seed_alert_policies
+    await seed_alert_policies()
+    await scheduler_service.load_all_tasks()
+    scheduler_service.start()
+
+    # 报表定时推送（C4）
+    from app.services import report_service as _report_svc
+    await _report_svc.load_all_schedules()
+
+    # 定时巡检（集群 + 数据库，可设置定期，默认不定时）
+    from app.services import inspection_service as _inspect_svc
+    from app.services import db_diagnosis_service as _db_svc
+    await _inspect_svc.load_all_cluster_inspects()
+    await _db_svc.load_all_db_inspects()
+
+    # 加载存量定时诊断任务
+    from app.services import diagnostic_service as _diag_svc
+    await _diag_svc.load_diagnostic_cron()
+
+    # 启动长连接客户端（钉钉 Stream / 飞书长连接，transport_mode=long_conn 的渠道）
+    try:
+        from app.services import long_conn_client
+        await long_conn_client.start_long_conn_clients()
+        # 全局飞书长连接（凭证取系统设置，审批闭环：群内回复/按钮 → 事件回调）
+        await long_conn_client.start_feishu_long_conn_global()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("长连接客户端启动失败: %s", e)
+
+    # 后台定时任务拆分：审批超时 / 告警自动处理 / 日志告警扫描 各自独立循环（互不阻塞），
+    # 慢 SQL 采集 + 快照清理 走独立维护循环
+    import asyncio
+    from app.services.approval_service import timeout_handler
+    from app.services.alert_auto_service import auto_process_alerts
+    from app.services.log_alert_service import scan_log_alerts
+    for name, fn, timeout in (
+        ("审批超时", timeout_handler, 60.0),
+        ("告警自动处理", auto_process_alerts, 150.0),
+        ("日志告警扫描", scan_log_alerts, 120.0),
+    ):
+        _background_tasks.append(asyncio.create_task(_interval_worker(name, 30, fn, timeout)))
+    _background_tasks.append(asyncio.create_task(_maintenance_loop()))
+    logger.info("后台定时任务已拆分启动：审批超时/告警自动处理/日志告警扫描（每 30 秒，独立隔离）+ 周期维护")
+
+    # 云原生 RBAC：启动时自动接入存量集群（未接入的自动补上，无需人工触发）
+    asyncio.create_task(_auto_setup_rbac_on_startup())
+
+
+    # 容器资源阈值告警扫描（Prometheus，每 60 秒）
+    try:
+        from app.services.resource_alert_service import background_loop as resource_alert_loop
+        _resource_alert_task = asyncio.create_task(resource_alert_loop())
+        logger.info("容器资源告警扫描已启动（每 60 秒，Prometheus 数据源）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("容器资源告警扫描启动失败: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动/关闭事件"""
+    logger.info("API-OPS 平台启动中...")
+    # 数据库表结构由 alembic 管理（部署时执行 alembic upgrade head），启动时只做初始化
+    await startup_tasks()
+    logger.info("API-OPS 平台启动完成")
+    yield
+    # 关闭共享 HTTP 连接池
+    from app.core.http_client import close_http_clients
+    await close_http_clients()
+    logger.info("API-OPS 平台已停止")
+
+
+app = FastAPI(title="API-OPS平台", version="1.0.0", lifespan=lifespan)
+
+# CORS（显式白名单；不可 allow_origins=* 且 credentials=True）
+_cors_origins = [o.strip() for o in (settings.CORS_ORIGINS or "").split(",") if o.strip()]
+if not _cors_origins:
+    _cors_origins = ["http://localhost", "http://localhost:5173", "http://127.0.0.1", "http://127.0.0.1:5173"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def request_log_middleware(request: Request, call_next):
+    """请求日志中间件：trace_id 贯穿"""
+    trace_id = request.headers.get("X-Trace-Id") or generate_trace_id()
+    request.state.trace_id = trace_id
+    response = await call_next(request)
+    response.headers["X-Trace-Id"] = trace_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """统一异常处理：内部细节只进日志，不回显给客户端"""
+    logger.error("unhandled error: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"code": 500, "message": "服务器内部错误", "data": None},
+    )
+
+
+@app.get("/health")
+async def health_check():
+    return {"code": 200, "message": "success", "data": {"status": "ok", "version": "1.0.0"}}
+
+
+@app.get("/metrics")
+async def metrics():
+    """平台自监控 /metrics（Prometheus 文本格式，无鉴权，供监控系统抓取）
+
+    输出平台自身探活指标：集群健康数、待处理告警、待审批、AI 成本、告警状态分布。
+    """
+    from fastapi.responses import PlainTextResponse
+    from sqlalchemy import func, select
+    from app.models import Alert, Approval, Cluster
+
+    async with async_session() as session:
+        cluster_total = (await session.execute(select(func.count()).select_from(Cluster))).scalar() or 0
+        cluster_healthy = (await session.execute(select(func.count()).select_from(Cluster).where(Cluster.status == "healthy"))).scalar() or 0
+        alert_pending = (await session.execute(select(func.count()).select_from(Alert).where(Alert.status == "pending"))).scalar() or 0
+        alert_awaiting = (await session.execute(select(func.count()).select_from(Alert).where(Alert.status == "awaiting_approval"))).scalar() or 0
+        approval_pending = (await session.execute(select(func.count()).select_from(Approval).where(Approval.status == "pending"))).scalar() or 0
+
+    lines = [
+        "# HELP apiops_cluster_total 集群总数",
+        "# TYPE apiops_cluster_total gauge",
+        f"apiops_cluster_total {cluster_total}",
+        "# HELP apiops_cluster_healthy 健康集群数",
+        "# TYPE apiops_cluster_healthy gauge",
+        f"apiops_cluster_healthy {cluster_healthy}",
+        "# HELP apiops_alert_pending 待处理告警数",
+        "# TYPE apiops_alert_pending gauge",
+        f"apiops_alert_pending {alert_pending}",
+        "# HELP apiops_alert_awaiting 待审批告警数",
+        "# TYPE apiops_alert_awaiting gauge",
+        f"apiops_alert_awaiting {alert_awaiting}",
+        "# HELP apiops_approval_pending 待审批单数",
+        "# TYPE apiops_approval_pending gauge",
+        f"apiops_approval_pending {approval_pending}",
+        "# HELP apiops_up 平台存活",
+        "# TYPE apiops_up gauge",
+        "apiops_up 1",
+    ]
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; charset=utf-8")
+
+
+# 注册所有 API 路由
+app.include_router(auth.router)
+app.include_router(ai_proxy.router)  # AI 服务代理（需在具体路由之后注册，避免覆盖）
+app.include_router(clusters.router)
+app.include_router(alerts.router)
+app.include_router(alert_policies.router)
+app.include_router(self_heal_rules.router)
+app.include_router(tasks.router)
+app.include_router(approvals.router)
+app.include_router(approval_flows.router)
+app.include_router(im_groups.router)
+app.include_router(webhooks.router)
+app.include_router(decisions.router)
+app.include_router(batch.router)
+app.include_router(executions.router)
+app.include_router(custom_tasks.router)
+app.include_router(resources.router)
+app.include_router(resource_alert_rules.router)
+app.include_router(knowledge.router)
+app.include_router(audit.router)
+app.include_router(stats.router)
+app.include_router(report_schedules.router)
+app.include_router(users.router)
+app.include_router(notifications.router)
+app.include_router(in_app_messages.router)
+app.include_router(on_duty.router)
+app.include_router(logs.router)
+app.include_router(repair_records.router)
+app.include_router(log_alert_rules.router)
+app.include_router(settings_api.router)
+app.include_router(permissions.router)
+app.include_router(projects.router)
+app.include_router(db_connections.router)
+app.include_router(db_diagnosis.router)
+app.include_router(diagnostic.router)
+app.include_router(fault_diagnosis.router)
+app.include_router(agent.router)
+app.include_router(terminal.router)

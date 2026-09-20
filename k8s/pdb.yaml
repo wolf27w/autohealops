@@ -1,0 +1,11 @@
+# Pod 中断预算：api-server 至少 2 个可用
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-server-pdb
+  namespace: api-ops
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api-server

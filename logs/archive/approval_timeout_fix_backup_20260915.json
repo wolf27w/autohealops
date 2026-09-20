@@ -1,0 +1,60 @@
+{
+  "time": "2026-09-15T13:22:16.030150",
+  "reason": "审批超时误报修复补偿：关联告警已自愈/已解决的 timeout 单改为 cancelled",
+  "approvals_before": [
+    {
+      "id": 17,
+      "alert_id": 294,
+      "kind": "manual_assist",
+      "status": "timeout",
+      "comments": "",
+      "decided_at": null
+    },
+    {
+      "id": 18,
+      "alert_id": 296,
+      "kind": "manual_assist",
+      "status": "timeout",
+      "comments": "",
+      "decided_at": null
+    },
+    {
+      "id": 24,
+      "alert_id": 306,
+      "kind": "manual_assist",
+      "status": "timeout",
+      "comments": "",
+      "decided_at": null
+    },
+    {
+      "id": 28,
+      "alert_id": 310,
+      "kind": "manual_assist",
+      "status": "timeout",
+      "comments": "",
+      "decided_at": null
+    }
+  ],
+  "alerts": [
+    {
+      "id": 294,
+      "status": "self_healed",
+      "resolved_at": "2026-09-14 09:54:16"
+    },
+    {
+      "id": 296,
+      "status": "self_healed",
+      "resolved_at": "2026-09-14 15:25:14"
+    },
+    {
+      "id": 306,
+      "status": "self_healed",
+      "resolved_at": "2026-09-15 09:54:10"
+    },
+    {
+      "id": 310,
+      "status": "self_healed",
+      "resolved_at": "2026-09-15 12:06:10"
+    }
+  ]
+}

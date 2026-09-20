@@ -1,0 +1,41 @@
+# API-OPS 自愈平台 docker-compose（数据库/缓存使用外部中间件 192.168.6.99）
+# 配置统一从项目根 .env 读取
+services:
+  api-server:
+    build: ./api-server
+    container_name: api-ops-api-server
+    env_file: .env
+    environment:
+      K8S_EXECUTOR_GRPC_ADDR: k8s-executor:9090
+      AI_SERVICE_HTTP_ADDR: http://ai-service:9000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - k8s-executor
+      - ai-service
+    restart: unless-stopped
+
+  k8s-executor:
+    build: ./k8s-executor
+    container_name: api-ops-executor
+    env_file: .env
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  ai-service:
+    build: ./ai-service
+    container_name: api-ops-ai-service
+    env_file: .env
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: api-ops-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api-server
+    restart: unless-stopped

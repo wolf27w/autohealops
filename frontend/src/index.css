@@ -1,0 +1,48 @@
+/* 全局样式重置：消除 body 默认 margin 白边，铺满全屏 */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background: #f5f6fa;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d0d5dd;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b8bec9;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 侧栏菜单颜色统一（深蓝底，避免默认白边/色差） */
+.ant-layout-sider,
+.ant-menu.ant-menu-dark {
+  background: #0f1a2e !important;
+}
+.ant-menu-dark .ant-menu-sub {
+  background: #0a1220 !important;
+}
+.ant-menu-dark .ant-menu-item-selected {
+  background: #1677ff !important;
+}

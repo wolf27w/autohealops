@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# 统一 CI 校验（A2）：编译/构建检查，失败即退出非 0
+# 用法：./scripts/ci_check.sh [--with-frontend-build]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
+
+echo "== 1/6 api-server py_compile =="
+"$ROOT/api-server/.venv/bin/python" -m compileall -q api-server/app api-server/alembic || { echo "FAIL api-server"; exit 1; }
+
+echo "== 2/6 ai-service py_compile =="
+"$ROOT/ai-service/.venv/bin/python" -m compileall -q ai-service/app || { echo "FAIL ai-service"; exit 1; }
+
+echo "== 3/6 frontend tsc =="
+( cd frontend && npx tsc -b --noEmit ) || { echo "FAIL frontend tsc"; exit 1; }
+
+echo "== 4/6 k8s-executor go build =="
+( cd k8s-executor && go build -o /tmp/executor-ci ./cmd/executor ) || { echo "FAIL go build"; exit 1; }
+
+echo "== 5/6 单元测试（api-server / ai-service）=="
+( cd api-server && ./.venv/bin/python -m unittest discover -s tests -p 'test_*.py' ) || { echo "FAIL api-server unit tests"; exit 1; }
+( cd ai-service && ./.venv/bin/python -m unittest discover -s tests -p 'test_*.py' ) || { echo "FAIL ai-service unit tests"; exit 1; }
+
+echo "== 6/6 跨语言加密互测（如存在） =="
+if [ -f api-server/tests/test_crypto.py ]; then
+  make crypto-test || { echo "FAIL crypto-test"; exit 1; }
+else
+  echo "skip (no crypto test)"
+fi
+
+if [ "${1:-}" = "--with-frontend-build" ]; then
+  echo "== extra: frontend production build =="
+  ( cd frontend && npm run build ) || { echo "FAIL frontend build"; exit 1; }
+fi
+
+echo "✅ CI check passed"
