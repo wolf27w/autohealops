@@ -90,8 +90,15 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     { bucket: t.bucket, type: '自愈', value: t.self_healed },
   ])
   const aiDistData = (data?.ai_result_dist ?? []).map((d) => ({
+    rawKey: d.key,
     key: AI_RESULT_META[d.key]?.label ?? d.key,
     value: d.count ?? d.value ?? 0,
+  }))
+  // 百分比展示（老板要求：AI 诊断结果分布用百分比）
+  const aiTotal = aiDistData.reduce((s, d) => s + (d.value || 0), 0)
+  const aiDistPct = aiDistData.map((d) => ({
+    ...d,
+    pct: aiTotal ? Math.round((d.value / aiTotal) * 1000) / 10 : 0,
   }))
   const faultTopData = (data?.fault_top ?? []).map((f) => ({ fault_type: f.fault_type, count: f.count }))
   const realtimeAlerts: RealtimeAlert[] = data?.realtime_alerts ?? []
@@ -217,14 +224,45 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         </Col>
         <Col xs={24} lg={8}>
           <Card title="AI 诊断结果分布" size="small">
-            {aiDistData.length ? (
-              <Pie
-                data={aiDistData} angleField="value" colorField="key"
-                height={240} radius={0.8} innerRadius={0.55}
-                label={{ text: 'key', style: { fontSize: 11 } }}
-                legend={{ color: { position: 'right' } }}
-                scale={{ color: { range: ['#52c41a', '#1677ff', '#faad14', '#ff4d4f'] } }}
-              />
+            {aiDistPct.length ? (
+              <>
+                <div style={{ position: 'relative' }}>
+                  <Pie
+                    data={aiDistPct} angleField="value" colorField="key"
+                    height={220} radius={0.78} innerRadius={0.6}
+                    legend={false}
+                    label={{
+                      text: (d: { key: string; pct: number }) => `${d.key} ${d.pct}%`,
+                      position: 'outside',
+                      style: { fontSize: 14, fontWeight: 600, fill: '#1f2d3d' },
+                    }}
+                    tooltip={{ items: [{ channel: 'y', name: '告警数', valueFormatter: (v: number) => `${v} 条（${aiTotal ? Math.round((v / aiTotal) * 1000) / 10 : 0}%）` }] }}
+                    scale={{ color: { range: ['#52c41a', '#1677ff', '#faad14', '#ff4d4f'] } }}
+                  />
+                  {/* 环形中心总量（HTML 叠层，字号可控） */}
+                  <div style={{
+                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                    textAlign: 'center', pointerEvents: 'none', lineHeight: 1.25,
+                  }}>
+                    <div style={{ fontSize: 13, color: '#8c8c8c' }}>总计</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: '#1f2d3d' }}>{aiTotal}</div>
+                  </div>
+                </div>
+                {/* 自定义图例（中文更大 + 数量 + 百分比） */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 4 }}>
+                  {aiDistPct.map((d) => {
+                    const color = AI_RESULT_META[Object.keys(AI_RESULT_META).find((k) => AI_RESULT_META[k].label === d.key) ?? '']?.color ?? '#8c8c8c'
+                    return (
+                      <span key={d.key} style={{ display: 'inline-flex', alignItems: 'center', fontSize: 14, color: '#1f2d3d' }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 2, background: color, marginRight: 6, display: 'inline-block' }} />
+                        {d.key}
+                        <span style={{ marginLeft: 6, fontWeight: 700 }}>{d.pct}%</span>
+                        <span style={{ marginLeft: 4, color: '#8c8c8c' }}>（{d.value}）</span>
+                      </span>
+                    )
+                  })}
+                </div>
+              </>
             ) : <Empty description="暂无数据" />}
           </Card>
         </Col>
