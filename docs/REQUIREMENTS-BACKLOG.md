@@ -299,3 +299,12 @@
 - ai-service：新增 `/live`（存活）与 `/ready`（查 DB + 已配置则查 Redis），中间件放行探活路径
 - `k8s/deployments.yaml`：api-server（live `/health` / ready `/ready`）、ai-service（live `/live` / ready `/ready`）、k8s-executor（补 liveness tcpSocket）、frontend（补 liveness/readiness httpGet `/`）
 - 实测：api-server `/health` 200、`/ready` 200(database/redis=true)；ai-service `/health` `/live` `/ready` 均 200
+
+### N6 数据库报错接入告警策略 ✅ 2026-09-20（待执行迁移）
+- 新增 `app/services/db_alert_service.py`：每 60s 只读探活 → 失败建告警（`DBConnFailed`/`DBAuthFailed`，`resource_type='db'`，`manual_required=True`）→ 复用 `notification_service.send_alert_notification` 走同一通知/策略；恢复 → 自动 `resolved` + 复用 `_cancel_related_approvals` 解除审批
+- `alert_auto_service._process_one`：`resource_type=='db'` 跳过自动修复（红线：只给方案不执行）
+- 默认告警策略加 `DBConnFailed`/`DBAuthFailed`（category B）
+- **迁移 `g1b2c3d4e5f6`（未执行）**：`alerts.cluster_id` 改可空 + 新增 `alerts.source` + 重建 `dedup_key` 生成列（原表达式对 db/log 撞唯一索引）
+- 顺带修复：`Alert.dedup_key` 生成列被 ORM 当可写列（改 `server_default=FetchedValue()`），否则日志/资源类告警建单会失败
+- 前端：`AlertList` 对 `resource_type='db'` 隐藏 Pod 专属按钮
+- 验证：py_compile ✅ / tsc ✅；临时不可达 DBConnection 端到端实测（建单→去重→通知→恢复关闭→DBAuthFailed 分类）后**测试数据已清理**；「本机mysql」无误报

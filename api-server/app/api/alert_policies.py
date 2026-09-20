@@ -84,6 +84,9 @@ DEFAULT_POLICIES = [
     {"fault_type": "MemoryPressure", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
     {"fault_type": "DiskPressure", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
     {"fault_type": "PIDPressure", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
+    # 数据库告警：B=直接报（不自动修复，统一走告警策略通知/分派）
+    {"fault_type": "DBConnFailed", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
+    {"fault_type": "DBAuthFailed", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
 ]
 
 

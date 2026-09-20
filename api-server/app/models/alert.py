@@ -2,7 +2,7 @@
 """告警模型：故障检测引擎产物，支持聚合计数"""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, FetchedValue, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -14,7 +14,8 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    cluster_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    # cluster_id 可空：DB 告警无集群（迁移后为 NULL，代码当前用 0 兜底）
+    cluster_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     resource_type: Mapped[str] = mapped_column(String(10), nullable=False)  # pod/node
     resource_name: Mapped[str] = mapped_column(String(200), nullable=False)
     # 聚合键：去随机后缀的 Deployment 名（同服务持续故障合并为一条告警，不按 Pod 实例分散）
@@ -43,7 +44,8 @@ class Alert(Base):
     acknowledged_by: Mapped[str] = mapped_column(String(50), default="")
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # ===== 去重键（D2）：STORED 生成列，活跃时非空、解决后自动 NULL，仅 DB 唯一索引用 =====
-    dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # server_default=FetchedValue()：让 ORM 不把该列写入 INSERT/UPDATE（MySQL 生成列禁止显式赋值）
+    dedup_key: Mapped[str | None] = mapped_column(String(255), server_default=FetchedValue(), nullable=True)
 
 
 class AlertComment(Base):

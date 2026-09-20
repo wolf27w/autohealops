@@ -178,6 +178,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("容器资源告警扫描启动失败: %s", e)
 
+    # 数据库连接故障告警扫描（每 60 秒：连接失败/认证失败 → 告警 → 统一告警策略）
+    try:
+        from app.services.db_alert_service import background_loop as db_alert_loop
+        _db_alert_task = asyncio.create_task(db_alert_loop())
+        logger.info("数据库连接告警扫描已启动（每 60 秒，只读探活，只给方案不执行修改）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("数据库连接告警扫描启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

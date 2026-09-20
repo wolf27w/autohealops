@@ -628,6 +628,10 @@ async def _process_one(alert: Alert) -> bool:
     if alert.fault_type in RESOURCE_ALERT_FAULT_TYPES:
         return False
 
+    # 数据库告警：诊断只给方案、绝不执行修改（建单时已标 manual_required），跳过自动修复链路
+    if alert.resource_type == "db":
+        return False
+
     # 🟠 转人工类（批三）：镜像名/镜像策略/镜像仓库问题，平台不自动处理，直接转人工
     if alert.fault_type in ("InvalidImageName", "ErrImageNeverPull", "ImageInspectError", "RegistryUnavailable"):
         await _mark_manual_and_notify(

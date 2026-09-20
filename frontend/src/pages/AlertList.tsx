@@ -186,12 +186,16 @@ export default function AlertList() {
           {
             title: '操作', render: (_, record) => (
               <Space>
-                <Button size="small" type="primary" loading={diagnosing === record.id}
-                  onClick={() => handleDiagnose(record.id)}>重新诊断</Button>
-                {CONTAINER_FAULTS.includes(record.fault_type) ? (
-                  <Button size="small" onClick={() => handleViewDescribe(record)}>查看容器信息</Button>
-                ) : (
-                  <Button size="small" onClick={() => handleViewLogs(record)}>查看日志</Button>
+                {record.resource_type !== 'db' && (
+                  <>
+                    <Button size="small" type="primary" loading={diagnosing === record.id}
+                      onClick={() => handleDiagnose(record.id)}>重新诊断</Button>
+                    {CONTAINER_FAULTS.includes(record.fault_type) ? (
+                      <Button size="small" onClick={() => handleViewDescribe(record)}>查看容器信息</Button>
+                    ) : (
+                      <Button size="small" onClick={() => handleViewLogs(record)}>查看日志</Button>
+                    )}
+                  </>
                 )}
                 {record.status === 'pending' && (
                   <Button size="small" onClick={() => { form.resetFields(); setResolveTarget(record) }}>解决</Button>
