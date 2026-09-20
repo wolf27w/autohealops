@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Card, Row, Col, Statistic, Select, Segmented, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip,
+  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker,
 } from 'antd'
 import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { Line, Pie, Bar } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
+import dayjs, { type Dayjs } from 'dayjs'
 import { getDashboard, getPlatformHealth, getProjects } from '../services/api'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
@@ -43,7 +44,25 @@ interface ProjectOption {
 
 export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
-  const [range, setRange] = useState('10m')
+  // 时间范围：快捷预设（10m/3h/8h/24h，随最新滑动）或自定义起止时间
+  const [preset, setPreset] = useState<string>('10m')
+  const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null)
+  const presetSpan: Record<string, [number, string]> = { '10m': [10, 'minute'], '3h': [3, 'hour'], '8h': [8, 'hour'], '24h': [24, 'hour'] }
+  const presetValue = (key: string): [Dayjs, Dayjs] => {
+    const [n, unit] = presetSpan[key] || presetSpan['10m']
+    return [dayjs().subtract(n, unit as dayjs.ManipulateType), dayjs()]
+  }
+  const applyPick = (v: [Dayjs | null, Dayjs | null] | null) => {
+    if (!v || !v[0] || !v[1]) return
+    const mins = v[1].diff(v[0], 'minute')
+    const nearNow = Math.abs(dayjs().diff(v[1], 'minute')) <= 1
+    const map: Record<number, string> = { 10: '10m', 180: '3h', 480: '8h', 1440: '24h' }
+    if (nearNow && map[mins]) { setPreset(map[mins]); setCustomRange(null) }
+    else { setCustomRange([v[0], v[1]]); setPreset('custom') }
+  }
+  const rangeLabel = customRange
+    ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}`
+    : (preset === '10m' ? '最近 10 分钟' : preset === '3h' ? '最近 3 小时' : preset === '8h' ? '最近 8 小时' : '最近 24 小时')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [projectId, setProjectId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
@@ -73,8 +92,14 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
 
   // 仪表盘主数据（5s 轮询；筛选变化自动重查）
   const { data, isFetching, refetch } = useQuery<DashboardData>({
-    queryKey: ['dashboard-v2', range, clusterId, projectId],
-    queryFn: () => getDashboard({ range, cluster_id: clusterId, project_id: projectId }),
+    queryKey: ['dashboard-v2', preset, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId, projectId],
+    queryFn: () => (customRange
+      ? getDashboard({
+          start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
+          end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
+          cluster_id: clusterId, project_id: projectId,
+        })
+      : getDashboard({ range: preset, cluster_id: clusterId, project_id: projectId })),
     refetchInterval: 5000,
   })
 
@@ -83,11 +108,15 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const clusters = data?.clusters ?? []
 
   // ---- 派生数据 ----
-  const trendData = (data?.alert_trend ?? []).flatMap((t) => [
-    { bucket: t.bucket, type: '新增', value: t.new },
-    { bucket: t.bucket, type: '已解决', value: t.resolved },
-    { bucket: t.bucket, type: '自愈', value: t.self_healed },
-  ])
+  const trendData = (data?.alert_trend ?? []).flatMap((t) => {
+    const label = String(t.bucket || '')
+    const short = label.length > 11 ? label.slice(5) : label  // 2026-09-20 18:00 → 09-20 18:00
+    return [
+      { bucket: short, type: '新增', value: t.new },
+      { bucket: short, type: '已解决', value: t.resolved },
+      { bucket: short, type: '自愈', value: t.self_healed },
+    ]
+  })
   const aiDistData = (data?.ai_result_dist ?? []).map((d) => ({
     rawKey: d.key,
     key: AI_RESULT_META[d.key]?.label ?? d.key,
@@ -149,11 +178,21 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               onChange={(v) => setClusterId(v)}
               options={clusters.map((c) => ({ value: c.id, label: c.name }))}
             />
-            <Segmented
-              value={range}
-              onChange={(v) => setRange(v as string)}
-              options={['10m', '3h', '8h', '24h']}
+            <DatePicker.RangePicker
+              showTime={{ format: 'HH:mm' }}
+              format="MM-DD HH:mm"
+              allowClear={false}
+              value={customRange ?? presetValue(preset)}
+              onChange={(v) => applyPick(v as [Dayjs | null, Dayjs | null] | null)}
+              presets={[
+                { label: '最近 10 分钟', value: presetValue('10m') },
+                { label: '最近 3 小时', value: presetValue('3h') },
+                { label: '最近 8 小时', value: presetValue('8h') },
+                { label: '最近 24 小时', value: presetValue('24h') },
+              ]}
+              style={{ width: 260 }}
             />
+            <span style={{ fontSize: 12, color: '#8c8c8c' }}>{rangeLabel}{customRange ? '（自定义）' : ''}</span>
           </Space>
 
           <div style={{ flex: 1 }} />

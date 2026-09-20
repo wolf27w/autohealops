@@ -122,6 +122,8 @@ def _classify_action(command: str, status: str) -> str:
 @router.get("/dashboard")
 async def dashboard(
     range_: str = Query("24h", alias="range"),
+    start: str = Query("", description="自定义起始时间（YYYY-MM-DD HH:mm[:ss]），与 end 同时提供时优先于 range"),
+    end: str = Query("", description="自定义结束时间（YYYY-MM-DD HH:mm[:ss]）"),
     cluster_id: int | None = Query(None),
     project_id: int | None = Query(None),
     user=Depends(require_any_user),
@@ -133,8 +135,9 @@ async def dashboard(
     range/cluster_id/project_id 仅作用于新增区块与趋势，不影响原有 core/ai_runtime/trend_* 兜底统计。
     """
     cache_key = "cache:dashboard:v2"
-    if range_ != "24h" or cluster_id is not None or project_id is not None:
-        cache_key = f"cache:dashboard:v2:{range_}:{cluster_id if cluster_id is not None else '-'}:{project_id if project_id is not None else '-'}"
+    if range_ != "24h" or cluster_id is not None or project_id is not None or start or end:
+        cache_key = (f"cache:dashboard:v2:{range_}:{start}:{end}:"
+                     f"{cluster_id if cluster_id is not None else '-'}:{project_id if project_id is not None else '-'}")
     try:
         cached = await redis_pool.get(cache_key)
         if cached:
@@ -231,8 +234,39 @@ async def dashboard(
             return stmt.where(*alert_filter_conds) if alert_filter_conds else stmt
 
         # 时间窗（趋势/成功率/MTTR 用）
-        range_since = now - timedelta(hours=24)
-        if range_ == "10m":
+        # 自定义时间段优先（start + end）
+        custom_span: int | None = None
+        range_end = now
+        if start and end:
+            try:
+                _fmt = "%Y-%m-%d %H:%M:%S" if len(start) > 16 else "%Y-%m-%d %H:%M"
+                st = datetime.strptime(start.replace("T", " "), _fmt)
+                et = datetime.strptime(end.replace("T", " "), _fmt)
+                if et > st:
+                    range_since = st
+                    range_end = et
+                    custom_span = int((et - st).total_seconds())
+            except Exception:  # noqa: BLE001
+                pass
+        if custom_span is not None:
+            # 按跨度自动选分桶：≤30min→1min、≤6h→5min、≤12h→15min、≤36h→1h、其余→1d
+            if custom_span <= 1800:
+                _cstep, bucket_mode = 60, "minute"
+            elif custom_span <= 21600:
+                _cstep, bucket_mode = 300, "minute"
+            elif custom_span <= 43200:
+                _cstep, bucket_mode = 900, "minute"
+            elif custom_span <= 129600:
+                _cstep, bucket_mode = 3600, "hour"
+            else:
+                _cstep, bucket_mode = 86400, "day"
+        else:
+            _cstep = 0
+            bucket_mode = ""
+            range_since = now - timedelta(hours=24)
+        if custom_span is not None:
+            pass
+        elif range_ == "10m":
             range_since = now - timedelta(minutes=10)
         elif range_ == "3h":
             range_since = now - timedelta(hours=3)
@@ -321,7 +355,18 @@ async def dashboard(
         _minute_spec = {"10m": (60, timedelta(minutes=10)),
                         "3h": (300, timedelta(hours=3)),
                         "8h": (900, timedelta(hours=8))}
-        if range_ in _minute_spec:
+        if custom_span is not None:
+            step = _cstep
+            _bucket_col = lambda col: func.from_unixtime(  # noqa: E731
+                func.floor(func.unix_timestamp(col) / step) * step)
+            if bucket_mode in ("minute", "hour"):
+                _fmt_b = "%Y-%m-%d %H:%i" if bucket_mode == "minute" else "%Y-%m-%d %H:00"
+                grp_new = func.date_format(_bucket_col(Alert.detected_at), _fmt_b)
+                grp_res = func.date_format(_bucket_col(Alert.resolved_at), _fmt_b)
+            else:  # day
+                grp_new = func.date(Alert.detected_at)
+                grp_res = func.date(Alert.resolved_at)
+        elif range_ in _minute_spec:
             step, span = _minute_spec[range_]
             bucket_mode = "minute"
             _bucket_col = lambda col: func.from_unixtime(  # noqa: E731
@@ -342,16 +387,17 @@ async def dashboard(
             grp_res = func.date_format(Alert.resolved_at, "%x-W%v")
 
         new_rows = (await session.execute(
-            _filter(select(grp_new, func.count()).where(Alert.detected_at >= range_since).group_by(grp_new))
+            _filter(select(grp_new, func.count()).where(
+                Alert.detected_at >= range_since, Alert.detected_at <= range_end).group_by(grp_new))
         )).all()
         resolved_rows = (await session.execute(
             _filter(select(grp_res, func.count()).where(
-                Alert.resolved_at >= range_since,
+                Alert.resolved_at >= range_since, Alert.resolved_at <= range_end,
                 Alert.status.in_(["resolved", "self_healed"])).group_by(grp_res))
         )).all()
         self_healed_rows = (await session.execute(
             _filter(select(grp_res, func.count()).where(
-                Alert.resolved_at >= range_since,
+                Alert.resolved_at >= range_since, Alert.resolved_at <= range_end,
                 Alert.status == "self_healed").group_by(grp_res))
         )).all()
 
@@ -359,7 +405,32 @@ async def dashboard(
         resolved_map = {str(k): int(c) for k, c in resolved_rows}
         self_healed_map = {str(k): int(c) for k, c in self_healed_rows}
         alert_trend: list = []
-        if bucket_mode == "minute":
+        if custom_span is not None and bucket_mode == "minute":
+            epoch = int(range_since.timestamp())
+            t = datetime.fromtimestamp(epoch - (epoch % _cstep))
+            while t <= range_end:
+                bk = t.strftime("%Y-%m-%d %H:%M")
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                t += timedelta(seconds=_cstep)
+        elif custom_span is not None and bucket_mode == "hour":
+            t = range_since.replace(minute=0, second=0, microsecond=0)
+            while t <= range_end:
+                bk = t.strftime("%Y-%m-%d %H:00")
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                t += timedelta(hours=1)
+        elif custom_span is not None and bucket_mode == "day":
+            d = range_since.date()
+            while d <= range_end.date():
+                bk = d.strftime("%Y-%m-%d")
+                alert_trend.append({"bucket": bk, "new": new_map.get(bk, 0),
+                                    "resolved": resolved_map.get(bk, 0),
+                                    "self_healed": self_healed_map.get(bk, 0)})
+                d += timedelta(days=1)
+        elif bucket_mode == "minute":
             step, _ = _minute_spec[range_]
             epoch = int(range_since.timestamp())
             t0 = datetime.fromtimestamp(epoch - (epoch % step))
@@ -410,7 +481,7 @@ async def dashboard(
                                                     Alert.status.in_(["pending", "awaiting_approval"])), 1, 0)), 0).label("manual"),
                 func.coalesce(func.sum(func.if_(and_(Alert.status == "pending",
                                                     Alert.manual_required.is_(False)), 1, 0)), 0).label("failed"),
-            ).where(Alert.detected_at >= range_since))
+            ).where(Alert.detected_at >= range_since, Alert.detected_at <= range_end))
         )).one()
         ai_result_dist = [
             {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},
@@ -448,15 +519,17 @@ async def dashboard(
 
         # --- kpi 趋势部分：heal_rate / mttr（随时间范围 + 过滤） ---
         range_alert_total = (await session.execute(
-            _filter(select(func.count()).select_from(Alert).where(Alert.detected_at >= range_since))
+            _filter(select(func.count()).select_from(Alert).where(
+                Alert.detected_at >= range_since, Alert.detected_at <= range_end))
         )).scalar() or 0
         range_alert_healed = (await session.execute(
             _filter(select(func.count()).select_from(Alert).where(
-                Alert.detected_at >= range_since, Alert.status.in_(["resolved", "self_healed"])))
+                Alert.detected_at >= range_since, Alert.detected_at <= range_end,
+                Alert.status.in_(["resolved", "self_healed"])))
         )).scalar() or 0
         mttr_rows = (await session.execute(
             _filter(select(Alert.detected_at, Alert.resolved_at).where(
-                Alert.resolved_at >= range_since,
+                Alert.resolved_at >= range_since, Alert.resolved_at <= range_end,
                 Alert.resolved_at.isnot(None), Alert.detected_at.isnot(None)).limit(20000))
         )).all()
         mttr_durs = [(r.resolved_at - r.detected_at).total_seconds() for r in mttr_rows if r.resolved_at and r.detected_at]

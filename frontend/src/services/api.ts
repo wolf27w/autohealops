@@ -209,6 +209,9 @@ export const verifyAuditChain = () => http.post('/audit/verify-chain')
 
 export interface DashboardParams {
   range?: string
+  /** 自定义时间段（与 range 二选一；同时提供时后端优先用 start/end） */
+  start?: string
+  end?: string
   cluster_id?: number
   project_id?: number
 }
