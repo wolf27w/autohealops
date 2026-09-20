@@ -11,6 +11,8 @@
 """
 import time
 
+import httpx
+
 from sqlalchemy import select
 
 from app.core.database import async_session
@@ -183,11 +185,17 @@ class ESClient:
         namespaces = [b["key"] for b in aggs.get("by_ns", {}).get("buckets", [])]
         return {"count": count, "pods": pods, "namespaces": namespaces, "index": eff_index}
 
-    async def search_logs(self, namespace: str, pod: str, tail: int = 50, log_source_id: int | None = None) -> str:
-        """按 namespace + pod 查最近日志（复用逻辑，与 ai-service 一致）"""
+    async def search_logs_result(self, namespace: str, pod: str, tail: int = 50,
+                                 log_source_id: int | None = None) -> dict:
+        """按 namespace + pod 查最近日志，返回 {logs, error, source}
+
+        与 search_logs 的区别：**失败时给出明确原因**（未配置 / 不可达 / HTTP 错误），
+        避免前端只看到「空日志」而不知道是配置问题还是真的没日志。
+        """
         cfg = await self._cfg(log_source_id)
         if not cfg["base_url"]:
-            return ""
+            return {"logs": "", "error": "未配置日志源（请到「策略配置 → 日志源」配置 ES 地址与索引）", "source": ""}
+        src_label = f"{cfg['base_url']}/{cfg['index']}"
         body = {
             "query": {
                 "bool": {
@@ -202,16 +210,23 @@ class ESClient:
         }
         try:
             client = get_http_client(trust_env=False)
-            resp = await client.post(f"{cfg['base_url']}/{cfg['index']}/_search", json=body, auth=self._auth(cfg), timeout=5)
+            resp = await client.post(f"{cfg['base_url']}/{cfg['index']}/_search", json=body,
+                                     auth=self._auth(cfg), timeout=8)
             resp.raise_for_status()
             hits = resp.json().get("hits", {}).get("hits", [])
-        except Exception:  # noqa: BLE001
-            return ""
+        except httpx.HTTPStatusError as e:
+            return {"logs": "", "error": f"日志源返回 HTTP {e.response.status_code}（{src_label}）", "source": src_label}
+        except Exception as e:  # noqa: BLE001
+            return {"logs": "", "error": f"日志源不可达：{src_label}（{type(e).__name__}）", "source": src_label}
         lines = []
         for h in reversed(hits):
             src = h.get("_source", {})
             lines.append(f"{src.get('@timestamp', '')} {src.get('message', src.get('log', ''))}")
-        return "\n".join(lines)
+        return {"logs": "\n".join(lines), "error": "", "source": src_label}
+
+    async def search_logs(self, namespace: str, pod: str, tail: int = 50, log_source_id: int | None = None) -> str:
+        """按 namespace + pod 查最近日志（兼容旧调用，失败返回空串；需要错误原因请用 search_logs_result）"""
+        return (await self.search_logs_result(namespace, pod, tail, log_source_id)).get("logs", "")
 
     # ---------- 连通性测试 ----------
 

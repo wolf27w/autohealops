@@ -21,9 +21,10 @@ async def search_logs(cluster_name: str = "", namespace: str = "", pod: str = ""
     if cluster_id and not await check_cluster_permission(user, cluster_id, namespace, "read"):
         return {"code": 403, "message": "无权限访问该集群", "data": None}
     try:
-        logs = await es_client.search_logs(namespace, pod, tail, log_source_id=log_source_id)
+        res = await es_client.search_logs_result(namespace, pod, tail, log_source_id=log_source_id)
+        logs, err = res.get("logs", ""), res.get("error", "")
         # 解析为行列表
         lines = logs.split("\n") if logs else []
-        return {"code": 200, "message": "success", "data": {"logs": lines}}
+        return {"code": 200, "message": "success", "data": {"logs": lines, "error": err, "source": res.get("source", "")}}
     except Exception as e:  # noqa: BLE001
-        return {"code": 200, "message": "success", "data": {"logs": [], "warning": str(e)}}
+        return {"code": 200, "message": "success", "data": {"logs": [], "error": f"日志查询异常：{e}"}}

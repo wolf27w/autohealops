@@ -76,8 +76,13 @@ export default function AlertList() {
   const handleViewLogs = async (record: Alert) => {
     setLogOpen(true)
     setLogs('')
-    const data = (await searchLogs({ namespace: record.namespace || 'default', pod: record.resource_name, cluster_id: record.cluster_id })) as { logs?: string[] }
-    setLogs((data?.logs || []).join('\n') || '（无日志，ES 未配置或该 Pod 无日志）')
+    const data = (await searchLogs({ namespace: record.namespace || 'default', pod: record.resource_name, cluster_id: record.cluster_id })) as { logs?: string[]; error?: string }
+    if (data?.error) {
+      setLogs(`⚠️ 无法获取日志：${data.error}`)
+      message.warning(data.error)
+      return
+    }
+    setLogs((data?.logs || []).join('\n') || '（该 Pod 暂无日志输出）')
   }
 
   const handleViewDescribe = async (record: Alert) => {
