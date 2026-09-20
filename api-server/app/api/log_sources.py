@@ -54,6 +54,11 @@ def _serialize(s: LogSource) -> dict:
         "has_password": bool(s.password_encrypted),
         "is_default": bool(s.is_default),
         "enabled": bool(s.enabled),
+        "time_field": s.time_field or "",
+        "namespace_field": s.namespace_field or "",
+        "pod_field": s.pod_field or "",
+        "message_field": s.message_field or "",
+        "search_field": s.search_field or "",
         "created_by": s.created_by,
         "created_at": str(s.created_at),
         "updated_at": str(s.updated_at),
@@ -96,6 +101,11 @@ async def create_source(payload: dict, user=Depends(require_admin)):
             password_encrypted=encrypt_aes256_gcm(password) if password else "",
             is_default=is_default,
             enabled=bool(payload.get("enabled", True)),
+            time_field=(payload.get("time_field") or "@timestamp").strip() or "@timestamp",
+            namespace_field=(payload.get("namespace_field") if payload.get("namespace_field") is not None else "kubernetes.namespace_name").strip(),
+            pod_field=(payload.get("pod_field") if payload.get("pod_field") is not None else "kubernetes.pod_name").strip(),
+            message_field=(payload.get("message_field") or "").strip(),
+            search_field=(payload.get("search_field") or "").strip(),
             created_by=user.id,
         )
         session.add(s)
@@ -129,6 +139,16 @@ async def update_source(source_id: int, payload: dict, user=Depends(require_admi
             s.is_default = is_default
         if "enabled" in payload:
             s.enabled = bool(payload.get("enabled", True))
+        if "time_field" in payload:
+            s.time_field = (payload.get("time_field") or "@timestamp").strip() or "@timestamp"
+        if "namespace_field" in payload:
+            s.namespace_field = (payload.get("namespace_field") or "").strip()
+        if "pod_field" in payload:
+            s.pod_field = (payload.get("pod_field") or "").strip()
+        if "message_field" in payload:
+            s.message_field = (payload.get("message_field") or "").strip()
+        if "search_field" in payload:
+            s.search_field = (payload.get("search_field") or "").strip()
         await session.commit()
         await session.refresh(s)
     return {"code": 200, "message": "success", "data": _serialize(s)}

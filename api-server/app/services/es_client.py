@@ -48,7 +48,9 @@ class ESClient:
         index = (await get_setting("es_index_pattern", "k8s-*")).strip() or "k8s-*"
         username = (await get_setting("es_username", "")).strip()
         password = (await get_setting("es_password", "")).strip()
-        cfg = {"base_url": base_url, "index": index, "username": username, "password": password}
+        cfg = {"base_url": base_url, "index": index, "username": username, "password": password,
+               "time_field": "@timestamp", "namespace_field": "kubernetes.namespace_name",
+               "pod_field": "kubernetes.pod_name", "message_field": "", "search_field": ""}
         if base_url:
             self._global_cache.update({"ts": now, "cfg": cfg})
         return cfg
@@ -67,6 +69,12 @@ class ESClient:
             "index": (src.index_pattern or "").strip() or "k8s-*",
             "username": (src.username or "").strip(),
             "password": password,
+            # 字段映射（空值走默认：时间 @timestamp；pod/namespace 留空=该 ES 无此维度）
+            "time_field": (getattr(src, "time_field", "") or "@timestamp").strip() or "@timestamp",
+            "namespace_field": (getattr(src, "namespace_field", "") or "").strip(),
+            "pod_field": (getattr(src, "pod_field", "") or "").strip(),
+            "message_field": (getattr(src, "message_field", "") or "").strip(),
+            "search_field": (getattr(src, "search_field", "") or "").strip(),
         }
 
     async def _load_source(self, log_source_id: int) -> LogSource | None:
@@ -152,23 +160,40 @@ class ESClient:
         else:
             eff_index = (index_pattern or "").strip() or (cfg.get("index") or "").strip() or "k8s-*"
         query_string = " OR ".join(f'"{k}"' for k in keywords)
-        body = {
+        time_field = cfg.get("time_field") or "@timestamp"
+        search_field = cfg.get("search_field") or ""
+        pod_field = cfg.get("pod_field") or ""
+        ns_field = cfg.get("namespace_field") or ""
+        # 关键词匹配：配了 search_field → 该字段 wildcard 包含匹配（适配 keyword 类型）；
+        # 未配 → 全字段 query_string（k8s 日志默认行为）
+        if search_field:
+            kw_clause: dict = {"bool": {
+                "should": [{"wildcard": {search_field: {"value": f"*{k}*", "case_insensitive": True}}} for k in keywords],
+                "minimum_should_match": 1,
+            }}
+        else:
+            kw_clause = {"query_string": {"query": query_string}}
+        body: dict = {
             "query": {
                 "bool": {
                     "must": [
-                        {"query_string": {"query": query_string}},
-                        {"range": {"@timestamp": {"gte": f"now-{time_window_minutes}m"}}},
+                        kw_clause,
+                        {"range": {time_field: {"gte": f"now-{time_window_minutes}m"}}},
                     ]
                 }
             },
             "size": 0,
-            "aggs": {
-                "by_pod": {"terms": {"field": "kubernetes.pod_name", "size": 20}},
-                "by_ns": {"terms": {"field": "kubernetes.namespace_name", "size": 20}},
-            },
         }
-        if namespace_filter:
-            body["query"]["bool"]["must"].append({"term": {"kubernetes.namespace_name": namespace_filter}})
+        # 只有该 ES 有对应维度字段时才聚合（非 k8s 结构的 ES 不聚合，避免查空）
+        aggs = {}
+        if pod_field:
+            aggs["by_pod"] = {"terms": {"field": pod_field, "size": 20}}
+        if ns_field:
+            aggs["by_ns"] = {"terms": {"field": ns_field, "size": 20}}
+        if aggs:
+            body["aggs"] = aggs
+        if namespace_filter and ns_field:
+            body["query"]["bool"]["must"].append({"term": {ns_field: namespace_filter}})
 
         url = f"{cfg['base_url']}/{eff_index}/_search"
         try:
@@ -196,16 +221,17 @@ class ESClient:
         if not cfg["base_url"]:
             return {"logs": "", "error": "未配置日志源（请到「策略配置 → 日志源」配置 ES 地址与索引）", "source": ""}
         src_label = f"{cfg['base_url']}/{cfg['index']}"
-        body = {
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"term": {"kubernetes.namespace_name": namespace}},
-                        {"term": {"kubernetes.pod_name": pod}},
-                    ]
-                }
-            },
-            "sort": [{"@timestamp": "desc"}],
+        time_field = cfg.get("time_field") or "@timestamp"
+        ns_field = cfg.get("namespace_field") or ""
+        pod_field = cfg.get("pod_field") or ""
+        filters = []
+        if namespace and ns_field:
+            filters.append({"term": {ns_field: namespace}})
+        if pod and pod_field:
+            filters.append({"term": {pod_field: pod}})
+        body: dict = {
+            "query": {"bool": {"filter": filters}} if filters else {"match_all": {}},
+            "sort": [{time_field: "desc"}],
             "size": tail,
         }
         try:
@@ -218,10 +244,15 @@ class ESClient:
             return {"logs": "", "error": f"日志源返回 HTTP {e.response.status_code}（{src_label}）", "source": src_label}
         except Exception as e:  # noqa: BLE001
             return {"logs": "", "error": f"日志源不可达：{src_label}（{type(e).__name__}）", "source": src_label}
+        msg_field = cfg.get("message_field") or ""
         lines = []
         for h in reversed(hits):
             src = h.get("_source", {})
-            lines.append(f"{src.get('@timestamp', '')} {src.get('message', src.get('log', ''))}")
+            if msg_field:
+                body_text = src.get(msg_field, "")
+            else:
+                body_text = src.get("message", src.get("log", ""))
+            lines.append(f"{src.get(time_field, '')} {body_text}")
         return {"logs": "\n".join(lines), "error": "", "source": src_label}
 
     async def search_logs(self, namespace: str, pod: str, tail: int = 50, log_source_id: int | None = None) -> str:

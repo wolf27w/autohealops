@@ -64,7 +64,7 @@ export default function LogSources() {
         密码加密存储，仅回显「是否已配置」，留空表示不修改。
       </div>
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }}
-        onClick={() => { setEditing(null); form.resetFields(); form.setFieldsValue({ index_pattern: 'k8s-*', is_default: false, enabled: true }); setOpen(true) }}>
+        onClick={() => { setEditing(null); form.resetFields(); form.setFieldsValue({ index_pattern: 'k8s-*', is_default: false, enabled: true, time_field: '@timestamp', pod_field: 'kubernetes.pod_name', namespace_field: 'kubernetes.namespace_name', message_field: '' }); setOpen(true) }}>
         新增日志源
       </Button>
       <Table rowKey="id" dataSource={data} columns={[
@@ -92,6 +92,16 @@ export default function LogSources() {
           <Form.Item name="index_pattern" label="索引 / 索引模式" rules={[{ required: true }]}><Input placeholder="k8s-*" /></Form.Item>
           <Form.Item name="username" label="账号（可选）"><Input autoComplete="off" /></Form.Item>
           <Form.Item name="password" label="密码（可选；留空不修改）"><Input.Password autoComplete="new-password" /></Form.Item>
+          <Form.Item name="time_field" label="时间字段" tooltip="范围过滤/排序用。k8s/filebeat 日志一般是 @timestamp；应用日志可能是 finishTime 等"
+            initialValue="@timestamp"><Input placeholder="@timestamp" /></Form.Item>
+          <Form.Item name="pod_field" label="Pod 字段（留空=该 ES 无此维度）"
+            tooltip="k8s 日志是 kubernetes.pod_name；非 k8s 结构的 ES（如应用操作日志）留空即可"><Input placeholder="kubernetes.pod_name" /></Form.Item>
+          <Form.Item name="namespace_field" label="命名空间字段（留空=该 ES 无此维度）"
+            tooltip="k8s 日志是 kubernetes.namespace_name；非 k8s 结构留空"><Input placeholder="kubernetes.namespace_name" /></Form.Item>
+          <Form.Item name="message_field" label="正文字段（留空=自动取 message/log）"
+            tooltip="日志正文所在字段；不同 ES 可能是 description/content 等"><Input placeholder="留空自动" /></Form.Item>
+          <Form.Item name="search_field" label="关键词搜索字段（留空=全字段）"
+            tooltip="留空=全字段 query_string（k8s 日志够用）；填字段名则按「包含匹配」查该字段，适配 keyword 类型的应用日志（如 description）"><Input placeholder="如 description（留空=全字段）" /></Form.Item>
           <Form.Item name="is_default" label="是否默认源" valuePropName="checked" tooltip="不指定日志源时优先使用；多个默认源取最早创建者">
             <Switch />
           </Form.Item>
