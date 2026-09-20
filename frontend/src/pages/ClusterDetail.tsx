@@ -51,7 +51,16 @@ export default function ClusterDetail() {
       return '_all_'
     }
   })
-  const [activeType, setActiveType] = useState('deployments')
+  const VALID_TYPES = ['deployments', 'statefulsets', 'daemonsets', 'pods', 'cronjobs']
+  const [activeType, setActiveType] = useState<string>(() => {
+    const fromUrl = searchParams.get('type')
+    if (fromUrl && VALID_TYPES.includes(fromUrl)) return fromUrl
+    try {
+      const saved = localStorage.getItem(`cluster_type:${id}`)
+      if (saved && VALID_TYPES.includes(saved)) return saved
+    } catch { /* ignore */ }
+    return 'deployments'
+  })
   const [loading, setLoading] = useState(false)
   const [metricsPod, setMetricsPod] = useState<PodTarget | null>(null)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
@@ -60,6 +69,16 @@ export default function ClusterDetail() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
+
+  // 工作负载类型 Tab 持久化（URL ?type= + 本地记忆，与命名空间同口径）
+  const changeType = (v: string) => {
+    setActiveType(v)
+    try { localStorage.setItem(`cluster_type:${id}`, v) } catch { /* ignore */ }
+    const next = new URLSearchParams(searchParams)
+    if (v && v !== 'deployments') next.set('type', v)
+    else next.delete('type')
+    setSearchParams(next, { replace: true })
+  }
 
   // 切换命名空间/类型/状态筛选时重置分页到第 1 页
   useEffect(() => { setPage(1) }, [activeNs, activeType, statusFilter])
@@ -93,6 +112,20 @@ export default function ClusterDetail() {
       if (saved && saved !== '_all_') {
         const next = new URLSearchParams(searchParams)
         next.set('ns', saved)
+        setSearchParams(next, { replace: true })
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  // 类型 Tab 同理：URL 没有 type 但本地记住 → 同步进 URL
+  useEffect(() => {
+    if (searchParams.get('type')) return
+    try {
+      const saved = localStorage.getItem(`cluster_type:${id}`)
+      if (saved && VALID_TYPES.includes(saved)) {
+        const next = new URLSearchParams(searchParams)
+        next.set('type', saved)
         setSearchParams(next, { replace: true })
       }
     } catch { /* ignore */ }
@@ -301,7 +334,7 @@ export default function ClusterDetail() {
         {namespaces.length === 0 ? (
           <Empty description="暂无数据，请先触发采集或添加集群" />
         ) : (
-          <Tabs activeKey={activeType} onChange={setActiveType} items={tabItems} />
+          <Tabs activeKey={activeType} onChange={changeType} items={tabItems} />
         )}
       </Card>
 
