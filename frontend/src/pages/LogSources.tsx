@@ -1,11 +1,13 @@
 // 日志源管理：自定义 ES 多实例（列表 + 新增/编辑弹窗 + 测试连通性 + 删除）
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, Popconfirm, message } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { getLogSources, createLogSource, updateLogSource, deleteLogSource, testLogSource, testLogSourceById } from '../services/api'
 import type { LogSource } from '../types'
 
 export default function LogSources() {
+  const navigate = useNavigate()
   const [data, setData] = useState<LogSource[]>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<LogSource | null>(null)
@@ -62,6 +64,10 @@ export default function LogSources() {
         自定义 Elasticsearch 日志源，支持多实例并存、不强绑环境。日志告警规则可选指定日志源；
         规则不选日志源时使用<b>默认源</b>（标记「默认」的源优先，否则回退全局系统设置里的 ES 配置）。
         密码加密存储，仅回显「是否已配置」，留空表示不修改。
+      </div>
+      <div style={{ marginBottom: 12, color: '#8c8c8c', fontSize: 12 }}>
+        配好源后，到「<a onClick={() => navigate('/strategy')}>策略配置 → 日志告警规则</a>」里<strong>选这个源</strong> + 关键词 / 阈值 / 时间窗，后台每约 2 分钟扫描，命中即建告警并通知。
+        非 k8s 结构的 ES：按实际索引填「时间字段 / 搜索字段」（Pod、命名空间字段可留空）。
       </div>
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }}
         onClick={() => { setEditing(null); form.resetFields(); form.setFieldsValue({ index_pattern: 'k8s-*', is_default: false, enabled: true, time_field: '@timestamp', pod_field: 'kubernetes.pod_name', namespace_field: 'kubernetes.namespace_name', message_field: '' }); setOpen(true) }}>

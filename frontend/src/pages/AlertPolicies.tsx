@@ -1,5 +1,6 @@
 // 告警策略页：审核人值班 + 日志告警规则
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card, Tabs, Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Tag, Popconfirm, message, Calendar } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
@@ -145,6 +146,7 @@ function DutyTab() {
 
 // ============ 日志告警规则 ============
 function LogRuleTab() {
+  const navigate = useNavigate()
   const [data, setData] = useState<LogAlertRule[]>([])
   const [sources, setSources] = useState<LogSource[]>([])
   const [open, setOpen] = useState(false)
@@ -170,6 +172,10 @@ function LogRuleTab() {
 
   return (
     <Card>
+      <div style={{ marginBottom: 12, color: '#8c8c8c', fontSize: 12 }}>
+        ES 日志源在「<a onClick={() => navigate('/log-sources')}>日志源</a>」页维护（支持多实例；可分别配置时间字段 / 搜索字段等）——
+        这里每条规则可以<strong>指定使用哪个源</strong>；不指定则用默认源。扫描周期约 2 分钟。
+      </div>
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }} onClick={() => { setEditing(null); form.resetFields(); setOpen(true) }}>新增规则</Button>
       <Table rowKey="id" dataSource={data} columns={[
         { title: '规则名', dataIndex: 'name' },
@@ -193,7 +199,7 @@ function LogRuleTab() {
         <Form form={form} layout="vertical" initialValues={{ cluster_id: 0, time_window: 5, threshold: 3, severity: 'medium', enabled: true }}>
           <Form.Item name="name" label="规则名" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="index_pattern" label="ES 索引（如 app-*）" rules={[{ required: true }]}
-            tooltip="不选日志源时用这里的索引；**选了日志源则以该源的索引为准**（此处会被忽略）"><Input /></Form.Item>
+            tooltip="不选日志源时用这里的索引；选了日志源则以该源的索引为准（此处会被忽略）"><Input /></Form.Item>
           <Form.Item name="log_source_id" label="日志源（不选=默认源）"
             tooltip="选择后使用该日志源（地址/账号/索引都取该源）">
             <Select allowClear placeholder="默认源（不指定）" options={sourceOptions} />
