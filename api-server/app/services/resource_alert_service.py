@@ -134,9 +134,9 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
         await session.commit()
         await session.refresh(alert)
         alert_id = alert.id
-    # 通知（项目路由 + 30 分钟限频）
+    # 通知（统一入口：分级/静默/渠道/模板/限频都在 notify_alert 内）
     try:
-        await notification_service.send_alert_notification(alert)
+        await notification_service.notify_alert(alert)
     except Exception as e:  # noqa: BLE001
         logger.warning("资源告警 %d 通知失败: %s", alert_id, e)
     return True

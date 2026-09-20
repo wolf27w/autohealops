@@ -3,7 +3,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
-  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, OpResult, PageParams, PageResult, PlatformHealth, User, Workload,
+  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, User, Workload,
 } from '../types'
 
 const api = axios.create({
@@ -97,6 +97,8 @@ export const updateNotificationConfig = (id: number, data: Payload) => http.put(
 export const deleteNotificationConfig = (id: number) => http.delete(`/notifications/configs/${id}`)
 export const testNotificationConfig = (id: number) => http.post(`/notifications/configs/${id}/test`)
 export const getNotificationLogs = () => http.get('/notifications/logs')
+export const getNotifyPolicy = () => http.get<NotifyPolicy>('/notifications/policy')
+export const updateNotifyPolicy = (data: NotifyPolicy) => http.put('/notifications/policy', data)
 
 // ============ 站内消息 ============
 export const getUnreadCount = () => http.get<{ count: number }>('/in-app-messages/unread-count')

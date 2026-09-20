@@ -9,6 +9,7 @@ from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import acquire_lock, redis_pool, release_lock
 from app.models import Alert, LogAlertRule
+from app.services import notification_service
 from app.services.es_client import es_client
 
 logger = get_logger("api-server.log_alert")
@@ -87,6 +88,12 @@ async def scan_log_alerts() -> int:
                 session.add(alert)
                 rule.last_triggered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 await session.commit()
+                await session.refresh(alert)
+            # 通知：与集群/DB/Pod 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
+            try:
+                await notification_service.notify_alert(alert)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("日志告警 %d 通知失败: %s", alert.id, e)
             triggered += 1
             logger.info("日志告警触发: %s (命中 %d 次)", rule.name, m.get("count", 0))
     finally:

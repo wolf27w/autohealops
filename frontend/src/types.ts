@@ -148,6 +148,20 @@ export interface NotificationConfig {
   [key: string]: unknown
 }
 
+// 统一告警通知策略（N8）：全平台一份，适用范围 = 全部告警
+export interface SilenceWindow {
+  enabled: boolean
+  start: string // "HH:mm"
+  end: string // "HH:mm"，支持跨天
+  days: string // "1,2,3,4,5"，1=周一...7=周日，空=每天
+}
+
+export interface NotifyPolicy {
+  enabled: boolean
+  severity_routes: Record<string, string[]>
+  silence_windows: SilenceWindow[]
+}
+
 // ============ 工作负载 ============
 export interface Workload {
   kind: string

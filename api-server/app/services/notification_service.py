@@ -14,6 +14,7 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime
 
 import httpx
 from sqlalchemy import select
@@ -223,55 +224,221 @@ async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_
                       channel=cfg.channel_type, receiver=receiver)
 
 
-async def send_alert_notification(alert: Alert) -> None:
-    """按项目(namespace)路由发送告警通知（限频 + 重试 3 次）
+# ============ 统一告警通知策略（N8）：全平台一份 ============
 
-    路由优先级：项目组群（project.notify_config_id）> namespace 匹配的 alert 配置 > 默认兜底群
+# 告警来源中文标签（模板/日志展示用；resource_type → 来源）
+ALERT_SOURCE_LABELS = {
+    "pod": "容器告警",
+    "node": "集群告警",
+    "log": "日志告警",
+    "db": "数据库告警",
+}
+
+
+async def get_alert_notify_policy() -> dict:
+    """读取全平台统一告警通知策略（system_settings.alert_notify_policy，JSON）。
+
+    缺省/缺失字段用内置默认兑底；返回 dict 形如
+    {"enabled": bool, "severity_routes": {severity: [channel...]}, "silence_windows": [...]}
     """
-    severity = alert.severity
-    if severity == "low":
-        return  # 不通知
+    from app.services.system_setting_service import ALERT_NOTIFY_POLICY_DEFAULT, get_setting
+    policy = dict(ALERT_NOTIFY_POLICY_DEFAULT)
+    policy["severity_routes"] = dict(ALERT_NOTIFY_POLICY_DEFAULT["severity_routes"])
+    try:
+        raw = await get_setting("alert_notify_policy", "")
+        if raw:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                policy["enabled"] = bool(data.get("enabled", True))
+                if isinstance(data.get("severity_routes"), dict):
+                    for sev, chans in data["severity_routes"].items():
+                        if isinstance(chans, list):
+                            policy["severity_routes"][sev] = [str(c) for c in chans]
+                if isinstance(data.get("silence_windows"), list):
+                    policy["silence_windows"] = [w for w in data["silence_windows"] if isinstance(w, dict)]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取统一告警通知策略失败，用默认: %s", e)
+    return policy
+
+
+async def update_alert_notify_policy(policy: dict) -> None:
+    """保存全平台统一告警通知策略（合并默认 + 校验后写 system_settings）"""
+    from app.services.system_setting_service import ALERT_NOTIFY_POLICY_DEFAULT, update_settings
+    merged = dict(ALERT_NOTIFY_POLICY_DEFAULT)
+    merged["severity_routes"] = dict(ALERT_NOTIFY_POLICY_DEFAULT["severity_routes"])
+    if isinstance(policy, dict):
+        if "enabled" in policy:
+            merged["enabled"] = bool(policy["enabled"])
+        if isinstance(policy.get("severity_routes"), dict):
+            for sev, chans in policy["severity_routes"].items():
+                if isinstance(chans, list):
+                    merged["severity_routes"][sev] = [str(c) for c in chans]
+        if isinstance(policy.get("silence_windows"), list):
+            merged["silence_windows"] = [w for w in policy["silence_windows"] if isinstance(w, dict)]
+    await update_settings({"alert_notify_policy": json.dumps(merged, ensure_ascii=False)})
+
+
+def _alert_source(alert: Alert) -> str:
+    """告警来源中文标签（模板 {source} 占位符用）"""
+    return ALERT_SOURCE_LABELS.get(alert.resource_type or "", alert.resource_type or "告警")
+
+
+def _parse_days(days: str) -> set[int]:
+    """解析 days 字符串（"1,2,3,4,5"，1=周一...7=周日）→ 集合；空=每天"""
+    out: set[int] = set()
+    for p in (days or "").split(","):
+        p = p.strip()
+        if p.isdigit() and 1 <= int(p) <= 7:
+            out.add(int(p))
+    return out
+
+
+def _in_time_window(now: datetime, start: str, end: str, days: str = "") -> bool:
+    """判断当前时间是否命中维护/静默窗口（支持跨天：end < start）"""
+    days_set = _parse_days(days)
+    if days_set and now.isoweekday() not in days_set:
+        return False
+    try:
+        sh, sm = (int(x) for x in (start or "").split(":"))
+        eh, em = (int(x) for x in (end or "").split(":"))
+    except (ValueError, AttributeError):
+        return False
+    start_min = sh * 60 + sm
+    end_min = eh * 60 + em
+    if start_min == end_min:
+        return False
+    now_min = now.hour * 60 + now.minute
+    if start_min < end_min:
+        return start_min <= now_min < end_min
+    return now_min >= start_min or now_min < end_min  # 跨天
+
+
+async def _alert_in_silence(alert: Alert, policy: dict) -> bool:
+    """静默/维护窗口判断：全局静默窗口（统一策略）+ 集群 maintenance_window"""
+    now = datetime.now()
+    # 1. 全局静默窗口（统一策略）
+    for w in policy.get("silence_windows") or []:
+        if w.get("enabled") is False:
+            continue
+        if _in_time_window(now, w.get("start", ""), w.get("end", ""), w.get("days", "")):
+            return True
+    # 2. 集群维护窗口（cluster.maintenance_window，存量字段复用）
+    if alert.cluster_id:
+        try:
+            from app.models import Cluster
+            async with async_session() as session:
+                c = await session.get(Cluster, alert.cluster_id)
+            mw = c.maintenance_window if c else ""
+            if mw:
+                mwj = json.loads(mw) if isinstance(mw, str) else mw
+                if isinstance(mwj, dict) and mwj.get("enabled") and _in_time_window(
+                        now, mwj.get("start", ""), mwj.get("end", ""), mwj.get("days", "")):
+                    return True
+        except Exception as e:  # noqa: BLE001
+            logger.debug("集群维护窗口判断失败: %s", e)
+    return False
+
+
+def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: str, cluster_name: str) -> str:
+    """按渠道渲染告警内容：im_template（按渠道）优先，缺失/渲染失败退回内置默认"""
+    ctx = {
+        "project": project_name or "",
+        "cluster": cluster_name or str(alert.cluster_id or "-"),
+        "namespace": alert.namespace or "-",
+        "resource": f"{alert.resource_type}/{alert.resource_name}",
+        "fault_type": alert.fault_type,
+        "severity": alert.severity,
+        "message": alert.message or "",
+        "source": _alert_source(alert),
+        "alert_id": str(alert.id),
+    }
+    tmpl = ""
+    try:
+        templates = json.loads(cfg.im_template or "{}")
+        if isinstance(templates, dict):
+            tmpl = templates.get(cfg.channel_type) or templates.get("default") or ""
+    except Exception:  # noqa: BLE001
+        tmpl = ""
+    tmpl = (tmpl or "").strip()
+    if tmpl:
+        try:
+            return tmpl.format(**ctx)
+        except (KeyError, IndexError, ValueError):
+            pass  # 模板占位符非法 → 退回内置默认
+    return format_alert_message(alert, project_name, cluster_name)
+
+
+async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False) -> dict:
+    """统一告警通知入口（全平台一份策略）——所有告警来源共用。
+
+    流程：策略开关 → 严重级别分级 → 静默/维护窗口 → 限频 → 风暴抑制
+         → 渠道解析（AlertPolicy.notify_config_id 扩展点 → 项目路由 → scene=alert 兜底）
+         → 模板渲染 → 发送 + 写通知日志。
+
+    返回 {"sent": int, "reason": str}：reason ∈ policy_disabled/severity_<sev>/silenced/
+    rate_limited/storm_suppressed/policy_route/project_route/scene_route/no_channel。
+    dry_run=True 时只计算渠道计划、不真实发送、不写日志（验证用）。
+    """
+    severity = (alert.severity or "").lower()
+    policy = await get_alert_notify_policy()
+    if not policy.get("enabled", True):
+        return {"sent": 0, "reason": "policy_disabled"}
+    allowed = policy.get("severity_routes", {}).get(severity, [])
+    if not allowed:
+        return {"sent": 0, "reason": f"severity_{severity or 'unknown'}"}
+    if await _alert_in_silence(alert, policy):
+        return {"sent": 0, "reason": "silenced"}
     if await _notify_limited(alert.id):
-        return  # 30 分钟内已通知过
+        return {"sent": 0, "reason": "rate_limited"}
     if await _storm_suppressed(alert):
         logger.info("告警 %d 触发风暴抑制（5分钟同源超5次），不通知", alert.id)
-        return  # 风暴抑制：5 分钟同源超 5 次不再报警
+        return {"sent": 0, "reason": "storm_suppressed"}
 
-    # 0. 告警策略通知渠道（批一）：AlertPolicy.notify_config_id 优先（按 fault_type 维度）
-    from app.models import AlertPolicy
-    async with async_session() as session:
-        policy = (await session.execute(
-            select(AlertPolicy).where(AlertPolicy.fault_type == alert.fault_type)
-        )).scalar_one_or_none()
-    if policy and policy.notify_config_id:
-        async with async_session() as session:
-            policy_cfg = await session.get(NotificationConfig, policy.notify_config_id)
-        if policy_cfg and policy_cfg.is_active:
-            await _send_webhook_with_retry(policy_cfg, content, alert.id, receiver="告警策略群")
-            return
-
-    # 1. 项目路由：namespace → 项目 → 项目组群
     project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
     cluster_name = await _cluster_name(alert.cluster_id)
-    content = format_alert_message(alert, project_name, cluster_name)
+    sent = 0
 
+    async def _dispatch(cfg: NotificationConfig, receiver: str) -> None:
+        nonlocal sent
+        if cfg.channel_type not in allowed:
+            return
+        content = _render_alert_content(cfg, alert, project_name, cluster_name)
+        if dry_run:
+            sent += 1
+            return
+        await _send_webhook_with_retry(cfg, content, alert.id, at_all=at_all, receiver=receiver)
+        sent += 1
+
+    # 0. 扩展点：按故障类型分流（AlertPolicy.notify_config_id，source/fault_type 维度）
+    from app.models import AlertPolicy
+    async with async_session() as session:
+        policy_row = (await session.execute(
+            select(AlertPolicy).where(AlertPolicy.fault_type == alert.fault_type)
+        )).scalar_one_or_none()
+    if policy_row and policy_row.notify_config_id:
+        async with async_session() as session:
+            policy_cfg = await session.get(NotificationConfig, policy_row.notify_config_id)
+        if policy_cfg and policy_cfg.is_active:
+            await _dispatch(policy_cfg, "告警策略群")
+            return {"sent": sent, "reason": "policy_route"}
+
+    # 1. 项目路由：namespace → 项目 → 项目组群
     if project_cfg:
-        await _send_webhook_with_retry(project_cfg, content, alert.id, receiver=f"项目:{project_name}")
-        return  # 已路由到项目组群，不再发默认群（避免重复轰炸）
+        await _dispatch(project_cfg, f"项目:{project_name}")
+        return {"sent": sent, "reason": "project_route"}
 
-    # 2. 未归属项目 → scene 含 alert 的配置（namespaces 空=全部兜底 / 精确匹配）
+    # 2. 未归属项目 → scene 含 alert 的配置（namespaces 空=全部兜底 / 精确匹配 + 分级渠道过滤）
     configs = await _get_configs(SCENE_ALERT)
     for cfg in configs:
-        # severity 路由
-        if severity == "critical":
-            pass  # 所有渠道
-        elif severity == "high":
-            pass  # 所有渠道
-        elif severity == "medium" and cfg.channel_type != "dingtalk":
-            continue  # 仅钉钉
         if not _ns_match(cfg, alert.namespace):
             continue  # namespace 不匹配
-        await _send_webhook_with_retry(cfg, content, alert.id)
+        await _dispatch(cfg, "")
+    return {"sent": sent, "reason": "scene_route" if sent else "no_channel"}
+
+
+async def send_alert_notification(alert: Alert) -> None:
+    """兼容旧入口：统一转发 notify_alert（不改变既有调用方，策略/静默/分级都在 notify_alert 内）"""
+    await notify_alert(alert)
 
 
 async def _cluster_name(cluster_id: int) -> str:

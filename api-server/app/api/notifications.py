@@ -8,8 +8,23 @@ from sqlalchemy import select
 from app.core.database import async_session
 from app.middleware.permission import require_admin, require_any_user
 from app.models import NotificationConfig, NotificationLog
+from app.services import notification_service
 
 router = APIRouter(prefix="/api/v1/notifications")
+
+
+@router.get("/policy")
+async def get_notify_policy(user=Depends(require_any_user)):
+    """读取全平台统一告警通知策略（分级渠道 + 静默窗口，适用范围=全部告警）"""
+    policy = await notification_service.get_alert_notify_policy()
+    return {"code": 200, "message": "success", "data": policy}
+
+
+@router.put("/policy")
+async def update_notify_policy(payload: dict, user=Depends(require_admin)):
+    """更新全平台统一告警通知策略（admin）"""
+    await notification_service.update_alert_notify_policy(payload)
+    return {"code": 200, "message": "success", "data": None}
 
 
 @router.get("/configs")

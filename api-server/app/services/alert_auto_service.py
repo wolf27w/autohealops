@@ -205,8 +205,10 @@ async def _decide_action(alert: Alert, steps: list) -> str:
 
 async def _dedup_knowledge(fault_type: str, root_cause: str, repair_steps: str, execution_steps: str = "") -> None:
     """知识库沉淀：同类型同根因只留一条（跨服务跨环境聚合）；带可执行步骤"""
+    from app.services.diag_category import category_of
     try:
-        results = await knowledge_service.search_knowledge(f"{fault_type} {root_cause}", 3)
+        results = await knowledge_service.search_knowledge(
+            f"{fault_type} {root_cause}", 3, category=category_of(None, fault_type))
         for r in results:
             if r.get("fault_type") == fault_type and r.get("similarity", 0) >= 0.9:
                 return  # 已有高相似条目，不重复写入
@@ -278,7 +280,7 @@ async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -
                     except Exception as e:  # noqa: BLE001
                         logger.warning("飞书通知值班人失败: %s", e)
         else:
-            await notification_service.send_alert_notification(alert)
+            await notification_service.notify_alert(alert)
     except Exception as e:  # noqa: BLE001
         logger.warning("值班人通知失败: %s", e)
 
@@ -736,7 +738,9 @@ async def _process_one(alert: Alert) -> bool:
 
         query = f"{alert.fault_type} {alert.resource_name}"
         try:
-            kb_results = await knowledge_service.search_knowledge(query, 3, trace_id)
+            from app.services.diag_category import category_of as _category_of
+            kb_results = await knowledge_service.search_knowledge(
+                query, 3, trace_id, category=_category_of(alert.resource_type, alert.fault_type))
         except Exception as e:  # noqa: BLE001
             logger.debug("知识库检索失败: %s", e)
             kb_results = []

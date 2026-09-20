@@ -343,3 +343,14 @@
 - 密码 AES-256-GCM 加密存储，列表只回 `has_password`
 - 迁移 `h1i2j3k4l5m6` **已执行**（head）；实测接口 200 且已自动生成默认源（127.0.0.1:9200 / k8s-* / demo）
 - 备注：`/logs/search` 由代理 ai-service 改为 api-server 直查 ES（支持多源；结果一致）
+
+### N8 统一告警通知策略 ✅ 2026-09-20
+- 统一入口 `notification_service.notify_alert(alert)`：策略开关 → 分级渠道（severity_routes）→ 静默/维护窗口 → 限频(30min) → 风暴抑制(5min 同源≥5) → 模板渲染 → 发送+写日志；旧 `send_alert_notification` 保留为一行兼容转发
+- 全平台一份策略存 `system_settings.alert_notify_policy`（JSON，不新增表）；接口 `GET/PUT /notifications/policy`；前端「通知配置」顶部新增统一策略卡片（分级渠道 + 静默窗口）
+- 五类告警全部改走统一入口：集群/容器（转人工路径）、**日志告警（原来建单后不通知，现补上）**、数据库、Pod 重启、容器资源
+- `im_template` 模板开始对告警生效（新增 `{source}`/`{alert_id}`，渲染失败回退默认）；集群 `maintenance_window` 存量字段被真正消费
+- 验证：py_compile ✅ / tsc ✅ / 接口 200（策略返回）/ 4 类来源 dry-run 命中渠道数与静默/限频断言通过
+- 未做（扩展点）：邮件/站内消息渠道未接线
+
+### N1 补充（工单）→ 见下节
+### N3 诊断分离 ✅（清单见 e4ddfb2 提交）

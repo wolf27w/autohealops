@@ -13,8 +13,8 @@
 不进入自动修复链路（alert_auto_service 跳过 resource_type='db' 的告警）。
 
 统一复用：
-- 通知：notification_service.send_alert_notification（与集群/资源告警同一入口，
-  按 AlertPolicy.notify_config_id → 项目路由 → scene 兜底群分发）
+- 通知：notification_service.notify_alert（与集群/资源告警同一入口，
+  统一策略：分级渠道/静默窗口/模板/限频）
 - 去重：同库同 fault_type 在途不重复建单（pending/awaiting_approval 命中则聚合 event_count）
 - 恢复关闭：复用 alert_auto_service._cancel_related_approvals（告警已恢复→取消审批）
 """
@@ -145,9 +145,9 @@ async def _upsert_db_alert(c: DBConnection, fault_type: str, err: str) -> int:
         await session.refresh(alert)
         alert_id = alert.id
 
-    # 通知：与集群/资源告警同一入口（AlertPolicy 通知渠道 → 项目路由 → scene 兜底群）
+    # 通知：与集群/资源告警同一入口（统一策略：分级/静默/渠道/模板/限频）
     try:
-        await notification_service.send_alert_notification(alert)
+        await notification_service.notify_alert(alert)
     except Exception as e:  # noqa: BLE001
         logger.warning("DB 告警 %d 通知失败: %s", alert_id, e)
     return alert_id

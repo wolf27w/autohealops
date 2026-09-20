@@ -1,12 +1,13 @@
 // 通知配置页：渠道管理 + 传输模式/反馈方式/长连接参数 + 测试
 import { useEffect, useState } from 'react'
-import { Card, Button, Modal, Form, Input, Select, Switch, Space, Tag, Table, message } from 'antd'
-import { PlusOutlined, SendOutlined } from '@ant-design/icons'
+import { Card, Button, Modal, Form, Input, Select, Switch, Space, Tag, Table, message, Alert as AntAlert, Divider } from 'antd'
+import { PlusOutlined, SendOutlined, SaveOutlined, DeleteOutlined } from '@ant-design/icons'
 import {
   getNotificationConfigs, createNotificationConfig, updateNotificationConfig,
   deleteNotificationConfig, getNotificationLogs, testNotificationConfig,
+  getNotifyPolicy, updateNotifyPolicy,
 } from '../services/api'
-import type { NotificationConfig } from '../types'
+import type { NotificationConfig, NotifyPolicy, SilenceWindow } from '../types'
 
 interface NotifLog {
   id: number
@@ -52,9 +53,17 @@ const IM_TEMPLATE_PRESET = {
 
 const IM_TEMPLATE_PLACEHOLDER_HINT = '占位符：{project} {cluster} {namespace} {resource} {fault_type} {severity} {message} {approval_id} {plan_summary} {risk_level}'
 
+const SEVERITY_LEVELS = [
+  { value: 'critical', label: 'Critical（严重）' },
+  { value: 'high', label: 'High（高）' },
+  { value: 'medium', label: 'Medium（中）' },
+  { value: 'low', label: 'Low（低）' },
+]
+
 export default function NotificationConfig() {
   const [configs, setConfigs] = useState<NotificationConfig[]>([])
   const [logs, setLogs] = useState<NotifLog[]>([])
+  const [policy, setPolicy] = useState<NotifyPolicy>({ enabled: true, severity_routes: {}, silence_windows: [] })
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<NotificationConfig | null>(null)
   const [form] = Form.useForm()
@@ -62,8 +71,33 @@ export default function NotificationConfig() {
   const load = () => {
     getNotificationConfigs().then((d) => setConfigs(d))
     getNotificationLogs().then((d) => setLogs(d as NotifLog[]))
+    getNotifyPolicy().then((p) => setPolicy(p))
   }
   useEffect(load, [])
+
+  // ============ 统一告警通知策略（N8） ============
+  const setSeverityChannels = (sev: string, chans: string[]) => {
+    setPolicy((p) => ({ ...p, severity_routes: { ...p.severity_routes, [sev]: chans } }))
+  }
+  const updateWindow = (idx: number, patch: Partial<SilenceWindow>) => {
+    setPolicy((p) => ({
+      ...p,
+      silence_windows: p.silence_windows.map((w, i) => (i === idx ? { ...w, ...patch } : w)),
+    }))
+  }
+  const addWindow = () => setPolicy((p) => ({
+    ...p,
+    silence_windows: [...p.silence_windows, { enabled: true, start: '22:00', end: '08:00', days: '' }],
+  }))
+  const removeWindow = (idx: number) => setPolicy((p) => ({
+    ...p,
+    silence_windows: p.silence_windows.filter((_, i) => i !== idx),
+  }))
+  const savePolicy = async () => {
+    await updateNotifyPolicy(policy)
+    message.success('统一告警通知策略已保存')
+    load()
+  }
 
   const openCreate = () => {
     setEditing(null)
@@ -128,6 +162,40 @@ export default function NotificationConfig() {
 
   return (
     <div>
+      <Card title="统一告警通知策略"
+        extra={<Button type="primary" icon={<SaveOutlined />} onClick={savePolicy}>保存策略</Button>}
+        style={{ marginBottom: 16 }}>
+        <AntAlert type="info" showIcon style={{ marginBottom: 12 }}
+          message="适用范围：全部告警（集群 / 容器 / 日志 / 数据库 / Pod 重启），全平台共用一份策略" />
+        <Space style={{ marginBottom: 8 }}>
+          <Switch checked={policy.enabled} checkedChildren="策略启用" unCheckedChildren="策略停用"
+            onChange={(v) => setPolicy((p) => ({ ...p, enabled: v }))} />
+        </Space>
+        <Divider orientation="left">分级渠道（严重级别 → 允许发送的渠道，留空=该级别不通知）</Divider>
+        {SEVERITY_LEVELS.map((s) => (
+          <div key={s.value} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <span style={{ width: 140 }}>{s.label}</span>
+            <Select mode="multiple" style={{ flex: 1 }} value={policy.severity_routes[s.value] || []}
+              options={CHANNEL_OPTIONS} placeholder="留空 = 不通知"
+              onChange={(v) => setSeverityChannels(s.value, v)} />
+          </div>
+        ))}
+        <Divider orientation="left">静默 / 维护窗口（命中则不发任何告警通知；时间 HH:mm，星期 1-7 逗号分隔，空=每天，支持跨天）</Divider>
+        {policy.silence_windows.map((w, idx) => (
+          <Space key={idx} style={{ marginBottom: 8 }} wrap>
+            <Switch size="small" checked={w.enabled} onChange={(v) => updateWindow(idx, { enabled: v })} />
+            <Input style={{ width: 96 }} value={w.start} placeholder="开始 22:00"
+              onChange={(e) => updateWindow(idx, { start: e.target.value })} />
+            <Input style={{ width: 96 }} value={w.end} placeholder="结束 08:00"
+              onChange={(e) => updateWindow(idx, { end: e.target.value })} />
+            <Input style={{ width: 200 }} value={w.days} placeholder="星期 1,2,3,4,5（空=每天）"
+              onChange={(e) => updateWindow(idx, { days: e.target.value })} />
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => removeWindow(idx)}>删除</Button>
+          </Space>
+        ))}
+        <Button size="small" icon={<PlusOutlined />} onClick={addWindow}>添加静默窗口</Button>
+      </Card>
+
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加通知渠道</Button>
       </Space>

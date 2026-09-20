@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """系统设置服务：key-value 配置读写（Prometheus/ES/LDAP 等）"""
+import json
+
 from sqlalchemy import select
 
 from app.core.database import async_session
@@ -8,6 +10,22 @@ from app.models import SystemSetting
 
 # 脱敏占位符（前端回显 + 更新时跳过）
 MASKED = "***"
+
+# ============ 统一告警通知策略（N8）：全平台一份 ============
+# 分级渠道（severity → 允许发送的渠道类型）、静默/维护窗口（全局）。
+# 渠道类型：dingtalk/wechat/feishu（现有 webhook 渠道）；email/inapp 为预留扩展点，暂未接线。
+ALERT_NOTIFY_POLICY_DEFAULT = {
+    "enabled": True,
+    "severity_routes": {
+        "critical": ["dingtalk", "wechat", "feishu"],
+        "high": ["dingtalk", "wechat", "feishu"],
+        "medium": ["dingtalk"],
+        "low": [],
+    },
+    # 全局静默窗口列表：[{"enabled": true, "start": "22:00", "end": "08:00", "days": "1,2,3,4,5,6,7"}]
+    # days: 1=周一...7=周日，逗号分隔，空=每天；支持跨天（end < start）
+    "silence_windows": [],
+}
 
 # 敏感密钥字段：写入时加密存储，读取回显时脱敏
 SENSITIVE_KEYS = {"es_password", "ldap_bind_password", "feishu_app_secret", "embedding_api_key"}
@@ -43,6 +61,8 @@ DEFAULT_SETTINGS = {
     "approval_comment_templates": ("[]", "审批意见模板（JSON 字符串数组）"),
     # AI 诊断：深度诊断单次对话最大「有效」工具步数（重复调用不占额，按环境可调）
     "agent_max_tool_steps": ("12", "深度诊断单次对话最大工具步数（1~100）"),
+    # 统一告警通知策略（N8）：分级渠道 + 全局静默窗口，全平台一份
+    "alert_notify_policy": (json.dumps(ALERT_NOTIFY_POLICY_DEFAULT, ensure_ascii=False), "统一告警通知策略 JSON（分级渠道/静默窗口）"),
 }
 
 

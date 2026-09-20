@@ -14,7 +14,7 @@
 4. 增量原因判定：容器 lastState.terminated.reason == OOMKilled → PodRestartOOM；
    否则 describe pod 事件含探针失败特征 → PodRestartProbeFail；其余（非 OOM/探针）不在 N5 范围
 5. 建/聚合告警（manual_required=False）→ AI 诊断（ai_client.diagnose，结论落 AIDiagnosisResult）→
-   诊断结论写入告警 message → 复用 notification_service.send_alert_notification 发通知
+   诊断结论写入告警 message → 复用 notification_service.notify_alert 发通知
 6. 恢复：Pod ready 且重启计数不再增长 → 关闭在途 PodRestart* 告警
 
 不走审批：alert_auto_service._process_one 对这两个 fault_type 直接跳过（诊断+通知在检测侧闭环），
@@ -230,9 +230,9 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
                 a.message = (a.message or "") + "\n" + diagnosis_text
             await session.commit()
 
-    # 通知：与集群/资源/DB 告警同一入口（AlertPolicy 通知渠道 → 项目路由 → scene 兜底群）
+    # 通知：与集群/资源/DB 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
     try:
-        await notification_service.send_alert_notification(a)
+        await notification_service.notify_alert(a)
     except Exception as e:  # noqa: BLE001
         logger.warning("Pod 重启告警 %d 通知失败: %s", alert_id, e)
 
