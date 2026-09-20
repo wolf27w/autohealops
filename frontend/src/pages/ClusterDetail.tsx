@@ -1,6 +1,7 @@
 // 集群详情页：命名空间下拉 + 工作负载类型 Tab 左右切换（无状态/有状态/守护集/定时任务/容器组）
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
 import { useEffect, useMemo, useState } from 'react'
+import type { PodTarget, MetricPoint } from '../types'
 import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -32,20 +33,6 @@ interface NamespaceDetail {
   cronjobs: ResourceItem[]
   daemonsets: ResourceItem[]
   pods: ResourceItem[]
-}
-
-interface PodTarget {
-  clusterId: number
-  namespace: string
-  name: string
-}
-
-interface MetricPoint {
-  sampled_at?: string
-  cpu_usage?: number
-  memory_usage?: number
-  network_rx?: number
-  network_tx?: number
 }
 
 export default function ClusterDetail() {

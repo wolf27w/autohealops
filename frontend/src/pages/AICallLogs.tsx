@@ -1,5 +1,6 @@
 // AI 运行 / 成本看板 + 调用日志（C5）
 import { useEffect, useState } from 'react'
+import type { AICallLog } from '../types'
 import { Card, Row, Col, Statistic, Table, Select, Empty, Tag, Space } from 'antd'
 import { getAIDashboard, getAICallLogs } from '../services/api'
 
@@ -20,18 +21,6 @@ interface AIDashboard {
   today?: AISummary
   by_type?: Array<Record<string, unknown>>
   by_model?: Array<Record<string, unknown>>
-}
-
-interface AICallLog {
-  id: number
-  request_type?: string
-  model_config_id?: number
-  token_usage?: number
-  latency_ms?: number
-  cost?: number
-  status?: string
-  created_at?: string
-  [key: string]: unknown
 }
 
 export default function AICallLogs() {

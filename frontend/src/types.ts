@@ -446,3 +446,48 @@ export interface TicketDetail {
   ticket: Ticket
   comments: TicketComment[]
 }
+
+// ============ 去重：原本在多页各写一份的通用类型（2026-09-20） ============
+export interface PodTarget {
+  clusterId: number
+  namespace: string
+  name: string
+}
+
+export interface MetricPoint {
+  sampled_at?: string
+  cpu_usage?: number
+  memory_usage?: number
+  network_rx?: number
+  network_tx?: number
+}
+
+export interface AICallLog {
+  id: number
+  request_type?: string
+  model_config_id?: number
+  token_usage?: number
+  latency_ms?: number
+  cost?: number
+  status?: string
+  created_at?: string
+  [key: string]: unknown
+}
+
+// 统一数据库连接视图模型（原 DiagnosticCenter.DBConn / Permissions.DBConn / ProjectManagement.DBConnection 三份）
+export interface DBConnection {
+  id: number
+  name: string
+  db_type?: string
+  host?: string
+  port?: number
+  database?: string
+  slow_sql_threshold?: number
+  status?: string
+  collect_enabled?: boolean
+  inspect_enabled?: boolean
+  inspect_cron?: string
+  password?: string
+  readonly_password?: string
+  [key: string]: unknown
+}

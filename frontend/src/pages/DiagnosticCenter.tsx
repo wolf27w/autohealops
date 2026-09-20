@@ -1,5 +1,6 @@
 // 诊断中心：数据库诊断（按需触发）+ 报告 + 趋势（应用诊断在 AI 诊断助手）
 import { useEffect, useState } from 'react'
+import type { DBConnection } from '../types'
 import {
   Tabs, Card, Button, Table, Modal, Form, Input, Select, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch,
 } from 'antd'
@@ -17,23 +18,6 @@ interface DBReport {
   root_cause?: string
   suggestion?: string
   created_at?: string
-}
-
-interface DBConn {
-  id: number
-  name: string
-  db_type?: string
-  host?: string
-  port?: number
-  database?: string
-  slow_sql_threshold?: number
-  status?: string
-  collect_enabled?: boolean
-  inspect_enabled?: boolean
-  inspect_cron?: string
-  password?: string
-  readonly_password?: string
-  [key: string]: unknown
 }
 
 interface TrendPoint {
@@ -76,7 +60,7 @@ export default function DiagnosticCenter() {
 // ============ 诊断报告与趋势 ============
 function ReportsTab() {
   const [reports, setReports] = useState<DBReport[]>([])
-  const [conns, setConns] = useState<DBConn[]>([])
+  const [conns, setConns] = useState<DBConnection[]>([])
   const [connId, setConnId] = useState<number>()
   const [metricType, setMetricType] = useState('connections')
   const [trends, setTrends] = useState<TrendPoint[]>([])
@@ -84,7 +68,7 @@ function ReportsTab() {
 
   const load = () => {
     getDbDiagnosisReports().then((d) => setReports((d || []) as DBReport[]))
-    getDBConnections().then((d) => setConns((d || []) as DBConn[]))
+    getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
   }
   useEffect(() => { load() }, [])
 
@@ -144,18 +128,18 @@ function ReportsTab() {
 
 
 function DBConnections() {
-  const [conns, setConns] = useState<DBConn[]>([])
+  const [conns, setConns] = useState<DBConnection[]>([])
   const [modalOpen, setModalOpen] = useState(false)
-  const [editing, setEditing] = useState<DBConn | null>(null)
+  const [editing, setEditing] = useState<DBConnection | null>(null)
   const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
   const [slowTrend, setSlowTrend] = useState<SlowTrendPoint[]>([])
   const [slowDrawer, setSlowDrawer] = useState(false)
-  const [slowConn, setSlowConn] = useState<DBConn | null>(null)
+  const [slowConn, setSlowConn] = useState<DBConnection | null>(null)
   const [sqlDetail, setSqlDetail] = useState<string>('')
   const [form] = Form.useForm()
 
-  const load = () => getDBConnections().then((d) => setConns((d || []) as DBConn[]))
-  const testConn = async (r: DBConn) => {
+  const load = () => getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
+  const testConn = async (r: DBConnection) => {
     try {
       await testDBConnection(r.id)
       message.success('连接成功')
@@ -163,7 +147,7 @@ function DBConnections() {
   }
   useEffect(() => { load() }, [])
 
-  const openModal = (c?: DBConn) => {
+  const openModal = (c?: DBConnection) => {
     setEditing(c || null)
     setModalOpen(true)
     if (c) {
@@ -189,14 +173,14 @@ function DBConnections() {
     load()
   }
 
-  const openSlowSQL = async (c: DBConn) => {
+  const openSlowSQL = async (c: DBConnection) => {
     setSlowConn(c)
     setSlowDrawer(true)
     getSlowSQL(c.id).then((d) => setSlowSQL((d || []) as SlowSQL[]))
     getSlowSQLTrend(c.id, 24).then((d) => setSlowTrend((d || []) as SlowTrendPoint[]))
   }
 
-  const runDiagnosis = async (c: DBConn) => {
+  const runDiagnosis = async (c: DBConnection) => {
     message.loading({ content: `正在诊断 ${c.name}...`, key: 'diag' })
     try {
       const res = (await runDbDiagnosis(c.id)) as { data?: DiagnosisResult }
@@ -220,13 +204,13 @@ function DBConnections() {
     }
   }
 
-  const toggleCollect = async (c: DBConn, enabled: boolean) => {
+  const toggleCollect = async (c: DBConnection, enabled: boolean) => {
     await updateDBConnection(c.id, { collect_enabled: enabled })
     message.success(enabled ? '已开启采集' : '已关闭采集')
     load()
   }
 
-  const toggleInspect = async (c: DBConn, enabled: boolean) => {
+  const toggleInspect = async (c: DBConnection, enabled: boolean) => {
     await updateDBConnection(c.id, { inspect_enabled: enabled })
     message.success(enabled ? '已开启巡检' : '已关闭巡检')
     load()

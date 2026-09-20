@@ -9,7 +9,7 @@ import {
   getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents,
 } from '../services/api'
-import type { Workload } from '../types'
+import type { MetricPoint, PodTarget, Workload } from '../types'
 
 const KIND_LABEL: Record<string, string> = {
   deployment: '无状态 Deployment', statefulset: '有状态 StatefulSet',
@@ -27,12 +27,6 @@ interface ServicePod {
   [key: string]: unknown
 }
 
-interface PodTarget {
-  clusterId: number
-  namespace: string
-  name: string
-}
-
 interface NsPods {
   namespace: string
   pods?: ServicePod[]
@@ -42,14 +36,6 @@ interface WorkloadEvent {
   pod: string
   summary?: string
   events?: string
-}
-
-interface MetricPoint {
-  sampled_at?: string
-  cpu_usage?: number
-  memory_usage?: number
-  network_rx?: number
-  network_tx?: number
 }
 
 export default function ServiceDetail() {

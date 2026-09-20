@@ -1,5 +1,6 @@
 // AI 模型配置页：模型列表（增删改）+ AI 调用日志（分页/统计分类/筛选）
 import { useEffect, useState } from 'react'
+import type { AICallLog } from '../types'
 import { Card, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Table, Tag, message, Popconfirm, Row, Col, Empty } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { getAIModels, createAIModel, updateAIModel, deleteAIModel, getAICallLogs, getAICallLogStats } from '../services/api'
@@ -25,18 +26,6 @@ interface AIModel {
   cost_per_1k_tokens?: number
   is_active?: boolean
   api_key_encrypted?: string
-  [key: string]: unknown
-}
-
-interface AICallLog {
-  id: number
-  request_type?: string
-  model_config_id?: number
-  token_usage?: number
-  latency_ms?: number
-  cost?: number
-  status?: string
-  created_at?: string
   [key: string]: unknown
 }
 

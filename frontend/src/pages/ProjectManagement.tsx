@@ -10,7 +10,7 @@ import {
   getClusters, getClusterNamespaces, getDBConnections, getUsers,
   getNotificationConfigs,
 } from '../services/api'
-import type { Cluster, NotificationConfig, User } from '../types'
+import type { Cluster, DBConnection, NotificationConfig, User } from '../types'
 
 interface Project {
   id: number
@@ -32,13 +32,6 @@ interface ProjectClusterNS {
 interface ProjectDB {
   id: number
   db_name?: string
-}
-
-interface DBConnection {
-  id: number
-  name: string
-  db_type?: string
-  host?: string
 }
 
 interface ProjectUser {

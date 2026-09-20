@@ -10,7 +10,7 @@ import {
   getUserDBPerms, addUserDBPerm, deleteUserDBPerm,
   getSubscriptions, addSubscription, deleteSubscription,
 } from '../services/api'
-import type { Cluster, User } from '../types'
+import type { Cluster, DBConnection, User } from '../types'
 
 type ClusterWithEnv = Cluster & { env_tag?: string }
 
@@ -19,11 +19,6 @@ interface ClusterPerm {
   cluster_id?: number
   namespace?: string
   permission?: string
-}
-
-interface DBConn {
-  id: number
-  name: string
 }
 
 interface DBPerm {
@@ -131,7 +126,7 @@ function ClusterPerms() {
 // ============ 数据库授权（admin）============
 function DBPerms() {
   const [users, setUsers] = useState<User[]>([])
-  const [conns, setConns] = useState<DBConn[]>([])
+  const [conns, setConns] = useState<DBConnection[]>([])
   const [selectedUser, setSelectedUser] = useState<number | null>(null)
   const [perms, setPerms] = useState<DBPerm[]>([])
   const [modalOpen, setModalOpen] = useState(false)
@@ -139,7 +134,7 @@ function DBPerms() {
 
   useEffect(() => {
     getUsers().then((d) => setUsers(d || []))
-    getDBConnections().then((d) => setConns((d || []) as DBConn[]))
+    getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
   }, [])
 
   const loadPerms = (uid: number) => getUserDBPerms(uid).then((d) => setPerms((d || []) as DBPerm[]))
