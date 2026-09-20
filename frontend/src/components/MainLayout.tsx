@@ -63,7 +63,7 @@ const menuItems: MenuProps['items'] = [
       { key: '/notify-center', icon: <NotificationOutlined />, label: '通知配置' },
       { key: '/user-permission', icon: <UserOutlined />, label: '用户与权限' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
-      { key: '/stats', icon: <BarChartOutlined />, label: '统计报表' },
+      { key: '/reports', icon: <BarChartOutlined />, label: '报表' },
       { key: '/audit', icon: <AuditOutlined />, label: '审计追溯' },
       { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
     ],

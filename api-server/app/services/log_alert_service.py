@@ -50,7 +50,7 @@ async def scan_log_alerts() -> int:
             pod = (m.get("pods") or [""])[0]
             ns = (m.get("namespaces") or [rule.namespace_filter or ""])[0]
             message = (
-                f"日志告警【{rule.name}】: 索引 {rule.index_pattern} 关键词 {keywords} "
+                f"日志告警【{rule.name}】: 索引 {m.get('index') or rule.index_pattern} 关键词 {keywords} "
                 f"在 {rule.time_window} 分钟内命中 {m['count']} 次（阈值 {rule.threshold}）"
             )
 

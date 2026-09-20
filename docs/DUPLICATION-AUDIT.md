@@ -64,6 +64,37 @@
 
 ---
 
+## 执行结果（2026-09-20 下午，干完的）
+
+**备份**：git tag `backup/before-dedup-20260920`；数据导出 `logs/archive/dedup_backup_20260920/data/*.json`；代码副本 `.../code/`。
+
+**⚠️ 复核纠错（审计时的误判，已核实后撤回）**：
+- `system_settings.risk_policy` **不是死配置** —— `/decisions/risk-policy` GET/PUT 正在读写它（真正无关的是 `decision_policies` 表，那是另一类策略）
+- `prompt_versions` **不是死表** —— ai-service `prompt_engine.update()` 会写历史版本，只是还没有模板被改过所以 0 行
+
+**已删除/已收敛**：
+| 项 | 处理 |
+|---|---|
+| C2 `alerts.source` 死列 | ✅ 迁移 `l5m6n7o8p9q0` 删除（经全仓核实无任何读写） |
+| D2 `ExecutorClient()` 14 处 | ✅ 收敛为 `clients/executor_client.py` 进程级单例 |
+| D1 `infer_deployment_name` ×3 | ✅ 收敛为 `app/utils/pod.py`（3 处改为引用） |
+| A1 旧统计页 `/stats` | ✅ 拆分：导出+定时推送 → 新 `/reports` 报表页；重叠的统计卡片/图表删除；页面删除，`/stats` 重定向到 `/reports` |
+| A1 旧接口 3 个 | ✅ `/stats/overview`、`/stats/repair-success-rate`、`/stats/alert-status-distribution` 删除（仅被该页使用） |
+| A2 孤立路由 14 条 | ✅ 改为重定向到合并页（`/alerts→/alert-handling` 等），外部深链仍可用 |
+| D5 `Tickets.tsx` 自建 http | ✅ 改用 `services/api.ts`（含新增 patch 与工单接口） |
+| D6 工单本地类型 | ✅ 收敛到 `types.ts`（Ticket/TicketComment/TicketDetail） |
+| B2 日志索引两处 | ✅ 消除歧义：**选了日志源以源索引为准**，未选才用规则索引；告警文案显示实际生效索引；前端加提示 |
+| B4 静默窗口两套 | ✅ 保留两层，前端明确「两者任一命中即静默」的优先级说明 |
+| E1 `PROMPT.md` 旧版 | ✅ 删除（归档副本在 backup 目录） |
+
+**保留未删（经核实后判定：非重复或不建议动）**：
+- `risk_policy` 配置、`prompt_versions` 表+模型（误判，见上）
+- `self_heal_rules`（0 条但是老板 09-10 明确保留的「决策覆盖层」功能）
+- 飞书「应用凭证（个人消息）」vs「群机器人 webhook」——职责不同，仅补说明
+- `notification_logs` vs `in_app_messages` —— 渠道发送记录 vs 站内消息，字段相似但语义不同
+- 两服务同名基础模块（es_client/http_client/database/config/security）—— 独立部署的边界，抽共享包收益小于风险
+- 其余各页本地 `interface`（约 14 页）—— 低风险重复，未动
+
 ## 建议清理顺序（按性价比）
 
 1. **B5 risk_policy 死配置**、**B7 prompt_versions 死表**、**C2 alerts.source 死列** —— 纯清理，零风险

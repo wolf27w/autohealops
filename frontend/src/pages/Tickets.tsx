@@ -2,59 +2,13 @@
 import { useEffect, useState } from 'react'
 import { Button, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
 import { PlusOutlined, UserOutlined, CommentOutlined, DeleteOutlined } from '@ant-design/icons'
-import api from '../services/api'
-import { getUsers, getClusters, getDBConnections } from '../services/api'
-import type { Cluster, User } from '../types'
+import {
+  getUsers, getClusters, getDBConnections,
+  getTickets, getTicket, createTicket, updateTicket, assignTicket, addTicketComment, deleteTicket,
+} from '../services/api'
+import type { Cluster, User, Ticket, TicketDetail, TicketComment } from '../types'
 
 // ============ 本地类型（不修改 api.ts/types.ts，避免与并行任务冲突） ============
-interface Ticket {
-  id: number
-  ticket_no: string
-  title: string
-  description: string
-  source: string
-  alert_id: number | null
-  approval_id: number | null
-  cluster_id: number | null
-  cluster_name: string
-  db_connection_id: number | null
-  db_name: string
-  namespace: string
-  resource_name: string
-  priority: string
-  status: string
-  assignee_id: number | null
-  assignee_name: string
-  created_by: number | null
-  creator_name: string
-  resolved_at: string
-  closed_at: string
-  created_at: string
-  updated_at: string
-}
-
-interface TicketComment {
-  id: number
-  ticket_id: number
-  user_id: number | null
-  username: string
-  type: string
-  content: string
-  created_at: string
-}
-
-interface TicketDetail {
-  ticket: Ticket
-  comments: TicketComment[]
-}
-
-interface TicketListResult {
-  items: Ticket[]
-  total: number
-  page: number
-  page_size: number
-}
-
 // ============ 常量（与后端口径一致） ============
 const STATUS_LABEL: Record<string, string> = {
   open: '待受理', processing: '处理中', resolved: '已解决', closed: '已关闭',
@@ -79,13 +33,6 @@ const NEXT_STATUS: Record<string, string[]> = {
 }
 
 // ============ 类型化请求门面（复用默认 api 实例，拦截器已解包 body.data） ============
-const http = {
-  get: <T,>(url: string, params?: Record<string, unknown>) => api.get(url, { params }) as Promise<T>,
-  post: <T,>(url: string, data?: unknown) => api.post(url, data) as Promise<T>,
-  patch: <T,>(url: string, data?: unknown) => api.patch(url, data) as Promise<T>,
-  delete: <T,>(url: string) => api.delete(url) as Promise<T>,
-}
-
 export default function Tickets() {
   const [items, setItems] = useState<Ticket[]>([])
   const [total, setTotal] = useState(0)
@@ -117,14 +64,14 @@ export default function Tickets() {
     if (priority) params.priority = priority
     if (source) params.source = source
     if (clusterId) params.cluster_id = clusterId
-    http.get<TicketListResult>('/tickets', params)
+    getTickets(params)
       .then((d) => { setItems(d?.items ?? []); setTotal(d?.total ?? 0) })
       .catch(() => {})
       .finally(() => setLoading(false))
   }
 
   const loadDetail = (id: number) => {
-    http.get<TicketDetail>(`/tickets/${id}`)
+    getTicket(id)
       .then((d) => setDetail(d))
       .catch(() => {})
   }
@@ -143,7 +90,7 @@ export default function Tickets() {
   }
 
   const doTransition = async (t: Ticket, next: string) => {
-    await http.patch(`/tickets/${t.id}`, { status: next })
+    await updateTicket(t.id, { status: next })
     message.success(`已流转到「${STATUS_LABEL[next]}」`)
     loadDetail(t.id)
     loadList()
@@ -151,7 +98,7 @@ export default function Tickets() {
 
   const doAssign = async () => {
     if (!detail) return
-    await http.post(`/tickets/${detail.ticket.id}/assign`, { assignee_id: assignUserId ?? null })
+    await assignTicket(detail.ticket.id, assignUserId ?? null)
     message.success('已指派')
     setAssignModalOpen(false)
     setAssignUserId(undefined)
@@ -161,7 +108,7 @@ export default function Tickets() {
 
   const doComment = async () => {
     if (!detail || !commentText.trim()) { message.warning('请输入留言内容'); return }
-    await http.post(`/tickets/${detail.ticket.id}/comments`, { content: commentText.trim() })
+    await addTicketComment(detail.ticket.id, commentText.trim())
     message.success('已留言')
     setCommentText('')
     loadDetail(detail.ticket.id)
@@ -173,7 +120,7 @@ export default function Tickets() {
 
   const doDelete = async (id: number) => {
     try {
-      await http.delete(`/tickets/${id}`)
+      await deleteTicket(id)
       message.success('已删除')
       setDrawerOpen(false)
       loadList()
@@ -182,7 +129,7 @@ export default function Tickets() {
 
   const doCreate = async () => {
     const v = await createForm.validateFields()
-    await http.post('/tickets', v)
+    await createTicket(v)
     message.success('已建单')
     setCreateOpen(false)
     createForm.resetFields()

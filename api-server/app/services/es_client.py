@@ -136,10 +136,19 @@ class ESClient:
         namespace_filter: str = "",
         log_source_id: int | None = None,
     ) -> dict:
-        """统计日志告警规则命中：返回 {count, pods, namespaces}"""
+        """统计日志告警规则命中：返回 {count, pods, namespaces, index}
+
+        索引口径（去重，避免「规则索引」与「日志源索引」两处打架）：
+        - 规则选了日志源 → **以该源的索引为准**（忽略规则里的索引）
+        - 未选日志源   → 以规则索引为准；规则未填则回落默认源索引 / k8s-*
+        """
         cfg = await self._cfg(log_source_id)
         if not cfg["base_url"]:
-            return {"count": 0, "pods": [], "namespaces": []}
+            return {"count": 0, "pods": [], "namespaces": [], "index": ""}
+        if log_source_id:
+            eff_index = (cfg.get("index") or "").strip() or (index_pattern or "").strip() or "k8s-*"
+        else:
+            eff_index = (index_pattern or "").strip() or (cfg.get("index") or "").strip() or "k8s-*"
         query_string = " OR ".join(f'"{k}"' for k in keywords)
         body = {
             "query": {
@@ -159,7 +168,7 @@ class ESClient:
         if namespace_filter:
             body["query"]["bool"]["must"].append({"term": {"kubernetes.namespace_name": namespace_filter}})
 
-        url = f"{cfg['base_url']}/{index_pattern}/_search"
+        url = f"{cfg['base_url']}/{eff_index}/_search"
         try:
             client = get_http_client(trust_env=False)
             resp = await client.post(url, json=body, auth=self._auth(cfg), timeout=10)
@@ -167,12 +176,12 @@ class ESClient:
             data = resp.json()
         except Exception as e:  # noqa: BLE001
             logger.warning("ES 日志告警查询失败: %s", e)
-            return {"count": 0, "pods": [], "namespaces": []}
+            return {"count": 0, "pods": [], "namespaces": [], "index": eff_index}
         count = data.get("hits", {}).get("total", {}).get("value", 0)
         aggs = data.get("aggregations", {})
         pods = [b["key"] for b in aggs.get("by_pod", {}).get("buckets", [])]
         namespaces = [b["key"] for b in aggs.get("by_ns", {}).get("buckets", [])]
-        return {"count": count, "pods": pods, "namespaces": namespaces}
+        return {"count": count, "pods": pods, "namespaces": namespaces, "index": eff_index}
 
     async def search_logs(self, namespace: str, pod: str, tail: int = 50, log_source_id: int | None = None) -> str:
         """按 namespace + pod 查最近日志（复用逻辑，与 ai-service 一致）"""

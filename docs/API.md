@@ -117,9 +117,13 @@
 
 | 方法 | 路径 | 说明 | 权限 |
 |---|---|---|---|
-| GET | /api/v1/stats/overview | 概览统计 | 登录 |
-| GET | /api/v1/stats/ai-effectiveness | AI 有效性 | 登录 |
-| GET | /api/v1/stats/repair-success-rate | 修复成功率 | 登录 |
+| GET | /api/v1/stats/dashboard | 仪表盘聚合（筛选/健康分/KPI/趋势/…） | 登录 |
+| GET | /api/v1/stats/ai-effectiveness | AI 有效性趋势（报表导出用） | 登录 |
+| GET | /api/v1/stats/model-cost | 模型成本（报表导出用） | 登录 |
+| GET | /api/v1/stats/ai-dashboard | AI 运行/成本看板 | 登录 |
+| GET | /api/v1/stats/platform-health | 平台健康探活 | 登录 |
+
+> 去重说明：旧端点 `/stats/overview`、`/stats/repair-success-rate`、`/stats/alert-status-distribution` 与仪表盘重复，已移除。
 
 ## 用户管理
 

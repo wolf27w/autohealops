@@ -153,7 +153,7 @@ export default function ClusterList() {
                 <Form.Item name="mw_end" label="结束"><Input placeholder="04:00" style={{ width: 100 }} /></Form.Item>
                 <Form.Item name="mw_days" label="星期"><Input placeholder="1,2,3,4,5" style={{ width: 120 }} /></Form.Item>
               </Space>
-              <div style={{ fontSize: 12, color: '#999', marginTop: -8 }}>维护窗口内不告警（1-7 表示周一到周日；跨天如 23:00-02:00 支持）</div>
+              <div style={{ fontSize: 12, color: '#999', marginTop: -8 }}>维护窗口内该集群不告警（1-7 表示周一到周日；跨天如 23:00-02:00 支持）。与「通知配置」里的全平台静默窗口任一命中即静默</div>
             </>
           )}
           {!editing && (

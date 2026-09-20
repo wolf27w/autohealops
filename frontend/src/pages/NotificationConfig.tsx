@@ -181,6 +181,10 @@ export default function NotificationConfig() {
           </div>
         ))}
         <Divider orientation="left">静默 / 维护窗口（命中则不发任何告警通知；时间 HH:mm，星期 1-7 逗号分隔，空=每天，支持跨天）</Divider>
+        <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>
+          这里配的是<strong>全平台静默窗口</strong>；各集群还有自己的「维护窗口」（集群管理 → 编辑集群）。
+          两者<strong>任一命中即静默</strong>（集群窗口只影响该集群告警）。
+        </div>
         {policy.silence_windows.map((w, idx) => (
           <Space key={idx} style={{ marginBottom: 8 }} wrap>
             <Switch size="small" checked={w.enabled} onChange={(v) => updateWindow(idx, { enabled: v })} />

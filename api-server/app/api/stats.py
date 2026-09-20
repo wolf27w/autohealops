@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""统计报表 API：概览 + AI 有效性趋势 + 修复成功率 + 告警状态分布 + 仪表盘/大屏聚合"""
+"""统计 API：AI 有效性趋势 / 模型成本 / 仪表盘聚合（去重后移除与仪表盘重复的旧端点）"""
 import json
 from datetime import datetime, time, timedelta
 
@@ -14,29 +14,6 @@ from app.models import (AICallLog, AIModelConfig, Alert, Approval, Cluster, DBMe
                         ProjectDBConnection, QuotaSnapshot, RepairPlan, ResourceSnapshot)
 
 router = APIRouter(prefix="/api/v1/stats")
-
-
-@router.get("/overview")
-async def overview(user=Depends(require_any_user)):
-    async with async_session() as session:
-        cluster_total = (await session.execute(select(func.count()).select_from(Cluster))).scalar() or 0
-        cluster_healthy = (await session.execute(select(func.count()).select_from(Cluster).where(Cluster.status == "healthy"))).scalar() or 0
-        alert_pending = (await session.execute(select(func.count()).select_from(Alert).where(Alert.status == "pending"))).scalar() or 0
-        approval_pending = (await session.execute(select(func.count()).select_from(Approval).where(Approval.status == "pending"))).scalar() or 0
-        today_cost = (await session.execute(
-            select(func.coalesce(func.sum(AICallLog.cost), 0.0)).where(AICallLog.created_at >= func.current_date())
-        )).scalar() or 0.0
-        # 告警总数 + 已解决（自愈 + 人工解决）
-        alert_total = (await session.execute(select(func.count()).select_from(Alert))).scalar() or 0
-        alert_healed = (await session.execute(
-            select(func.count()).select_from(Alert).where(Alert.status.in_(["self_healed", "resolved"]))
-        )).scalar() or 0
-    return {"code": 200, "message": "success", "data": {
-        "cluster_total": cluster_total, "cluster_healthy": cluster_healthy,
-        "alert_pending": alert_pending, "approval_pending": approval_pending,
-        "today_ai_cost": round(float(today_cost), 4),
-        "alert_total": alert_total, "alert_healed": alert_healed,
-    }}
 
 
 async def _range_days(range_days: str) -> int:
@@ -121,44 +98,6 @@ async def model_cost(range_days: str = Query("7d", alias="range"), user=Depends(
     data.sort(key=lambda x: x["cost"], reverse=True)
     total_cost = round(sum(d["cost"] for d in data), 4)
     return {"code": 200, "message": "success", "data": {"models": data, "total_cost": total_cost}}
-
-
-@router.get("/repair-success-rate")
-async def repair_success_rate(user=Depends(require_any_user)):
-    """修复成功率：已解决（自愈+人工）告警 / 总告警"""
-    async with async_session() as session:
-        total = (await session.execute(select(func.count()).select_from(Alert))).scalar() or 0
-        healed = (await session.execute(
-            select(func.count()).select_from(Alert).where(Alert.status.in_(["self_healed", "resolved"]))
-        )).scalar() or 0
-        # 修复计划成功率
-        plan_total = (await session.execute(select(func.count()).select_from(RepairPlan))).scalar() or 0
-        plan_done = (await session.execute(
-            select(func.count()).select_from(RepairPlan).where(RepairPlan.status == "completed")
-        )).scalar() or 0
-    return {"code": 200, "message": "success", "data": {
-        "alert_total": total, "alert_healed": healed,
-        "alert_heal_rate": round(healed / total, 4) if total else 0.0,
-        "plan_total": plan_total, "plan_completed": plan_done,
-        "plan_success_rate": round(plan_done / plan_total, 4) if plan_total else 0.0,
-    }}
-
-
-@router.get("/alert-status-distribution")
-async def alert_status_distribution(user=Depends(require_any_user)):
-    """告警状态分布（pending/self_healed/resolved/awaiting_approval）"""
-    async with async_session() as session:
-        rows = (await session.execute(
-            select(Alert.status, func.count()).group_by(Alert.status)
-        )).all()
-    dist = {status: cnt for status, cnt in rows}
-    return {"code": 200, "message": "success", "data": {
-        "distribution": [
-            {"status": s, "count": dist.get(s, 0)}
-            for s in ("pending", "self_healed", "resolved", "awaiting_approval")
-        ],
-        "total": sum(dist.values()),
-    }}
 
 
 # ============ v2 动作分类口径（供 action_stat / action_timeline 使用） ============

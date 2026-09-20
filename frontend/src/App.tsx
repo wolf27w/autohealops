@@ -31,7 +31,7 @@ import ApprovalFlows from './pages/ApprovalFlows'
 import IMGroups from './pages/IMGroups'
 import KnowledgeBase from './pages/KnowledgeBase'
 import AuditTrace from './pages/AuditTrace'
-import StatsDashboard from './pages/StatsDashboard'
+import Reports from './pages/Reports'
 import UserManagement from './pages/UserManagement'
 import PlatformSettings from './pages/PlatformSettings'
 import LogSources from './pages/LogSources'
@@ -75,36 +75,37 @@ export default function App() {
         <Route path="clusters" element={<ClusterList />} />
         <Route path="clusters/:id" element={<ClusterDetail />} />
         <Route path="clusters/:id/workloads/:kind/:namespace/:name" element={<ServiceDetail />} />
-        <Route path="alerts" element={<AlertList />} />
+        <Route path="alerts" element={<Navigate to="/alert-handling" replace />} />
         <Route path="tickets" element={<Tickets />} />
-        <Route path="approvals" element={<ApprovalList />} />
-        <Route path="records" element={<ProcessingRecords />} />
+        <Route path="approvals" element={<Navigate to="/alert-handling" replace />} />
+        <Route path="records" element={<Navigate to="/alert-handling" replace />} />
         <Route path="alert-handling" element={<AlertHandling />} />
         <Route path="strategy" element={<RequireRole role="admin"><StrategyConfig /></RequireRole>} />
         <Route path="notify-center" element={<RequireRole role="admin"><NotificationCenter /></RequireRole>} />
         <Route path="user-permission" element={<RequireRole role="admin"><UserPermission /></RequireRole>} />
-        <Route path="notifications" element={<RequireRole role="admin"><NotificationConfig /></RequireRole>} />
+        <Route path="notifications" element={<Navigate to="/notify-center" replace />} />
         <Route path="ai-models" element={<RequireRole role="admin"><AIConfig /></RequireRole>} />
-        <Route path="prompts" element={<RequireRole role="admin"><PromptTemplates /></RequireRole>} />
-        <Route path="alert-policies" element={<RequireRole role="admin"><AlertPolicies /></RequireRole>} />
+        <Route path="prompts" element={<Navigate to="/ai-models" replace />} />
+        <Route path="alert-policies" element={<Navigate to="/strategy" replace />} />
         <Route path="log-sources" element={<RequireRole role="admin"><LogSources /></RequireRole>} />
-        <Route path="self-heal-rules" element={<RequireRole role="admin"><SelfHealRules /></RequireRole>} />
+        <Route path="self-heal-rules" element={<Navigate to="/strategy" replace />} />
         <Route path="executions/:planId" element={<ExecutionDetail />} />
-        <Route path="batch" element={<BatchOperation />} />
+        <Route path="batch" element={<Navigate to="/alert-handling" replace />} />
         <Route path="custom-tasks" element={<RequireRole role="admin"><CustomTasks /></RequireRole>} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
-        <Route path="fault-diagnosis" element={<FaultDiagnosis />} />
+        <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />
         <Route path="fault-diagnosis/cluster" element={<FaultDiagnosis category="cluster" />} />
         <Route path="fault-diagnosis/app" element={<FaultDiagnosis category="app" />} />
-        <Route path="permissions" element={<RequireRole role="admin"><Permissions /></RequireRole>} />
+        <Route path="permissions" element={<Navigate to="/user-permission" replace />} />
         <Route path="knowledge" element={<KnowledgeBase />} />
         <Route path="audit" element={<AuditTrace />} />
-        <Route path="stats" element={<StatsDashboard />} />
-        <Route path="users" element={<RequireRole role="admin"><UserManagement /></RequireRole>} />
-        <Route path="projects" element={<RequireRole role="admin"><ProjectManagement /></RequireRole>} />
-        <Route path="approval-flows" element={<RequireRole role="admin"><ApprovalFlows /></RequireRole>} />
-        <Route path="im-groups" element={<RequireRole role="admin"><IMGroups /></RequireRole>} />
+        <Route path="reports" element={<Reports />} />
+        <Route path="stats" element={<Navigate to="/reports" replace />} />
+        <Route path="users" element={<Navigate to="/user-permission" replace />} />
+        <Route path="projects" element={<Navigate to="/user-permission" replace />} />
+        <Route path="approval-flows" element={<Navigate to="/strategy" replace />} />
+        <Route path="im-groups" element={<Navigate to="/notify-center" replace />} />
         <Route path="settings" element={<RequireRole role="admin"><PlatformSettings /></RequireRole>} />
       </Route>
     </Routes>

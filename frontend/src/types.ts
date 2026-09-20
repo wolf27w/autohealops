@@ -404,3 +404,45 @@ export interface LogSource {
   updated_at?: string
   [key: string]: unknown
 }
+
+// ============ 工单（N1：集中类型定义，避免各页自写重复 interface） ============
+export interface Ticket {
+  id: number
+  ticket_no: string
+  title: string
+  description: string
+  source: string
+  alert_id: number | null
+  approval_id: number | null
+  cluster_id: number | null
+  cluster_name: string
+  db_connection_id: number | null
+  db_name: string
+  namespace: string
+  resource_name: string
+  priority: string
+  status: string
+  assignee_id: number | null
+  assignee_name: string
+  created_by: number | null
+  creator_name: string
+  resolved_at: string
+  closed_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface TicketComment {
+  id: number
+  ticket_id: number
+  user_id: number | null
+  username: string
+  type: string
+  content: string
+  created_at: string
+}
+
+export interface TicketDetail {
+  ticket: Ticket
+  comments: TicketComment[]
+}

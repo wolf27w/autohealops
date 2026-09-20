@@ -3,7 +3,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
-  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, User, Workload,
+  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, Ticket, TicketComment, TicketDetail, User, Workload,
 } from '../types'
 
 const api = axios.create({
@@ -46,6 +46,7 @@ const http = {
   get: <T = unknown>(url: string, config?: AxiosRequestConfig) => api.get(url, config) as Promise<T>,
   post: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) => api.post(url, data, config) as Promise<T>,
   put: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) => api.put(url, data, config) as Promise<T>,
+  patch: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) => api.patch(url, data, config) as Promise<T>,
   delete: <T = unknown>(url: string, config?: AxiosRequestConfig) => api.delete(url, config) as Promise<T>,
 }
 
@@ -205,7 +206,6 @@ export const searchAudit = (params: PageParams) => http.get('/audit/search', { p
 export const verifyAuditChain = () => http.post('/audit/verify-chain')
 
 // ============ 统计 ============
-export const getStatsOverview = () => http.get('/stats/overview')
 
 export interface DashboardParams {
   range?: string
@@ -218,8 +218,6 @@ export const getDashboard = (params?: DashboardParams) =>
 export const getPlatformHealth = () => http.get<PlatformHealth>('/stats/platform-health')
 export const getAIEffectiveness = (range: string = '7d') => http.get('/stats/ai-effectiveness', { params: { range } })
 export const getModelCost = (range: string = '7d') => http.get('/stats/model-cost', { params: { range } })
-export const getRepairSuccessRate = () => http.get('/stats/repair-success-rate')
-export const getAlertStatusDistribution = () => http.get('/stats/alert-status-distribution')
 // 报表定时推送（C4）
 export const getReportSchedules = () => http.get('/report-schedules')
 export const createReportSchedule = (data: Payload) => http.post('/report-schedules', data)
@@ -374,5 +372,17 @@ export const deleteSubscription = (id: number) => http.delete(`/subscriptions/${
 // ============ 风险评分策略 ============
 export const getRiskPolicy = () => http.get('/decisions/risk-policy')
 export const updateRiskPolicy = (data: Payload) => http.put('/decisions/risk-policy', data)
+
+// ============ 工单（N1） ============
+export const getTickets = (params?: PageParams) => http.get<PageResult<Ticket>>('/tickets', { params })
+export const getTicket = (id: number) => http.get<TicketDetail>(`/tickets/${id}`)
+export const createTicket = (data: Payload) => http.post<Ticket>('/tickets', data)
+export const createTicketFromAlert = (alertId: number) => http.post<Ticket>(`/tickets/from-alert/${alertId}`)
+export const createTicketFromApproval = (approvalId: number) => http.post<Ticket>(`/tickets/from-approval/${approvalId}`)
+export const updateTicket = (id: number, data: Payload) => http.patch<Ticket>(`/tickets/${id}`, data)
+export const assignTicket = (id: number, assigneeId: number | null) => http.post<Ticket>(`/tickets/${id}/assign`, { assignee_id: assigneeId })
+export const addTicketComment = (id: number, content: string) => http.post<TicketComment>(`/tickets/${id}/comments`, { content })
+export const deleteTicket = (id: number) => http.delete<{ id: number }>(`/tickets/${id}`)
+export const getTicketComments = (id: number) => http.get<TicketComment[]>(`/tickets/${id}/comments`)
 
 export default api

@@ -192,8 +192,10 @@ function LogRuleTab() {
       <Modal title={editing ? '编辑规则' : '新增规则'} open={open} onOk={save} onCancel={() => setOpen(false)}>
         <Form form={form} layout="vertical" initialValues={{ cluster_id: 0, time_window: 5, threshold: 3, severity: 'medium', enabled: true }}>
           <Form.Item name="name" label="规则名" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="index_pattern" label="ES 索引（如 app-*）" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="log_source_id" label="日志源（不选=默认源）">
+          <Form.Item name="index_pattern" label="ES 索引（如 app-*）" rules={[{ required: true }]}
+            tooltip="不选日志源时用这里的索引；**选了日志源则以该源的索引为准**（此处会被忽略）"><Input /></Form.Item>
+          <Form.Item name="log_source_id" label="日志源（不选=默认源）"
+            tooltip="选择后使用该日志源（地址/账号/索引都取该源）">
             <Select allowClear placeholder="默认源（不指定）" options={sourceOptions} />
           </Form.Item>
           <Form.Item name="keywords" label="关键词（JSON 数组，如 [&apos;error&apos;,&apos;exception&apos;]）" rules={[{ required: true }]}><Input placeholder='["error","exception"]' /></Form.Item>
