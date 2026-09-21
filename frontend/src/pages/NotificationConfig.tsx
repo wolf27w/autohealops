@@ -33,13 +33,6 @@ const SEND_MODE_OPTIONS = [
   { value: 'app', label: '应用机器人（飞书自建应用）' },
 ]
 
-const RECEIVE_ID_TYPE_OPTIONS = [
-  { value: 'chat_id', label: '群 chat_id（oc_xxx）' },
-  { value: 'user_id', label: '用户 user_id' },
-  { value: 'open_id', label: '用户 open_id（ou_xxx）' },
-  { value: 'email', label: '邮箱' },
-]
-
 const FEEDBACK_OPTIONS = [
   { value: 'text', label: '文本回复' },
   { value: 'button', label: '卡片按钮' },
@@ -160,6 +153,7 @@ export default function NotificationConfig() {
     // 应用机器人模式：清掉 webhook，避免误填；非应用模式清掉应用字段
     if (payload.send_mode === 'app') {
       payload.webhook_url = ''
+      payload.receive_id_type = 'chat_id'
       if (!payload.app_secret) delete payload.app_secret
     } else {
       payload.app_id = ''
@@ -291,12 +285,9 @@ export default function NotificationConfig() {
               <Form.Item name="app_secret" label="App Secret（编辑留空=不修改）">
                 <Input.Password placeholder="应用凭证 App Secret" />
               </Form.Item>
-              <Form.Item name="receive_id_type" label="接收方类型">
-                <Select options={RECEIVE_ID_TYPE_OPTIONS} />
-              </Form.Item>
-              <Form.Item name="receive_id" label="接收方" rules={[{ required: true }]}
-                tooltip="通知发往的目标：群 chat_id（oc_xxx）、用户 user_id/open_id 或邮箱。机器人必须在目标群内">
-                <Input placeholder="如 oc_xxxxx（群）或 ou_xxx / user_id" />
+              <Form.Item name="receive_id" label="通知群 chat_id" rules={[{ required: true }]}
+                tooltip="应用机器人是一个独立身份，可给多个群/人发消息，所以要指定发到哪个群：填群 chat_id（oc_xxx）。群机器人 webhook 则因 URL 已绑定群而无需此项">
+                <Input placeholder="oc_xxxxx（把机器人拉进群后可在群设置/链接里看到）" />
               </Form.Item>
             </>
           ) : (
