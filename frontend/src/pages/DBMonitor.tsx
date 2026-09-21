@@ -1,9 +1,9 @@
-// 数据库监控：按数据库切换，展示全部监控指标（分组）+ 指标趋势
+// 数据库监控：按数据库切换，一屏展示全部监控项（+ 慢 SQL）
+// 不同数据库类型（mysql/pg/oracle）采集项不同，按采集到的内容展示
 import { useEffect, useState } from 'react'
-import { Card, Select, Space, Table, Tag, Tabs, Button, Empty, Spin } from 'antd'
+import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
-import { Line } from '@ant-design/charts'
-import { getDBConnections, getDbLatestMetrics, getDbTrends } from '../services/api'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL } from '../services/api'
 
 interface Metric {
   metric_type: string
@@ -12,13 +12,26 @@ interface Metric {
   detail: string
   sampled_at: string
 }
-interface TrendPoint { metric_name: string; value: number; sampled_at: string }
+interface SlowSQL {
+  id: number
+  sql_text?: string
+  schema_name?: string
+  exec_count?: number
+  avg_latency_ms?: number
+  max_latency_ms?: number
+  sampled_at?: string
+}
 interface DBConn { id: number; name: string; db_type: string }
 
 const TYPE_LABEL: Record<string, string> = {
   connections: '连接', throughput: '吞吐', network: '网络', cache: '缓存/缓冲池',
-  query_quality: '查询质量', innodb: 'InnoDB 锁/事务', tablespace: '表空间/文件',
+  query_quality: '查询质量', innodb: 'InnoDB', tablespace: '表空间/文件',
   config: '参数配置', lock_wait: '锁等待', replication: '主从复制', rate: '速率',
+}
+const TYPE_COLOR: Record<string, string> = {
+  connections: 'blue', throughput: 'geekblue', network: 'cyan', cache: 'green',
+  query_quality: 'orange', innodb: 'purple', tablespace: 'magenta', config: 'default',
+  lock_wait: 'red', replication: 'gold', rate: 'lime',
 }
 
 const NAME_LABEL: Record<string, string> = {
@@ -34,45 +47,35 @@ const NAME_LABEL: Record<string, string> = {
   row_lock_waits: '行锁等待', row_lock_time_avg_ms: '行锁平均等待(ms)', row_lock_current_waits: '当前行锁等待',
   deadlocks: '死锁', db_size_mb: '库大小(MB)', table_count: '表数量', top_tables: 'Top大表(MB)',
   open_tables: '打开表', table_open_cache_usage_pct: '表缓存使用率(%)', open_files: '打开文件',
-  opened_tables: '已打开表累计', long_query_time: '慢查询阈值(s)', slow_query_log: '慢查询日志(1开)',
+  opened_tables: '已打开表累计', long_query_time: '慢查询阈值(s)', slow_query_log: '慢查询日志(1已开)',
   innodb_buffer_pool_size_mb: '缓冲池配置(MB)', slave_running: '从库运行(1正常)', replication_lag_seconds: '复制延迟(s)',
-  lock_wait_count: '锁等待数', bytes_received: '接收字节', bytes_sent: '发送字节',
+  lock_wait_count: '锁等待数', bytes_received: '累计接收字节', bytes_sent: '累计发送字节',
   rx_bytes_per_sec: '接收速率(B/s)', tx_bytes_per_sec: '发送速率(B/s)',
-  com_select: 'SELECT', com_insert: 'INSERT', com_update: 'UPDATE', com_delete: 'DELETE',
-  com_commit: 'COMMIT', com_rollback: 'ROLLBACK',
+  com_select: 'SELECT 次数', com_insert: 'INSERT 次数', com_update: 'UPDATE 次数', com_delete: 'DELETE 次数',
+  com_commit: 'COMMIT 次数', com_rollback: 'ROLLBACK 次数',
 }
 
 export default function DBMonitor() {
   const [conns, setConns] = useState<DBConn[]>([])
   const [connId, setConnId] = useState<number>()
   const [metrics, setMetrics] = useState<Metric[]>([])
+  const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
   const [loading, setLoading] = useState(false)
-  const [activeType, setActiveType] = useState<string>('')
-  const [trends, setTrends] = useState<TrendPoint[]>([])
 
   useEffect(() => { getDBConnections().then((d) => setConns((d || []) as DBConn[])) }, [])
 
-  const loadMetrics = (cid?: number) => {
+  const load = (cid?: number) => {
     const id = cid ?? connId
     if (!id) return
     setLoading(true)
-    getDbLatestMetrics(id).then((d) => {
-      const arr = (d || []) as Metric[]
-      setMetrics(arr)
-      const types = Array.from(new Set(arr.map((m) => m.metric_type)))
-      setActiveType((t) => (t && types.includes(t) ? t : (types[0] || '')))
-    }).finally(() => setLoading(false))
+    Promise.all([
+      getDbLatestMetrics(id).then((d) => setMetrics((d || []) as Metric[])),
+      getSlowSQL(id, 20).then((d) => setSlowSQL((d || []) as SlowSQL[])).catch(() => setSlowSQL([])),
+    ]).finally(() => setLoading(false))
   }
-  useEffect(() => { loadMetrics() }, [connId])
+  useEffect(() => { load() }, [connId])
 
-  const loadTrend = (mt: string) => {
-    if (!connId) return
-    getDbTrends(connId, mt).then((d) => setTrends((d || []) as TrendPoint[]))
-  }
-  useEffect(() => { if (activeType && connId) loadTrend(activeType) }, [activeType, connId])
-
-  const types = Array.from(new Set(metrics.map((m) => m.metric_type)))
-  const byType = (t: string) => metrics.filter((m) => m.metric_type === t)
+  const cur = conns.find((c) => c.id === connId)
   const sampledAt = metrics[0]?.sampled_at || '-'
 
   const fmt = (m: Metric) => {
@@ -82,10 +85,24 @@ export default function DBMonitor() {
     return v
   }
 
-  const columns = [
-    { title: '指标', dataIndex: 'metric_name', width: 240, render: (n: string) => NAME_LABEL[n] || n },
-    { title: '值', width: 160, render: (_: unknown, m: Metric) => <b>{fmt(m)}</b> },
+  const metricCols = [
+    { title: '分类', dataIndex: 'metric_type', width: 120,
+      render: (t: string) => <Tag color={TYPE_COLOR[t] || 'default'}>{TYPE_LABEL[t] || t}</Tag>,
+      filters: Array.from(new Set(metrics.map((m) => m.metric_type))).map((t) => ({ text: TYPE_LABEL[t] || t, value: t })),
+      onFilter: (v: unknown, m: Metric) => m.metric_type === v },
+    { title: '监控项', dataIndex: 'metric_name', width: 220, render: (n: string) => NAME_LABEL[n] || n },
+    { title: '值', width: 150, render: (_: unknown, m: Metric) => <b>{fmt(m)}</b> },
     { title: '说明/明细', dataIndex: 'detail', ellipsis: true, render: (v: string) => v || '-' },
+  ]
+
+  const slowCols = [
+    { title: '平均耗时(ms)', dataIndex: 'avg_latency_ms', width: 120, sorter: (a: SlowSQL, b: SlowSQL) => (a.avg_latency_ms || 0) - (b.avg_latency_ms || 0),
+      render: (v: number) => <b style={{ color: (v || 0) > 1000 ? '#cf1322' : undefined }}>{v ?? '-'}</b> },
+    { title: '最大(ms)', dataIndex: 'max_latency_ms', width: 100 },
+    { title: '次数', dataIndex: 'exec_count', width: 80 },
+    { title: '库', dataIndex: 'schema_name', width: 120, render: (v: string) => v || '-' },
+    { title: '采样时间', dataIndex: 'sampled_at', width: 170 },
+    { title: 'SQL', dataIndex: 'sql_text', ellipsis: true, render: (v: string) => <Tooltip title={<pre style={{ maxWidth: 700, whiteSpace: 'pre-wrap' }}>{v}</pre>}>{v}</Tooltip> },
   ]
 
   return (
@@ -95,34 +112,25 @@ export default function DBMonitor() {
           <span style={{ fontWeight: 600 }}>数据库监控</span>
           <Select placeholder="选择数据库" style={{ width: 240 }} value={connId} onChange={setConnId}
             options={conns.map((c) => ({ value: c.id, label: `${c.name}（${c.db_type}）` }))} />
-          <Button icon={<ReloadOutlined />} onClick={() => loadMetrics()} disabled={!connId}>刷新</Button>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>采集时间：{sampledAt}（数据来自最近一次诊断/采集）</span>
+          <Button icon={<ReloadOutlined />} onClick={() => load()} disabled={!connId}>刷新</Button>
+          {cur && <Tag color="blue">{cur.db_type}</Tag>}
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>采集时间：{sampledAt}</span>
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>（不同数据库类型采集项不同）</span>
         </Space>
       </Card>
 
       {!connId ? <Empty description="请选择数据库" /> : loading ? <Spin /> : (
         <>
-          <Tabs
-            activeKey={activeType}
-            onChange={setActiveType}
-            items={types.map((t) => ({
-              key: t,
-              label: `${TYPE_LABEL[t] || t}（${byType(t).length}）`,
-              children: (
-                <>
-                  <Table rowKey="metric_name" size="small" dataSource={byType(t)} columns={columns} pagination={false} />
-                  <Card size="small" title={`${TYPE_LABEL[t] || t} 趋势`} style={{ marginTop: 12 }}>
-                    {trends.length ? (
-                      <Line data={trends} xField="sampled_at" yField="value" seriesField="metric_name" height={260} smooth />
-                    ) : <div style={{ color: '#999', padding: 16 }}>暂无趋势数据（多诊断几次形成趋势）</div>}
-                  </Card>
-                </>
-              ),
-            }))}
-          />
-          <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
-            共 {metrics.length} 项指标 · <Tag>{types.length} 组</Tag>
-          </div>
+          <Card size="small" title={`监控指标（共 ${metrics.length} 项 · ${new Set(metrics.map((m) => m.metric_type)).size} 类）`}>
+            <Table rowKey="metric_name" size="small" dataSource={metrics} columns={metricCols}
+              pagination={false} scroll={{ y: 520 }} />
+          </Card>
+
+          <Card size="small" title={`慢 SQL（Top ${slowSQL.length}）`} style={{ marginTop: 12 }}>
+            {slowSQL.length
+              ? <Table rowKey="id" size="small" dataSource={slowSQL} columns={slowCols} pagination={false} />
+              : <div style={{ color: '#999', padding: 8 }}>暂无慢 SQL 采集数据</div>}
+          </Card>
         </>
       )}
     </div>
