@@ -159,9 +159,10 @@ export default function ApprovalFlows() {
     const payload = { name: values.name, description: values.description, nodes, is_active: values.is_active ?? true }
     setSaving(true)
     try {
-      if (editing) await updateApprovalFlow(editing.id, payload)
-      else await createApprovalFlow(payload)
-      message.success('已保存')
+      const res = editing ? await updateApprovalFlow(editing.id, payload) : await createApprovalFlow(payload)
+      const w = (res as { warning?: string } | undefined)?.warning
+      if (w) message.warning(w, 8)
+      else message.success('已保存')
       setOpen(false)
       load()
     } finally {

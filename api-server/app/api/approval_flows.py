@@ -53,10 +53,11 @@ def _validate_nodes(nodes) -> tuple[bool, str]:
     return True, ""
 
 
-async def _validate_users_exist(nodes) -> tuple[bool, str]:
-    """校验「指定用户」节点：允许 平台用户名 或 飞书 open_id（ou_/on_ 开头）
+async def _check_users_exist(nodes) -> list[str]:
+    """检查「指定用户」节点，返回既不是平台用户名、也不是飞书 open_id 的条目（不阻断保存）
 
-    飞书 @ 必须用 open_id；平台用户名则通过「用户管理」里的 feishu_open_id 映射后 @。
+    飞书 @ 必须用 open_id；填平台用户名时用「用户管理」里的 feishu_open_id 映射后 @。
+    其余值（如中文姓名）允许保存，但群里 @ 不到。
     """
     names: list[str] = []
     for n in nodes or []:
@@ -67,16 +68,12 @@ async def _validate_users_exist(nodes) -> tuple[bool, str]:
                     continue  # 飞书 open_id，直接 @
                 names.append(s)
     if not names:
-        return True, ""
+        return []
     from app.models import User
     async with async_session() as session:
         rows = (await session.execute(select(User.username).where(User.username.in_(names)))).all()
     exists = {r[0] for r in rows}
-    missing = [x for x in names if x not in exists]
-    if missing:
-        return False, (f"指定用户既不是平台用户名、也不是飞书 open_id（ou_/on_ 开头）：{', '.join(missing)}"
-                       f"。飞书 @ 必须用 open_id；若填平台用户名，需在「用户管理」里配置其 feishu_open_id")
-    return True, ""
+    return [x for x in names if x not in exists]
 
 
 @router.get("")
@@ -96,9 +93,7 @@ async def create_flow(payload: dict, user=Depends(require_admin)):
     ok, err = _validate_nodes(nodes)
     if not ok:
         return {"code": 400, "message": err, "data": None}
-    ok, err = await _validate_users_exist(nodes)
-    if not ok:
-        return {"code": 400, "message": err, "data": None}
+    missing = await _check_users_exist(nodes)
     async with async_session() as session:
         f = ApprovalFlow(
             name=name,
@@ -111,11 +106,14 @@ async def create_flow(payload: dict, user=Depends(require_admin)):
         session.add(f)
         await session.commit()
         await session.refresh(f)
-        return {"code": 200, "message": "success", "data": _flow_dict(f)}
+        return {"code": 200, "message": "success", "data": _flow_dict(f),
+                "warning": (f"以下指定用户既非平台用户名、也非飞书 open_id（ou_ 开头），群里 @ 不到："
+                            f"{', '.join(missing)}" if missing else None)}
 
 
 @router.put("/{flow_id}")
 async def update_flow(flow_id: int, payload: dict, user=Depends(require_admin)):
+    missing: list[str] = []
     async with async_session() as session:
         f = await session.get(ApprovalFlow, flow_id)
         if not f:
@@ -128,9 +126,7 @@ async def update_flow(flow_id: int, payload: dict, user=Depends(require_admin)):
             ok, err = _validate_nodes(payload["nodes"])
             if not ok:
                 return {"code": 400, "message": err, "data": None}
-            ok, err = await _validate_users_exist(payload["nodes"])
-            if not ok:
-                return {"code": 400, "message": err, "data": None}
+            missing = await _check_users_exist(payload["nodes"])
             f.nodes = json.dumps(payload["nodes"], ensure_ascii=False)
         if "is_active" in payload:
             # 至少保留一个启用流程
@@ -143,7 +139,9 @@ async def update_flow(flow_id: int, payload: dict, user=Depends(require_admin)):
             f.is_active = payload["is_active"]
         await session.commit()
         await session.refresh(f)
-    return {"code": 200, "message": "success", "data": _flow_dict(f)}
+    return {"code": 200, "message": "success", "data": _flow_dict(f),
+            "warning": (f"以下指定用户既非平台用户名、也非飞书 open_id（ou_ 开头），群里 @ 不到："
+                        f"{', '.join(missing)}" if missing else None)}
 
 
 @router.delete("/{flow_id}")
