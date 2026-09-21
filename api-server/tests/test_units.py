@@ -269,5 +269,28 @@ class TestMessagingRespOk(unittest.TestCase):
         self.assertFalse(resp_ok("feishu", {"status": 500, "body": "oops"}, url))
 
 
+class TestNotifyConfigValidate(unittest.TestCase):
+    """通知渠道配置校验（创建/更新共用，重点：应用机器人模式）"""
+
+    def _v(self, payload):
+        from app.api.notifications import _validate_config
+        return _validate_config(payload)
+
+    def test_webhook_needs_url(self):
+        self.assertTrue(self._v({"channel_type": "feishu", "name": "x"}))
+        self.assertFalse(self._v({"channel_type": "feishu", "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}))
+
+    def test_app_mode_requires_creds_and_target(self):
+        base = {"channel_type": "feishu", "send_mode": "app"}
+        self.assertTrue(self._v(base))
+        self.assertTrue(self._v({**base, "app_id": "cli_x", "app_secret": "s"}))          # 缺接收方
+        self.assertTrue(self._v({**base, "app_id": "cli_x", "receive_id": "oc_1"}))      # 缺 secret
+        self.assertFalse(self._v({**base, "app_id": "cli_x", "app_secret": "s", "receive_id": "oc_1"}))
+
+    def test_app_mode_feishu_only(self):
+        self.assertTrue(self._v({"channel_type": "dingtalk", "send_mode": "app",
+                                 "app_id": "a", "app_secret": "s", "receive_id": "r"}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

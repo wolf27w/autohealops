@@ -144,6 +144,11 @@ export interface NotificationConfig {
   namespaces: string
   transport_mode: string
   feedback_mode: string
+  send_mode?: string // webhook / app（飞书应用机器人）
+  app_id?: string
+  app_secret?: string
+  receive_id?: string
+  receive_id_type?: string
   stream_config: string
   im_template: string
   created_at?: string

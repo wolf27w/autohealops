@@ -28,6 +28,13 @@ class NotificationConfig(Base):
     secret: Mapped[str] = mapped_column(String(200), default="")
     # 飞书 Encrypt Key 模式验签密钥（仅 feishu 使用；为空则走 X-Lark-Request-Token 验签）
     encrypt_key: Mapped[str] = mapped_column(String(200), default="")
+    # 应用机器人模式（飞书自建应用）：渠道自带 App 凭证，消息由该机器人经 IM API 发出
+    # 配了 app_id 时优先走应用 API（群/人）；否则回落到 webhook_url 群机器人
+    app_id: Mapped[str] = mapped_column(String(100), default="")
+    app_secret: Mapped[str] = mapped_column(String(200), default="")
+    # 应用模式接收方：chat_id（群 oc_xxx）/ user_id / open_id / email，由 receive_id_type 决定
+    receive_id: Mapped[str] = mapped_column(String(200), default="")
+    receive_id_type: Mapped[str] = mapped_column(String(20), default="chat_id")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # 用途路由：alert / approval_duty / approval_admin / both
     scene: Mapped[str] = mapped_column(String(20), default="both", index=True)
@@ -35,6 +42,8 @@ class NotificationConfig(Base):
     namespaces: Mapped[str] = mapped_column(Text, default="")
     # 传输模式：webhook=回调（有公网）/ long_conn=长连接（无公网，钉钉 Stream / 飞书长连接）
     transport_mode: Mapped[str] = mapped_column(String(20), default="webhook")
+    # 发送方式：webhook=群机器人 webhook / app=应用机器人（飞书自建应用 App ID+Secret）
+    send_mode: Mapped[str] = mapped_column(String(20), default="webhook")
     # 反馈方式：text=文本回复 / button=卡片按钮 / both=都支持
     feedback_mode: Mapped[str] = mapped_column(String(20), default="text")
     # 长连接/回调参数 JSON（钉钉 Stream appKey/appSecret、飞书 app_id/secret 等）

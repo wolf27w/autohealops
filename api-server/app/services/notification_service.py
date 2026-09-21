@@ -196,30 +196,50 @@ async def _storm_suppressed(alert: Alert) -> bool:
 
 
 async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_id: int | None = None,
-                                   at_all: bool = False, receiver: str = "") -> None:
-    """统一发送 webhook（按渠道分发 + 重试 3 次 + 记录日志）
+                                   at_all: bool = False, receiver: str = "",
+                                   at_open_ids: list[str] | None = None) -> None:
+    """统一发送（按渠道配置分发：应用机器人优先 → 群机器人 webhook；重试 3 次 + 记录日志）
 
-    成功判定走 messaging.resp_ok（HTTP 2xx + 业务返回码为 0），地址非法直接失败不重试。
+    - 飞书 send_mode=app（或填了 app_id）→ 走应用 API（渠道自带 App 凭证，发到 receive_id）
+    - 其它 → 群机器人 webhook（resp_ok 按返回码判成败；地址非法直接失败不重试）
     """
     from app.services.messaging import check_webhook_url, resp_ok
 
-    bad = check_webhook_url(cfg.channel_type, cfg.webhook_url)
-    if bad:
-        await _record_log(cfg.id, alert_id, "failed", content, bad,
-                          channel=cfg.channel_type, receiver=receiver)
-        return
+    is_app = cfg.channel_type == "feishu" and (cfg.send_mode == "app" or (cfg.app_id or "").strip())
+    if is_app:
+        if not (cfg.app_id or "").strip() or not (cfg.app_secret or "").strip():
+            await _record_log(cfg.id, alert_id, "failed", content, "应用机器人模式缺 App ID / App Secret",
+                              channel=cfg.channel_type, receiver=receiver)
+            return
+        if not (cfg.receive_id or "").strip():
+            await _record_log(cfg.id, alert_id, "failed", content, "应用机器人模式缺接收方（receive_id：群 chat_id / 用户 user_id）",
+                              channel=cfg.channel_type, receiver=receiver)
+            return
+    else:
+        bad = check_webhook_url(cfg.channel_type, cfg.webhook_url)
+        if bad:
+            await _record_log(cfg.id, alert_id, "failed", content, bad,
+                              channel=cfg.channel_type, receiver=receiver)
+            return
 
     success = False
     last_err = ""
     for attempt in range(3):
         try:
-            if cfg.channel_type == "dingtalk":
-                resp = await send_dingtalk_text(cfg.webhook_url, content, at_all=at_all)
-            elif cfg.channel_type == "feishu":
-                resp = await send_feishu_webhook_text(cfg.webhook_url, content)
+            if is_app:
+                from app.services.feishu_service import send_feishu_message
+                resp = await send_feishu_message(cfg.receive_id, cfg.receive_id_type or "chat_id",
+                                                 content, cfg.app_id, cfg.app_secret, at_open_ids=at_open_ids)
+                ok = resp.get("status") == "success"
             else:
-                resp = await send_wechat_text(cfg.webhook_url, content, at_all=at_all)
-            if resp_ok(cfg.channel_type, resp, cfg.webhook_url):
+                if cfg.channel_type == "dingtalk":
+                    resp = await send_dingtalk_text(cfg.webhook_url, content, at_all=at_all)
+                elif cfg.channel_type == "feishu":
+                    resp = await send_feishu_webhook_text(cfg.webhook_url, content)
+                else:
+                    resp = await send_wechat_text(cfg.webhook_url, content, at_all=at_all)
+                ok = resp_ok(cfg.channel_type, resp, cfg.webhook_url)
+            if ok:
                 success = True
                 break
             last_err = resp.get("body") or resp.get("status")
@@ -493,6 +513,14 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
     """
     text = f"【审批】待审批\n{plan_summary}\n风险等级：{risk_level}\n审批ID：{approval_id}\n请回复【批准/拒绝 + {approval_id}】"
 
+    # 应用凭证：优先节点绑定的通知配置（应用机器人模式），否则回落平台级（系统设置）
+    _app_id, _app_secret = "", ""
+    if notify_config_id:
+        async with async_session() as session:
+            _cfg = await session.get(NotificationConfig, notify_config_id)
+        if _cfg and (_cfg.app_id or "").strip():
+            _app_id, _app_secret = _cfg.app_id, _cfg.app_secret
+
     # 1. 个人消息（飞书应用 API，留痕）—— duty/admin/user/manager 节点；同时写站内消息（走 IM 同时写站内）
     if node_type in ("duty", "admin", "user", "manager"):
         from app.services.feishu_service import send_feishu_text
@@ -500,7 +528,7 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
         for u in targets:
             await write_in_app_message(u.id, "【审批】修复方案待审批", text, kind="approval", link="/approvals")
             if getattr(u, "feishu_user_id", ""):
-                resp = await send_feishu_text(u.feishu_user_id, text)
+                resp = await send_feishu_text(u.feishu_user_id, text, _app_id, _app_secret)
                 await _record_log(0, None, resp["status"], text, resp.get("body", ""),
                                   channel="feishu", receiver=u.feishu_user_id)
 
@@ -509,7 +537,12 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
         async with async_session() as session:
             cfg = await session.get(NotificationConfig, notify_config_id)
         if cfg and cfg.is_active:
-            await _send_webhook_with_retry(cfg, text, None, at_all=at_all, receiver=f"通知配置:{cfg.name}")
+            at_ids: list[str] = []
+            if at_duty:
+                _t = receiver_users if receiver_users is not None else (duty_users or [])
+                at_ids = [u.feishu_open_id for u in _t if getattr(u, "feishu_open_id", "")]
+            await _send_webhook_with_retry(cfg, text, None, at_all=at_all,
+                                           receiver=f"通知配置:{cfg.name}", at_open_ids=at_ids or None)
             return
 
     from app.services import messaging
@@ -557,18 +590,28 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
     for c in configs:
         try:
             fb_mode = c.feedback_mode or "text"
-            if not at_all and fb_mode in ("button", "both") and c.channel_type in ("dingtalk", "feishu"):
+            is_app = c.channel_type == "feishu" and (c.send_mode == "app" or (c.app_id or "").strip())
+            if is_app:
+                from app.services.feishu_service import send_feishu_message
+                resp = await send_feishu_message(c.receive_id, c.receive_id_type or "chat_id", text,
+                                                 c.app_id, c.app_secret)
+                ok = resp.get("status") == "success"
+            elif not at_all and fb_mode in ("button", "both") and c.channel_type in ("dingtalk", "feishu"):
                 buttons = messaging.build_approval_buttons(approval_id)
                 resp = await messaging.send_action_card(c.channel_type, c.webhook_url, "【审批】修复方案待审批", text, buttons)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
             elif c.channel_type == "dingtalk":
                 resp = await messaging.send_markdown(c.channel_type, c.webhook_url, "【审批】修复方案待审批", text)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
             elif c.channel_type == "wechat":
                 resp = await messaging.send_markdown(c.channel_type, c.webhook_url, "【审批】修复方案待审批", text)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
             elif c.channel_type == "feishu":
                 resp = await messaging.send_text(c.channel_type, c.webhook_url, text, at_all=at_all)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
             else:
                 continue
-            await _record_log(c.id, None, "success" if messaging.resp_ok(c.channel_type, resp, c.webhook_url) else "failed", text,
+            await _record_log(c.id, None, "success" if ok else "failed", text,
                               resp.get("body", ""), channel=c.channel_type)
         except Exception as e:  # noqa: BLE001
             await _record_log(c.id, None, "failed", text, str(e), channel=c.channel_type)

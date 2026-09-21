@@ -27,6 +27,19 @@ const TRANSPORT_OPTIONS = [
   { value: 'long_conn', label: '长连接（无公网，待 SDK）' },
 ]
 
+// 发送方式：群机器人 webhook / 应用机器人（飞书自建应用 App ID+Secret，经 IM API 发出）
+const SEND_MODE_OPTIONS = [
+  { value: 'webhook', label: '群机器人 webhook' },
+  { value: 'app', label: '应用机器人（飞书自建应用）' },
+]
+
+const RECEIVE_ID_TYPE_OPTIONS = [
+  { value: 'chat_id', label: '群 chat_id（oc_xxx）' },
+  { value: 'user_id', label: '用户 user_id' },
+  { value: 'open_id', label: '用户 open_id（ou_xxx）' },
+  { value: 'email', label: '邮箱' },
+]
+
 const FEEDBACK_OPTIONS = [
   { value: 'text', label: '文本回复' },
   { value: 'button', label: '卡片按钮' },
@@ -67,6 +80,9 @@ export default function NotificationConfig() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<NotificationConfig | null>(null)
   const [form] = Form.useForm()
+  const channelType = Form.useWatch('channel_type', form)
+  const sendMode = Form.useWatch('send_mode', form)
+  const useAppMode = channelType === 'feishu' && sendMode === 'app'
 
   const load = () => {
     getNotificationConfigs().then((d) => setConfigs(d))
@@ -102,7 +118,7 @@ export default function NotificationConfig() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ transport_mode: 'webhook', feedback_mode: 'text', scene: 'both', namespaces: [] })
+    form.setFieldsValue({ transport_mode: 'webhook', feedback_mode: 'text', scene: 'both', namespaces: [], send_mode: 'webhook', receive_id_type: 'chat_id' })
     setModalOpen(true)
   }
 
@@ -116,6 +132,8 @@ export default function NotificationConfig() {
       secret: '', transport_mode: c.transport_mode, feedback_mode: c.feedback_mode,
       scene: c.scene || 'both', namespaces: c.namespaces || [],
       stream_config: c.stream_config || '', is_active: c.is_active,
+      send_mode: c.send_mode || 'webhook', app_id: c.app_id || '', app_secret: '',
+      receive_id: c.receive_id || '', receive_id_type: c.receive_id_type || 'chat_id',
       im_dingtalk: imTpl.dingtalk || '', im_wechat: imTpl.wechat || '', im_feishu: imTpl.feishu || '',
     })
     setModalOpen(true)
@@ -133,11 +151,21 @@ export default function NotificationConfig() {
       namespaces: Array.isArray(values.namespaces) ? values.namespaces : [],
       stream_config: values.stream_config || '',
       is_active: values.is_active ?? true,
+      send_mode: values.channel_type === 'feishu' ? (values.send_mode || 'webhook') : 'webhook',
       im_template,
     }
     delete payload.im_dingtalk
     delete payload.im_wechat
     delete payload.im_feishu
+    // 应用机器人模式：清掉 webhook，避免误填；非应用模式清掉应用字段
+    if (payload.send_mode === 'app') {
+      payload.webhook_url = ''
+      if (!payload.app_secret) delete payload.app_secret
+    } else {
+      payload.app_id = ''
+      payload.app_secret = ''
+      payload.receive_id = ''
+    }
     if (editing) {
       // 编辑时不传 secret（留空=不改），保留原值
       if (!payload.secret) delete payload.secret
@@ -209,7 +237,11 @@ export default function NotificationConfig() {
             <div style={{ fontWeight: 'bold' }}>
               {c.name} <Tag>{CHANNEL_OPTIONS.find((o) => o.value === c.channel_type)?.label || c.channel_type}</Tag>
             </div>
-            <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>{c.webhook_url}</div>
+            <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
+              {c.channel_type === 'feishu' && c.send_mode === 'app'
+                ? `应用机器人 · ${c.app_id || ''} → ${c.receive_id || ''}（${c.receive_id_type || 'chat_id'}）`
+                : c.webhook_url}
+            </div>
             <div style={{ fontSize: 12, marginBottom: 8 }}>
               用途：<Tag color={SCENE_COLOR[c.scene] || 'default'}>{SCENE_OPTIONS.find((o) => o.value === c.scene)?.label || c.scene}</Tag>
               {c.scene === 'alert' && c.namespaces?.length > 0 && (
@@ -245,7 +277,31 @@ export default function NotificationConfig() {
           <Form.Item name="channel_type" label="渠道" rules={[{ required: true }]}>
             <Select options={CHANNEL_OPTIONS} disabled={!!editing} />
           </Form.Item>
-          <Form.Item name="webhook_url" label="Webhook URL（飞书填群机器人 webhook）" rules={[{ required: true }]}><Input /></Form.Item>
+          {channelType === 'feishu' && (
+            <Form.Item name="send_mode" label="发送方式" rules={[{ required: true }]}
+              tooltip="群机器人 webhook：单向通知；应用机器人：填飞书自建应用 App ID/Secret，消息由该机器人经 IM API 发出">
+              <Select options={SEND_MODE_OPTIONS} />
+            </Form.Item>
+          )}
+          {useAppMode ? (
+            <>
+              <Form.Item name="app_id" label="App ID" rules={[{ required: true }]}>
+                <Input placeholder="cli_xxxxxxxx（飞书开放平台 → 自建应用）" />
+              </Form.Item>
+              <Form.Item name="app_secret" label="App Secret（编辑留空=不修改）">
+                <Input.Password placeholder="应用凭证 App Secret" />
+              </Form.Item>
+              <Form.Item name="receive_id_type" label="接收方类型">
+                <Select options={RECEIVE_ID_TYPE_OPTIONS} />
+              </Form.Item>
+              <Form.Item name="receive_id" label="接收方" rules={[{ required: true }]}
+                tooltip="通知发往的目标：群 chat_id（oc_xxx）、用户 user_id/open_id 或邮箱。机器人必须在目标群内">
+                <Input placeholder="如 oc_xxxxx（群）或 ou_xxx / user_id" />
+              </Form.Item>
+            </>
+          ) : (
+            <Form.Item name="webhook_url" label="Webhook URL（飞书填群机器人 webhook）" rules={[{ required: true }]}><Input /></Form.Item>
+          )}
           <Form.Item name="secret" label="加签密钥（编辑留空=不修改）"><Input.Password /></Form.Item>
           <Form.Item name="scene" label="用途" rules={[{ required: true }]}>
             <Select options={SCENE_OPTIONS} />
