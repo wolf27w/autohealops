@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """AI 服务辅助 API：模型管理、嵌入、RAG、日志"""
+import json
+import re
+
 from fastapi import APIRouter
 from sqlalchemy import case, func, select
 
@@ -157,6 +160,28 @@ async def rag_dedup():
     return {"code": 200, "message": "success", "data": data}
 
 
+def _extract_json_dict(text: str) -> dict | None:
+    """从模型输出里健壮地取出 JSON 对象（容忍 ```json 代码块/前后说明文字）"""
+    t = (text or "").strip()
+    if not t:
+        return None
+    t = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", t)
+    t = re.sub(r"\s*```$", "", t).strip()
+    try:
+        v = json.loads(t)
+        return v if isinstance(v, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        pass
+    i, j = t.find("{"), t.rfind("}")
+    if i >= 0 and j > i:
+        try:
+            v = json.loads(t[i:j + 1])
+            return v if isinstance(v, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
 @router.post("/db-diagnose")
 async def db_diagnose(payload: dict):
     """数据库健康诊断：基于健康指标+慢SQL 输出结论/根因/解决方案（只给方案，不执行）"""
@@ -167,11 +192,16 @@ async def db_diagnose(payload: dict):
         "你是数据库运维专家。基于提供的数据库健康指标和慢SQL进行分析，**严格按下面三段结构**返回JSON："
         "{\"conclusion\": \"总体结论（数据库当前健康状况，一段话）\", "
         "\"root_cause\": \"主要问题根因（结合指标/慢SQL，说明为何发生）\", "
-        "\"suggestions\": [\"优化建议1（具体、可执行）\", \"优化建议2\"]}。\n"
-        "优化建议要求：具体到对象与动作，例如——为 <表> 在 (<字段列表>) 建复合索引（并给出可直接执行的 SQL，仅作为建议）、"
-        "消除相关子查询/改写 JOIN、历史数据归档或分区表、调整参数、更新统计信息（ANALYZE）等；"
-        "每条建议尽量注明影响面/优先级，不要空泛。\n"
-        "【红线】只输出诊断结论与优化建议，绝不执行任何修改（不跑变更、不删数据、不重启服务），具体操作由 DBA 人工执行。"
+        "\"suggestions\": [ {\"title\": \"优化项标题（简短）\", "
+        "\"detail\": \"为什么这么优化（一句话）\", "
+        "\"sql_before\": \"优化前的问题SQL（没有则空字符串）\", "
+        "\"sql_after\": \"优化后的SQL：如建索引/改写查询（可直接执行，仅为建议）\", "
+        "\"impact\": \"优化前→后对比，尽量含耗时，如 单次 2400s → 0.03s / 扫描行数 X → Y\"} ]}。\n"
+        "要求：\n"
+        "1) suggestions 必须是对象数组（每项含 title/detail/sql_before/sql_after/impact 五个字段）；\n"
+        "2) 每条建议要具体到对象与动作（表名/字段/索引名/参数）；sql_after 要给可直接执行的语句；\n"
+        "3) impact 明标记为预计（无实测时写「预计」），不要编造精确数字，能估算才写。\n"
+        "【红线】只输出诊断结论与优化建议，绝不执行任何修改（不跑变更、不删数据、不重启），具体操作由 DBA 人工执行。"
     )
     user = (
         f"数据库类型：{payload.get('db_type', '')}\n"
@@ -184,11 +214,25 @@ async def db_diagnose(payload: dict):
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"AI 诊断失败: {e}", "data": None}
     data = {"conclusion": "", "root_cause": "", "suggestions": []}
-    try:
-        parsed = _json.loads(resp.content)
+    parsed = _extract_json_dict(resp.content)
+    if parsed:
         data = {k: parsed.get(k, data.get(k)) for k in data}
-    except _json.JSONDecodeError:
+    else:
         data["conclusion"] = resp.content[:2000]
+    # 归一化 suggestions：兼容字符串/对象；统一为对象（title/detail/sql_before/sql_after/impact）
+    norm = []
+    for s in (data.get("suggestions") or []):
+        if isinstance(s, str):
+            norm.append({"title": s, "detail": "", "sql_before": "", "sql_after": "", "impact": ""})
+        elif isinstance(s, dict):
+            norm.append({
+                "title": str(s.get("title", "")),
+                "detail": str(s.get("detail", "")),
+                "sql_before": str(s.get("sql_before", "") or ""),
+                "sql_after": str(s.get("sql_after", "") or ""),
+                "impact": str(s.get("impact", "") or ""),
+            })
+    data["suggestions"] = norm
     data["model"] = model
     data["raw"] = resp.content
     return {"code": 200, "message": "success", "data": data}

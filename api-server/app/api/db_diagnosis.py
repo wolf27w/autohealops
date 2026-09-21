@@ -36,8 +36,8 @@ async def list_reports(conn_id: int | None = None, limit: int = 20, user=Depends
         result = await session.execute(q.order_by(DiagnosticReport.id.desc()).limit(limit))
         reports = list(result.scalars())
     return {"code": 200, "message": "success", "data": [
-        {"id": r.id, "conclusion": r.conclusion[:200], "root_cause": r.root_cause[:200],
-         "suggestion": r.suggestion[:300], "created_at": str(r.created_at)}
+        {"id": r.id, "conclusion": r.conclusion or "", "root_cause": r.root_cause or "",
+         "suggestion": r.suggestion or "", "created_at": str(r.created_at)}
         for r in reports
     ]}
 

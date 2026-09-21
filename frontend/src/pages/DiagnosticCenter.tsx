@@ -39,10 +39,41 @@ interface SlowTrendPoint {
   avg_latency_ms?: number
 }
 
+interface SuggestionItem {
+  title?: string
+  detail?: string
+  sql_before?: string
+  sql_after?: string
+  impact?: string
+}
+
 interface DiagnosisResult {
   conclusion?: string
   root_cause?: string
-  suggestions?: string[]
+  suggestions?: Array<string | SuggestionItem>
+}
+
+function Suggestion({ s, idx }: { s: string | SuggestionItem; idx: number }) {
+  if (typeof s === 'string') return <li>{s}</li>
+  return (
+    <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: '1px solid #f0f0f0' }}>
+      <div style={{ fontWeight: 600 }}>{idx}. {s.title || '优化项'}</div>
+      {s.detail && <div style={{ color: '#555', margin: '4px 0' }}>{s.detail}</div>}
+      {s.sql_before && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: '#999' }}>优化前 SQL（问题 SQL）</div>
+          <pre style={{ whiteSpace: 'pre-wrap', background: '#fff1f0', padding: 8, borderRadius: 4, margin: 0 }}>{s.sql_before}</pre>
+        </div>
+      )}
+      {s.sql_after && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: '#999' }}>优化后 SQL</div>
+          <pre style={{ whiteSpace: 'pre-wrap', background: '#f6ffed', padding: 8, borderRadius: 4, margin: 0 }}>{s.sql_after}</pre>
+        </div>
+      )}
+      {s.impact && <div style={{ marginTop: 6, color: '#fa8c16' }}>预计优化前后对比：{s.impact}</div>}
+    </div>
+  )
 }
 
 export default function DiagnosticCenter() {
@@ -136,7 +167,15 @@ function ReportsTab() {
           <div>
             <div style={{ marginBottom: 12 }}><b>结论：</b>{detail.conclusion}</div>
             <div style={{ marginBottom: 12 }}><b>根因：</b>{detail.root_cause}</div>
-            <div style={{ marginBottom: 12 }}><b>优化建议：</b><pre style={{ whiteSpace: 'pre-wrap' }}>{detail.suggestion}</pre></div>
+            <div style={{ marginBottom: 12 }}><b>优化建议：</b>
+              {(() => {
+                try {
+                  const arr = JSON.parse(detail.suggestion || '[]')
+                  if (Array.isArray(arr)) return <div style={{ marginTop: 6 }}>{arr.map((s, i) => <Suggestion key={i} s={s} idx={i + 1} />)}</div>
+                } catch { /* 非 JSON，按文本展示 */ }
+                return <pre style={{ whiteSpace: 'pre-wrap' }}>{detail.suggestion}</pre>
+              })()}
+            </div>
           </div>
         )}
       </Drawer>
@@ -216,8 +255,8 @@ function DBConnections() {
           <div>
             <div style={{ marginBottom: 8 }}><b>结论：</b>{d.conclusion || '-'}</div>
             <div style={{ marginBottom: 8 }}><b>根因：</b>{d.root_cause || '-'}</div>
-            <div><b>优化建议：</b></div>
-            <ul>{(d.suggestions || []).map((s: string, i: number) => <li key={i}>{s}</li>)}</ul>
+            <div style={{ marginBottom: 4 }}><b>优化建议：</b></div>
+            <div>{(d.suggestions || []).map((s, i) => <Suggestion key={i} s={s} idx={i + 1} />)}</div>
             <div style={{ color: '#999', fontSize: 12, marginTop: 8 }}>⚠️ 诊断仅提供解决方案，不执行任何修改，具体操作由 DBA 人工执行</div>
           </div>
         ) })

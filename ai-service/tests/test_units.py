@@ -44,5 +44,24 @@ class TestKnowledgeValue(unittest.TestCase):
         self.assertTrue(is_valuable_knowledge("为慢查询加索引", ""))
 
 
+class TestExtractJsonDict(unittest.TestCase):
+    """模型输出 JSON 提取（容忍 ```json 代码块 / 前后文字）"""
+
+    def test_fenced(self):
+        from app.api.aux_api import _extract_json_dict
+        s = '```json\n{"conclusion": "ok", "suggestions": []}\n```'
+        self.assertEqual(_extract_json_dict(s), {"conclusion": "ok", "suggestions": []})
+
+    def test_with_prose(self):
+        from app.api.aux_api import _extract_json_dict
+        s = '分析如下：\n{"a": 1}\n以上。'
+        self.assertEqual(_extract_json_dict(s), {"a": 1})
+
+    def test_invalid(self):
+        from app.api.aux_api import _extract_json_dict
+        self.assertIsNone(_extract_json_dict("not json at all"))
+        self.assertIsNone(_extract_json_dict("[1,2,3]"))  # 非对象
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

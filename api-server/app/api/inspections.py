@@ -27,6 +27,33 @@ def _md_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(out)
 
 
+def _render_suggestions(raw: str) -> list[str]:
+    """渲染优化建议：结构化 JSON（title/detail/sql_before/sql_after/impact）或纯文本"""
+    try:
+        items = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return [raw, ""]
+    if not isinstance(items, list):
+        return [str(raw), ""]
+    out: list[str] = []
+    for i, it in enumerate(items, 1):
+        if isinstance(it, str):
+            out += [f"{i}. {it}", ""]
+            continue
+        if not isinstance(it, dict):
+            continue
+        out += [f"### {i}. {it.get('title') or '优化项'}", ""]
+        if it.get("detail"):
+            out += [str(it["detail"]), ""]
+        if it.get("sql_before"):
+            out += ["**优化前 SQL（问题 SQL）：**", "", "```sql", str(it["sql_before"]), "```", ""]
+        if it.get("sql_after"):
+            out += ["**优化后 SQL：**", "", "```sql", str(it["sql_after"]), "```", ""]
+        if it.get("impact"):
+            out += [f"**预计优化前后对比：** {it['impact']}", ""]
+    return out
+
+
 def render_report_markdown(report: DiagnosticReport, cluster_name: str = "") -> str:
     """把报告渲染成 Markdown 文本（集群/数据库通用）"""
     label = _REPORT_TYPE_LABEL.get(report.task_type, "巡检报告")
@@ -59,7 +86,8 @@ def render_report_markdown(report: DiagnosticReport, cluster_name: str = "") -> 
     if report.root_cause:
         lines += ["## 根因", "", report.root_cause, ""]
     if report.suggestion:
-        lines += ["## 优化建议", "", report.suggestion, ""]
+        lines += ["## 优化建议", ""]
+        lines += _render_suggestions(report.suggestion)
 
     items = raw.get("items")
     if isinstance(items, list) and items:

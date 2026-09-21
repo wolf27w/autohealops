@@ -16,6 +16,32 @@ from app.models import Alert, Cluster, DiagnosticReport, QuotaSnapshot, Resource
 
 logger = get_logger("api-server.inspection")
 
+# 巡检进度（前端轮询）：cluster_inspect_progress:{cluster_id} = {pct, step, ts}
+_PROGRESS_TTL = 600
+
+
+async def _set_progress(cluster_id: int, pct: int, step: str) -> None:
+    try:
+        from app.core.redis_client import redis_pool
+        await redis_pool.set(
+            f"cluster_inspect_progress:{cluster_id}",
+            json.dumps({"pct": int(pct), "step": step}, ensure_ascii=False),
+            ex=_PROGRESS_TTL,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("写巡检进度失败: %s", e)
+
+
+async def get_inspect_progress(cluster_id: int) -> dict:
+    try:
+        from app.core.redis_client import redis_pool
+        raw = await redis_pool.get(f"cluster_inspect_progress:{cluster_id}")
+        if raw:
+            return json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读巡检进度失败: %s", e)
+    return {"pct": 0, "step": "idle"}
+
 
 def _health_from(problems: int) -> str:
     if problems == 0:
@@ -29,6 +55,8 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         c = await session.get(Cluster, cluster_id)
         if not c:
             return {"code": 404, "message": "集群不存在", "data": None}
+
+        await _set_progress(cluster_id, 10, "采集集群快照")
 
         # 节点状态（_cluster_ 快照：PodLimit=节点总数，PodUsed=就绪数）
         node_row = (await session.execute(
@@ -49,6 +77,7 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         )).first()
         pod_total = int(pod_row[0] or 0) if pod_row else 0
         pod_running = int(pod_row[1] or 0) if pod_row else 0
+        await _set_progress(cluster_id, 45, "统计工作负载与活跃告警")
 
         # 工作负载统计（resource_snapshots 最新一轮，按类型计数）
         latest_ts_rows = (await session.execute(
@@ -163,6 +192,8 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         } for a in active_alerts],
     }
 
+    await _set_progress(cluster_id, 80, "汇总巡检项")
+
     # 落报告
     async with async_session() as session:
         report = DiagnosticReport(
@@ -178,6 +209,7 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         await session.refresh(report)
         report_data["report_id"] = report.id
 
+    await _set_progress(cluster_id, 100, "完成")
     return {"code": 200, "message": "success", "data": report_data}
 
 

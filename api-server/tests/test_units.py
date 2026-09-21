@@ -399,5 +399,24 @@ class TestInspectionReportRender(unittest.TestCase):
         self.assertIn("加索引", md)
 
 
+class TestInspectionSuggestionRender(unittest.TestCase):
+    """优化建议渲染（结构化 JSON：SQL 前后对比 + 影响）"""
+
+    def test_structured(self):
+        from app.api.inspections import _render_suggestions
+        raw = ('[{"title":"建复合索引","detail":"消除相关子查询",'
+               '"sql_before":"SELECT 1","sql_after":"ALTER TABLE t ADD INDEX ix (a,b)",'
+               '"impact":"预计 2400s → 0.03s"}]')
+        out = "\n".join(_render_suggestions(raw))
+        self.assertIn("建复合索引", out)
+        self.assertIn("优化前 SQL", out)
+        self.assertIn("ALTER TABLE", out)
+        self.assertIn("预计", out)
+
+    def test_plain_text_fallback(self):
+        from app.api.inspections import _render_suggestions
+        self.assertIn("hello", "\n".join(_render_suggestions("hello")))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

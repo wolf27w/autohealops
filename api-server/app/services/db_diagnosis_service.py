@@ -113,12 +113,18 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
         })
         conclusion = data.get("conclusion", "")
         root_cause = data.get("root_cause", "")
-        suggestions = data.get("suggestions", [])
+        suggestions = data.get("suggestions", []) or []
         raw = data.get("raw", "")
     except Exception as e:  # noqa: BLE001
         logger.error("数据库 %d AI 诊断失败: %s", conn_id, e)
         await _set_progress(conn_id, 100, f"失败：{e}")
         return {"code": 500, "message": f"AI 诊断失败: {e}", "data": None}
+
+    # 结构化建议（对象数组：title/detail/sql_before/sql_after/impact）存 JSON；兼容字符串
+    try:
+        _sug_json = json.dumps(suggestions, ensure_ascii=False)
+    except (TypeError, ValueError):
+        _sug_json = json.dumps([{"title": str(x)} for x in suggestions], ensure_ascii=False)
 
     await _set_progress(conn_id, 90, "生成报告")
     # 3. 落报告（task_id=0：按需诊断，非定时任务）
@@ -129,7 +135,7 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
             task_type="db",
             conclusion=conclusion or "诊断完成（无明确结论）",
             root_cause=root_cause,
-            suggestion="\n".join(suggestions) if suggestions else "",
+            suggestion=_sug_json,
             raw_output=json.dumps({
                 "db_name": c.name, "db_type": c.db_type,
                 "health": health_text, "slow_sql": slow_sql_text[:2000],

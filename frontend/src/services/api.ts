@@ -70,6 +70,7 @@ export const healthCheckCluster = (id: number) => http.post(`/clusters/${id}/hea
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })
+export const getClusterInspectProgress = (id: number) => http.get<{ pct: number; step: string }>(`/clusters/${id}/inspect/progress`)
 // 下载巡检/诊断报告（Markdown 文件）
 export const downloadInspectionReport = (reportId: number) =>
   api.get(`/inspection-reports/${reportId}/download`, { responseType: 'blob' }) as unknown as Promise<Blob>

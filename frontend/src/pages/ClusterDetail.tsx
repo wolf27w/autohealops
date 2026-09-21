@@ -2,11 +2,11 @@
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
 import { useEffect, useMemo, useState } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
-import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown } from 'antd'
+import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress } from '../services/api'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -352,13 +352,18 @@ function InspectModal({ clusterId, clusterName, open, onClose }: { clusterId: nu
   const [report, setReport] = useState<Record<string, unknown> | null>(null)
   const [history, setHistory] = useState<Array<Record<string, unknown>>>([])
   const [loading, setLoading] = useState(false)
+  const [prog, setProg] = useState<{ pct: number; step: string } | null>(null)
 
   const run = () => {
     setLoading(true)
+    setProg({ pct: 5, step: '准备中…' })
+    const timer = setInterval(() => {
+      getClusterInspectProgress(clusterId).then((p) => { if (p) setProg({ pct: p.pct, step: p.step }) }).catch(() => {})
+    }, 800)
     inspectCluster(clusterId)
       .then((d) => setReport(d as Record<string, unknown>))
       .catch((e) => message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '巡检失败'))
-      .finally(() => setLoading(false))
+      .finally(() => { clearInterval(timer); setProg(null); setLoading(false) })
   }
   const loadHistory = () => getInspectionReports(clusterId).then((d) => setHistory((d as Array<Record<string, unknown>>) || [])).catch(() => {})
 
@@ -393,6 +398,12 @@ function InspectModal({ clusterId, clusterName, open, onClose }: { clusterId: nu
         <Button type="primary" loading={loading} onClick={run}>立即巡检</Button>
         <Button onClick={loadHistory}>刷新历史</Button>
       </Space>
+      {loading && prog && (
+        <Card size="small" style={{ marginBottom: 12 }}>
+          <Progress percent={prog.pct} status="active" />
+          <div style={{ marginTop: 6, color: '#666', fontSize: 12 }}>{prog.step}</div>
+        </Card>
+      )}
       {report ? (
         <div>
           <Card size="small" style={{ marginBottom: 12 }}>

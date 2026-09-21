@@ -187,6 +187,13 @@ async def inspect_cluster(cluster_id: int, user=Depends(require_operator)):
     return await inspection_service.inspect_cluster(cluster_id, user.id)
 
 
+@router.get("/{cluster_id}/inspect/progress")
+async def inspect_progress(cluster_id: int, user=Depends(require_any_user)):
+    """集群巡检进度（前端轮询）：{pct, step}；idle=未在巡检"""
+    from app.services import inspection_service
+    return {"code": 200, "message": "success", "data": await inspection_service.get_inspect_progress(cluster_id)}
+
+
 @router.get("/{cluster_id}/inspection-reports")
 async def list_inspection_reports(cluster_id: int, limit: int = 20, user=Depends(require_any_user)):
     """集群巡检报告历史"""
