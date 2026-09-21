@@ -77,6 +77,8 @@ export const downloadInspectionReport = (reportId: number) =>
 
 // ============ 告警 ============
 export const getAlerts = (params?: PageParams) => http.get<Alert[]>('/alerts', { params })
+// 服务端分页版：with_total=true 返回 {items,total,page,page_size}（告警列表用）
+export const getAlertsPaged = (params?: PageParams) => http.get<PageResult<Alert>>('/alerts', { params: { ...params, with_total: true } })
 export const getAlert = (id: number) => http.get<Alert>(`/alerts/${id}`)
 export const resolveAlert = (id: number) => http.post(`/alerts/${id}/resolve`)
 export const manualResolveAlert = (id: number, data: Payload) => http.post(`/alerts/${id}/manual-resolve`, data)
@@ -348,6 +350,8 @@ export const getDiagnosticReports = (taskId?: number) => http.get('/diagnostic-r
 
 // ============ 故障诊断（针对告警的 AI 诊断）============
 export const getFaultDiagnoses = (params?: PageParams & { category?: string }) => http.get<FaultDiagnosisItem[]>('/fault-diagnoses', { params })
+export const getFaultDiagnosesPaged = (params?: PageParams & { category?: string }) =>
+  http.get<PageResult<FaultDiagnosisItem>>('/fault-diagnoses', { params: { ...params, with_total: true } })
 export const getFaultDiagnosis = (alertId: number) => http.get<FaultDiagnosisItem>(`/fault-diagnoses/${alertId}`)
 
 // ============ 数据库连接管理 ============

@@ -22,7 +22,7 @@ import type {
 // 告警状态/级别：走公共常量 + SeverityTag/StatusTag 组件（去重）
 const AI_RESULT_META: Record<string, { label: string; color: string }> = {
   self_heal: { label: '可自愈', color: '#52c41a' },
-  approval: { label: '需审批', color: '#1677ff' },
+  approval: { label: '待审批告警', color: '#1677ff' },
   manual: { label: '需人工', color: '#faad14' },
   failed: { label: '诊断失败', color: '#ff4d4f' },
 }
@@ -130,6 +130,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     { title: '活跃告警', value: kpi?.alert_pending ?? 0, color: (kpi?.alert_pending ?? 0) > 0 ? '#ff4d4f' : '#1677ff' },
     { title: '自动处理（近一年）', value: kpi?.auto_processed_1y ?? 0, color: '#13c2c2' },
     { title: '待人工', value: kpi?.manual_pending ?? 0, color: (kpi?.manual_pending ?? 0) > 0 ? '#faad14' : '#1677ff' },
+    { title: '待审核', value: kpi?.approval_pending ?? 0, color: (kpi?.approval_pending ?? 0) > 0 ? '#1677ff' : '#8c8c8c' },
+    { title: '今日已审核', value: kpi?.approval_decided_today ?? 0, color: '#52c41a' },
     { title: 'DB 异常', value: kpi?.db_abnormal ?? 0, color: (kpi?.db_abnormal ?? 0) > 0 ? '#ff4d4f' : '#1677ff' },
     { title: '成功率（全量）', value: `${(((kpi?.heal_rate ?? 0) * 100).toFixed(1))}%`, color: '#52c41a' },
     { title: 'MTTR（分钟·全量）', value: kpi?.mttr_minutes ?? 0, color: '#722ed1' },

@@ -26,10 +26,15 @@ export default function PlatformSettings() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    // LDAP 字段在未展开的页签里，validateFields 拿不到 → 用当前 settings 兜底，避免存成 "undefined"
     const payload = {
       ...values,
-      ldap_enabled: String(values.ldap_enabled),
-      ldap_port: String(values.ldap_port),
+      ldap_enabled: values.ldap_enabled === undefined
+        ? String(settings.ldap_enabled ?? 'false')
+        : (values.ldap_enabled ? 'true' : 'false'),
+      ldap_port: values.ldap_port === undefined
+        ? String(settings.ldap_port ?? '389')
+        : String(values.ldap_port),
     }
     await updateSettings(payload)
     message.success('设置已保存')

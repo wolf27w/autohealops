@@ -13,6 +13,7 @@ import {
 } from '../services/api'
 import type { Cluster, DBConnection, User } from '../types'
 import ProjectManagement from './ProjectManagement'
+import { getCurrentUser } from '../utils/auth'
 
 type ClusterWithEnv = Cluster & { env_tag?: string }
 
@@ -38,7 +39,7 @@ interface Subscription {
 }
 
 export default function Permissions() {
-  const me = JSON.parse(localStorage.getItem('user') || '{}')
+  const me = getCurrentUser()
   const items = me.role === 'admin'
     ? [
         { key: 'project', label: '按项目授权', children: <ProjectManagement /> },

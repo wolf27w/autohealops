@@ -39,9 +39,9 @@ export default function UserManagement() {
         columns={[
           { title: '用户名', dataIndex: 'username' },
           { title: '邮箱', dataIndex: 'email' },
+          { title: '手机号', dataIndex: 'phone' },
           { title: '角色', dataIndex: 'role', render: (r) => <Tag color={roleColor[r]}>{r}</Tag> },
           { title: '状态', dataIndex: 'is_active', render: (v) => (v ? '启用' : '停用') },
-          { title: '手机号', dataIndex: 'phone' },
           { title: '飞书 user_id', dataIndex: 'feishu_user_id' },
           { title: '飞书 open_id', dataIndex: 'feishu_open_id' },
           { title: '钉钉ID', dataIndex: 'dingtalk_user_id' },
@@ -60,12 +60,12 @@ export default function UserManagement() {
           <Form.Item name="username" label="用户名" rules={[{ required: true }]}><Input disabled={!!editing} /></Form.Item>
           {!editing && <Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password /></Form.Item>}
           <Form.Item name="email" label="邮箱"><Input /></Form.Item>
+          <Form.Item name="phone" label="手机号"><Input /></Form.Item>
           <Form.Item name="role" label="角色" rules={[{ required: true }]}>
             <Select options={['admin', 'operator', 'viewer', 'developer'].map((r) => ({ value: r, label: r }))} />
           </Form.Item>
           <Form.Item name="dingtalk_user_id" label="钉钉 user ID"><Input /></Form.Item>
           <Form.Item name="wechat_userid" label="企微 userid"><Input /></Form.Item>
-          <Form.Item name="phone" label="手机号"><Input /></Form.Item>
           <Form.Item name="feishu_user_id" label="飞书 user_id（通知到个人用）"><Input /></Form.Item>
           <Form.Item name="feishu_open_id" label="飞书 open_id（群内 @ 与审批回复身份映射用）"><Input /></Form.Item>
         </Form>

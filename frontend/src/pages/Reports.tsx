@@ -8,6 +8,7 @@ import {
   getNotificationConfigs, getAIEffectiveness, getModelCost,
 } from '../services/api'
 import type { NotificationConfig } from '../types'
+import { canWrite } from '../utils/auth'
 
 function downloadCsv(rows: Array<Record<string, unknown>>, headers: { key: string; title: string }[], filename: string) {
   const head = headers.map((h) => h.title).join(',')
@@ -31,6 +32,7 @@ interface ReportSchedule {
 }
 
 export default function Reports() {
+  const writable = canWrite()
   const [range, setRange] = useState('7d')
   const [trend, setTrend] = useState<TrendItem[]>([])
   const [modelCost, setModelCost] = useState<ModelCostData>({ models: [], total_cost: 0 })
@@ -76,7 +78,7 @@ export default function Reports() {
         extra={
           <Space>
             <Button size="small" onClick={async () => { const d = (await previewReport(7)) as { text?: string }; Modal.info({ title: '报表预览（近 7 天）', content: <pre style={{ whiteSpace: 'pre-wrap' }}>{d?.text || ''}</pre>, width: 520 }) }}>预览</Button>
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); scForm.resetFields(); scForm.setFieldsValue({ range_days: 7, enabled: true, cron_expression: '0 9 * * *' }); setScOpen(true) }}>新建推送</Button>
+            {writable && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); scForm.resetFields(); scForm.setFieldsValue({ range_days: 7, enabled: true, cron_expression: '0 9 * * *' }); setScOpen(true) }}>新建推送</Button>}
           </Space>
         }>
         <Table rowKey="id" dataSource={schedules} pagination={false} size="small"
@@ -90,11 +92,13 @@ export default function Reports() {
             { title: '上次推送', dataIndex: 'last_run_at', width: 170, render: (v: string) => v ? String(v).slice(0, 19) : '-' },
             { title: '操作', width: 220, render: (_: unknown, r: ReportSchedule) => (
               <Space>
-                <Button size="small" icon={<SendOutlined />} onClick={async () => { const res = (await runReportSchedule(r.id)) as { ok?: boolean; reason?: string }; if (res?.ok) message.success('已推送'); else message.warning(res?.reason || '推送失败') }}>立即推送</Button>
-                <Button size="small" onClick={() => { setEditing(r); scForm.setFieldsValue(r); setScOpen(true) }}>编辑</Button>
-                <Popconfirm title="删除该推送任务？" onConfirm={async () => { await deleteReportSchedule(r.id); message.success('已删除'); loadSchedules() }}>
-                  <Button size="small" danger>删除</Button>
-                </Popconfirm>
+                {writable && <Button size="small" icon={<SendOutlined />} onClick={async () => { const res = (await runReportSchedule(r.id)) as { ok?: boolean; reason?: string }; if (res?.ok) message.success('已推送'); else message.warning(res?.reason || '推送失败') }}>立即推送</Button>}
+                {writable && <Button size="small" onClick={() => { setEditing(r); scForm.setFieldsValue(r); setScOpen(true) }}>编辑</Button>}
+                {writable && (
+                  <Popconfirm title="删除该推送任务？" onConfirm={async () => { await deleteReportSchedule(r.id); message.success('已删除'); loadSchedules() }}>
+                    <Button size="small" danger>删除</Button>
+                  </Popconfirm>
+                )}
               </Space>
             ) },
           ]} />

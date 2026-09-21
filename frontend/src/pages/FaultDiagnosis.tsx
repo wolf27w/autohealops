@@ -2,7 +2,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Tag, Button, Space, Modal, message, Input } from 'antd'
-import { getFaultDiagnoses, getFaultDiagnosis, diagnoseAlert, getAiFeedback, addAiFeedback } from '../services/api'
+import { getFaultDiagnosesPaged, getFaultDiagnosis, diagnoseAlert, getAiFeedback, addAiFeedback } from '../services/api'
+import { canWrite } from '../utils/auth'
 import type { AiFeedbackData, FaultDiagnosisItem } from '../types'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
@@ -10,12 +11,17 @@ import Markdown from '../components/Markdown'
 
 export default function FaultDiagnosis({ category = '' }: { category?: string }) {
   // N3 诊断分离：category = cluster / app / ''（空=全部）
-  // react-query：诊断台账（15s 轮询）
-  const { data: data = [], isLoading: loading, refetch } = useQuery({
-    queryKey: ['fault-diagnoses', category],
-    queryFn: () => getFaultDiagnoses({ page: 1, page_size: 100, category }),
+  // react-query：诊断台账（15s 轮询；服务端分页，with_total=true 精确 total）
+  const PAGE_SIZE = 50
+  const [page, setPage] = useState(1)
+  const writable = canWrite()
+  const { data: paged, isLoading: loading, refetch } = useQuery({
+    queryKey: ['fault-diagnoses', category, page],
+    queryFn: () => getFaultDiagnosesPaged({ page, page_size: PAGE_SIZE, category }),
     refetchInterval: 15000,
   })
+  const data = paged?.items ?? []
+  const total = paged?.total ?? 0
   const [detail, setDetail] = useState<FaultDiagnosisItem | null>(null)
   const [currentAlertId, setCurrentAlertId] = useState<number | null>(null)
   const [diagnosing, setDiagnosing] = useState<number | null>(null)
@@ -64,6 +70,12 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
         （处理闭环记录见「告警处理 → 处理记录」）。
       </div>
       <Table rowKey="alert_id" loading={loading} dataSource={data}
+        pagination={{
+          current: page, pageSize: PAGE_SIZE, total,
+          showSizeChanger: false,
+          showTotal: (t) => `共 ${t} 条` ,
+          onChange: (p) => setPage(p),
+        }}
         columns={[
           { title: '告警ID', dataIndex: 'alert_id', width: 80 },
           { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v) => v || '-' },
@@ -76,7 +88,7 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
           { title: '诊断时间', dataIndex: 'diagnosis_time', width: 160, render: (v) => v ? String(v).slice(0, 19) : '-' },
           { title: '操作', width: 150, render: (_, r) => (
             <Space>
-              <Button size="small" onClick={() => handleDiagnose(r.alert_id)} loading={diagnosing === r.alert_id}>诊断</Button>
+              {writable && <Button size="small" onClick={() => handleDiagnose(r.alert_id)} loading={diagnosing === r.alert_id}>诊断</Button>}
               {r.has_diagnosis && <Button size="small" type="link" onClick={() => { setCurrentAlertId(r.alert_id); viewDiagnosis(r.alert_id) }}>查看</Button>}
             </Space>
           ) },

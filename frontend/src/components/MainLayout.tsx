@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
+import { getCurrentUser, isAdmin } from '../utils/auth'
 
 const { Sider, Header, Content } = Layout
 
@@ -70,6 +71,27 @@ const menuItems: MenuProps['items'] = [
   },
 ]
 
+// admin 专属菜单项（viewer/operator 不可见；App.tsx 路由同样有 RequireRole 守卫）
+const ADMIN_ONLY_KEYS = new Set([
+  '/strategy', '/notify-center', '/user-permission', '/log-sources',
+  '/ai-models', '/custom-tasks', '/settings',
+])
+
+// 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（空分组一并移除）
+function filterMenuItems(items: MenuProps['items'], admin: boolean): MenuProps['items'] {
+  if (admin) return items
+  return (items || [])
+    .map((item) => {
+      if (!item || !('children' in item) || !item.children) return item
+      const children = (item.children as NonNullable<MenuProps['items']>).filter(
+        (c) => c && !ADMIN_ONLY_KEYS.has(String(c.key)),
+      )
+      if (children.length === 0) return null
+      return { ...item, children }
+    })
+    .filter(Boolean) as MenuProps['items']
+}
+
 export default function MainLayout() {
   // 版本标记：方便确认浏览器加载的是哪一版
 document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
@@ -77,7 +99,10 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
   console.info('[API-OPS] frontend build:', __BUILD_TS__)
   const navigate = useNavigate()
   const location = useLocation()
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  // 安全读取当前用户（JSON.parse 写坏不崩溃）；按角色过滤菜单
+  const user = getCurrentUser()
+  const admin = isAdmin()
+  const filteredMenuItems = filterMenuItems(menuItems, admin)
 
   // 左侧菜单折叠（默认收起，记忆折叠状态）
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sider_collapsed') === '1')
@@ -200,7 +225,7 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
-          items={menuItems}
+          items={filteredMenuItems}
           inlineIndent={18}
           onClick={({ key }) => navigate(key)}
           {...(collapsed ? {} : { openKeys, onOpenChange: handleOpenChange })}

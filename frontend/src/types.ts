@@ -54,7 +54,7 @@ export interface Alert {
   cluster_id: number
   resource_type: string // pod / node
   resource_name: string
-  deployment_name: string
+  deployment_name?: string
   namespace: string
   fault_type: string
   severity: string // critical / high / medium / low
@@ -278,6 +278,8 @@ export interface DashboardKpi {
   alert_pending: number
   auto_processed_1y: number
   manual_pending: number
+  approval_pending: number
+  approval_decided_today: number
   db_abnormal: number
   heal_rate: number
   mttr_minutes: number

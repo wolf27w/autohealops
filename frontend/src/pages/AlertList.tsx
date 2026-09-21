@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge } from 'antd'
-import { getAlerts, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
+import { getAlertsPaged, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
+import { canWrite } from '../utils/auth'
 import StatusTag from '../components/StatusTag'
 import SeverityTag from '../components/SeverityTag'
 import CodeBlock from '../components/CodeBlock'
@@ -15,6 +16,9 @@ export default function AlertList() {
   const [severity, setSeverity] = useState<string>()
   const [status, setStatus] = useState<string>()
   const [manualOnly, setManualOnly] = useState<boolean | undefined>()
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 20
+  const writable = canWrite()
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
   const [diagnosing, setDiagnosing] = useState<number>()
   const [logOpen, setLogOpen] = useState(false)
@@ -29,12 +33,14 @@ export default function AlertList() {
   const [commentText, setCommentText] = useState('')
   const [sendingComment, setSendingComment] = useState(false)
 
-  // react-query：告警列表查询（15s 轮询 + 缓存 + 筛选变化自动重查）
-  const { data: alerts = [], isLoading: loading, refetch } = useQuery({
-    queryKey: ['alerts', severity, status, manualOnly],
-    queryFn: () => getAlerts({ severity, status, manual_required: manualOnly, page: 1, page_size: 100 }),
+  // react-query：告警列表查询（15s 轮询 + 缓存 + 筛选变化自动重查；服务端分页）
+  const { data: alertsData, isLoading: loading, refetch } = useQuery({
+    queryKey: ['alerts', severity, status, manualOnly, page],
+    queryFn: () => getAlertsPaged({ severity, status, manual_required: manualOnly, page, page_size: PAGE_SIZE }),
     refetchInterval: 15000,
   })
+  const alerts = alertsData?.items ?? []
+  const alertTotal = alertsData?.total ?? 0
 
   const handleDiagnose = async (id: number) => {
     setDiagnosing(id)
@@ -136,28 +142,31 @@ export default function AlertList() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
-        <Select placeholder="严重级别" allowClear style={{ width: 140 }} onChange={setSeverity}
+        <Select placeholder="严重级别" allowClear style={{ width: 140 }} onChange={(v) => { setSeverity(v); setPage(1) }}
           options={['critical', 'high', 'medium', 'low'].map((s) => ({ value: s, label: s }))} />
-        <Select placeholder="状态" allowClear style={{ width: 140 }} onChange={setStatus}
+        <Select placeholder="状态" allowClear style={{ width: 140 }} onChange={(v) => { setStatus(v); setPage(1) }}
           options={[
             { value: 'pending', label: '待处理' },
             { value: 'resolved', label: '已解决' },
             { value: 'self_healed', label: '已自愈' },
             { value: 'awaiting_approval', label: '待审批' },
           ]} />
-        <Select placeholder="处理方式" allowClear style={{ width: 150 }} onChange={(v) => setManualOnly(v === 'manual' ? true : v === 'auto' ? false : undefined)}
+        <Select placeholder="处理方式" allowClear style={{ width: 150 }} onChange={(v) => { setManualOnly(v === 'manual' ? true : v === 'auto' ? false : undefined); setPage(1) }}
           options={[
             { value: 'manual', label: '需人工协助' },
             { value: 'auto', label: '平台自动处理' },
           ]} />
-        <Button type="primary" danger onClick={handleBatchResolve} disabled={selectedRowKeys.length === 0}>
-          批量解决 ({selectedRowKeys.length})
-        </Button>
+        {writable && (
+          <Button type="primary" danger onClick={handleBatchResolve} disabled={selectedRowKeys.length === 0}>
+            批量解决 ({selectedRowKeys.length})
+          </Button>
+        )}
       </Space>
       <Table
         rowKey="id"
         loading={loading}
         dataSource={alerts}
+        pagination={{ current: page, pageSize: PAGE_SIZE, total: alertTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => setPage(p) }}
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
         expandable={{
           expandedRowRender: (record) => <DiagnosisPanel alertId={record.id} />,
@@ -198,10 +207,12 @@ export default function AlertList() {
           {
             title: '操作', render: (_, record) => (
               <Space>
+                {record.resource_type !== 'db' && writable && (
+                  <Button size="small" type="primary" loading={diagnosing === record.id}
+                    onClick={() => handleDiagnose(record.id)}>重新诊断</Button>
+                )}
                 {record.resource_type !== 'db' && (
                   <>
-                    <Button size="small" type="primary" loading={diagnosing === record.id}
-                      onClick={() => handleDiagnose(record.id)}>重新诊断</Button>
                     {CONTAINER_FAULTS.includes(record.fault_type) ? (
                       <Button size="small" onClick={() => handleViewDescribe(record)}>查看容器信息</Button>
                     ) : (
@@ -209,12 +220,12 @@ export default function AlertList() {
                     )}
                   </>
                 )}
-                {record.status === 'pending' && (
+                {record.status === 'pending' && writable && (
                   <Button size="small" onClick={() => { form.resetFields(); setResolveTarget(record) }}>解决</Button>
                 )}
-                <Button size="small" onClick={() => handleAssign(record)}>{record.assigned_to ? '取消认领' : '认领'}</Button>
-                <Button size="small" onClick={() => handleAck(record)}>{record.acknowledged ? '取消确认' : '确认'}</Button>
-                <Button size="small" onClick={() => openComments(record)}>备注</Button>
+                {writable && <Button size="small" onClick={() => handleAssign(record)}>{record.assigned_to ? '取消认领' : '认领'}</Button>}
+                {writable && <Button size="small" onClick={() => handleAck(record)}>{record.acknowledged ? '取消确认' : '确认'}</Button>}
+                {writable && <Button size="small" onClick={() => openComments(record)}>备注</Button>}
               </Space>
             ),
           },

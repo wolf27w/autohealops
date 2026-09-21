@@ -1,18 +1,20 @@
 // 审批列表页
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Tabs, Card, Space, Button, Table, Tag, Modal, Input, message, Empty, Checkbox, Select, Tooltip } from 'antd'
+import { Tabs, Card, Space, Button, Table, Tag, Modal, Input, message, Empty, Checkbox, Select, Tooltip, Pagination } from 'antd'
 import { getApprovals, getApproval, decideApproval, batchDecideApprovals, addApprover, transferApproval, getApprovalCommentTemplates } from '../services/api'
 import type { Approval } from '../types'
 import StatusTag from '../components/StatusTag'
 
 export default function ApprovalList() {
-  // react-query：待审批（去重后一次拉全）+ 已处理（分页）+ 意见模板（一次性）
+  // react-query：待审批（服务端分页，不再一次拉 500 被 clamp 静默截断）+ 已处理（分页）+ 意见模板（一次性）
   const [handledPage, setHandledPage] = useState(1)
+  const [pendingPage, setPendingPage] = useState(1)
+  const PENDING_PAGE_SIZE = 20
   const [pageSize] = useState(20)
   const { data: pendingData, refetch: refetchPending } = useQuery({
-    queryKey: ['approvals', 'pending'],
-    queryFn: () => getApprovals({ status: 'pending', page: 1, page_size: 500 }),
+    queryKey: ['approvals', 'pending', pendingPage],
+    queryFn: () => getApprovals({ status: 'pending', page: pendingPage, page_size: PENDING_PAGE_SIZE }),
     refetchInterval: 15000,
   })
   const { data: handledData, refetch: refetchHandled } = useQuery({
@@ -87,6 +89,7 @@ export default function ApprovalList() {
   }
 
   const pending = pendingData?.items ?? []
+  const pendingTotal = pendingData?.total ?? 0
   const handled = handledData?.items ?? []
   const handledTotal = handledData?.total ?? 0
   const manualPending = pending.filter((a) => a.kind === 'manual_assist')
@@ -125,8 +128,16 @@ export default function ApprovalList() {
             </Space>
           </Card>
         ))}
-        {list.length === 0 && <Empty description="暂无待审批" />}
+        {list.length === 0 && <Empty description="本页暂无该类型待审批（可翻页查看）" />}
       </Space>
+      {/* 待审批服务端分页：后端不分 kind，两个 tab 共用同一总页数 */}
+      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <span style={{ color: '#999', fontSize: 12 }}>
+          待审批共 {pendingTotal} 条（人工协助 + 风险审批合计，每页 {PENDING_PAGE_SIZE} 条）
+        </span>
+        <Pagination size="small" current={pendingPage} pageSize={PENDING_PAGE_SIZE} total={pendingTotal}
+          showSizeChanger={false} onChange={setPendingPage} />
+      </div>
     </div>
   )
 
@@ -146,8 +157,8 @@ export default function ApprovalList() {
     <div>
       <Tabs
         items={[
-          { key: 'manual', label: `人工协助 (${manualPending.length})`, children: renderPendingList(manualPending) },
-          { key: 'risk', label: `高风险审批 (${riskPending.length})`, children: renderPendingList(riskPending) },
+          { key: 'manual', label: '人工协助', children: renderPendingList(manualPending) },
+          { key: 'risk', label: '风险审批', children: renderPendingList(riskPending) },
           { key: 'handled', label: '已处理', children: renderHandled() },
         ]}
       />

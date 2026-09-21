@@ -67,6 +67,19 @@ const SOURCE_OPTIONS = [
   { value: 'db', label: '数据库告警' },
 ]
 
+// 后端字段可能是 JSON 字符串或数组：安全转成字符串数组（避免直接 .map 报错）
+function toStrArr(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x))
+  if (typeof v === 'string' && v.trim()) {
+    try {
+      const p = JSON.parse(v)
+      if (Array.isArray(p)) return p.map((x) => String(x))
+    } catch { /* 非 JSON，按逗号分隔处理 */ }
+    return v.split(',').map((s) => s.trim()).filter(Boolean)
+  }
+  return []
+}
+
 const LOG_PAGE_SIZE = 20
 
 export default function NotificationConfig() {
@@ -281,11 +294,11 @@ export default function NotificationConfig() {
             </div>
             <div style={{ fontSize: 12, marginBottom: 8 }}>
               用途：<Tag color={SCENE_COLOR[c.scene] || 'default'}>{SCENE_OPTIONS.find((o) => o.value === c.scene)?.label || c.scene}</Tag>
-              {c.namespaces?.length > 0 && (
-                <span style={{ marginLeft: 8 }}>namespace：{((c.namespaces as unknown as string[]) || []).join(', ')}</span>
+              {toStrArr(c.namespaces).length > 0 && (
+                <span style={{ marginLeft: 8 }}>namespace：{toStrArr(c.namespaces).join(', ')}</span>
               )}
-              {c.sources && c.sources.length > 0 && (
-                <span style={{ marginLeft: 8 }}>来源：{c.sources.map((s) => SOURCE_OPTIONS.find((o) => o.value === s)?.label || s).join(', ')}</span>
+              {toStrArr(c.sources).length > 0 && (
+                <span style={{ marginLeft: 8 }}>来源：{toStrArr(c.sources).map((s) => SOURCE_OPTIONS.find((o) => o.value === s)?.label || s).join(', ')}</span>
               )}
             </div>
             <div style={{ fontSize: 12, marginBottom: 8 }}>

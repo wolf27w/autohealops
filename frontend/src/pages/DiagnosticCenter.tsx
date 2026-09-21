@@ -200,8 +200,9 @@ function DBConnections() {
         .catch(() => {})
     }, 800)
     try {
-      const res = (await runDbDiagnosis(c.id)) as { data?: DiagnosisResult }
-      const d = res?.data
+      // 拦截器已把 AxiosResponse 解包为 body.data → res 本身就是诊断结果对象
+      // （report_id/conclusion/root_cause/suggestions/health），不要再取 res.data
+      const d = (await runDbDiagnosis(c.id)) as DiagnosisResult | null
       if (d) {
         setDiag({ name: c.name, pct: 100, step: '完成' })
         setTimeout(() => setDiag(null), 400)

@@ -4,6 +4,7 @@ import { Input, Card, Tag, Space, List, Empty, Button, Modal, Form, message, Pop
 import { SearchOutlined, PlusOutlined, EditOutlined, LockOutlined, UnlockOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, StopOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { getKnowledgeList, getKnowledgeStats, exportKnowledge, importKnowledge, setKnowledgeStatus, searchKnowledge, addKnowledge, updateKnowledge, deleteKnowledge, dedupKnowledge } from '../services/api'
 import type { KnowledgeEntry } from '../types'
+import { canWrite, isAdmin } from '../utils/auth'
 
 interface KnowledgeStats {
   total?: number
@@ -15,6 +16,8 @@ interface KnowledgeStats {
 }
 
 export default function KnowledgeBase() {
+  const writable = canWrite()
+  const admin = isAdmin()
   const [query, setQuery] = useState('')
   const [list, setList] = useState<KnowledgeEntry[]>([])
   const [stats, setStats] = useState<KnowledgeStats>({})
@@ -125,12 +128,14 @@ export default function KnowledgeBase() {
       </Row>
       <Space style={{ marginBottom: 16 }} wrap>
         <Input prefix={<SearchOutlined />} placeholder="搜索知识（防抖300ms）" style={{ width: 300 }} onChange={(e) => handleSearch(e.target.value)} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新增知识</Button>
+        {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新增知识</Button>}
         <Button icon={<DownloadOutlined />} onClick={handleExport}>导出</Button>
-        <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
-        <Popconfirm title="合并「解决方法相同」的重复条目？（保留最早一条，合并使用计数）" onConfirm={handleDedup}>
-          <Button icon={<DeleteOutlined />}>清理重复</Button>
-        </Popconfirm>
+        {writable && <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入</Button>}
+        {writable && (
+          <Popconfirm title="合并「解决方法相同」的重复条目？（保留最早一条，合并使用计数）" onConfirm={handleDedup}>
+            <Button icon={<DeleteOutlined />}>清理重复</Button>
+          </Popconfirm>
+        )}
       </Space>
       <List
         dataSource={list}
@@ -159,16 +164,20 @@ export default function KnowledgeBase() {
               {item.execution_steps && <div style={{ fontSize: 12, color: '#666' }}><b>可执行：</b>{item.execution_steps.slice(0, 120)}...</div>}
               {item.success_count !== undefined && <div style={{ color: '#999', fontSize: 12 }}>成功 {item.success_count} 次 / 使用 {item.usage_count} 次</div>}
               <Space style={{ marginTop: 8 }}>
-                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(item)}>编辑</Button>
-                <Popconfirm title={item.is_active === false ? '确认启用该条目？' : '确认失效该条目？（失效后不再参与检索复用）'}
-                  onConfirm={() => handleToggle(item)}>
-                  <Button size="small" icon={item.is_active === false ? <PlayCircleOutlined /> : <StopOutlined />}>
-                    {item.is_active === false ? '启用' : '失效'}
-                  </Button>
-                </Popconfirm>
-                <Popconfirm title="确认删除该条目？（仅 admin）" onConfirm={async () => { await deleteKnowledge(item.id); message.success('已删除'); loadList(); loadStats() }}>
-                  <Button size="small" danger>删除</Button>
-                </Popconfirm>
+                {writable && <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(item)}>编辑</Button>}
+                {writable && (
+                  <Popconfirm title={item.is_active === false ? '确认启用该条目？' : '确认失效该条目？（失效后不再参与检索复用）'}
+                    onConfirm={() => handleToggle(item)}>
+                    <Button size="small" icon={item.is_active === false ? <PlayCircleOutlined /> : <StopOutlined />}>
+                      {item.is_active === false ? '启用' : '失效'}
+                    </Button>
+                  </Popconfirm>
+                )}
+                {admin && (
+                  <Popconfirm title="确认删除该条目？（仅 admin）" onConfirm={async () => { await deleteKnowledge(item.id); message.success('已删除'); loadList(); loadStats() }}>
+                    <Button size="small" danger>删除</Button>
+                  </Popconfirm>
+                )}
               </Space>
             </Card>
           </List.Item>
