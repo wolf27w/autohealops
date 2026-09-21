@@ -43,6 +43,7 @@ export default function UserManagement() {
           { title: '状态', dataIndex: 'is_active', render: (v) => (v ? '启用' : '停用') },
           { title: '手机号', dataIndex: 'phone' },
           { title: '飞书 user_id', dataIndex: 'feishu_user_id' },
+          { title: '飞书 open_id', dataIndex: 'feishu_open_id' },
           { title: '钉钉ID', dataIndex: 'dingtalk_user_id' },
           { title: '操作', render: (_, r) => (
             <Space>
@@ -66,6 +67,7 @@ export default function UserManagement() {
           <Form.Item name="wechat_userid" label="企微 userid"><Input /></Form.Item>
           <Form.Item name="phone" label="手机号"><Input /></Form.Item>
           <Form.Item name="feishu_user_id" label="飞书 user_id（通知到个人用）"><Input /></Form.Item>
+          <Form.Item name="feishu_open_id" label="飞书 open_id（群内 @ 与审批回复身份映射用）"><Input /></Form.Item>
         </Form>
       </Modal>
     </div>
