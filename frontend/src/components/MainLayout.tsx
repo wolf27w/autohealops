@@ -54,6 +54,7 @@ const menuItems: MenuProps['items'] = [
       { key: '/fault-diagnosis/cluster', icon: <ApartmentOutlined />, label: '集群故障诊断' },
       { key: '/fault-diagnosis/app', icon: <ExperimentOutlined />, label: '应用故障诊断' },
       { key: '/diagnostic', icon: <MedicineBoxOutlined />, label: '数据库故障诊断' },
+      { key: '/db-monitor', icon: <DatabaseOutlined />, label: '数据库监控' },
       { key: '/agent', icon: <MessageOutlined />, label: '应用诊断助手' },
     ],
   },

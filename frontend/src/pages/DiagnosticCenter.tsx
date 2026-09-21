@@ -15,6 +15,8 @@ import {
 
 interface DBReport {
   id: number
+  db_name?: string
+  db_type?: string
   conclusion?: string
   root_cause?: string
   suggestion?: string
@@ -160,6 +162,7 @@ function ReportsTab() {
           pagination={{ current: logPage, pageSize: PAGE_SIZE, total: logTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => load(p) }}
           columns={[
             { title: 'ID', dataIndex: 'id', width: 60 },
+            { title: '数据库', dataIndex: 'db_name', width: 150, render: (v: string, r: DBReport) => v ? <span>{v}{r.db_type ? <Tag style={{ marginLeft: 4 }}>{r.db_type}</Tag> : null}</span> : '-' },
             { title: '结论', dataIndex: 'conclusion', ellipsis: true },
             { title: '根因', dataIndex: 'root_cause', ellipsis: true },
             { title: '时间', dataIndex: 'created_at', width: 170 },

@@ -164,6 +164,8 @@ export const runDbDiagnosis = (connId: number) => http.post(`/db-diagnosis/${con
 export const getDbDiagnosisReports = (page = 1, pageSize = 20) => http.get<PageResult<{ id: number; conclusion: string; root_cause: string; suggestion: string; created_at: string }>>('/db-diagnosis/reports', { params: { page, page_size: pageSize } })
 export const getDbTrends = (connId: number, metricType: string) => http.get(`/db-diagnosis/${connId}/trends`, { params: { metric_type: metricType } })
 export const getDbDiagnosisProgress = (connId: number) => http.get<{ pct: number; step: string; ts: number }>(`/db-diagnosis/${connId}/progress`)
+export const getDbLatestMetrics = (connId: number) =>
+  http.get<Array<{ metric_type: string; metric_name: string; value: number; detail: string; sampled_at: string }>>(`/db-diagnosis/${connId}/metrics`)
 
 // ============ 执行进度（轮询）============
 export const getExecutionStatus = (planId: number, sinceStep: number = 0) =>

@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """数据库诊断 API：按需诊断 + 报告 + 趋势（诊断中心改造后入口）"""
+import json
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
@@ -41,11 +43,40 @@ async def list_reports(conn_id: int | None = None, page: int = 1, page_size: int
             .order_by(DiagnosticReport.id.desc())
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars().all()
+        items = []
+        for r in rows:
+            db_name, db_type = "", ""
+            try:
+                raw = json.loads(r.raw_output or "{}")
+                db_name, db_type = raw.get("db_name", ""), raw.get("db_type", "")
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+            items.append({"id": r.id, "db_name": db_name, "db_type": db_type,
+                          "conclusion": r.conclusion or "", "root_cause": r.root_cause or "",
+                          "suggestion": r.suggestion or "", "created_at": str(r.created_at)})
     return {"code": 200, "message": "success", "data": {
-        "items": [{"id": r.id, "conclusion": r.conclusion or "", "root_cause": r.root_cause or "",
-                   "suggestion": r.suggestion or "", "created_at": str(r.created_at)} for r in rows],
-        "total": total, "page": page, "page_size": page_size,
+        "items": items, "total": total, "page": page, "page_size": page_size,
     }}
+
+
+@router.get("/{conn_id}/metrics")
+async def latest_metrics(conn_id: int, user=Depends(require_any_user)):
+    """最新一次采集的全部监控指标（按 metric_name 取最新）"""
+    if not await check_db_permission(user, conn_id, "read"):
+        return _deny()
+    from sqlalchemy import func as _func
+    async with async_session() as session:
+        sub = (select(DBMetricSnapshot.metric_name, _func.max(DBMetricSnapshot.id).label("mid"))
+               .where(DBMetricSnapshot.db_connection_id == conn_id)
+               .group_by(DBMetricSnapshot.metric_name).subquery())
+        rows = (await session.execute(
+            select(DBMetricSnapshot).join(sub, sub.c.mid == DBMetricSnapshot.id)
+            .order_by(DBMetricSnapshot.metric_type, DBMetricSnapshot.metric_name)
+        )).scalars().all()
+    return {"code": 200, "message": "success", "data": [
+        {"metric_type": r.metric_type, "metric_name": r.metric_name,
+         "value": r.value, "detail": r.detail or "", "sampled_at": str(r.sampled_at)} for r in rows
+    ]}
 
 
 @router.get("/{conn_id}/progress")
