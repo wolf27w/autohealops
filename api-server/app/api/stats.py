@@ -467,12 +467,12 @@ async def dashboard(
                                     "self_healed": self_healed_map.get(bk, 0)})
                 t += timedelta(days=7)
 
-        # --- ai_result_dist（**当前态**分布，随告警关闭自动收敛） ---
+        # --- ai_result_dist（**当前态**分布，不随时间窗变化；仍受集群/项目筛选） ---
         #   self_heal = AI 自愈成功（status=self_healed）
         #   approval  = 当前待审批（awaiting_approval）
         #   manual    = 当前需人工（manual_required 且未关闭）
         #   failed    = 当前未处理且未转人工（pending 且非 manual_required）
-        # 注：统计口径随「时间范围」；已解决的历史告警不计入，避免"分布"看着像没处理
+        # 注：之前按 detected_at 时间窗过滤，实时(10m)窗口下几乎恒为空 → 取消时间窗
         ai_dist = (await session.execute(
             _filter(select(
                 func.coalesce(func.sum(func.if_(Alert.status == "self_healed", 1, 0)), 0).label("self_heal"),
@@ -481,7 +481,7 @@ async def dashboard(
                                                     Alert.status.in_(["pending", "awaiting_approval"])), 1, 0)), 0).label("manual"),
                 func.coalesce(func.sum(func.if_(and_(Alert.status == "pending",
                                                     Alert.manual_required.is_(False)), 1, 0)), 0).label("failed"),
-            ).where(Alert.detected_at >= range_since, Alert.detected_at <= range_end))
+            ))
         )).one()
         ai_result_dist = [
             {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},
