@@ -126,6 +126,7 @@ async def dashboard(
     end: str = Query("", description="自定义结束时间（YYYY-MM-DD HH:mm[:ss]）"),
     cluster_id: int | None = Query(None),
     project_id: int | None = Query(None),
+    ai_range: str = Query("", description="AI 诊断结果分布窗口：24h/7d/30d；空或 follow=跟随上方时间筛选"),
     user=Depends(require_any_user),
 ):
     """仪表盘 / 大屏聚合数据（一次拉取，减少往返；Redis 缓存 15s）
@@ -134,10 +135,11 @@ async def dashboard(
     db_health/action_stat/action_timeline/cluster_waterline 区块。
     range/cluster_id/project_id 仅作用于新增区块与趋势，不影响原有 core/ai_runtime/trend_* 兜底统计。
     """
-    cache_key = "cache:dashboard:v2"
-    if range_ != "24h" or cluster_id is not None or project_id is not None or start or end:
-        cache_key = (f"cache:dashboard:v2:{range_}:{start}:{end}:"
-                     f"{cluster_id if cluster_id is not None else '-'}:{project_id if project_id is not None else '-'}")
+    cache_key = "cache:dashboard:v3"
+    if range_ != "24h" or cluster_id is not None or project_id is not None or start or end or ai_range:
+        cache_key = (f"cache:dashboard:v3:{range_}:{start}:{end}:"
+                     f"{cluster_id if cluster_id is not None else '-'}:{project_id if project_id is not None else '-'}:"
+                     f"{ai_range or '-'}")
     try:
         cached = await redis_pool.get(cache_key)
         if cached:
@@ -473,7 +475,16 @@ async def dashboard(
         #   manual         = 人工处理（manual_required 且已 resolved 且无通过审批）
         #   auto_resolved  = 自动恢复关闭（resolved 且非人工且无审批：指标回落/删规则等）
         #   open           = 未解决（pending / awaiting_approval）
-        # 窗口跟随页面顶部的时间筛选（实时=10m / range / 自定义 start~end），与告警趋势同口径
+        # 窗口：ai_range 指定（24h/7d/30d）；空/follow = 跟随页面顶部时间筛选，与告警趋势同口径
+        # 分布图窗口：ai_range 指定固定窗口；空/follow = 跟随上方时间筛选
+        if ai_range == "24h":
+            _ai_since, _ai_until = now - timedelta(hours=24), now
+        elif ai_range == "7d":
+            _ai_since, _ai_until = now - timedelta(days=7), now
+        elif ai_range == "30d":
+            _ai_since, _ai_until = now - timedelta(days=30), now
+        else:  # follow / 未指定
+            _ai_since, _ai_until = range_since, range_end
         _approved_ex = exists(select(Approval.id).where(
             Approval.alert_id == Alert.id, Approval.status == "approved"))
         ai_dist = (await session.execute(
@@ -487,9 +498,10 @@ async def dashboard(
                                                     Alert.manual_required.isnot(True),
                                                     not_(_approved_ex)), 1, 0)), 0).label("auto_resolved"),
                 func.coalesce(func.sum(func.if_(Alert.status.in_(["pending", "awaiting_approval"]), 1, 0)), 0).label("open"),
-            )).where(Alert.detected_at >= range_since, Alert.detected_at <= range_end)
+            )).where(Alert.detected_at >= _ai_since, Alert.detected_at <= _ai_until)
         )).one()
-        ai_window = {"since": str(range_since), "until": str(range_end), "range": range_}
+        ai_window = {"since": str(_ai_since), "until": str(_ai_until),
+                     "window": ai_range or "follow", "range": range_}
         ai_result_dist = [
             {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},
             {"key": "approval", "count": int(ai_dist.approval or 0)},

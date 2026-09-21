@@ -56,13 +56,11 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     setCustomRange([v[0], v[1]])
     setLive(false)  // 选了具体时间段 → 退出实时模式
   }
-  // 分布图窗口文案（跟随顶部时间筛选）：实时=10 分钟滚动窗口 / 自定义=所选时间段
-  const aiWinLabel = live
-    ? `实时 ${RANGE_MINUTES} 分钟`
-    : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}` : '')
   const rangeLabel = live
     ? `实时（最近 ${RANGE_MINUTES} 分钟，自动刷新）`
     : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
+  // AI 诊断结果分布窗口（默认最近 24 小时；可选跟随上方时间筛选）
+  const [aiRange, setAiRange] = useState<string>('24h')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
 
@@ -85,14 +83,14 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
 
   // 仪表盘主数据（5s 轮询；筛选变化自动重查）
   const { data, isFetching, refetch } = useQuery<DashboardData>({
-    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
+    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId, aiRange],
     queryFn: () => (!live && customRange
       ? getDashboard({
           start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
           end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
-          cluster_id: clusterId,
+          cluster_id: clusterId, ai_range: aiRange,
         })
-      : getDashboard({ range: '10m', cluster_id: clusterId })),
+      : getDashboard({ range: '10m', cluster_id: clusterId, ai_range: aiRange })),
     refetchInterval: 5000,
   })
 
@@ -259,7 +257,19 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title={`AI 诊断结果分布${aiWinLabel ? `（${aiWinLabel}）` : ''}`} size="small" style={{ height: '100%' }}>
+          <Card
+            title="AI 诊断结果分布" size="small" style={{ height: '100%' }}
+            extra={
+              <Select size="small" value={aiRange} onChange={setAiRange} style={{ width: 118 }}
+                options={[
+                  { value: '24h', label: '最近 24 小时' },
+                  { value: '7d', label: '最近 7 天' },
+                  { value: '30d', label: '最近 30 天' },
+                  { value: 'follow', label: '跟随上方' },
+                ]}
+              />
+            }
+          >
             {aiTotal > 0 ? (
               <>
                 <div style={{ position: 'relative' }}>
