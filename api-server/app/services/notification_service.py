@@ -533,7 +533,7 @@ async def _remember_approval_message(approval_id: int, resp: dict | None, text: 
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        await r.setex(f"approval_msg:{approval_id}", 7 * 86400, json.dumps(
+        await r.setex(f"approval_notify:{approval_id}", 7 * 86400, json.dumps(
             {"message_id": mid, "text": text, "app_id": app_id, "app_secret": app_secret},
             ensure_ascii=False))
     except Exception as e:  # noqa: BLE001
@@ -545,7 +545,7 @@ async def update_approval_message(approval_id: int, status: str, decided_by: str
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        raw = await r.get(f"approval_msg:{approval_id}")
+        raw = await r.get(f"approval_notify:{approval_id}")
         if not raw:
             return
         info = json.loads(raw)
@@ -561,7 +561,7 @@ async def update_approval_message(approval_id: int, status: str, decided_by: str
         logger.info("审批 %s 群消息已回写：%s", approval_id, label)
         if status != "partially_approved":
             try:
-                await r.delete(f"approval_msg:{approval_id}")
+                await r.delete(f"approval_notify:{approval_id}")
             except Exception:  # noqa: BLE001
                 pass
     else:
