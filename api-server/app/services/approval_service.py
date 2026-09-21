@@ -167,6 +167,77 @@ async def _current_approve_count(approval: Approval) -> int:
     return 1 if (approval.required_level or 3) <= 3 else 2
 
 
+def _format_plan_text(raw: str) -> str:
+    """把 plan_json 渲染成可读文本（能解析则取 note + 步骤动作，否则原样截断）"""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw[:200]
+    if isinstance(data, dict):
+        parts: list[str] = []
+        note = str(data.get("note") or "").strip()
+        if note:
+            parts.append(note)
+        steps = data.get("steps") or []
+        if isinstance(steps, list):
+            acts = [str(s.get("action") or s.get("type") or "") for s in steps if isinstance(s, dict)]
+            acts = [a for a in acts if a]
+            if acts:
+                parts.append("步骤: " + " → ".join(acts))
+        text = "；".join(parts)
+        return (text or raw)[:300]
+    return raw[:200]
+
+
+async def _build_approval_summary(session, plan: RepairPlan | None, alert_id: int | None = None) -> tuple[str, str]:
+    """构造审批通知摘要：集群 / 命名空间 / 资源 / 故障类型 + 修复方案（或告警详情）。
+
+    修复方案审批（有 plan）与人工协助单（只有 alert）都要能看出**集群**，
+    返回 (summary, risk_level)。
+    """
+    from app.models import Cluster
+
+    alert = None
+    aid = alert_id or (plan.alert_id if plan is not None else None)
+    if aid:
+        alert = await session.get(Alert, aid)
+
+    lines: list[str] = []
+    if alert:
+        cname = ""
+        if alert.cluster_id:
+            c = await session.get(Cluster, alert.cluster_id)
+            cname = (getattr(c, "name", "") or "") if c else ""
+            if not cname:
+                cname = f"#{alert.cluster_id}"
+        if cname:
+            lines.append(f"集群: {cname}")
+        if alert.namespace:
+            lines.append(f"命名空间: {alert.namespace}")
+        if alert.resource_type or alert.resource_name:
+            lines.append(f"资源: {alert.resource_type}/{alert.resource_name}")
+        if alert.fault_type:
+            lines.append(f"故障类型: {alert.fault_type}")
+
+    if plan is not None:
+        pj = (plan.plan_json or "").strip()
+        if pj:
+            lines.append(f"修复方案: {_format_plan_text(pj)}")
+    elif alert:
+        msg = (alert.message or "").strip()
+        if msg:
+            lines.append(f"详情: {msg[:200]}")
+
+    risk = ""
+    if plan is not None and plan.risk_level:
+        risk = plan.risk_level
+    elif alert and alert.severity:
+        risk = alert.severity
+    if not lines and plan is not None and plan.plan_json:
+        lines.append((plan.plan_json or "")[:100])
+    return "\n".join(lines), risk or "medium"
+
+
 async def _notify_current_node(approval: Approval, summary: str, risk: str) -> None:
     """按审批单当前节点类型发送通知（个人消息 + 对应场景群 / @群所有人）"""
     nodes = json.loads(approval.flow_nodes or "[]")
@@ -243,26 +314,12 @@ async def create_approval(plan_id: int, decision_level: int, current_user=None, 
         await session.refresh(approval)
         approval_id = approval.id
 
-        # 取方案摘要（人工协助单无 plan；人工协助单直接展示关联告警的故障信息）
-        summary = ""
-        risk = "medium"
+        # 摘要：集群/命名空间/资源/故障类型 + 修复方案（人工协助单展示告警详情）
+        plan = None
         if plan_id:
             result = await session.execute(select(RepairPlan).where(RepairPlan.id == plan_id))
             plan = result.scalar_one_or_none()
-            summary = (plan.plan_json[:100] if plan else "")
-            risk = plan.risk_level if plan else "medium"
-        elif alert_id:
-            from app.models import Alert
-            alert_row = await session.get(Alert, alert_id)
-            if alert_row:
-                summary = (
-                    f"故障类型: {alert_row.fault_type}\n"
-                    f"资源: {alert_row.resource_type}/{alert_row.resource_name}\n"
-                    f"命名空间: {alert_row.namespace}\n"
-                    f"级别: {alert_row.severity}\n"
-                    f"详情: {(alert_row.message or '')[:200]}"
-                )
-                risk = alert_row.severity or "medium"
+        summary, risk = await _build_approval_summary(session, plan, alert_id)
 
     await _notify_current_node(approval, summary, risk)
     # 审计
@@ -486,9 +543,8 @@ async def _renotify_approval(approval_id: int, next_approver_username: str) -> N
     try:
         async with async_session() as session:
             ap = await session.get(Approval, approval_id)
-            plan = await session.get(RepairPlan, ap.plan_id) if ap else None
-            summary = (plan.plan_json[:100] if plan else "")
-            risk = plan.risk_level if plan else "medium"
+            plan = await session.get(RepairPlan, ap.plan_id) if (ap and ap.plan_id) else None
+            summary, risk = await _build_approval_summary(session, plan, ap.alert_id if ap else None)
             u = (await session.execute(
                 select(User).where(User.username == next_approver_username)
             )).scalars().first()
@@ -595,9 +651,8 @@ async def timeout_handler() -> None:
                 escalated += 1
                 try:
                     async with async_session() as s2:
-                        plan = await s2.get(RepairPlan, a.plan_id)
-                    summary = (plan.plan_json[:100] if plan else "")
-                    risk = plan.risk_level if plan else "medium"
+                        plan = await s2.get(RepairPlan, a.plan_id) if a.plan_id else None
+                        summary, risk = await _build_approval_summary(s2, plan, a.alert_id)
                     await _notify_current_node(ap, summary, risk)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("审批节点升级通知失败: %s", e)
