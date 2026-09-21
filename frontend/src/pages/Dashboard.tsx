@@ -107,6 +107,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const aiDistData = (data?.ai_result_dist ?? []).map((d) => ({
     rawKey: d.key,
     key: AI_RESULT_META[d.key]?.label ?? d.key,
+    color: AI_RESULT_META[d.key]?.color ?? '#8c8c8c',
     value: d.count ?? d.value ?? 0,
   }))
   // 百分比展示（老板要求：AI 诊断结果分布用百分比）
@@ -115,6 +116,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     ...d,
     pct: aiTotal ? Math.round((d.value / aiTotal) * 1000) / 10 : 0,
   }))
+  // 只画非零扇区：零值扇区的外侧标签会堆在同一点上重叠（图例仍展示四项含 0）
+  const aiDistDraw = aiDistPct.filter((d) => (d.value || 0) > 0)
   const faultTopData = (data?.fault_top ?? []).map((f) => ({ fault_type: f.fault_type, count: f.count }))
   const realtimeAlerts: RealtimeAlert[] = data?.realtime_alerts ?? []
   const abnormalPods: AbnormalPod[] = data?.abnormal_pods ?? []
@@ -251,11 +254,11 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         </Col>
         <Col xs={24} lg={8}>
           <Card title="AI 诊断结果分布" size="small">
-            {aiDistPct.length ? (
+            {aiTotal > 0 ? (
               <>
                 <div style={{ position: 'relative' }}>
                   <Pie
-                    data={aiDistPct} angleField="value" colorField="key"
+                    data={aiDistDraw} angleField="value" colorField="color"
                     height={220} radius={0.78} innerRadius={0.6}
                     legend={false}
                     label={{
@@ -264,7 +267,6 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                       style: { fontSize: 14, fontWeight: 600, fill: '#1f2d3d' },
                     }}
                     tooltip={{ items: [{ channel: 'y', name: '告警数', valueFormatter: (v: number) => `${v} 条（${aiTotal ? Math.round((v / aiTotal) * 1000) / 10 : 0}%）` }] }}
-                    scale={{ color: { range: ['#52c41a', '#1677ff', '#faad14', '#ff4d4f'] } }}
                   />
                   {/* 环形中心总量（HTML 叠层，字号可控） */}
                   <div style={{
@@ -278,7 +280,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 {/* 自定义图例（中文更大 + 数量 + 百分比） */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 4 }}>
                   {aiDistPct.map((d) => {
-                    const color = AI_RESULT_META[Object.keys(AI_RESULT_META).find((k) => AI_RESULT_META[k].label === d.key) ?? '']?.color ?? '#8c8c8c'
+                    const color = d.color
                     return (
                       <span key={d.key} style={{ display: 'inline-flex', alignItems: 'center', fontSize: 14, color: '#1f2d3d' }}>
                         <span style={{ width: 10, height: 10, borderRadius: 2, background: color, marginRight: 6, display: 'inline-block' }} />
