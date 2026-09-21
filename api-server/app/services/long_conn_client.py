@@ -3,7 +3,7 @@
 
 按 NotificationConfig.transport_mode == "long_conn" 的渠道，启动对应长连接客户端：
 - 钉钉 Stream 模式（可选依赖 dingtalk-stream）
-- 飞书长连接（可选依赖 lark-oapi / websockets）
+- 飞书长连接（可选依赖 lark-oapi）
 
 SDK 均为可选依赖，未安装时优雅降级：日志提示 + 跳过启动，不影响 webhook 回调模式。
 事件统一分发到 approval_service.handle_callback（复用幂等 + 身份映射 + 审批状态更新）。
@@ -11,9 +11,11 @@ SDK 均为可选依赖，未安装时优雅降级：日志提示 + 跳过启动�
 设计要点（MESSAGING.md）：
 - 断线自动重连（SDK 自带或本框架补重连）
 - 长连接无法触达时，网页审批兜底（平台内审批页）
+- 飞书长连接：凭证取渠道 app_id/app_secret（应用机器人），缺失回落系统设置（平台级）
 """
 import asyncio
 import json
+import threading
 
 from sqlalchemy import select
 
@@ -22,18 +24,40 @@ from app.core.logging import get_logger
 from app.models import NotificationConfig
 from app.services import approval_service
 
+try:  # 可选依赖：lark-oapi（飞书长连接）
+    import lark_oapi as lark  # noqa: F401
+    from lark_oapi.ws import client as _lark_ws_client
+    _LARK_OK = True
+except ImportError:  # pragma: no cover
+    lark = None
+    _lark_ws_client = None
+    _LARK_OK = False
+
+# lark-oapi 用模块级 loop 跑 run_until_complete；模块导入若发生在 uvicorn 事件循环内，
+# 会拿到正在运行的 loop 导致线程里 run_until_complete 报错 → 强制换独立 loop。
+if _LARK_OK:
+    try:
+        _lark_ws_client.loop = asyncio.new_event_loop()
+    except Exception:  # noqa: BLE001
+        pass
+
 logger = get_logger("api-server.long_conn")
 
 # 全局运行中的客户端任务引用（防 GC）
-_running_clients: dict[int, asyncio.Task] = {}
+_running_clients: dict = {}
 # 已建连的飞书应用 app_id（同一应用重复建连会互顶，按 app_id 去重）
 _running_feishu_apps: set[str] = set()
+# lark-oapi 的 ws 客户端共用模块级 loop，同时只能跑一个（多应用需各自独立 loop，暂不支持）
+_feishu_ws_started = False
+# uvicorn 主事件循环（长连接回调线程需切回它执行协程）
+_main_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def _handle_incoming(channel: str, external_user_id: str, text: str, source_msg_id: str):
     """长连接收到消息 → 统一分发到审批反馈处理"""
     from app.services.messaging import parse_feedback
 
+    logger.info("长连接收到消息(%s) 用户=%s: %s", channel, (external_user_id or "")[:10], (text or "")[:60])
     action, approval_id, comment = parse_feedback(text)
     if not action or not approval_id:
         return
@@ -98,10 +122,8 @@ async def _start_dingtalk_stream(cfg: NotificationConfig) -> None:
 # ============ 飞书长连接 ============
 
 async def _start_feishu_long_conn(cfg: NotificationConfig) -> None:
-    """启动飞书长连接（可选依赖 lark-oapi）——按渠道配置（stream_config 存凭证）"""
-    try:
-        import lark_oapi as lark  # noqa: PLC0415
-    except ImportError:
+    """启动飞书长连接（可选依赖 lark-oapi）——凭证取渠道 app_id/app_secret"""
+    if not _LARK_OK:
         logger.warning("lark-oapi 未安装，飞书长连接跳过（安装后重启生效）；可用 webhook 回调模式替代")
         return
 
@@ -124,31 +146,40 @@ async def _start_feishu_long_conn(cfg: NotificationConfig) -> None:
         logger.info("渠道 %s 未配飞书凭证，已由全局长连接承担（系统设置），跳过", cfg.name)
         return
     logger.warning("飞书长连接缺少 app_id/app_secret，跳过（可在通知渠道填应用凭证）")
-    return
 
 
 async def start_feishu_long_conn_global() -> None:
     """启动全局飞书长连接（凭证从系统设置表 feishu_app_id/feishu_app_secret 读取，平台级唯一应用）"""
-    if _running_clients.get("feishu_global"):
+    if not _LARK_OK:
         return
     from app.services.system_setting_service import get_setting
     app_id = await get_setting("feishu_app_id", "")
     app_secret = await get_setting("feishu_app_secret", "")
     if not app_id or not app_secret:
-        logger.info("飞书凭证未配置，长连接不启动（配置后在系统设置填写 feishu_app_id/feishu_app_secret）")
+        logger.info("飞书凭证未配置，长连接不启动（可在通知渠道填应用凭证，或系统设置填平台级应用）")
         return
     await _launch_feishu_ws(app_id, app_secret, source="全局")
 
 
+def _dispatch_incoming(open_id: str, text: str, msg_id: str) -> None:
+    """从长连接 SDK 线程把事件切回 uvicorn 主事件循环执行"""
+    if not text:
+        return
+    try:
+        if _main_loop and not _main_loop.is_closed():
+            asyncio.run_coroutine_threadsafe(_handle_incoming("feishu", open_id, text, msg_id), _main_loop)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("飞书事件分发失败: %s", e)
+
+
 async def _launch_feishu_ws(app_id: str, app_secret: str, source: str) -> None:
-    """用 lark-oapi WebSocket 启动飞书长连接（SDK 内部线程，断线自动重连）"""
+    """用 lark-oapi WebSocket 启动飞书长连接（阻塞式 start() 放独立线程，断线 SDK 自愈）"""
+    global _feishu_ws_started, _main_loop
     if app_id in _running_feishu_apps:
         logger.info("飞书长连接(app_id=%s)已启动，跳过（%s）", app_id[:8], source)
         return
-    try:
-        import lark_oapi as lark  # noqa: PLC0415
-    except ImportError:
-        logger.warning("lark-oapi 未安装，飞书长连接跳过")
+    if _feishu_ws_started:
+        logger.info("飞书长连接已由其它应用占用，跳过（%s，app_id=%s）", source, app_id[:8])
         return
     try:
         handler = _build_feishu_handler()
@@ -157,56 +188,88 @@ async def _launch_feishu_ws(app_id: str, app_secret: str, source: str) -> None:
             event_handler=handler,
             log_level=lark.LogLevel.WARNING,
         )
-        # 长连接启动在独立线程（SDK 内部），这里不阻塞事件循环
-        client.start()
+        _main_loop = asyncio.get_running_loop()
         _running_feishu_apps.add(app_id)
+        _feishu_ws_started = True
+        threading.Thread(target=_run_feishu_ws, args=(client, source), name=f"feishu-ws-{app_id[:8]}", daemon=True).start()
         logger.info("飞书长连接已启动（%s，app_id=%s）", source, app_id[:8])
     except Exception as e:  # noqa: BLE001
         logger.warning("飞书长连接启动失败（%s）: %s", source, e)
 
 
+def _run_feishu_ws(client, source: str) -> None:
+    """阻塞式运行飞书长连接（SDK 内部自动重连）"""
+    try:
+        client.start()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("飞书长连接异常退出（%s）: %s", source, e)
+
+
+def _extract_text(msg_type: str, content: str) -> str:
+    """从飞书消息 content(JSON 字符串) 抽文本"""
+    try:
+        doc = json.loads(content) if content else {}
+    except (json.JSONDecodeError, TypeError):
+        return content or ""
+    if not isinstance(doc, dict):
+        return ""
+    if msg_type == "text":
+        return doc.get("text", "") or ""
+    if msg_type == "post":  # 富文本
+        parts: list[str] = []
+        for para in doc.get("content") or []:
+            for el in para or []:
+                if isinstance(el, dict) and el.get("text"):
+                    parts.append(el["text"])
+        return "".join(parts)
+    return ""
+
+
 def _build_feishu_handler():
-    """构建飞书事件处理器（延迟执行 _handle_incoming）"""
-    import lark_oapi as lark  # noqa: PLC0415
+    """构建飞书事件处理器（lark-oapi 1.7.x EventDispatcherHandler.builder 风格）
 
-    def do_handle(data: lark.ws.Client, message: lark.ws.Message):
+    - p2.im.message.receive_v1：群内文本/富文本回复
+    - p2.card.action.trigger：卡片按钮点击
+    """
+    from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
+
+    def on_message(data) -> None:
         try:
-            event = message.event
-            msg_type = event.message.message_type if event.message else ""
-            text = ""
-            sender_open_id = ""
-            if hasattr(event, "sender") and event.sender:
-                sender = event.sender.sender_id
-                sender_open_id = getattr(sender, "open_id", "") or ""
-            if msg_type == "text":
-                text = (event.message.content or "").strip()
-                try:
-                    text = json.loads(text).get("text", text)
-                except json.JSONDecodeError:
-                    pass
-            elif msg_type == "interactive":
-                action = getattr(event, "action", None)
-                if action and getattr(action, "value", None):
-                    val = action.value
-                    text = val.get("action", "") if isinstance(val, dict) else str(val)
-            msg_id = getattr(event.message, "message_id", "") if event.message else ""
-            if text:
-                # 长连接事件循环在 SDK 线程，这里用 asyncio.run_coroutine_threadsafe 回到主循环
-                try:
-                    loop = asyncio.get_event_loop()
-                    asyncio.run_coroutine_threadsafe(
-                        _handle_incoming("feishu", sender_open_id, text, msg_id), loop,
-                    )
-                except RuntimeError:
-                    asyncio.create_task(_handle_incoming("feishu", sender_open_id, text, msg_id))
+            event = getattr(data, "event", None)
+            msg = getattr(event, "message", None)
+            sender = getattr(event, "sender", None)
+            open_id = getattr(getattr(sender, "sender_id", None), "open_id", "") or ""
+            msg_type = getattr(msg, "message_type", "") or ""
+            text = _extract_text(msg_type, getattr(msg, "content", "") or "")
+            msg_id = getattr(msg, "message_id", "") or ""
+            _dispatch_incoming(open_id, (text or "").strip(), msg_id)
         except Exception as e:  # noqa: BLE001
-            logger.warning("飞书长连接事件处理异常: %s", e)
+            logger.warning("飞书消息事件处理异常: %s", e)
 
-    class _Handler(lark.ws.EventDispatcherHandler):
-        def handle(self, message: lark.ws.Message):
-            do_handle(None, message)
+    def on_card(data):
+        try:
+            event = getattr(data, "event", None)
+            action = getattr(event, "action", None)
+            val = getattr(action, "value", None)
+            if isinstance(val, dict):
+                text = val.get("action", "") or ""
+            elif val:
+                text = str(val)
+            else:
+                text = ""
+            open_id = getattr(getattr(event, "operator", None), "open_id", "") or ""
+            msg_id = getattr(getattr(event, "context", None), "open_message_id", "") or ""
+            _dispatch_incoming(open_id, str(text).strip(), msg_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("飞书卡片事件处理异常: %s", e)
+        return P2CardActionTriggerResponse()
 
-    return _Handler()
+    return (
+        lark.EventDispatcherHandler.builder("", "")
+        .register_p2_im_message_receive_v1(on_message)
+        .register_p2_card_action_trigger(on_card)
+        .build()
+    )
 
 
 # ============ 管理器 ============
