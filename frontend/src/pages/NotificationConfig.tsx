@@ -83,7 +83,13 @@ export default function NotificationConfig() {
   const [groupLoading, setGroupLoading] = useState(false)
   const channelType = Form.useWatch('channel_type', form)
   const sendMode = Form.useWatch('send_mode', form)
-  const useAppMode = channelType === 'feishu' && sendMode === 'app'
+  const transportMode = Form.useWatch('transport_mode', form)
+  const sceneValue = Form.useWatch('scene', form)
+  const isFeishu = channelType === 'feishu'
+  const isDingTalk = channelType === 'dingtalk'
+  const useAppMode = isFeishu && sendMode === 'app'
+  const sceneHasAlert = sceneValue === 'alert' || sceneValue === 'both'
+  const imTplKey = isFeishu ? 'im_feishu' : isDingTalk ? 'im_dingtalk' : 'im_wechat'
 
   const loadLogs = (page = 1) => {
     getNotificationLogs({ page, page_size: LOG_PAGE_SIZE }).then((d) => {
@@ -150,10 +156,13 @@ export default function NotificationConfig() {
 
   const handleSubmit = async () => {
     const values = await form.validateFields()
+    // 模板：只显示当前渠道一套，其余渠道保留已存值（不因隐藏被清空）
+    let imExisting: Record<string, string> = {}
+    try { imExisting = JSON.parse((editing as NotificationConfig | null)?.im_template || '{}') } catch { imExisting = {} }
     const im_template = JSON.stringify({
-      dingtalk: values.im_dingtalk || '',
-      wechat: values.im_wechat || '',
-      feishu: values.im_feishu || '',
+      dingtalk: values.im_dingtalk ?? imExisting.dingtalk ?? '',
+      wechat: values.im_wechat ?? imExisting.wechat ?? '',
+      feishu: values.im_feishu ?? imExisting.feishu ?? '',
     })
     const payload: Record<string, unknown> = {
       ...values,
@@ -312,7 +321,7 @@ export default function NotificationConfig() {
           <Form.Item name="channel_type" label="渠道" rules={[{ required: true }]}>
             <Select options={CHANNEL_OPTIONS} disabled={!!editing} />
           </Form.Item>
-          {channelType === 'feishu' && (
+          {isFeishu && (
             <Form.Item name="send_mode" label="发送方式" rules={[{ required: true }]}
               tooltip="群机器人 webhook：单向通知；应用机器人：填飞书自建应用 App ID/Secret，消息由该机器人经 IM API 发出">
               <Select options={SEND_MODE_OPTIONS} />
@@ -337,48 +346,58 @@ export default function NotificationConfig() {
               </Form.Item>
             </>
           ) : (
-            <Form.Item name="webhook_url" label="Webhook URL（飞书填群机器人 webhook）" rules={[{ required: true }]}><Input /></Form.Item>
+            <>
+              <Form.Item name="webhook_url"
+                label={`Webhook URL（${CHANNEL_OPTIONS.find((o) => o.value === channelType)?.label || ''}群机器人 webhook）`}
+                rules={[{ required: true }]}><Input /></Form.Item>
+              <Form.Item name="secret" label={isDingTalk ? '加签密钥 secret（编辑留空=不修改）' : '加签密钥（编辑留空=不修改）'}>
+                <Input.Password />
+              </Form.Item>
+            </>
           )}
-          <Form.Item name="secret" label="加签密钥（编辑留空=不修改）"><Input.Password /></Form.Item>
           <Form.Item name="scene" label="用途" rules={[{ required: true }]}>
             <Select options={SCENE_OPTIONS} />
           </Form.Item>
-          <Form.Item name="namespaces" label="告警 namespace 匹配（仅告警机器人，留空=全部）"
-            tooltip="不同 namespace 的告警发到不同群：填该群负责的 namespace，多个用回车分隔；留空表示接收所有 namespace 的告警（默认兜底群）">
-            <Select mode="tags" placeholder="如 qa-eft、qa-bgs，回车添加；留空=全部" tokenSeparators={[',', '，']} />
-          </Form.Item>
-          <Form.Item name="sources" label="告警来源（仅告警机器人，留空=全部）"
-            tooltip="选择该渠道接收哪些来源的告警；留空=全部来源（容器/集群/日志/数据库）">
-            <Select mode="multiple" allowClear placeholder="留空=全部来源" options={SOURCE_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="transport_mode" label="传输模式" rules={[{ required: true }]}>
-            <Select options={TRANSPORT_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="feedback_mode" label="反馈方式" rules={[{ required: true }]}>
-            <Select options={FEEDBACK_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="stream_config" label="长连接参数（JSON，可选）">
-            <Input.TextArea rows={3} placeholder='{"appKey":"...","appSecret":"..."}' />
-          </Form.Item>
-          <Form.Item label="IM 通知模板（按渠道各一套，留空用内置默认）">
+          {sceneHasAlert && (
+            <>
+              <Form.Item name="namespaces" label="告警 namespace 匹配（留空=全部）"
+                tooltip="不同 namespace 的告警发到不同群：填该群负责的 namespace，多个用回车分隔；留空表示接收所有 namespace 的告警（默认兜底群）">
+                <Select mode="tags" placeholder="如 qa-eft、qa-bgs，回车添加；留空=全部" tokenSeparators={[',', '，']} />
+              </Form.Item>
+              <Form.Item name="sources" label="告警来源（留空=全部）"
+                tooltip="选择该渠道接收哪些来源的告警；留空=全部来源（容器/集群/日志/数据库）">
+                <Select mode="multiple" allowClear placeholder="留空=全部来源" options={SOURCE_OPTIONS} />
+              </Form.Item>
+            </>
+          )}
+          {(isFeishu || isDingTalk) && (
+            <Form.Item name="transport_mode" label={isDingTalk ? '传输模式（钉钉 Stream）' : '传输模式'} rules={[{ required: true }]}>
+              <Select options={TRANSPORT_OPTIONS} />
+            </Form.Item>
+          )}
+          {isDingTalk && transportMode === 'long_conn' && (
+            <Form.Item name="stream_config" label="钉钉长连接参数（JSON）"
+              tooltip='{"appKey":"...","appSecret":"..."}'>
+              <Input.TextArea rows={2} placeholder='{"appKey":"...","appSecret":"..."}' />
+            </Form.Item>
+          )}
+          {(isFeishu || isDingTalk) && (
+            <Form.Item name="feedback_mode" label="反馈方式" rules={[{ required: true }]}
+              tooltip="群里回复审批的方式：文本回复 / 卡片按钮">
+              <Select options={FEEDBACK_OPTIONS} />
+            </Form.Item>
+          )}
+          <Form.Item label={`IM 通知模板（${CHANNEL_OPTIONS.find((o) => o.value === channelType)?.label || '当前渠道'}，留空用内置默认）`}>
             <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>{IM_TEMPLATE_PLACEHOLDER_HINT}</div>
-            <Form.Item name="im_dingtalk" noStyle>
-              <Input.TextArea rows={3} placeholder={`钉钉模板（点右侧按钮套预置）`} style={{ marginBottom: 8 }} />
-            </Form.Item>
-            <Form.Item name="im_wechat" noStyle>
-              <Input.TextArea rows={3} placeholder="企微模板" style={{ marginBottom: 8 }} />
-            </Form.Item>
-            <Form.Item name="im_feishu" noStyle>
-              <Input.TextArea rows={3} placeholder="飞书模板" />
+            <Form.Item name={imTplKey} noStyle>
+              <Input.TextArea rows={3} placeholder="通知消息模板，点下方按钮套预置" />
             </Form.Item>
             <div style={{ marginTop: 8 }}>
-              {['dingtalk', 'wechat', 'feishu'].map((ch) => (
-                <Button key={ch} size="small" style={{ marginRight: 8 }} onClick={() => {
-                  form.setFieldsValue({ [`im_${ch}`]: IM_TEMPLATE_PRESET[ch as keyof typeof IM_TEMPLATE_PRESET] })
-                }}>
-                  套 {ch} 预置模板
-                </Button>
-              ))}
+              <Button size="small" onClick={() => {
+                form.setFieldsValue({ [imTplKey]: IM_TEMPLATE_PRESET[(isFeishu ? 'feishu' : isDingTalk ? 'dingtalk' : 'wechat') as keyof typeof IM_TEMPLATE_PRESET] })
+              }}>
+                套预置模板
+              </Button>
             </div>
           </Form.Item>
           {editing && (
