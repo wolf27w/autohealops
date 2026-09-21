@@ -6,9 +6,9 @@
 巡检开关按集群（clusters.inspect_enabled），关闭则不生成报告。
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -179,6 +179,20 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         report_data["report_id"] = report.id
 
     return {"code": 200, "message": "success", "data": report_data}
+
+
+async def cleanup_old_inspection_reports(days: int = 30) -> int:
+    """清理超过保留期的巡检/诊断报告（task_type=cluster/db），默认保留 30 天"""
+    cutoff = datetime.now() - timedelta(days=days)
+    async with async_session() as session:
+        result = await session.execute(
+            delete(DiagnosticReport).where(
+                DiagnosticReport.task_type.in_(["cluster", "db"]),
+                DiagnosticReport.created_at < cutoff,
+            )
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
 
 
 async def list_reports(cluster_id: int, limit: int = 20) -> list[dict]:

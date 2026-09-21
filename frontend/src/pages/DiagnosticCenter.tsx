@@ -9,7 +9,7 @@ import { Line } from '@ant-design/charts'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, getSlowSQL, collectSlowSQL, getSlowSQLTrend,
-  runDbDiagnosis, getDbDiagnosisReports, getDbTrends,
+  runDbDiagnosis, getDbDiagnosisReports, getDbTrends, downloadInspectionReport,
 } from '../services/api'
 
 interface DBReport {
@@ -115,7 +115,20 @@ function ReportsTab() {
             { title: '结论', dataIndex: 'conclusion', ellipsis: true },
             { title: '根因', dataIndex: 'root_cause', ellipsis: true },
             { title: '时间', dataIndex: 'created_at', width: 170 },
-            { title: '操作', width: 80, render: (_, r) => <Button size="small" onClick={() => setDetail(r)}>详情</Button> },
+            { title: '操作', width: 140, render: (_, r) => (
+              <Space>
+                <Button size="small" onClick={() => setDetail(r)}>详情</Button>
+                <Button size="small" onClick={async () => {
+                  try {
+                    const blob = await downloadInspectionReport(r.id)
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url; a.download = `db-inspect-${r.id}.md`; a.click()
+                    URL.revokeObjectURL(url)
+                  } catch { message.error('下载失败') }
+                }}>下载</Button>
+              </Space>
+            ) },
           ]} />
       </Card>
       <Drawer title={`诊断报告 #${detail?.id}`} open={!!detail} onClose={() => setDetail(null)} width={720}>

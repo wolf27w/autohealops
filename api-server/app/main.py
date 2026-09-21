@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.api import (
     agent, ai_proxy, alert_policies, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
-    db_diagnosis, decisions, diagnostic, executions, fault_diagnosis, im_groups, in_app_messages, knowledge, log_alert_rules, log_sources, logs, notifications, on_duty, permissions,
+    db_diagnosis, decisions, diagnostic, executions, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, notifications, on_duty, permissions,
     projects, repair_records, report_schedules, resource_alert_rules, resources, self_heal_rules, stats, tasks, terminal, tickets, users, webhooks,
 )
 from app.api import settings as settings_api
@@ -91,6 +91,14 @@ async def _maintenance_loop() -> None:
                     logger.info("资源快照清理完成：删除 %d 条历史记录", n)
             except Exception as e:  # noqa: BLE001
                 logger.warning("资源快照清理 异常: %s", e)
+            # 巡检/诊断报告保留期（30 天）
+            try:
+                from app.services.inspection_service import cleanup_old_inspection_reports
+                n = await cleanup_old_inspection_reports(30)
+                if n:
+                    logger.info("巡检报告清理完成：删除 %d 条超过保留期的报告", n)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("巡检报告清理 异常: %s", e)
 
 
 # 后台循环 task（模块级引用，防 GC）
@@ -342,6 +350,7 @@ app.include_router(notifications.router)
 app.include_router(in_app_messages.router)
 app.include_router(on_duty.router)
 app.include_router(logs.router)
+app.include_router(inspections.router)
 app.include_router(repair_records.router)
 app.include_router(log_alert_rules.router)
 app.include_router(log_sources.router)

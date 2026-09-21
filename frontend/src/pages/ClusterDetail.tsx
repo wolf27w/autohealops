@@ -6,7 +6,7 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport } from '../services/api'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -362,6 +362,20 @@ function InspectModal({ clusterId, clusterName, open, onClose }: { clusterId: nu
   }
   const loadHistory = () => getInspectionReports(clusterId).then((d) => setHistory((d as Array<Record<string, unknown>>) || [])).catch(() => {})
 
+  const downloadReport = async (reportId: number) => {
+    try {
+      const blob = await downloadInspectionReport(reportId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `cluster-inspect-${clusterId}-${reportId}.md`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      message.error('下载失败')
+    }
+  }
+
   useEffect(() => {
     if (!open) return
     setReport(null)
@@ -419,6 +433,9 @@ function InspectModal({ clusterId, clusterName, open, onClose }: { clusterId: nu
               { title: '时间', dataIndex: 'inspected_at', width: 160 },
               { title: '结论', dataIndex: 'summary', ellipsis: true },
               { title: '健康', dataIndex: 'health', width: 90, render: (s: string) => <Tag color={healthColor[s] || 'default'}>{s}</Tag> },
+              { title: '操作', width: 80, render: (_: unknown, r: Record<string, unknown>) => (
+                <Button size="small" onClick={() => downloadReport(Number(r.report_id))}>下载</Button>
+              ) },
             ]}
           />
         </div>

@@ -24,6 +24,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => {
     const body = response.data
+    // 文件下载（blob）：不做业务码解包
+    if (response.config.responseType === 'blob') return body
     if (body && body.code !== 200) {
       message.error(body.message || '请求失败')
       return Promise.reject(new Error(body.message))
@@ -68,6 +70,9 @@ export const healthCheckCluster = (id: number) => http.post(`/clusters/${id}/hea
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })
+// 下载巡检/诊断报告（Markdown 文件）
+export const downloadInspectionReport = (reportId: number) =>
+  api.get(`/inspection-reports/${reportId}/download`, { responseType: 'blob' }) as unknown as Promise<Blob>
 
 // ============ 告警 ============
 export const getAlerts = (params?: PageParams) => http.get<Alert[]>('/alerts', { params })

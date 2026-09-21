@@ -367,5 +367,37 @@ class TestResourceAlertPromql(unittest.TestCase):
         self.assertEqual(SCAN_INTERVAL, 15)
 
 
+class TestInspectionReportRender(unittest.TestCase):
+    """巡检/诊断报告 → Markdown（下载文件用）"""
+
+    def test_cluster_markdown(self):
+        from types import SimpleNamespace
+        from app.api.inspections import render_report_markdown
+        rep = SimpleNamespace(
+            id=7, task_type="cluster", conclusion="一切正常", root_cause="", suggestion="",
+            raw_output='{"cluster_id":1,"health":"healthy","inspected_at":"2026-09-21 10:00",'
+                       '"items":[{"category":"节点","name":"就绪","value":"3/3","ok":true}],'
+                       '"stats":{"nodes":3}}',
+            created_at="2026-09-21 10:00:00",
+        )
+        md = render_report_markdown(rep, "测试环境")
+        self.assertIn("# 集群巡检报告 #7", md)
+        self.assertIn("测试环境", md)
+        self.assertIn("节点", md)
+        self.assertIn("## 原始数据", md)
+
+    def test_db_markdown(self):
+        from types import SimpleNamespace
+        from app.api.inspections import render_report_markdown
+        rep = SimpleNamespace(
+            id=9, task_type="db", conclusion="慢SQL偏多", root_cause="缺索引", suggestion="- 加索引",
+            raw_output='{"db_name":"prod","db_type":"mysql"}', created_at="2026-09-21",
+        )
+        md = render_report_markdown(rep)
+        self.assertIn("数据库巡检报告 #9", md)
+        self.assertIn("prod", md)
+        self.assertIn("加索引", md)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
