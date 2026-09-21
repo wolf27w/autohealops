@@ -40,6 +40,8 @@ class NotificationConfig(Base):
     scene: Mapped[str] = mapped_column(String(20), default="both", index=True)
     # 告警 namespace 匹配（JSON 数组），空=全部
     namespaces: Mapped[str] = mapped_column(Text, default="")
+    # 告警来源过滤（JSON 数组，仅 alert 场景生效）：pod/node/log/db，空=全部
+    sources: Mapped[str] = mapped_column(Text, default="")
     # 传输模式：webhook=回调（有公网）/ long_conn=长连接（无公网，钉钉 Stream / 飞书长连接）
     transport_mode: Mapped[str] = mapped_column(String(20), default="webhook")
     # 发送方式：webhook=群机器人 webhook / app=应用机器人（飞书自建应用 App ID+Secret）

@@ -136,6 +136,22 @@ def _ns_match(cfg: NotificationConfig, namespace: str) -> bool:
     return (namespace or "") in ns_list
 
 
+def _parse_sources(cfg: NotificationConfig) -> list[str]:
+    try:
+        src = json.loads(getattr(cfg, "sources", "") or "[]")
+        return [str(x) for x in src] if isinstance(src, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _source_match(cfg: NotificationConfig, resource_type: str) -> bool:
+    """告警来源匹配：配置 sources 为空 = 全部（pod/node/log/db），否则精确匹配"""
+    src_list = _parse_sources(cfg)
+    if not src_list:
+        return True
+    return (resource_type or "") in src_list
+
+
 async def _resolve_project_notify_config(cluster_id: int, namespace: str) -> tuple[NotificationConfig | None, str]:
     """按 (cluster_id, namespace) 反查项目 → 项目组群通知配置。
 
@@ -428,6 +444,8 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
         nonlocal sent
         if cfg.channel_type not in allowed:
             return
+        if not _source_match(cfg, alert.resource_type):
+            return  # 告警来源不匹配（配置了 sources 时）
         content = _render_alert_content(cfg, alert, project_name, cluster_name)
         if dry_run:
             sent += 1
@@ -622,11 +640,11 @@ async def send_repair_complete_notification(alert: Alert | None, verdict: str) -
     content = f"【API-OPS 修复完成】资源 {alert.namespace or ''}/{alert.resource_name if alert else ''} 修复验证结果：{verdict}"
     if alert:
         project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
-        if project_cfg:
+        if project_cfg and _source_match(project_cfg, alert.resource_type):
             await _send_webhook_with_retry(project_cfg, content, alert.id, receiver=f"项目:{project_name}")
             return
     configs = await _get_configs(SCENE_ALERT)
     for c in configs:
-        if alert and not _ns_match(c, alert.namespace):
+        if alert and (not _ns_match(c, alert.namespace) or not _source_match(c, alert.resource_type)):
             continue
         await _send_webhook_with_retry(c, content, alert.id if alert else None)

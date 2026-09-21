@@ -3,7 +3,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
-  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, Ticket, TicketComment, TicketDetail, User, Workload,
+  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotificationLog, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, Ticket, TicketComment, TicketDetail, User, Workload,
 } from '../types'
 
 const api = axios.create({
@@ -98,7 +98,7 @@ export const updateNotificationConfig = (id: number, data: Payload) => http.put(
 export const deleteNotificationConfig = (id: number) => http.delete(`/notifications/configs/${id}`)
 export const testNotificationConfig = (id: number) => http.post(`/notifications/configs/${id}/test`)
 export const listFeishuChats = (data: Payload) => http.post<{ chat_id: string; name: string }[]>('/notifications/feishu/chats', data)
-export const getNotificationLogs = () => http.get('/notifications/logs')
+export const getNotificationLogs = (params?: PageParams) => http.get<PageResult<NotificationLog>>('/notifications/logs', { params })
 export const getNotifyPolicy = () => http.get<NotifyPolicy>('/notifications/policy')
 export const updateNotifyPolicy = (data: NotifyPolicy) => http.put('/notifications/policy', data)
 

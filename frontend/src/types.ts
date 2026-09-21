@@ -142,6 +142,7 @@ export interface NotificationConfig {
   is_active: boolean
   scene: string
   namespaces: string
+  sources?: string[] // 告警来源过滤 pod/node/log/db，空=全部
   transport_mode: string
   feedback_mode: string
   send_mode?: string // webhook / app（飞书应用机器人）
@@ -167,6 +168,17 @@ export interface NotifyPolicy {
   enabled: boolean
   severity_routes: Record<string, string[]>
   silence_windows: SilenceWindow[]
+}
+
+export interface NotificationLog {
+  id: number
+  config_id?: number
+  alert_id?: number
+  channel?: string
+  receiver?: string
+  status?: string
+  error?: string
+  sent_at?: string
 }
 
 // ============ 工作负载 ============

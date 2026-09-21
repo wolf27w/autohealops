@@ -310,5 +310,25 @@ class TestFeishuExtractText(unittest.TestCase):
         self.assertEqual(_extract_text("image", '{"image_key":"x"}'), "")
 
 
+class TestNotifySourceMatch(unittest.TestCase):
+    """告警来源过滤（通知渠道 sources）"""
+
+    def _cfg(self, sources):
+        from types import SimpleNamespace
+        return SimpleNamespace(sources=sources)
+
+    def test_empty_sources_matches_all(self):
+        from app.services.notification_service import _source_match
+        for rt in ("pod", "node", "log", "db"):
+            self.assertTrue(_source_match(self._cfg(""), rt))
+
+    def test_explicit_sources(self):
+        from app.services.notification_service import _source_match
+        c = self._cfg('["log", "db"]')
+        self.assertTrue(_source_match(c, "log"))
+        self.assertTrue(_source_match(c, "db"))
+        self.assertFalse(_source_match(c, "pod"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

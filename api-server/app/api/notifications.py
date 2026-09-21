@@ -3,7 +3,7 @@
 import json
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import async_session
 from app.middleware.permission import require_admin, require_any_user
@@ -39,6 +39,7 @@ async def list_configs(user=Depends(require_any_user)):
          "webhook_url": c.webhook_url if is_admin else (c.webhook_url[:30] + "..."),
          "is_active": c.is_active,
          "scene": c.scene or "both", "namespaces": json.loads(c.namespaces or "[]"),
+         "sources": json.loads(getattr(c, "sources", "") or "[]"),
          "transport_mode": c.transport_mode, "feedback_mode": c.feedback_mode,
          "send_mode": c.send_mode or "webhook",
          "app_id": c.app_id or "", "receive_id": c.receive_id or "",
@@ -93,6 +94,7 @@ async def create_config(payload: dict, user=Depends(require_admin)):
             receive_id_type=payload.get("receive_id_type", "chat_id"),
             scene=payload.get("scene", "both"),
             namespaces=json.dumps(payload.get("namespaces", []), ensure_ascii=False),
+            sources=json.dumps(payload.get("sources", []), ensure_ascii=False),
             transport_mode=payload.get("transport_mode", "webhook"),
             feedback_mode=payload.get("feedback_mode", "text"),
             stream_config=payload.get("stream_config", ""),
@@ -121,6 +123,8 @@ async def update_config(config_id: int, payload: dict, user=Depends(require_admi
             c.im_template = payload.get("im_template", "")
         if "namespaces" in payload:
             c.namespaces = json.dumps(payload["namespaces"], ensure_ascii=False)
+        if "sources" in payload:
+            c.sources = json.dumps(payload["sources"], ensure_ascii=False)
         if "is_active" in payload:
             c.is_active = payload["is_active"]
         await session.commit()
@@ -186,12 +190,28 @@ async def delete_config(config_id: int, user=Depends(require_admin)):
 
 
 @router.get("/logs")
-async def list_logs(user=Depends(require_any_user)):
+async def list_logs(page: int = 1, page_size: int = 20, config_id: int | None = None,
+                   status: str = "", user=Depends(require_any_user)):
+    """发送日志（服务端分页；可按渠道/状态过滤）"""
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    conds = []
+    if config_id:
+        conds.append(NotificationLog.config_id == config_id)
+    if status:
+        conds.append(NotificationLog.status == status)
     async with async_session() as session:
-        result = await session.execute(select(NotificationLog).order_by(NotificationLog.id.desc()).limit(50))
-        logs = list(result.scalars())
-    return {"code": 200, "message": "success", "data": [
-        {"id": l.id, "config_id": l.config_id, "alert_id": l.alert_id, "status": l.status,
-         "sent_at": str(l.sent_at)}
-        for l in logs
-    ]}
+        total = (await session.execute(
+            select(func.count()).select_from(NotificationLog).where(*conds)
+        )).scalar() or 0
+        rows = (await session.execute(
+            select(NotificationLog).where(*conds)
+            .order_by(NotificationLog.id.desc())
+            .offset((page - 1) * page_size).limit(page_size)
+        )).scalars().all()
+    return {"code": 200, "message": "success", "data": {
+        "items": [{"id": l.id, "config_id": l.config_id, "alert_id": l.alert_id,
+                   "channel": l.channel, "receiver": l.receiver, "status": l.status,
+                   "error": l.error or "", "sent_at": str(l.sent_at)} for l in rows],
+        "total": total, "page": page, "page_size": page_size,
+    }}

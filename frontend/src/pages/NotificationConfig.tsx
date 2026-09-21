@@ -7,14 +7,7 @@ import {
   deleteNotificationConfig, getNotificationLogs, testNotificationConfig,
   getNotifyPolicy, updateNotifyPolicy, listFeishuChats,
 } from '../services/api'
-import type { NotificationConfig, NotifyPolicy, SilenceWindow } from '../types'
-
-interface NotifLog {
-  id: number
-  config_id?: number
-  status?: string
-  sent_at?: string
-}
+import type { NotificationConfig, NotificationLog, NotifyPolicy, SilenceWindow } from '../types'
 
 const CHANNEL_OPTIONS = [
   { value: 'dingtalk', label: '钉钉' },
@@ -66,9 +59,21 @@ const SEVERITY_LEVELS = [
   { value: 'low', label: 'Low（低）' },
 ]
 
+// 告警来源（alert.resource_type）
+const SOURCE_OPTIONS = [
+  { value: 'pod', label: '容器告警' },
+  { value: 'node', label: '集群告警' },
+  { value: 'log', label: '日志告警' },
+  { value: 'db', label: '数据库告警' },
+]
+
+const LOG_PAGE_SIZE = 20
+
 export default function NotificationConfig() {
   const [configs, setConfigs] = useState<NotificationConfig[]>([])
-  const [logs, setLogs] = useState<NotifLog[]>([])
+  const [logs, setLogs] = useState<NotificationLog[]>([])
+  const [logTotal, setLogTotal] = useState(0)
+  const [logPage, setLogPage] = useState(1)
   const [policy, setPolicy] = useState<NotifyPolicy>({ enabled: true, severity_routes: {}, silence_windows: [] })
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<NotificationConfig | null>(null)
@@ -80,10 +85,18 @@ export default function NotificationConfig() {
   const sendMode = Form.useWatch('send_mode', form)
   const useAppMode = channelType === 'feishu' && sendMode === 'app'
 
+  const loadLogs = (page = 1) => {
+    getNotificationLogs({ page, page_size: LOG_PAGE_SIZE }).then((d) => {
+      setLogs((d.items || []) as NotificationLog[])
+      setLogTotal(d.total || 0)
+      setLogPage(d.page || page)
+    })
+  }
+
   const load = () => {
     getNotificationConfigs().then((d) => setConfigs(d))
-    getNotificationLogs().then((d) => setLogs(d as NotifLog[]))
     getNotifyPolicy().then((p) => setPolicy(p))
+    loadLogs(1)
   }
   useEffect(load, [])
 
@@ -114,7 +127,7 @@ export default function NotificationConfig() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ transport_mode: 'webhook', feedback_mode: 'text', scene: 'both', namespaces: [], send_mode: 'webhook', receive_id_type: 'chat_id' })
+    form.setFieldsValue({ transport_mode: 'webhook', feedback_mode: 'text', scene: 'both', namespaces: [], sources: [], send_mode: 'webhook', receive_id_type: 'chat_id' })
     setModalOpen(true)
   }
 
@@ -126,7 +139,7 @@ export default function NotificationConfig() {
     form.setFieldsValue({
       name: c.name, channel_type: c.channel_type, webhook_url: c.webhook_url,
       secret: '', transport_mode: c.transport_mode, feedback_mode: c.feedback_mode,
-      scene: c.scene || 'both', namespaces: c.namespaces || [],
+      scene: c.scene || 'both', namespaces: c.namespaces || [], sources: c.sources || [],
       stream_config: c.stream_config || '', is_active: c.is_active,
       send_mode: c.send_mode || 'webhook', app_id: c.app_id || '', app_secret: '',
       receive_id: c.receive_id || '', receive_id_type: c.receive_id_type || 'chat_id',
@@ -145,6 +158,7 @@ export default function NotificationConfig() {
     const payload: Record<string, unknown> = {
       ...values,
       namespaces: Array.isArray(values.namespaces) ? values.namespaces : [],
+      sources: Array.isArray(values.sources) ? values.sources : [],
       stream_config: values.stream_config || '',
       is_active: values.is_active ?? true,
       send_mode: values.channel_type === 'feishu' ? (values.send_mode || 'webhook') : 'webhook',
@@ -258,8 +272,11 @@ export default function NotificationConfig() {
             </div>
             <div style={{ fontSize: 12, marginBottom: 8 }}>
               用途：<Tag color={SCENE_COLOR[c.scene] || 'default'}>{SCENE_OPTIONS.find((o) => o.value === c.scene)?.label || c.scene}</Tag>
-              {c.scene === 'alert' && c.namespaces?.length > 0 && (
+              {c.namespaces?.length > 0 && (
                 <span style={{ marginLeft: 8 }}>namespace：{((c.namespaces as unknown as string[]) || []).join(', ')}</span>
+              )}
+              {c.sources && c.sources.length > 0 && (
+                <span style={{ marginLeft: 8 }}>来源：{c.sources.map((s) => SOURCE_OPTIONS.find((o) => o.value === s)?.label || s).join(', ')}</span>
               )}
             </div>
             <div style={{ fontSize: 12, marginBottom: 8 }}>
@@ -277,11 +294,15 @@ export default function NotificationConfig() {
       </Space>
 
       <Card title="发送日志" style={{ marginTop: 16 }}>
-        <Table rowKey="id" dataSource={logs} pagination={false}
+        <Table rowKey="id" dataSource={logs} size="small"
+          pagination={{ current: logPage, pageSize: LOG_PAGE_SIZE, total: logTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => loadLogs(p) }}
           columns={[
-            { title: '渠道ID', dataIndex: 'config_id' },
-            { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'success' ? 'green' : 'red'}>{s}</Tag> },
-            { title: '发送时间', dataIndex: 'sent_at' },
+            { title: '渠道', dataIndex: 'config_id', width: 160, render: (v) => configs.find((c) => c.id === v)?.name || v || '-' },
+            { title: '类型', dataIndex: 'channel', width: 90, render: (t) => CHANNEL_OPTIONS.find((o) => o.value === t)?.label || t || '-' },
+            { title: '接收方', dataIndex: 'receiver', ellipsis: true, render: (v) => v || '-' },
+            { title: '状态', dataIndex: 'status', width: 90, render: (s) => <Tag color={s === 'success' ? 'green' : 'red'}>{s || '-'}</Tag> },
+            { title: '错误', dataIndex: 'error', ellipsis: true, render: (v) => v ? <span style={{ color: '#cf1322' }}>{v}</span> : '-' },
+            { title: '发送时间', dataIndex: 'sent_at', width: 180 },
           ]} />
       </Card>
 
@@ -325,6 +346,10 @@ export default function NotificationConfig() {
           <Form.Item name="namespaces" label="告警 namespace 匹配（仅告警机器人，留空=全部）"
             tooltip="不同 namespace 的告警发到不同群：填该群负责的 namespace，多个用回车分隔；留空表示接收所有 namespace 的告警（默认兜底群）">
             <Select mode="tags" placeholder="如 qa-eft、qa-bgs，回车添加；留空=全部" tokenSeparators={[',', '，']} />
+          </Form.Item>
+          <Form.Item name="sources" label="告警来源（仅告警机器人，留空=全部）"
+            tooltip="选择该渠道接收哪些来源的告警；留空=全部来源（容器/集群/日志/数据库）">
+            <Select mode="multiple" allowClear placeholder="留空=全部来源" options={SOURCE_OPTIONS} />
           </Form.Item>
           <Form.Item name="transport_mode" label="传输模式" rules={[{ required: true }]}>
             <Select options={TRANSPORT_OPTIONS} />
