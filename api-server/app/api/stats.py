@@ -4,7 +4,7 @@ import json
 from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, exists, func, not_, or_, select, text
 
 from app.core.database import async_session
 from app.core.redis_client import redis_pool
@@ -467,29 +467,34 @@ async def dashboard(
                                     "self_healed": self_healed_map.get(bk, 0)})
                 t += timedelta(days=7)
 
-        # --- ai_result_dist（**当前态**分布，不随时间窗变化；仍受集群/项目筛选） ---
-        #   self_heal = AI 自愈成功（status=self_healed）
-        #   approval  = 当前待审批（awaiting_approval 且非转人工）
-        #   manual    = 当前需人工（manual_required 且未关闭）
-        #   failed    = 当前未处理且未转人工（pending 且非 manual_required）
-        # 四类互斥（approval 已排除 manual_required，避免同一告警被双计）
-        # 注：之前按 detected_at 时间窗过滤，实时(10m)窗口下几乎恒为空 → 取消时间窗
+        # --- ai_result_dist（**全量告警处置结果**，互斥且穷尽；不随时间窗变化，仍受集群/项目筛选） ---
+        #   self_heal      = 自愈成功（status=self_healed 且无审批）
+        #   approval       = 审批通过后修复（存在 status=approved 的审批单 —— 即人工审核过的那批，
+        #                    不再用「当前待审批」口径，否则审完即归零）
+        #   manual         = 人工处理（manual_required 且已 resolved 且无通过审批）
+        #   auto_resolved  = 自动恢复关闭（resolved 且非人工且无审批：指标回落/删规则等）
+        #   open           = 未解决（pending / awaiting_approval）
+        _approved_ex = exists(select(Approval.id).where(
+            Approval.alert_id == Alert.id, Approval.status == "approved"))
         ai_dist = (await session.execute(
             _filter(select(
-                func.coalesce(func.sum(func.if_(Alert.status == "self_healed", 1, 0)), 0).label("self_heal"),
-                func.coalesce(func.sum(func.if_(and_(Alert.status == "awaiting_approval",
-                                                    Alert.manual_required.isnot(True)), 1, 0)), 0).label("approval"),
-                func.coalesce(func.sum(func.if_(and_(Alert.manual_required.is_(True),
-                                                    Alert.status.in_(["pending", "awaiting_approval"])), 1, 0)), 0).label("manual"),
-                func.coalesce(func.sum(func.if_(and_(Alert.status == "pending",
-                                                    Alert.manual_required.is_(False)), 1, 0)), 0).label("failed"),
-            ))
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "self_healed", not_(_approved_ex)), 1, 0)), 0).label("self_heal"),
+                func.coalesce(func.sum(func.if_(_approved_ex, 1, 0)), 0).label("approval"),
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "resolved",
+                                                    Alert.manual_required.is_(True),
+                                                    not_(_approved_ex)), 1, 0)), 0).label("manual"),
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "resolved",
+                                                    Alert.manual_required.isnot(True),
+                                                    not_(_approved_ex)), 1, 0)), 0).label("auto_resolved"),
+                func.coalesce(func.sum(func.if_(Alert.status.in_(["pending", "awaiting_approval"]), 1, 0)), 0).label("open"),
+            )).where(Alert.detected_at.isnot(None))
         )).one()
         ai_result_dist = [
             {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},
             {"key": "approval", "count": int(ai_dist.approval or 0)},
             {"key": "manual", "count": int(ai_dist.manual or 0)},
-            {"key": "failed", "count": int(ai_dist.failed or 0)},
+            {"key": "auto_resolved", "count": int(ai_dist.auto_resolved or 0)},
+            {"key": "open", "count": int(ai_dist.open or 0)},
         ]
 
         # --- realtime_alerts（pending/awaiting 倒序 Top15，字段同 recent_alerts） ---

@@ -21,10 +21,12 @@ import type {
 
 // 告警状态/级别：走公共常量 + SeverityTag/StatusTag 组件（去重）
 const AI_RESULT_META: Record<string, { label: string; color: string }> = {
-  self_heal: { label: '可自愈', color: '#52c41a' },
-  approval: { label: '待审批告警', color: '#1677ff' },
-  manual: { label: '需人工', color: '#faad14' },
-  failed: { label: '诊断失败', color: '#ff4d4f' },
+  // 全量告警处置结果（互斥且穷尽），与 stats.py ai_result_dist 口径一致
+  self_heal: { label: '自愈成功', color: '#52c41a' },
+  approval: { label: '审批后修复', color: '#1677ff' },
+  manual: { label: '人工处理', color: '#faad14' },
+  auto_resolved: { label: '自动恢复关闭', color: '#13c2c2' },
+  open: { label: '未解决', color: '#ff4d4f' },
 }
 const ACTION_META: Record<string, { label: string; color: string }> = {
   self_heal: { label: '自愈', color: 'green' },
