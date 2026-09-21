@@ -113,7 +113,13 @@ async def _start_feishu_long_conn(cfg: NotificationConfig) -> None:
     app_id = stream_config.get("app_id", "")
     app_secret = stream_config.get("app_secret", "")
     if not app_id or not app_secret:
-        logger.warning("飞书长连接缺少 app_id/app_secret，跳过")
+        # 渠道未配凭证：平台级应用（系统设置 feishu_app_id/secret）由全局长连接承担，
+        # 同一应用重复建连会互相顶掉，这里不再单独启动。
+        from app.services.system_setting_service import get_setting
+        if await get_setting("feishu_app_id", ""):
+            logger.info("渠道 %s 未配飞书凭证，已由全局长连接承担（系统设置），跳过", cfg.name)
+            return
+        logger.warning("飞书长连接缺少 app_id/app_secret，跳过（可在系统设置填平台级飞书应用）")
         return
 
     await _launch_feishu_ws(app_id, app_secret, source=f"渠道:{cfg.name}")

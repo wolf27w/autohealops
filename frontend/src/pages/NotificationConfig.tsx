@@ -115,7 +115,7 @@ export default function NotificationConfig() {
       name: c.name, channel_type: c.channel_type, webhook_url: c.webhook_url,
       secret: '', transport_mode: c.transport_mode, feedback_mode: c.feedback_mode,
       scene: c.scene || 'both', namespaces: c.namespaces || [],
-      stream_config: '', is_active: c.is_active,
+      stream_config: c.stream_config || '', is_active: c.is_active,
       im_dingtalk: imTpl.dingtalk || '', im_wechat: imTpl.wechat || '', im_feishu: imTpl.feishu || '',
     })
     setModalOpen(true)

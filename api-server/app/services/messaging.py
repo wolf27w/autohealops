@@ -7,6 +7,7 @@
 传输模式（webhook 回调 / 长连接）在 NotificationConfig.transport_mode 配置，
 长连接客户端（钉钉 Stream / 飞书长连接）需 SDK，见 MESSAGING.md 待装包项。
 """
+import json
 import re
 
 import httpx
@@ -15,6 +16,58 @@ from app.core.http_client import get_http_client
 from app.core.logging import get_logger
 
 logger = get_logger("api-server.messaging")
+
+# 飞书群机器人 webhook 固定形如 .../bot/v2/hook/<token>（域名 open.feishu.cn / open.larksuite.com 均可）
+FEISHU_BOT_HOOK_MARK = "/bot/v2/hook/"
+
+
+def check_webhook_url(channel_type: str, webhook_url: str) -> str:
+    """发送前的地址预检，返回错误说明（""=通过）。
+
+    飞书发送只能走群机器人 webhook，历史坑：把「卡片回调地址」当 webhook 填，
+    对方返回 HTTP 200 + body null，旧的「200 即成功」判定会误报成功但飞书收不到。
+    """
+    url = (webhook_url or "").strip()
+    if not url:
+        return "webhook 地址为空"
+    if channel_type == "feishu" and FEISHU_BOT_HOOK_MARK not in url:
+        return f"飞书 webhook 地址不合法，应为 open-apis/bot/v2/hook/…（当前：{url[:60]}）"
+    return ""
+
+
+def resp_ok(channel_type: str, resp: dict, webhook_url: str = "") -> bool:
+    """按渠道判定发送是否真正成功：HTTP 2xx + 业务返回码为 0。
+
+    - 钉钉：{"errcode":0,...}
+    - 企微：{"errcode":0,...}
+    - 飞书群机器人：{"code":0,...} 或 {"StatusCode":0,...}
+    非 JSON / 无返回码字段时退化为「HTTP 200 即成功」。
+    """
+    if webhook_url and check_webhook_url(channel_type, webhook_url):
+        return False
+    status = resp.get("status")
+    if isinstance(status, str) and status.lower() in ("failed", "error", "skipped"):
+        return False
+    try:
+        http_ok = int(status) in (200, 201, 204)
+    except (TypeError, ValueError):
+        http_ok = status == "success"
+    if not http_ok:
+        return False
+    body = resp.get("body") or ""
+    try:
+        data = json.loads(body) if body else {}
+    except (ValueError, TypeError):
+        return True  # 非 JSON：以 HTTP 状态为准
+    if not isinstance(data, dict):
+        return True  # 飞书错填回调地址会返回 null → 但地址预检已拦截
+    for key in ("errcode", "code", "StatusCode"):
+        if key in data:
+            try:
+                return int(data[key]) == 0
+            except (TypeError, ValueError):
+                return False
+    return True
 
 
 # ============ 发送 ============

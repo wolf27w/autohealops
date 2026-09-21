@@ -231,5 +231,43 @@ class TestAgentLoopBudget(unittest.TestCase):
         self.assertIn("重复调用", res["final_answer"]["root_cause"])
 
 
+class TestMessagingRespOk(unittest.TestCase):
+    """发送成功判定：HTTP 2xx + 业务返回码为 0；飞书 webhook 地址预检
+
+    复现历史坑：飞书渠道误填「卡片回调地址」，对方返回 HTTP 200 + body null，
+    旧逻辑「status==200 即 success」会误报成功但飞书收不到。
+    """
+
+    CALLBACK_URL = "https://ae.feishu.cn/oda/api/v1/card-action/callback"
+    BOT_HOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"
+
+    def test_feishu_callback_url_is_rejected(self):
+        from app.services.messaging import check_webhook_url, resp_ok
+        self.assertTrue(check_webhook_url("feishu", self.CALLBACK_URL))
+        # 旧行为会误判成功，现在必须 False
+        self.assertFalse(resp_ok("feishu", {"status": 200, "body": "null"}, self.CALLBACK_URL))
+
+    def test_feishu_bot_hook_success(self):
+        from app.services.messaging import resp_ok
+        self.assertTrue(resp_ok("feishu", {"status": 200, "body": '{"code":0,"msg":"success"}'}, self.BOT_HOOK))
+        self.assertTrue(resp_ok("feishu", {"status": 200, "body": '{"StatusCode":0,"StatusMessage":"success"}'}, self.BOT_HOOK))
+
+    def test_feishu_bot_hook_error_code(self):
+        from app.services.messaging import resp_ok
+        self.assertFalse(resp_ok("feishu", {"status": 200, "body": '{"code":19021,"msg":"sign match fail"}'}, self.BOT_HOOK))
+
+    def test_dingtalk_errcode(self):
+        from app.services.messaging import resp_ok
+        url = "https://oapi.dingtalk.com/robot/send?access_token=x"
+        self.assertTrue(resp_ok("dingtalk", {"status": 200, "body": '{"errcode":0,"errmsg":"ok"}'}, url))
+        self.assertFalse(resp_ok("dingtalk", {"status": 200, "body": '{"errcode":310000,"errmsg":"keywords not in content"}'}, url))
+
+    def test_non_json_body_falls_back_to_http_status(self):
+        from app.services.messaging import resp_ok
+        url = "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"
+        self.assertTrue(resp_ok("feishu", {"status": 200, "body": ""}, url))
+        self.assertFalse(resp_ok("feishu", {"status": 500, "body": "oops"}, url))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

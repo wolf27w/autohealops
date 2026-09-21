@@ -29,14 +29,18 @@ async def update_notify_policy(payload: dict, user=Depends(require_admin)):
 
 @router.get("/configs")
 async def list_configs(user=Depends(require_any_user)):
+    is_admin = getattr(user, "role", "") == "admin"
     async with async_session() as session:
         result = await session.execute(select(NotificationConfig))
         configs = list(result.scalars())
     return {"code": 200, "message": "success", "data": [
         {"id": c.id, "name": c.name, "channel_type": c.channel_type,
-         "webhook_url": c.webhook_url[:30] + "...", "is_active": c.is_active,
+         # admin 返回完整 URL：否则编辑时表单回填被截断的值，保存即写坏地址
+         "webhook_url": c.webhook_url if is_admin else (c.webhook_url[:30] + "..."),
+         "is_active": c.is_active,
          "scene": c.scene or "both", "namespaces": json.loads(c.namespaces or "[]"),
          "transport_mode": c.transport_mode, "feedback_mode": c.feedback_mode,
+         "stream_config": c.stream_config if is_admin else ("" if not c.stream_config else "***"),
          "im_template": c.im_template or "",
          "secret": (c.secret[:6] + "...") if c.secret else ""}
         for c in configs
@@ -92,9 +96,12 @@ async def test_config(config_id: int, user=Depends(require_admin)):
         if not c:
             return {"code": 404, "message": "配置不存在", "data": None}
     resp = await messaging.send_text(c.channel_type, c.webhook_url, "【API-OPS】这是一条测试消息，渠道连通正常 ✅")
-    ok = resp["status"] in (200, "success")
-    return {"code": 200 if ok else 500, "message": "success" if ok else f"发送失败: {resp.get('body', '')}",
-            "data": {"ok": ok, "detail": resp}}
+    ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
+    detail = resp
+    if not ok and messaging.check_webhook_url(c.channel_type, c.webhook_url):
+        detail = {**resp, "hint": messaging.check_webhook_url(c.channel_type, c.webhook_url)}
+    return {"code": 200 if ok else 500, "message": "success" if ok else f"发送失败: {detail.get('hint') or resp.get('body', '')}",
+            "data": {"ok": ok, "detail": detail}}
 
 
 @router.delete("/configs/{config_id}")

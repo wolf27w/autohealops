@@ -197,7 +197,18 @@ async def _storm_suppressed(alert: Alert) -> bool:
 
 async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_id: int | None = None,
                                    at_all: bool = False, receiver: str = "") -> None:
-    """统一发送 webhook（按渠道分发 + 重试 3 次 + 记录日志）"""
+    """统一发送 webhook（按渠道分发 + 重试 3 次 + 记录日志）
+
+    成功判定走 messaging.resp_ok（HTTP 2xx + 业务返回码为 0），地址非法直接失败不重试。
+    """
+    from app.services.messaging import check_webhook_url, resp_ok
+
+    bad = check_webhook_url(cfg.channel_type, cfg.webhook_url)
+    if bad:
+        await _record_log(cfg.id, alert_id, "failed", content, bad,
+                          channel=cfg.channel_type, receiver=receiver)
+        return
+
     success = False
     last_err = ""
     for attempt in range(3):
@@ -208,10 +219,10 @@ async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_
                 resp = await send_feishu_webhook_text(cfg.webhook_url, content)
             else:
                 resp = await send_wechat_text(cfg.webhook_url, content, at_all=at_all)
-            if resp["status"] == 200:
+            if resp_ok(cfg.channel_type, resp, cfg.webhook_url):
                 success = True
                 break
-            last_err = resp["body"]
+            last_err = resp.get("body") or resp.get("status")
         except Exception as e:  # noqa: BLE001
             last_err = str(e)
         await asyncio.sleep(2 ** attempt)
@@ -534,7 +545,7 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                     resp = await messaging.send_text(group.channel_type, group.webhook_url, text, at_all=at_all)
                 else:
                     resp = await messaging.send_text(group.channel_type, group.webhook_url, text, at_all=at_all)
-                await _record_log(group.id, None, "success" if resp["status"] == 200 else "failed", text,
+                await _record_log(group.id, None, "success" if messaging.resp_ok(group.channel_type, resp, group.webhook_url) else "failed", text,
                                   resp.get("body", ""), channel=group.channel_type, receiver=f"群:{group.name}")
             except Exception as e:  # noqa: BLE001
                 await _record_log(group.id, None, "failed", text, str(e), channel=group.channel_type)
@@ -557,7 +568,7 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                 resp = await messaging.send_text(c.channel_type, c.webhook_url, text, at_all=at_all)
             else:
                 continue
-            await _record_log(c.id, None, "success" if resp["status"] == 200 else "failed", text,
+            await _record_log(c.id, None, "success" if messaging.resp_ok(c.channel_type, resp, c.webhook_url) else "failed", text,
                               resp.get("body", ""), channel=c.channel_type)
         except Exception as e:  # noqa: BLE001
             await _record_log(c.id, None, "failed", text, str(e), channel=c.channel_type)
