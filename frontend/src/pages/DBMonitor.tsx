@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
-import { getDBConnections, getDbLatestMetrics, getSlowSQL } from '../services/api'
+import { Line } from '@ant-design/charts'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends } from '../services/api'
 
 interface Metric {
   metric_type: string
@@ -22,6 +23,7 @@ interface SlowSQL {
   sampled_at?: string
 }
 interface DBConn { id: number; name: string; db_type: string }
+interface TrendPoint { metric_name: string; value: number; sampled_at: string }
 
 const TYPE_LABEL: Record<string, string> = {
   connections: '连接', throughput: '吞吐', network: '网络', cache: '缓存/缓冲池',
@@ -61,6 +63,8 @@ export default function DBMonitor() {
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
   const [loading, setLoading] = useState(false)
+  const [metricType, setMetricType] = useState<string>('')
+  const [trends, setTrends] = useState<TrendPoint[]>([])
 
   useEffect(() => {
     getDBConnections().then((d) => {
@@ -80,6 +84,14 @@ export default function DBMonitor() {
     ]).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [connId])
+
+  const types = Array.from(new Set(metrics.map((m) => m.metric_type)))
+  // 趋势：默认第一组；切换分组或库时重拉
+  useEffect(() => { setMetricType((t) => (t && types.includes(t) ? t : (types[0] || ''))) }, [metrics])
+  useEffect(() => {
+    if (!connId || !metricType) return
+    getDbTrends(connId, metricType).then((d) => setTrends((d || []) as TrendPoint[])).catch(() => setTrends([]))
+  }, [connId, metricType])
 
   const cur = conns.find((c) => c.id === connId)
   const sampledAt = metrics[0]?.sampled_at || '-'
@@ -130,6 +142,14 @@ export default function DBMonitor() {
           <Card size="small" title={`监控指标（共 ${metrics.length} 项 · ${new Set(metrics.map((m) => m.metric_type)).size} 类）`}>
             <Table rowKey="metric_name" size="small" dataSource={metrics} columns={metricCols}
               pagination={false} scroll={{ y: 520 }} />
+          </Card>
+
+          <Card size="small" title="指标趋势" style={{ marginTop: 12 }}
+            extra={<Select size="small" style={{ width: 170 }} value={metricType} onChange={setMetricType}
+              options={types.map((t) => ({ value: t, label: TYPE_LABEL[t] || t }))} />}>
+            {trends.length
+              ? <Line data={trends} xField="sampled_at" yField="value" seriesField="metric_name" height={260} smooth />
+              : <div style={{ color: '#999', padding: 8 }}>暂无趋势数据（采集几次后形成）</div>}
           </Card>
 
           <Card size="small" title={`慢 SQL（Top ${slowSQL.length}）`} style={{ marginTop: 12 }}>

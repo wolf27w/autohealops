@@ -24,7 +24,6 @@ import BatchOperation from './pages/BatchOperation'
 import CustomTasks from './pages/CustomTasks'
 import AgentChat from './pages/AgentChat'
 import DiagnosticCenter from './pages/DiagnosticCenter'
-import DBMonitor from './pages/DBMonitor'
 import FaultDiagnosis from './pages/FaultDiagnosis'
 import Permissions from './pages/Permissions'
 import ProjectManagement from './pages/ProjectManagement'
@@ -95,7 +94,6 @@ export default function App() {
         <Route path="custom-tasks" element={<RequireRole role="admin"><CustomTasks /></RequireRole>} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
-        <Route path="db-monitor" element={<DBMonitor />} />
         <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />
         <Route path="fault-diagnosis/cluster" element={<FaultDiagnosis category="cluster" />} />
         <Route path="fault-diagnosis/app" element={<FaultDiagnosis category="app" />} />

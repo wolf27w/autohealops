@@ -6,6 +6,7 @@ import {
 } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
+import DBMonitor from './DBMonitor'
 import { Line } from '@ant-design/charts'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
@@ -89,20 +90,17 @@ export default function DiagnosticCenter() {
       defaultActiveKey="db"
       items={[
         { key: 'db', label: '数据库诊断', children: <DBConnections /> },
-        { key: 'reports', label: '诊断报告与趋势', children: <ReportsTab /> },
+        { key: 'reports', label: '诊断报告', children: <ReportsTab /> },
+        { key: 'monitor', label: '数据库监控', children: <DBMonitor /> },
       ]}
     />
     </>
   )
 }
 
-// ============ 诊断报告与趋势 ============
+// ============ 诊断报告 ============
 function ReportsTab() {
   const [reports, setReports] = useState<DBReport[]>([])
-  const [conns, setConns] = useState<DBConnection[]>([])
-  const [connId, setConnId] = useState<number>()
-  const [metricType, setMetricType] = useState('connections')
-  const [trends, setTrends] = useState<TrendPoint[]>([])
   const [detail, setDetail] = useState<DBReport | null>(null)
   const [logPage, setLogPage] = useState(1)
   const [logTotal, setLogTotal] = useState(0)
@@ -114,50 +112,12 @@ function ReportsTab() {
       setLogTotal(d?.total || 0)
       setLogPage(d?.page || page)
     })
-    getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
   }
   useEffect(() => { load(1) }, [])
 
-  const loadTrend = (cid?: number, mt?: string) => {
-    const id = cid ?? connId
-    const type = mt ?? metricType
-    if (!id) return
-    getDbTrends(id, type).then((d) => setTrends((d || []) as TrendPoint[]))
-  }
-
-  const trendConfig = {
-    data: trends,
-    xField: 'sampled_at',
-    yField: 'value',
-    seriesField: 'metric_name',
-    height: 280,
-    smooth: true,
-  }
-
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
-        <Select placeholder="选择数据库" style={{ width: 220 }} value={connId} onChange={(v) => { setConnId(v); loadTrend(v, metricType) }}
-          options={conns.map((c) => ({ value: c.id, label: `${c.name}（${c.db_type}）` }))} />
-        <Select style={{ width: 160 }} value={metricType} onChange={(v) => { setMetricType(v); loadTrend(connId, v) }}
-          options={[
-            { value: 'connections', label: '连接数' },
-            { value: 'lock_wait', label: '锁等待' },
-            { value: 'tablespace', label: '表空间' },
-            { value: 'throughput', label: '吞吐/QPS/TPS' },
-            { value: 'cache', label: '缓存/缓冲池' },
-            { value: 'query_quality', label: '查询质量' },
-            { value: 'innodb', label: 'InnoDB 锁/死锁' },
-            { value: 'network', label: '网络' },
-            { value: 'rate', label: '速率（差分）' },
-            { value: 'replication', label: '主从复制' },
-            { value: 'config', label: '参数配置' },
-          ]} />
-      </Space>
-      <Card size="small" title="指标趋势（诊断时采集，多次诊断形成）">
-        {trends.length ? <Line {...trendConfig} /> : <div style={{ color: '#999', padding: 16 }}>选择数据库后查看趋势；每次点「诊断」都会采集一次指标</div>}
-      </Card>
-      <Card size="small" title="诊断报告" style={{ marginTop: 16 }}>
+      <Card size="small" title="诊断报告">
         <Table rowKey="id" dataSource={reports} size="small"
           pagination={{ current: logPage, pageSize: PAGE_SIZE, total: logTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => load(p) }}
           columns={[
