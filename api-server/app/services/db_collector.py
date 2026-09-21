@@ -217,16 +217,30 @@ async def collect_connection_slow_sql(conn_id: int) -> int:
 
 
 async def scan_all_connections() -> int:
-    """扫描所有数据库连接采集慢 SQL（调度用，跳过关闭采集的连接）"""
+    """扫描所有数据库连接：采集慢 SQL + 健康指标（调度用，跳过关闭采集的连接）"""
     async with async_session() as session:
         result = await session.execute(select(DBConnection).where(DBConnection.collect_enabled.is_(True)))
         conns = list(result.scalars())
     total = 0
+    now = datetime.now()
     for c in conns:
         try:
             total += await collect_connection_slow_sql(c.id)
         except Exception as e:  # noqa: BLE001
             logger.warning("连接 %d 采集异常: %s", c.id, e)
+        # 健康指标：按 collect_interval 分钟采集（监控页数据源；调度粒度 5 分钟）
+        try:
+            interval = max(1, int(c.collect_interval or 5))
+            async with async_session() as session:
+                last = (await session.execute(
+                    select(DBMetricSnapshot.sampled_at)
+                    .where(DBMetricSnapshot.db_connection_id == c.id)
+                    .order_by(DBMetricSnapshot.id.desc()).limit(1)
+                )).scalar()
+            if not last or (now - last).total_seconds() >= interval * 60 - 30:
+                await collect_db_health(c.id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("连接 %d 健康指标采集异常: %s", c.id, e)
     return total
 
 
