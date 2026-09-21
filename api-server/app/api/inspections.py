@@ -55,10 +55,11 @@ def render_report_markdown(report: DiagnosticReport, cluster_name: str = "") -> 
     lines.append(f"- 结论：{report.conclusion or '-'}")
     lines.append("")
 
+    lines += ["## 结论", "", report.conclusion or "-", ""]
     if report.root_cause:
         lines += ["## 根因", "", report.root_cause, ""]
     if report.suggestion:
-        lines += ["## 处理建议", "", report.suggestion, ""]
+        lines += ["## 优化建议", "", report.suggestion, ""]
 
     items = raw.get("items")
     if isinstance(items, list) and items:

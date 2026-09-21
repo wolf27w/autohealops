@@ -136,7 +136,7 @@ function ReportsTab() {
           <div>
             <div style={{ marginBottom: 12 }}><b>结论：</b>{detail.conclusion}</div>
             <div style={{ marginBottom: 12 }}><b>根因：</b>{detail.root_cause}</div>
-            <div style={{ marginBottom: 12 }}><b>建议：</b><pre style={{ whiteSpace: 'pre-wrap' }}>{detail.suggestion}</pre></div>
+            <div style={{ marginBottom: 12 }}><b>优化建议：</b><pre style={{ whiteSpace: 'pre-wrap' }}>{detail.suggestion}</pre></div>
           </div>
         )}
       </Drawer>
@@ -210,7 +210,7 @@ function DBConnections() {
           <div>
             <div style={{ marginBottom: 8 }}><b>结论：</b>{d.conclusion || '-'}</div>
             <div style={{ marginBottom: 8 }}><b>根因：</b>{d.root_cause || '-'}</div>
-            <div><b>建议：</b></div>
+            <div><b>优化建议：</b></div>
             <ul>{(d.suggestions || []).map((s: string, i: number) => <li key={i}>{s}</li>)}</ul>
             <div style={{ color: '#999', fontSize: 12, marginTop: 8 }}>⚠️ 诊断仅提供解决方案，不执行任何修改，具体操作由 DBA 人工执行</div>
           </div>
