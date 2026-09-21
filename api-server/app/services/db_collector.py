@@ -24,13 +24,12 @@ logger = get_logger("api-server.db_collector")
 # MySQL 慢 SQL 查询（performance_schema，按 digest 聚合，AVG_TIMER_WAIT 单位皮秒）
 MYSQL_SLOW_SQL = """
 SELECT DIGEST, DIGEST_TEXT, SCHEMA_NAME, COUNT_STAR,
-       AVG_TIMER_WAIT / 1000000000 AS avg_latency_ms,
-       MAX_TIMER_WAIT / 1000000000 AS max_latency_ms
+       SUM_TIMER_WAIT / 1000000000 AS sum_ms,
+       MAX_TIMER_WAIT / 1000000000 AS max_ms
 FROM performance_schema.events_statements_summary_by_digest
 WHERE SCHEMA_NAME IS NOT NULL
-  AND AVG_TIMER_WAIT > %s
-ORDER BY AVG_TIMER_WAIT DESC
-LIMIT 100
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 200
 """
 
 # PostgreSQL 慢 SQL（pg_stat_statements 扩展，mean_exec_time 单位毫秒）
@@ -72,17 +71,16 @@ async def _mysql_collect(conn_info: dict, threshold_sec: float) -> list[dict]:
         logger.warning("数据库 %s 连接失败: %s", conn_info.get("name"), e)
         return []
     try:
-        threshold_ps = threshold_sec * 1e12  # 秒 → 皮秒
         async with conn.cursor() as cur:
-            await cur.execute(MYSQL_SLOW_SQL, (threshold_ps,))
+            await cur.execute(MYSQL_SLOW_SQL)
             rows = await cur.fetchall()
         return [
             {
                 "digest": (r[0] or "")[:64],
                 "sql_text": r[1] or "",
                 "schema_name": r[2] or "",
-                "exec_count": int(r[3] or 0),
-                "avg_latency_ms": round(float(r[4] or 0), 2),
+                "count": int(r[3] or 0),           # 累计执行次数
+                "sum_ms": float(r[4] or 0),        # 累计总耗时(ms)
                 "max_latency_ms": round(float(r[5] or 0), 2),
             }
             for r in rows
@@ -198,6 +196,49 @@ async def collect_connection_slow_sql(conn_id: int) -> int:
     elif c.db_type == "oracle":
         records = await _oracle_collect(conn_info, c.slow_sql_threshold)
 
+    if not records:
+        return 0
+
+    # 增量口径：与上一次采集的累计值差分 → 区间内真实平均耗时/次数
+    # （performance_schema 是自启动累计，直接取平均会把优化前的历史算进去，导致“没优化掉”的假象）
+    from app.core.redis_client import redis_pool
+    prev_key = f"slow_sql_prev:{conn_id}"
+    prev: dict = {}
+    try:
+        import json as _json
+        raw = await redis_pool.get(prev_key)
+        if raw:
+            prev = _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        prev = {}
+    cur_snap: dict = {}
+    delta_records: list[dict] = []
+    for r in records:
+        if "count" not in r:  # 非 MySQL（PG/Oracle）：无累计差分，原样保留
+            delta_records.append(r)
+            continue
+        digest = r["digest"]
+        cur_snap[digest] = [r["count"], r["sum_ms"]]
+        pc, ps = prev.get(digest, [None, None])
+        if pc is None:
+            continue  # 首次采集无基线，跳过（下次起为增量）
+        d_count = r["count"] - int(pc)
+        d_sum = r["sum_ms"] - float(ps)
+        if d_count <= 0 or d_sum < 0:
+            continue
+        d_avg = d_sum / d_count
+        if d_avg >= float(c.slow_sql_threshold or 1.0) * 1000:
+            delta_records.append({
+                "digest": digest, "sql_text": r["sql_text"], "schema_name": r["schema_name"],
+                "exec_count": d_count, "avg_latency_ms": round(d_avg, 2),
+                "max_latency_ms": r["max_latency_ms"],
+            })
+    try:
+        import json as _json2
+        await redis_pool.set(prev_key, _json2.dumps(cur_snap), ex=7 * 86400)
+    except Exception:  # noqa: BLE001
+        pass
+    records = delta_records
     if not records:
         return 0
 
