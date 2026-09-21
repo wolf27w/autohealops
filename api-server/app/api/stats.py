@@ -469,14 +469,16 @@ async def dashboard(
 
         # --- ai_result_dist（**当前态**分布，不随时间窗变化；仍受集群/项目筛选） ---
         #   self_heal = AI 自愈成功（status=self_healed）
-        #   approval  = 当前待审批（awaiting_approval）
+        #   approval  = 当前待审批（awaiting_approval 且非转人工）
         #   manual    = 当前需人工（manual_required 且未关闭）
         #   failed    = 当前未处理且未转人工（pending 且非 manual_required）
+        # 四类互斥（approval 已排除 manual_required，避免同一告警被双计）
         # 注：之前按 detected_at 时间窗过滤，实时(10m)窗口下几乎恒为空 → 取消时间窗
         ai_dist = (await session.execute(
             _filter(select(
                 func.coalesce(func.sum(func.if_(Alert.status == "self_healed", 1, 0)), 0).label("self_heal"),
-                func.coalesce(func.sum(func.if_(Alert.status == "awaiting_approval", 1, 0)), 0).label("approval"),
+                func.coalesce(func.sum(func.if_(and_(Alert.status == "awaiting_approval",
+                                                    Alert.manual_required.isnot(True)), 1, 0)), 0).label("approval"),
                 func.coalesce(func.sum(func.if_(and_(Alert.manual_required.is_(True),
                                                     Alert.status.in_(["pending", "awaiting_approval"])), 1, 0)), 0).label("manual"),
                 func.coalesce(func.sum(func.if_(and_(Alert.status == "pending",

@@ -17,7 +17,8 @@ from app.models import Alert, Cluster, DiagnosticReport, QuotaSnapshot, Resource
 logger = get_logger("api-server.inspection")
 
 # 巡检进度（前端轮询）：cluster_inspect_progress:{cluster_id} = {pct, step, ts}
-_PROGRESS_TTL = 600
+# TTL 取 30 分钟：巡检 + AI 阶段可能超过 10 分钟
+_PROGRESS_TTL = 1800
 
 
 async def _set_progress(cluster_id: int, pct: int, step: str) -> None:

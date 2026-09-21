@@ -545,13 +545,14 @@ async def _settle_alert_for_manual(approval: Approval, action: str, username: st
 
 
 async def _reject_risk_approval_alert(approval: Approval, username: str) -> None:
-    """风险审批被拒（有 plan）→ 告警置 resolved（人工裁定不处理）+ resolved_by 留痕。
+    """风险审批被拒（有 plan）→ 告警置 resolved（人工裁定不处理）+ 计划置 cancelled。
 
-    plan 保持 pending 不再复用：告警已 resolved，`_process_one` 不会再处理该告警（也就不会复用 plan）。
+    计划同步置 cancelled：告警虽已 resolved 不会被复用，但 pending 计划长期堆积会污染
+    「待执行计划」口径（历史上曾积 73 条）。
     """
     if not approval.alert_id:
         return
-    from app.models import Alert
+    from app.models import Alert, RepairPlan
 
     tail = "（人工裁定不处理）"
     async with async_session() as session:
@@ -559,8 +560,15 @@ async def _reject_risk_approval_alert(approval: Approval, username: str) -> None
             select(Alert).where(Alert.id == approval.alert_id).with_for_update()
         )
         alert = result.scalar_one_or_none()
+        # 计划收口（与告警状态解耦：无论告警是否已恢复都清掉待执行计划）
+        if approval.plan_id:
+            plan = await session.get(RepairPlan, approval.plan_id)
+            if plan and plan.status in ("pending", "executing"):
+                plan.status = "cancelled"
         if not alert or alert.status != "awaiting_approval":
-            return  # 已恢复/已关闭，不重复动
+            await session.commit()
+            return  # 已恢复/已关闭，不重复动告警，但计划仍已收口
+        alert.status = "resolved"
         alert.status = "resolved"
         alert.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
         alert.resolved_by = username or ""

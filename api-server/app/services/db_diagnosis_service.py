@@ -23,7 +23,8 @@ from app.services import knowledge_service
 logger = get_logger("api-server.db_diagnosis")
 
 # 诊断进度（前端轮询）：db_diag_progress:{conn_id} = {pct, step, ts}
-_PROGRESS_TTL = 600
+# TTL 取 30 分钟：AI 分析阶段可能超过 10 分钟，过短会在运行中途过期→前端误显示 idle
+_PROGRESS_TTL = 1800
 
 
 async def _set_progress(conn_id: int, pct: int, step: str) -> None:
