@@ -255,7 +255,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title="AI 诊断结果分布" size="small">
+          <Card title="AI 诊断结果分布（近 24 小时）" size="small">
             {aiTotal > 0 ? (
               <>
                 <div style={{ position: 'relative' }}>
@@ -263,11 +263,6 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                     data={aiDistDraw} angleField="value" colorField="key"
                     height={220} radius={0.78} innerRadius={0.6}
                     legend={false}
-                    label={{
-                      text: (d: { key: string; pct: number }) => `${d.key} ${d.pct}%`,
-                      position: 'outside',
-                      style: { fontSize: 14, fontWeight: 600, fill: '#1f2d3d' },
-                    }}
                     tooltip={{ items: [{ channel: 'y', name: '告警数', valueFormatter: (v: number) => `${v} 条（${aiTotal ? Math.round((v / aiTotal) * 1000) / 10 : 0}%）` }] }}
                     scale={{ color: { domain: aiDistDraw.map((d) => d.key), range: aiDistDraw.map((d) => d.color) } }}
                   />
@@ -280,19 +275,16 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                     <div style={{ fontSize: 22, fontWeight: 700, color: '#1f2d3d' }}>{aiTotal}</div>
                   </div>
                 </div>
-                {/* 自定义图例（中文更大 + 数量 + 百分比） */}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 4 }}>
-                  {aiDistPct.map((d) => {
-                    const color = d.color
-                    return (
-                      <span key={d.key} style={{ display: 'inline-flex', alignItems: 'center', fontSize: 14, color: '#1f2d3d' }}>
-                        <span style={{ width: 10, height: 10, borderRadius: 2, background: color, marginRight: 6, display: 'inline-block' }} />
-                        {d.key}
-                        <span style={{ marginLeft: 6, fontWeight: 700 }}>{d.pct}%</span>
-                        <span style={{ marginLeft: 4, color: '#8c8c8c' }}>（{d.value}）</span>
-                      </span>
-                    )
-                  })}
+                {/* 分列表格图例：名称 / 百分比 / 条数（不再用环外标签，避免小扇区标签重叠） */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 16px', marginTop: 6 }}>
+                  {aiDistPct.map((d) => (
+                    <div key={d.key} style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: '#1f2d3d' }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 2, background: d.color, marginRight: 6, flex: '0 0 auto', display: 'inline-block' }} />
+                      <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.key}</span>
+                      <span style={{ marginLeft: 6, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{d.pct}%</span>
+                      <span style={{ marginLeft: 4, color: '#8c8c8c' }}>（{d.value}）</span>
+                    </div>
+                  ))}
                 </div>
               </>
             ) : <Empty description="暂无数据" />}
