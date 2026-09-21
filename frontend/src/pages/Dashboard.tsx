@@ -45,7 +45,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   // 时间范围：默认【实时】（跟随最新，滚动窗口），也可自定义起止时间段
   const [live, setLive] = useState(true)
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null)
-  const RANGE_MINUTES = 10  // 实时模式滚动窗口（最近 10 分钟，5s 刷新）
+  const LIVE_RANGE = '24h'  // 实时模式滚动窗口（统一为最近 24 小时，5s 刷新）
   const presetValue = (key: string): [Dayjs, Dayjs] => {
     const span: Record<string, [number, string]> = { '10m': [10, 'minute'], '3h': [3, 'hour'], '8h': [8, 'hour'], '24h': [24, 'hour'] }
     const [n, unit] = span[key] || span['10m']
@@ -57,10 +57,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     setLive(false)  // 选了具体时间段 → 退出实时模式
   }
   const rangeLabel = live
-    ? `实时（最近 ${RANGE_MINUTES} 分钟，自动刷新）`
+    ? '实时（最近 24 小时，自动刷新）'
     : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
-  // AI 诊断结果分布窗口（默认最近 24 小时；可选跟随上方时间筛选）
-  const [aiRange, setAiRange] = useState<string>('24h')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
 
@@ -83,14 +81,14 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
 
   // 仪表盘主数据（5s 轮询；筛选变化自动重查）
   const { data, isFetching, refetch } = useQuery<DashboardData>({
-    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId, aiRange],
+    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
     queryFn: () => (!live && customRange
       ? getDashboard({
           start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
           end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
-          cluster_id: clusterId, ai_range: aiRange,
+          cluster_id: clusterId, ai_range: '24h',
         })
-      : getDashboard({ range: '10m', cluster_id: clusterId, ai_range: aiRange })),
+      : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, ai_range: '24h' })),
     refetchInterval: 5000,
   })
 
@@ -257,19 +255,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card
-            title="AI 诊断结果分布" size="small" style={{ height: '100%' }}
-            extra={
-              <Select size="small" value={aiRange} onChange={setAiRange} style={{ width: 118 }}
-                options={[
-                  { value: '24h', label: '最近 24 小时' },
-                  { value: '7d', label: '最近 7 天' },
-                  { value: '30d', label: '最近 30 天' },
-                  { value: 'follow', label: '跟随上方' },
-                ]}
-              />
-            }
-          >
+          <Card title="AI 诊断结果分布（最近 24 小时）" size="small" style={{ height: '100%' }}>
             {aiTotal > 0 ? (
               <>
                 <div style={{ position: 'relative' }}>
