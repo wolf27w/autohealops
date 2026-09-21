@@ -56,6 +56,10 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     setCustomRange([v[0], v[1]])
     setLive(false)  // 选了具体时间段 → 退出实时模式
   }
+  // 分布图窗口文案（跟随顶部时间筛选）：实时=10 分钟滚动窗口 / 自定义=所选时间段
+  const aiWinLabel = live
+    ? `实时 ${RANGE_MINUTES} 分钟`
+    : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}` : '')
   const rangeLabel = live
     ? `实时（最近 ${RANGE_MINUTES} 分钟，自动刷新）`
     : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
@@ -227,7 +231,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       </Card>
 
       {/* ===== 第 2 段 · KPI 行（7 项） ===== */}
-      <Row gutter={[12, 12]}>
+      <Row gutter={[12, 12]} align="stretch">
         {kpiItems.map((k) => (
           <Col key={k.title} flex="1 1 150px">
             <Card bodyStyle={{ padding: '12px 16px' }}>
@@ -241,13 +245,13 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       </Row>
 
       {/* ===== 第 3 段 · 告警趋势（2/3） + AI 诊断结果分布（1/3） ===== */}
-      <Row gutter={[12, 12]}>
+      <Row gutter={[12, 12]} align="stretch">
         <Col xs={24} lg={16}>
-          <Card title="告警趋势（新增 / 已解决 / 自愈）" size="small">
+          <Card title="告警趋势（新增 / 已解决 / 自愈）" size="small" style={{ height: '100%' }}>
             {trendData.length ? (
               <Line
                 data={trendData} xField="bucket" yField="value" colorField="type"
-                height={240} smooth
+                height={320} smooth
                 legend={{ color: { position: 'top' } }}
                 scale={{ color: { range: ['#1677ff', '#52c41a', '#13c2c2'] } }}
               />
@@ -255,7 +259,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title="AI 诊断结果分布（近 24 小时）" size="small">
+          <Card title={`AI 诊断结果分布${aiWinLabel ? `（${aiWinLabel}）` : ''}`} size="small" style={{ height: '100%' }}>
             {aiTotal > 0 ? (
               <>
                 <div style={{ position: 'relative' }}>
@@ -299,9 +303,9 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       </Row>
 
       {/* ===== 第 4 段 · 实时告警流（2/3） + Top 告警类型（1/3） ===== */}
-      <Row gutter={[12, 12]}>
+      <Row gutter={[12, 12]} align="stretch">
         <Col xs={24} lg={16}>
-          <Card title="实时告警流（未处理）" size="small">
+          <Card title="实时告警流（未处理）" size="small" style={{ height: '100%' }}>
             <Table
               rowKey="id" size="small" pagination={false}
               dataSource={realtimeAlerts}
@@ -320,7 +324,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title="Top 告警类型" size="small">
+          <Card title="Top 告警类型" size="small" style={{ height: '100%' }}>
             {faultTopData.length ? (
               <Bar
                 data={faultTopData} xField="count" yField="fault_type"
@@ -333,9 +337,9 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       </Row>
 
       {/* ===== 第 5 段 · 异常 Pod Top N（1/2） + 数据库健康概览（1/2） ===== */}
-      <Row gutter={[12, 12]}>
+      <Row gutter={[12, 12]} align="stretch">
         <Col xs={24} lg={12}>
-          <Card title="异常 Pod Top 20（按历史告警次数）" size="small">
+          <Card title="异常 Pod Top 20（按历史告警次数）" size="small" style={{ height: '100%' }}>
             <Table
               rowKey={(r) => `${r.cluster_name}-${r.namespace}-${r.pod_name}`}
               size="small" pagination={false}
@@ -355,7 +359,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="数据库健康概览" size="small">
+          <Card title="数据库健康概览" size="small" style={{ height: '100%' }}>
             <Table
               rowKey="id" size="small" pagination={false}
               dataSource={dbHealth}
@@ -379,9 +383,9 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       </Row>
 
       {/* ===== 第 6 段 · 自动处理动作统计/时间线（1/2） + 集群资源水位 Top（1/2） ===== */}
-      <Row gutter={[12, 12]}>
+      <Row gutter={[12, 12]} align="stretch">
         <Col xs={24} lg={12}>
-          <Card title="自动处理（近一年）" size="small">
+          <Card title="自动处理（近一年）" size="small" style={{ height: '100%' }}>
             <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
               {actionItems.map((a) => (
                 <Col key={a.key} span={6}>
@@ -415,7 +419,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="集群资源水位 Top（点击进集群详情）" size="small">
+          <Card title="集群资源水位 Top（点击进集群详情）" size="small" style={{ height: '100%' }}>
             <Table
               rowKey="cluster_id" size="small" pagination={false}
               dataSource={waterline}

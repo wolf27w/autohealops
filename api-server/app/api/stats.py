@@ -467,14 +467,13 @@ async def dashboard(
                                     "self_healed": self_healed_map.get(bk, 0)})
                 t += timedelta(days=7)
 
-        # --- ai_result_dist（**近 24 小时产生的告警**的处置结果，互斥且穷尽） ---
+        # --- ai_result_dist（**所选时间窗口内产生的告警**的处置结果，互斥且穷尽） ---
         #   self_heal      = 自愈成功（status=self_healed 且无审批）
         #   approval       = 审批通过后修复（存在 status=approved 的审批单 —— 即人工审核过的那批）
         #   manual         = 人工处理（manual_required 且已 resolved 且无通过审批）
         #   auto_resolved  = 自动恢复关闭（resolved 且非人工且无审批：指标回落/删规则等）
         #   open           = 未解决（pending / awaiting_approval）
-        # 窗口固定 24 小时（不跟 dashboard 的 range 选择器：默认实时 10m 窗口下几乎恒为空）
-        _ai_win_since = now - timedelta(hours=24)
+        # 窗口跟随页面顶部的时间筛选（实时=10m / range / 自定义 start~end），与告警趋势同口径
         _approved_ex = exists(select(Approval.id).where(
             Approval.alert_id == Alert.id, Approval.status == "approved"))
         ai_dist = (await session.execute(
@@ -488,9 +487,9 @@ async def dashboard(
                                                     Alert.manual_required.isnot(True),
                                                     not_(_approved_ex)), 1, 0)), 0).label("auto_resolved"),
                 func.coalesce(func.sum(func.if_(Alert.status.in_(["pending", "awaiting_approval"]), 1, 0)), 0).label("open"),
-            )).where(Alert.detected_at >= _ai_win_since, Alert.detected_at <= now)
+            )).where(Alert.detected_at >= range_since, Alert.detected_at <= range_end)
         )).one()
-        ai_window = {"since": _ai_win_since.isoformat(), "until": now.isoformat(), "hours": 24}
+        ai_window = {"since": str(range_since), "until": str(range_end), "range": range_}
         ai_result_dist = [
             {"key": "self_heal", "count": int(ai_dist.self_heal or 0)},
             {"key": "approval", "count": int(ai_dist.approval or 0)},
