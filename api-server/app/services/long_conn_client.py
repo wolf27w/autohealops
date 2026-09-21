@@ -53,20 +53,40 @@ _feishu_ws_started = False
 _main_loop: asyncio.AbstractEventLoop | None = None
 
 
-async def _handle_incoming(channel: str, external_user_id: str, text: str, source_msg_id: str):
-    """长连接收到消息 → 统一分发到审批反馈处理"""
+async def _handle_incoming(channel: str, external_user_id: str, text: str, source_msg_id: str,
+                           chat_id: str = "", app_id: str = "", app_secret: str = "") -> None:
+    """长连接收到消息 → 分发到审批反馈处理 + 回执"""
     from app.services.messaging import parse_feedback
 
-    logger.info("长连接收到消息(%s) 用户=%s: %s", channel, (external_user_id or "")[:10], (text or "")[:60])
+    logger.info("长连接收到消息(%s) 用户=%s 群=%s: %s", channel, external_user_id or "", chat_id or "", (text or "")[:80])
     action, approval_id, comment = parse_feedback(text)
+
     if not action or not approval_id:
-        return
-    try:
-        await approval_service.handle_callback(
-            source_msg_id or f"{channel}:{text}", external_user_id, action, int(approval_id), comment,
-        )
-    except ValueError:
-        logger.warning("长连接反馈审批 ID 解析失败: %s", text)
+        reply = "收到。本机器人用于审批反馈：请回复「批准/拒绝 + 审批ID」，或点卡片按钮。"
+    else:
+        try:
+            res = await approval_service.handle_callback(
+                source_msg_id or f"{channel}:{text}", external_user_id, action, int(approval_id), comment,
+            )
+            code = res.get("code") if isinstance(res, dict) else 200
+            verb = "批准" if action == "approve" else "拒绝"
+            if code == 200:
+                reply = f"已收到：{verb} 审批 #{approval_id}，平台处理中。"
+            else:
+                reply = f"处理未生效：{res.get('message', '') if isinstance(res, dict) else ''}"
+        except ValueError:
+            reply = f"审批 ID 解析失败（{text}）。"
+        except Exception as e:  # noqa: BLE001
+            logger.warning("长连接反馈处理异常: %s", e)
+            reply = f"处理失败：{e}"
+
+    if reply and chat_id:
+        try:
+            from app.services.feishu_service import send_feishu_message
+            if channel == "feishu":
+                await send_feishu_message(chat_id, "chat_id", f"【API-OPS】{reply}", app_id, app_secret)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("回执发送失败: %s", e)
 
 
 # ============ 钉钉 Stream ============
@@ -161,13 +181,15 @@ async def start_feishu_long_conn_global() -> None:
     await _launch_feishu_ws(app_id, app_secret, source="全局")
 
 
-def _dispatch_incoming(open_id: str, text: str, msg_id: str) -> None:
+def _dispatch_incoming(open_id: str, text: str, msg_id: str, chat_id: str = "",
+                       app_id: str = "", app_secret: str = "") -> None:
     """从长连接 SDK 线程把事件切回 uvicorn 主事件循环执行"""
     if not text:
         return
     try:
         if _main_loop and not _main_loop.is_closed():
-            asyncio.run_coroutine_threadsafe(_handle_incoming("feishu", open_id, text, msg_id), _main_loop)
+            asyncio.run_coroutine_threadsafe(
+                _handle_incoming("feishu", open_id, text, msg_id, chat_id, app_id, app_secret), _main_loop)
     except Exception as e:  # noqa: BLE001
         logger.warning("飞书事件分发失败: %s", e)
 
@@ -182,11 +204,11 @@ async def _launch_feishu_ws(app_id: str, app_secret: str, source: str) -> None:
         logger.info("飞书长连接已由其它应用占用，跳过（%s，app_id=%s）", source, app_id[:8])
         return
     try:
-        handler = _build_feishu_handler()
+        handler = _build_feishu_handler(app_id, app_secret)
         client = lark.ws.Client(
             app_id, app_secret,
             event_handler=handler,
-            log_level=lark.LogLevel.WARNING,
+            log_level=lark.LogLevel.INFO,
         )
         _main_loop = asyncio.get_running_loop()
         _running_feishu_apps.add(app_id)
@@ -225,7 +247,7 @@ def _extract_text(msg_type: str, content: str) -> str:
     return ""
 
 
-def _build_feishu_handler():
+def _build_feishu_handler(app_id: str = "", app_secret: str = ""):
     """构建飞书事件处理器（lark-oapi 1.7.x EventDispatcherHandler.builder 风格）
 
     - p2.im.message.receive_v1：群内文本/富文本回复
@@ -242,7 +264,8 @@ def _build_feishu_handler():
             msg_type = getattr(msg, "message_type", "") or ""
             text = _extract_text(msg_type, getattr(msg, "content", "") or "")
             msg_id = getattr(msg, "message_id", "") or ""
-            _dispatch_incoming(open_id, (text or "").strip(), msg_id)
+            chat_id = getattr(msg, "chat_id", "") or ""
+            _dispatch_incoming(open_id, (text or "").strip(), msg_id, chat_id, app_id, app_secret)
         except Exception as e:  # noqa: BLE001
             logger.warning("飞书消息事件处理异常: %s", e)
 
@@ -259,7 +282,8 @@ def _build_feishu_handler():
                 text = ""
             open_id = getattr(getattr(event, "operator", None), "open_id", "") or ""
             msg_id = getattr(getattr(event, "context", None), "open_message_id", "") or ""
-            _dispatch_incoming(open_id, str(text).strip(), msg_id)
+            chat_id = getattr(getattr(event, "context", None), "open_chat_id", "") or ""
+            _dispatch_incoming(open_id, str(text).strip(), msg_id, chat_id, app_id, app_secret)
         except Exception as e:  # noqa: BLE001
             logger.warning("飞书卡片事件处理异常: %s", e)
         return P2CardActionTriggerResponse()

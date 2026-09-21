@@ -292,5 +292,23 @@ class TestNotifyConfigValidate(unittest.TestCase):
                                  "app_id": "a", "app_secret": "s", "receive_id": "r"}))
 
 
+class TestFeishuExtractText(unittest.TestCase):
+    """飞书消息 content(JSON) → 文本抽取"""
+
+    def test_text(self):
+        from app.services.long_conn_client import _extract_text
+        self.assertEqual(_extract_text("text", '{"text":"批准 1"}'), "批准 1")
+
+    def test_post(self):
+        from app.services.long_conn_client import _extract_text
+        content = '{"title":"t","content":[[{"tag":"text","text":"拒绝"},{"tag":"text","text":" 2"}]]}'
+        self.assertEqual(_extract_text("post", content), "拒绝 2")
+
+    def test_bad_json_falls_back(self):
+        from app.services.long_conn_client import _extract_text
+        self.assertEqual(_extract_text("text", "not-json"), "not-json")
+        self.assertEqual(_extract_text("image", '{"image_key":"x"}'), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
