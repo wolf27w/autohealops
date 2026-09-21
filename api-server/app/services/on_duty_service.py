@@ -9,11 +9,19 @@ from app.models import OnDutySchedule, User
 
 
 def _in_time_range(now_hm: str, start: str, end: str) -> bool:
-    """判断时间是否在 [start, end] 区间内（支持跨天）"""
-    if start <= end:
-        return start <= now_hm <= end
+    """判断时间是否在 [start, end) 区间内（左闭右开，支持跨天）
+
+    左闭右开避免相邻班次在边界同时命中（如 白班 09:00-18:00 与 夜班 18:00-09:00：
+    18:00 只算夜班），否则 resolver 取第一个命中项会导致晚班在 18:00 拿不到通知。
+    """
+    if not start or not end:
+        return False
+    if start == end:
+        return False  # 无有效区间（等同不配）
+    if start < end:
+        return start <= now_hm < end
     # 跨天（如 18:00-09:00）
-    return now_hm >= start or now_hm <= end
+    return now_hm >= start or now_hm < end
 
 
 async def resolve_duty_users(now: datetime | None = None) -> list[int]:

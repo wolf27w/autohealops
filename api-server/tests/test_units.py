@@ -330,5 +330,26 @@ class TestNotifySourceMatch(unittest.TestCase):
         self.assertFalse(_source_match(c, "pod"))
 
 
+class TestDutyTimeRange(unittest.TestCase):
+    """值班时段匹配（白班/夜班按时间路由，左闭右开不重叠）"""
+
+    def test_day_night_no_overlap(self):
+        from app.services.on_duty_service import _in_time_range
+        # 白班 09:00-18:00
+        self.assertTrue(_in_time_range("09:00", "09:00", "18:00"))
+        self.assertTrue(_in_time_range("17:59", "09:00", "18:00"))
+        self.assertFalse(_in_time_range("18:00", "09:00", "18:00"))
+        # 夜班 18:00-09:00（跨天）
+        self.assertTrue(_in_time_range("18:00", "18:00", "09:00"))
+        self.assertTrue(_in_time_range("23:30", "18:00", "09:00"))
+        self.assertTrue(_in_time_range("08:59", "18:00", "09:00"))
+        self.assertFalse(_in_time_range("09:00", "18:00", "09:00"))
+
+    def test_empty_and_degenerate(self):
+        from app.services.on_duty_service import _in_time_range
+        self.assertFalse(_in_time_range("12:00", "", ""))
+        self.assertFalse(_in_time_range("12:00", "10:00", "10:00"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
