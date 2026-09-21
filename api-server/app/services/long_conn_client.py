@@ -33,14 +33,6 @@ except ImportError:  # pragma: no cover
     _lark_ws_client = None
     _LARK_OK = False
 
-# lark-oapi 用模块级 loop 跑 run_until_complete；模块导入若发生在 uvicorn 事件循环内，
-# 会拿到正在运行的 loop 导致线程里 run_until_complete 报错 → 强制换独立 loop。
-if _LARK_OK:
-    try:
-        _lark_ws_client.loop = asyncio.new_event_loop()
-    except Exception:  # noqa: BLE001
-        pass
-
 logger = get_logger("api-server.long_conn")
 
 # 全局运行中的客户端任务引用（防 GC）
@@ -204,6 +196,12 @@ async def _launch_feishu_ws(app_id: str, app_secret: str, source: str) -> None:
         logger.info("飞书长连接已由其它应用占用，跳过（%s，app_id=%s）", source, app_id[:8])
         return
     try:
+        # lark-oapi 用 ws.client 的模块级 loop 跑 run_until_complete；SDK 导入若发生在
+        # uvicorn 事件循环内会拿到正在运行的 loop（线程里 run_until_complete 会报错）→ 换独立 loop。
+        try:
+            _lark_ws_client.loop = asyncio.new_event_loop()
+        except Exception:  # noqa: BLE001
+            pass
         handler = _build_feishu_handler(app_id, app_secret)
         client = lark.ws.Client(
             app_id, app_secret,
