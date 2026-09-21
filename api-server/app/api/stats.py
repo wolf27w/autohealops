@@ -616,28 +616,46 @@ async def dashboard(
             select(func.count()).select_from(KnowledgeEntry).where(KnowledgeEntry.source == "ai")
         )).scalar() or 0
         # 资源快照：表为历史累计（百万行），取每个「集群 × 资源类型」的最新一次快照计数
-        latest_type_rows = (await session.execute(
-            select(ResourceSnapshot.cluster_id, ResourceSnapshot.resource_type,
-                   func.max(ResourceSnapshot.snapshot_time))
+        # 优化：不再对每个集群做 N+1 次 count 查询，改用「每集群每类型最新快照」临时表一次 JOIN 聚合
+        _latest = (
+            select(
+                ResourceSnapshot.cluster_id.label("cid"),
+                ResourceSnapshot.resource_type.label("rt"),
+                func.max(ResourceSnapshot.snapshot_time).label("mt"),
+            )
             .group_by(ResourceSnapshot.cluster_id, ResourceSnapshot.resource_type)
+            .subquery()
+        )
+        latest_type_rows = (await session.execute(
+            select(_latest.c.cid, _latest.c.rt, _latest.c.mt)
         )).all()
         _by_cluster: dict[int, list] = {}
         for _cid, _rt, _ts in latest_type_rows:
             _by_cluster.setdefault(int(_cid), []).append((_rt, _ts))
+        cnt_rows = (await session.execute(
+            select(_latest.c.cid, _latest.c.rt, func.count())
+            .select_from(ResourceSnapshot)
+            .join(_latest, and_(
+                _latest.c.cid == ResourceSnapshot.cluster_id,
+                _latest.c.rt == ResourceSnapshot.resource_type,
+                _latest.c.mt == ResourceSnapshot.snapshot_time,
+            ))
+            .group_by(_latest.c.cid, _latest.c.rt)
+        )).all()
         _cur: dict[int, dict] = {}
+        for _cid, _rt, _c in cnt_rows:
+            _cur.setdefault(int(_cid), {})[_rt] = int(_c)
         _cur_ns: dict[int, int] = {}
-        for _cid, _items in _by_cluster.items():
-            _ts_list = [_ts for _rt, _ts in _items]
-            _cnt = (await session.execute(
-                select(ResourceSnapshot.resource_type, func.count())
-                .where(ResourceSnapshot.cluster_id == _cid, ResourceSnapshot.snapshot_time.in_(_ts_list))
-                .group_by(ResourceSnapshot.resource_type)
-            )).all()
-            _cur[_cid] = {rt: int(c) for rt, c in _cnt}
-            _cur_ns[_cid] = int((await session.execute(
-                select(func.count(func.distinct(ResourceSnapshot.namespace)))
-                .where(ResourceSnapshot.cluster_id == _cid, ResourceSnapshot.snapshot_time.in_(_ts_list))
-            )).scalar() or 0)
+        _ns_rows = (await session.execute(
+            select(ResourceSnapshot.cluster_id, ResourceSnapshot.namespace).distinct()
+            .select_from(ResourceSnapshot)
+            .join(_latest, and_(
+                _latest.c.cid == ResourceSnapshot.cluster_id,
+                _latest.c.mt == ResourceSnapshot.snapshot_time,
+            ))
+        )).all()
+        for _cid, _ns in _ns_rows:
+            _cur_ns[int(_cid)] = _cur_ns.get(int(_cid), 0) + 1
         _agg: dict[str, int] = {}
         for _m in _cur.values():
             for rt, c in _m.items():

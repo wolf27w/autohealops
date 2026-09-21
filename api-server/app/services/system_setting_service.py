@@ -61,6 +61,8 @@ DEFAULT_SETTINGS = {
     "approval_comment_templates": ("[]", "审批意见模板（JSON 字符串数组）"),
     # AI 诊断：深度诊断单次对话最大「有效」工具步数（重复调用不占额，按环境可调）
     "agent_max_tool_steps": ("12", "深度诊断单次对话最大工具步数（1~100）"),
+    # 历史数据保留期（资源/配额快照 + Pod 指标 + 慢SQL）
+    "snapshot_retention_days": ("7", "快照/指标/慢SQL 历史保留天数（默认 7，超期每日清理）"),
     # 统一告警通知策略（N8）：分级渠道 + 全局静默窗口，全平台一份
     "alert_notify_policy": (json.dumps(ALERT_NOTIFY_POLICY_DEFAULT, ensure_ascii=False), "统一告警通知策略 JSON（分级渠道/静默窗口）"),
 }

@@ -86,9 +86,14 @@ async def _maintenance_loop() -> None:
         if loop_count == 1 or loop_count % 2880 == 0:
             try:
                 from app.services.resource_service import cleanup_old_snapshots
-                n = await cleanup_old_snapshots()
+                from app.services.system_setting_service import get_setting
+                try:
+                    _days = int(await get_setting("snapshot_retention_days", "7") or 7)
+                except (TypeError, ValueError):
+                    _days = 7
+                n = await cleanup_old_snapshots(max(1, _days))
                 if n:
-                    logger.info("资源快照清理完成：删除 %d 条历史记录", n)
+                    logger.info("资源快照清理完成（保留 %d 天）：删除 %d 条历史记录", _days, n)
             except Exception as e:  # noqa: BLE001
                 logger.warning("资源快照清理 异常: %s", e)
             # 巡检/诊断报告保留期（30 天）
