@@ -161,7 +161,7 @@ export const createResourceAlertRule = (data: Payload) => http.post('/resource-a
 export const updateResourceAlertRule = (id: number, data: Payload) => http.put(`/resource-alert-rules/${id}`, data)
 export const deleteResourceAlertRule = (id: number) => http.delete(`/resource-alert-rules/${id}`)
 export const runDbDiagnosis = (connId: number) => http.post(`/db-diagnosis/${connId}/run`)
-export const getDbDiagnosisReports = (limit: number = 20) => http.get('/db-diagnosis/reports', { params: { limit } })
+export const getDbDiagnosisReports = (page = 1, pageSize = 20) => http.get<PageResult<{ id: number; conclusion: string; root_cause: string; suggestion: string; created_at: string }>>('/db-diagnosis/reports', { params: { page, page_size: pageSize } })
 export const getDbTrends = (connId: number, metricType: string) => http.get(`/db-diagnosis/${connId}/trends`, { params: { metric_type: metricType } })
 export const getDbDiagnosisProgress = (connId: number) => http.get<{ pct: number; step: string; ts: number }>(`/db-diagnosis/${connId}/progress`)
 

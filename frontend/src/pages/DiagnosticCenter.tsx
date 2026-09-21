@@ -5,6 +5,7 @@ import {
   Tabs, Card, Button, Table, Modal, Form, Input, Select, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress,
 } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
+import Markdown from '../components/Markdown'
 import { Line } from '@ant-design/charts'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
@@ -58,7 +59,7 @@ function Suggestion({ s, idx }: { s: string | SuggestionItem; idx: number }) {
   return (
     <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: '1px solid #f0f0f0' }}>
       <div style={{ fontWeight: 600 }}>{idx}. {s.title || '优化项'}</div>
-      {s.detail && <div style={{ color: '#555', margin: '4px 0' }}>{s.detail}</div>}
+      {s.detail && <Markdown text={s.detail} />}
       {s.sql_before && (
         <div style={{ marginTop: 4 }}>
           <div style={{ fontSize: 12, color: '#999' }}>优化前 SQL（问题 SQL）</div>
@@ -101,12 +102,19 @@ function ReportsTab() {
   const [metricType, setMetricType] = useState('connections')
   const [trends, setTrends] = useState<TrendPoint[]>([])
   const [detail, setDetail] = useState<DBReport | null>(null)
+  const [logPage, setLogPage] = useState(1)
+  const [logTotal, setLogTotal] = useState(0)
+  const PAGE_SIZE = 20
 
-  const load = () => {
-    getDbDiagnosisReports().then((d) => setReports((d || []) as DBReport[]))
+  const load = (page = 1) => {
+    getDbDiagnosisReports(page, PAGE_SIZE).then((d) => {
+      setReports(((d?.items) || []) as DBReport[])
+      setLogTotal(d?.total || 0)
+      setLogPage(d?.page || page)
+    })
     getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(1) }, [])
 
   const loadTrend = (cid?: number, mt?: string) => {
     const id = cid ?? connId
@@ -134,13 +142,22 @@ function ReportsTab() {
             { value: 'connections', label: '连接数' },
             { value: 'lock_wait', label: '锁等待' },
             { value: 'tablespace', label: '表空间' },
+            { value: 'throughput', label: '吞吐/QPS/TPS' },
+            { value: 'cache', label: '缓存/缓冲池' },
+            { value: 'query_quality', label: '查询质量' },
+            { value: 'innodb', label: 'InnoDB 锁/死锁' },
+            { value: 'network', label: '网络' },
+            { value: 'rate', label: '速率（差分）' },
+            { value: 'replication', label: '主从复制' },
+            { value: 'config', label: '参数配置' },
           ]} />
       </Space>
       <Card size="small" title="指标趋势（诊断时采集，多次诊断形成）">
         {trends.length ? <Line {...trendConfig} /> : <div style={{ color: '#999', padding: 16 }}>选择数据库后查看趋势；每次点「诊断」都会采集一次指标</div>}
       </Card>
       <Card size="small" title="诊断报告" style={{ marginTop: 16 }}>
-        <Table rowKey="id" dataSource={reports} pagination={false} size="small"
+        <Table rowKey="id" dataSource={reports} size="small"
+          pagination={{ current: logPage, pageSize: PAGE_SIZE, total: logTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => load(p) }}
           columns={[
             { title: 'ID', dataIndex: 'id', width: 60 },
             { title: '结论', dataIndex: 'conclusion', ellipsis: true },
@@ -165,15 +182,15 @@ function ReportsTab() {
       <Drawer title={`诊断报告 #${detail?.id}`} open={!!detail} onClose={() => setDetail(null)} width={720}>
         {detail && (
           <div>
-            <div style={{ marginBottom: 12 }}><b>结论：</b>{detail.conclusion}</div>
-            <div style={{ marginBottom: 12 }}><b>根因：</b>{detail.root_cause}</div>
-            <div style={{ marginBottom: 12 }}><b>优化建议：</b>
+            <div style={{ marginBottom: 12 }}><b>结论</b><Markdown text={detail.conclusion} /></div>
+            <div style={{ marginBottom: 12 }}><b>根因</b><Markdown text={detail.root_cause} /></div>
+            <div style={{ marginBottom: 12 }}><b>优化建议</b>
               {(() => {
                 try {
                   const arr = JSON.parse(detail.suggestion || '[]')
                   if (Array.isArray(arr)) return <div style={{ marginTop: 6 }}>{arr.map((s, i) => <Suggestion key={i} s={s} idx={i + 1} />)}</div>
-                } catch { /* 非 JSON，按文本展示 */ }
-                return <pre style={{ whiteSpace: 'pre-wrap' }}>{detail.suggestion}</pre>
+                } catch { /* 非 JSON，按 Markdown 展示 */ }
+                return <Markdown text={detail.suggestion} />
               })()}
             </div>
           </div>
@@ -253,9 +270,9 @@ function DBConnections() {
         setTimeout(() => setDiag(null), 400)
         Modal.info({ title: `诊断结果：${c.name}`, width: 640, content: (
           <div>
-            <div style={{ marginBottom: 8 }}><b>结论：</b>{d.conclusion || '-'}</div>
-            <div style={{ marginBottom: 8 }}><b>根因：</b>{d.root_cause || '-'}</div>
-            <div style={{ marginBottom: 4 }}><b>优化建议：</b></div>
+            <div style={{ marginBottom: 8 }}><b>结论</b><Markdown text={d.conclusion} /></div>
+            <div style={{ marginBottom: 8 }}><b>根因</b><Markdown text={d.root_cause} /></div>
+            <div style={{ marginBottom: 4 }}><b>优化建议</b></div>
             <div>{(d.suggestions || []).map((s, i) => <Suggestion key={i} s={s} idx={i + 1} />)}</div>
             <div style={{ color: '#999', fontSize: 12, marginTop: 8 }}>⚠️ 诊断仅提供解决方案，不执行任何修改，具体操作由 DBA 人工执行</div>
           </div>

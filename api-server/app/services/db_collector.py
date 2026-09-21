@@ -318,21 +318,114 @@ async def _mysql_collect_health(conn_info: dict) -> list[dict]:
             active = int(row[1]) if row else 0
             out.append({"metric_type": "connections", "metric_name": "active_connections", "value": active, "detail": ""})
 
-            # 1c. QPS/TPS 累计值 + InnoDB 缓存命中率（一次 STATUS 批量取）
-            await cur.execute(
-                "SHOW GLOBAL STATUS WHERE Variable_name IN "
-                "('Queries','Com_commit','Com_rollback','Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads')"
-            )
-            st_rows = {r[0]: int(r[1]) for r in (await cur.fetchall())}
-            out.append({"metric_type": "throughput", "metric_name": "queries_total",
-                        "value": st_rows.get("Queries", 0), "detail": ""})
+            # 1c. 批量取 STATUS / VARIABLES（一次取全，再挑常用监控项）
+            await cur.execute("SHOW GLOBAL STATUS")
+            st = {r[0]: r[1] for r in (await cur.fetchall())}
+
+            def _si(k: str) -> int:
+                try:
+                    return int(st.get(k, 0))
+                except (TypeError, ValueError):
+                    return 0
+
+            await cur.execute("SHOW GLOBAL VARIABLES")
+            va = {r[0]: r[1] for r in (await cur.fetchall())}
+
+            def _sv(k: str, d: float = 0.0) -> float:
+                try:
+                    return float(va.get(k, d))
+                except (TypeError, ValueError):
+                    return d
+
+            # 吞吐（累计值；QPS/TPS 速率由 collect_db_health 差分算）
+            out.append({"metric_type": "throughput", "metric_name": "queries_total", "value": _si("Queries"), "detail": ""})
             out.append({"metric_type": "throughput", "metric_name": "tps_total",
-                        "value": st_rows.get("Com_commit", 0) + st_rows.get("Com_rollback", 0), "detail": ""})
-            bp_requests = st_rows.get("Innodb_buffer_pool_read_requests", 0)
-            bp_reads = st_rows.get("Innodb_buffer_pool_reads", 0)
+                        "value": _si("Com_commit") + _si("Com_rollback"), "detail": ""})
+            for nm, key in (("com_select", "Com_select"), ("com_insert", "Com_insert"),
+                            ("com_update", "Com_update"), ("com_delete", "Com_delete"),
+                            ("com_commit", "Com_commit"), ("com_rollback", "Com_rollback")):
+                out.append({"metric_type": "throughput", "metric_name": nm, "value": _si(key), "detail": ""})
+            # 网络（累计字节；速率由差分算）
+            out.append({"metric_type": "network", "metric_name": "bytes_received", "value": _si("Bytes_received"), "detail": ""})
+            out.append({"metric_type": "network", "metric_name": "bytes_sent", "value": _si("Bytes_sent"), "detail": ""})
+
+            # 缓存 / InnoDB 缓冲池
+            bp_requests = _si("Innodb_buffer_pool_read_requests")
+            bp_reads = _si("Innodb_buffer_pool_reads")
             if bp_requests:
                 out.append({"metric_type": "cache", "metric_name": "buffer_pool_hit_rate",
                             "value": round((1 - bp_reads / bp_requests) * 100, 2), "detail": ""})
+            bp_pages_data = _si("Innodb_buffer_pool_pages_data")
+            bp_pages_free = _si("Innodb_buffer_pool_pages_free")
+            out.append({"metric_type": "cache", "metric_name": "buffer_pool_size_mb",
+                        "value": round(_sv("innodb_buffer_pool_size") / 1048576, 2), "detail": ""})
+            if bp_pages_data + bp_pages_free:
+                out.append({"metric_type": "cache", "metric_name": "buffer_pool_usage_pct",
+                            "value": round(bp_pages_data / (bp_pages_data + bp_pages_free) * 100, 2), "detail": ""})
+            out.append({"metric_type": "cache", "metric_name": "buffer_pool_dirty_pages",
+                        "value": _si("Innodb_buffer_pool_pages_dirty"), "detail": ""})
+            out.append({"metric_type": "cache", "metric_name": "innodb_log_waits",
+                        "value": _si("Innodb_log_waits"), "detail": ""})
+
+            # 查询质量 / 临时表 / 排序 / 全表扫描 / 表锁
+            out.append({"metric_type": "query_quality", "metric_name": "slow_queries", "value": _si("Slow_queries"), "detail": ""})
+            out.append({"metric_type": "query_quality", "metric_name": "select_scan_total", "value": _si("Select_scan"), "detail": "全表扫描次数（累计）"})
+            out.append({"metric_type": "query_quality", "metric_name": "handler_read_rnd_next", "value": _si("Handler_read_rnd_next"), "detail": "无索引/全表扫描读行（累计）"})
+            tmp_tables = _si("Created_tmp_tables")
+            tmp_disk = _si("Created_tmp_disk_tables")
+            out.append({"metric_type": "query_quality", "metric_name": "tmp_tables", "value": tmp_tables, "detail": ""})
+            out.append({"metric_type": "query_quality", "metric_name": "tmp_disk_tables", "value": tmp_disk, "detail": ""})
+            if tmp_tables:
+                out.append({"metric_type": "query_quality", "metric_name": "tmp_disk_tables_pct",
+                            "value": round(tmp_disk / tmp_tables * 100, 2), "detail": ""})
+            out.append({"metric_type": "query_quality", "metric_name": "sort_merge_passes", "value": _si("Sort_merge_passes"), "detail": ""})
+            out.append({"metric_type": "query_quality", "metric_name": "table_locks_waited", "value": _si("Table_locks_waited"), "detail": ""})
+
+            # InnoDB 行锁 / 死锁
+            out.append({"metric_type": "innodb", "metric_name": "row_lock_waits", "value": _si("Innodb_row_lock_waits"), "detail": ""})
+            out.append({"metric_type": "innodb", "metric_name": "row_lock_time_avg_ms", "value": _si("Innodb_row_lock_time_avg"), "detail": ""})
+            out.append({"metric_type": "innodb", "metric_name": "row_lock_current_waits", "value": _si("Innodb_row_lock_current_waits"), "detail": ""})
+            out.append({"metric_type": "innodb", "metric_name": "deadlocks", "value": _si("Innodb_deadlocks"), "detail": ""})
+
+            # 线程 / 连接质量 / 打开表文件
+            out.append({"metric_type": "connections", "metric_name": "threads_cached", "value": _si("Threads_cached"), "detail": ""})
+            out.append({"metric_type": "connections", "metric_name": "threads_created", "value": _si("Threads_created"), "detail": ""})
+            out.append({"metric_type": "connections", "metric_name": "aborted_connects", "value": _si("Aborted_connects"), "detail": ""})
+            out.append({"metric_type": "connections", "metric_name": "max_used_connections", "value": _si("Max_used_connections"), "detail": ""})
+            out.append({"metric_type": "connections", "metric_name": "thread_cache_size", "value": int(_sv("thread_cache_size")), "detail": ""})
+            out.append({"metric_type": "tablespace", "metric_name": "open_tables", "value": _si("Open_tables"), "detail": ""})
+            table_open_cache = int(_sv("table_open_cache"))
+            if table_open_cache:
+                out.append({"metric_type": "tablespace", "metric_name": "table_open_cache_usage_pct",
+                            "value": round(_si("Open_tables") / table_open_cache * 100, 2), "detail": ""})
+            out.append({"metric_type": "tablespace", "metric_name": "open_files", "value": _si("Open_files"), "detail": ""})
+            out.append({"metric_type": "tablespace", "metric_name": "opened_tables", "value": _si("Opened_tables"), "detail": ""})
+
+            # 配置项（便于诊断参考）
+            out.append({"metric_type": "config", "metric_name": "long_query_time", "value": _sv("long_query_time"), "detail": ""})
+            out.append({"metric_type": "config", "metric_name": "slow_query_log", "value": 1 if str(va.get("slow_query_log", "OFF")).upper() in ("ON", "1") else 0, "detail": ""})
+            out.append({"metric_type": "config", "metric_name": "innodb_buffer_pool_size_mb", "value": round(_sv("innodb_buffer_pool_size") / 1048576, 2), "detail": ""})
+
+            # 主从复制（非从库/无权限则跳过）
+            try:
+                try:
+                    await cur.execute("SHOW REPLICA STATUS")
+                except Exception:  # noqa: BLE001
+                    await cur.execute("SHOW SLAVE STATUS")
+                rrow = await cur.fetchone()
+                if rrow and cur.description:
+                    cols = [d[0] for d in cur.description]
+                    rr = dict(zip(cols, rrow))
+                    io = str(rr.get("Replica_IO_Running") or rr.get("Slave_IO_Running") or "")
+                    sql_t = str(rr.get("Replica_SQL_Running") or rr.get("Slave_SQL_Running") or "")
+                    lag = rr.get("Seconds_Behind_Source", rr.get("Seconds_Behind_Master"))
+                    out.append({"metric_type": "replication", "metric_name": "slave_running",
+                                "value": 1 if (io == "Yes" and sql_t == "Yes") else 0, "detail": f"IO={io} SQL={sql_t}"})
+                    if lag is not None:
+                        out.append({"metric_type": "replication", "metric_name": "replication_lag_seconds",
+                                    "value": float(lag), "detail": ""})
+            except Exception:  # noqa: BLE001
+                pass
 
             # 2. 锁等待（8.0 performance_schema / 5.7 innodb_trx 兜底）
             lock_count = 0
@@ -466,7 +559,10 @@ async def collect_db_health(conn_id: int) -> list[dict]:
             c2.status = "connected"
         # QPS/TPS 差值：先读上一次累计值，算出速率后一并落库
         prev_map: dict[str, tuple[float, datetime]] = {}
-        for name in ("queries_total", "tps_total"):
+        _RATE_NAMES = {"queries_total": "qps", "tps_total": "tps",
+                       "bytes_received": "rx_bytes_per_sec", "bytes_sent": "tx_bytes_per_sec",
+                       "slow_queries": "slow_queries_per_sec"}
+        for name in _RATE_NAMES:
             prev = (await session.execute(
                 select(DBMetricSnapshot).where(
                     DBMetricSnapshot.db_connection_id == conn_id,
@@ -490,11 +586,10 @@ async def collect_db_health(conn_id: int) -> list[dict]:
                 dt = (now_ts - prev_ts).total_seconds()
                 if dt > 0 and m["value"] >= prev_val:
                     rate = round((m["value"] - prev_val) / dt, 2)
-                    rate_name = "qps" if m["metric_name"] == "queries_total" else "tps"
                     session.add(DBMetricSnapshot(
                         db_connection_id=conn_id,
-                        metric_type="throughput",
-                        metric_name=rate_name,
+                        metric_type="throughput" if m["metric_name"] in ("queries_total", "tps_total") else "rate",
+                        metric_name=_RATE_NAMES[m["metric_name"]],
                         value=rate,
                         detail="",
                     ))

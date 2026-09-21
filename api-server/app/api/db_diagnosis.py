@@ -25,21 +25,27 @@ async def run_diagnosis(conn_id: int, user=Depends(require_any_user)):
 
 
 @router.get("/reports")
-async def list_reports(conn_id: int | None = None, limit: int = 20, user=Depends(require_any_user)):
+async def list_reports(conn_id: int | None = None, page: int = 1, page_size: int = 20,
+                      user=Depends(require_any_user)):
     if conn_id and not await check_db_permission(user, conn_id, "read"):
         return _deny()
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    from sqlalchemy import func as _func
     async with async_session() as session:
-        q = select(DiagnosticReport).where(DiagnosticReport.task_type == "db")
-        if conn_id:
-            # 报告 raw_output 里含 db_name，简单过滤：按 task_id 无法关联，先全量返回
-            pass
-        result = await session.execute(q.order_by(DiagnosticReport.id.desc()).limit(limit))
-        reports = list(result.scalars())
-    return {"code": 200, "message": "success", "data": [
-        {"id": r.id, "conclusion": r.conclusion or "", "root_cause": r.root_cause or "",
-         "suggestion": r.suggestion or "", "created_at": str(r.created_at)}
-        for r in reports
-    ]}
+        total = (await session.execute(
+            select(_func.count()).select_from(DiagnosticReport).where(DiagnosticReport.task_type == "db")
+        )).scalar() or 0
+        rows = (await session.execute(
+            select(DiagnosticReport).where(DiagnosticReport.task_type == "db")
+            .order_by(DiagnosticReport.id.desc())
+            .offset((page - 1) * page_size).limit(page_size)
+        )).scalars().all()
+    return {"code": 200, "message": "success", "data": {
+        "items": [{"id": r.id, "conclusion": r.conclusion or "", "root_cause": r.root_cause or "",
+                   "suggestion": r.suggestion or "", "created_at": str(r.created_at)} for r in rows],
+        "total": total, "page": page, "page_size": page_size,
+    }}
 
 
 @router.get("/{conn_id}/progress")
