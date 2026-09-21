@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """数据库诊断 API：按需诊断 + 报告 + 趋势（诊断中心改造后入口）"""
 import json
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -89,11 +90,24 @@ async def diag_progress(conn_id: int, user=Depends(require_any_user)):
 
 
 @router.get("/{conn_id}/trends")
-async def list_trends(conn_id: int, metric_type: str = "connections", user=Depends(require_any_user)):
-    """连接/锁/表空间趋势（db_metric_snapshots）"""
+async def list_trends(conn_id: int, metric_type: str = "connections", hours: int = 1, user=Depends(require_any_user)):
+    """指标趋势；metric_type=all 时返回全量指标（按时间窗，前端多线展示）"""
     if not await check_db_permission(user, conn_id, "read"):
         return _deny()
     async with async_session() as session:
+        if metric_type in ("", "all"):
+            since = datetime.now() - timedelta(hours=max(1, min(hours, 48)))
+            rows = (await session.execute(
+                select(DBMetricSnapshot)
+                .where(DBMetricSnapshot.db_connection_id == conn_id,
+                       DBMetricSnapshot.sampled_at >= since)
+                .order_by(DBMetricSnapshot.id.desc()).limit(20000)
+            )).scalars().all()
+            rows = list(reversed(rows))
+            return {"code": 200, "message": "success", "data": [
+                {"metric_type": r.metric_type, "metric_name": r.metric_name,
+                 "value": r.value, "sampled_at": str(r.sampled_at)} for r in rows
+            ]}
         result = await session.execute(
             select(DBMetricSnapshot)
             .where(
@@ -103,8 +117,8 @@ async def list_trends(conn_id: int, metric_type: str = "connections", user=Depen
             .order_by(DBMetricSnapshot.sampled_at.desc())
             .limit(200)
         )
-        rows = list(result.scalars())
+        rows2 = list(result.scalars())
     return {"code": 200, "message": "success", "data": [
         {"metric_name": r.metric_name, "value": r.value, "sampled_at": str(r.sampled_at)}
-        for r in reversed(rows)
+        for r in reversed(rows2)
     ]}

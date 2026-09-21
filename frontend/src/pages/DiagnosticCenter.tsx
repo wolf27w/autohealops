@@ -4,14 +4,13 @@ import type { DBConnection } from '../types'
 import {
   Tabs, Card, Button, Table, Modal, Form, Input, Select, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress,
 } from 'antd'
-import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
+import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
 import DBMonitor from './DBMonitor'
-import { Line } from '@ant-design/charts'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
-  deleteDBConnection, testDBConnection, getSlowSQL, collectSlowSQL, getSlowSQLTrend,
-  runDbDiagnosis, getDbDiagnosisReports, getDbTrends, downloadInspectionReport, getDbDiagnosisProgress,
+  deleteDBConnection, testDBConnection, collectSlowSQL,
+  runDbDiagnosis, getDbDiagnosisReports, downloadInspectionReport, getDbDiagnosisProgress,
 } from '../services/api'
 
 interface DBReport {
@@ -28,19 +27,6 @@ interface TrendPoint {
   sampled_at?: string
   value?: number
   metric_name?: string
-}
-
-interface SlowSQL {
-  id: number
-  sql_text?: string
-  exec_count?: number
-  avg_latency_ms?: number
-  max_latency_ms?: number
-}
-
-interface SlowTrendPoint {
-  bucket?: string
-  avg_latency_ms?: number
 }
 
 interface SuggestionItem {
@@ -168,11 +154,6 @@ function DBConnections() {
   const [conns, setConns] = useState<DBConnection[]>([])
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
-  const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
-  const [slowTrend, setSlowTrend] = useState<SlowTrendPoint[]>([])
-  const [slowDrawer, setSlowDrawer] = useState(false)
-  const [slowConn, setSlowConn] = useState<DBConnection | null>(null)
-  const [sqlDetail, setSqlDetail] = useState<string>('')
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
   const [form] = Form.useForm()
 
@@ -209,13 +190,6 @@ function DBConnections() {
     message.success('已保存')
     setModalOpen(false)
     load()
-  }
-
-  const openSlowSQL = async (c: DBConnection) => {
-    setSlowConn(c)
-    setSlowDrawer(true)
-    getSlowSQL(c.id).then((d) => setSlowSQL((d || []) as SlowSQL[]))
-    getSlowSQLTrend(c.id, 24).then((d) => setSlowTrend((d || []) as SlowTrendPoint[]))
   }
 
   const runDiagnosis = async (c: DBConnection) => {
@@ -277,7 +251,6 @@ function DBConnections() {
           { title: '操作', render: (_, r) => (
             <Space>
               <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => runDiagnosis(r)}>诊断</Button>
-              <Button size="small" icon={<ThunderboltOutlined />} onClick={() => openSlowSQL(r)}>慢SQL</Button>
               <Button size="small" onClick={() => testConn(r)}>测试连接</Button>
               <Button size="small" onClick={async () => { await collectSlowSQL(r.id); message.success('已触发采集') }}>采集</Button>
               <Button size="small" onClick={() => openModal(r)}>编辑</Button>
@@ -324,37 +297,6 @@ function DBConnections() {
             <Input placeholder="留空=不定时，如 0 9 * * *" />
           </Form.Item>
         </Form>
-      </Modal>
-
-      <Drawer title={`慢SQL：${slowConn?.name || ''}`} open={slowDrawer} onClose={() => setSlowDrawer(false)} width={860}>
-        {slowTrend.length > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>平均耗时趋势（按小时，近 24h）</div>
-            <Line
-              data={slowTrend}
-              xField="bucket"
-              yField="avg_latency_ms"
-              height={200}
-              point={{ size: 3 }}
-              tooltip={{ title: 'bucket' }}
-            />
-          </div>
-        )}
-        <Table rowKey="id" dataSource={slowSQL} pagination={false} size="small"
-          columns={[
-            { title: 'SQL', dataIndex: 'sql_text', render: (v) => (
-              <Space size={4} style={{ maxWidth: '100%' }}>
-                <span style={{ maxWidth: 480, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle' }}>{v}</span>
-                <Button size="small" type="link" onClick={() => setSqlDetail(v)}>完整</Button>
-              </Space>
-            ) },
-            { title: '执行次数', dataIndex: 'exec_count', width: 90 },
-            { title: '平均(ms)', dataIndex: 'avg_latency_ms', width: 100 },
-            { title: '最大(ms)', dataIndex: 'max_latency_ms', width: 100 },
-          ]} />
-      </Drawer>
-      <Modal title="完整 SQL" open={!!sqlDetail} onCancel={() => setSqlDetail('')} footer={null} width={820}>
-        <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f5f6fa', padding: 12, borderRadius: 6, maxHeight: 420, overflow: 'auto', fontSize: 13 }}>{sqlDetail}</pre>
       </Modal>
     </div>
   )
