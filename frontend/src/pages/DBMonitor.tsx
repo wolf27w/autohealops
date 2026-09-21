@@ -36,8 +36,7 @@ const TYPE_COLOR: Record<string, string> = {
   lock_wait: 'red', replication: 'gold', rate: 'lime',
 }
 
-const NAME_LABEL: Record<string, string> = {
-  connections_used: '当前连接数', max_connections: '最大连接数', connection_usage_pct: '连接使用率(%)',
+const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数', max_connections: '最大连接数', connection_usage_pct: '连接使用率(%)',
   active_connections: '活跃连接', threads_cached: '线程缓存', threads_created: '已创建线程',
   aborted_connects: '失败连接', max_used_connections: '历史最大连接', thread_cache_size: '线程缓存大小',
   queries_total: '总查询数', tps_total: '事务累计', qps: 'QPS', tps: 'TPS',
@@ -105,13 +104,26 @@ export default function DBMonitor() {
     return v
   }
 
+  // 单位（避免把 ms 当次数误读）
+  const unitOf = (name: string): string => {
+    if (name.endsWith('_pct') || name === 'buffer_pool_hit_rate') return '%'
+    if (name.endsWith('_ms')) return 'ms'
+    if (name.endsWith('_mb') || name === 'top_tables') return 'MB'
+    if (name.endsWith('_seconds') || name === 'long_query_time') return 's'
+    if (name.endsWith('_bytes_per_sec')) return 'B/s'
+    if (name.endsWith('_bytes')) return 'MB'
+    if (name === 'qps' || name === 'tps' || name.endsWith('_per_sec')) return '/s'
+    if (name === 'table_count') return '张'
+    return '次'
+  }
+
   const metricCols = [
     { title: '分类', dataIndex: 'metric_type', width: 120,
       render: (t: string) => <Tag color={TYPE_COLOR[t] || 'default'}>{TYPE_LABEL[t] || t}</Tag>,
       filters: Array.from(new Set(metrics.map((m) => m.metric_type))).map((t) => ({ text: TYPE_LABEL[t] || t, value: t })),
       onFilter: (v: unknown, m: Metric) => m.metric_type === v },
     { title: '监控项', dataIndex: 'metric_name', width: 220, render: (n: string) => NAME_LABEL[n] || n },
-    { title: '值', width: 150, render: (_: unknown, m: Metric) => <b>{fmt(m)}</b> },
+    { title: '值', width: 170, render: (_: unknown, m: Metric) => <><b>{fmt(m)}</b> <span style={{ color: '#999', fontSize: 12 }}>{unitOf(m.metric_name)}</span></> },
     { title: '说明/明细', dataIndex: 'detail', ellipsis: true, render: (v: string) => v || '-' },
   ]
 
