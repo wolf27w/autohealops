@@ -1,7 +1,7 @@
 // 数据库监控：按数据库切换，一屏展示全部监控项（+ 慢 SQL）
 // 不同数据库类型（mysql/pg/oracle）采集项不同，按采集到的内容展示
 import { useEffect, useState } from 'react'
-import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip } from 'antd'
+import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends } from '../services/api'
@@ -64,6 +64,7 @@ export default function DBMonitor() {
   const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
   const [loading, setLoading] = useState(false)
   const [trends, setTrends] = useState<TrendPoint[]>([])
+  const [groupByScale, setGroupByScale] = useState(false)
 
   useEffect(() => {
     getDBConnections().then((d) => {
@@ -145,11 +146,30 @@ export default function DBMonitor() {
               pagination={false} scroll={{ y: 520 }} />
           </Card>
 
-          <Card size="small" title={`指标趋势（全部指标 · 最近 1 小时 · ${new Set(trends.map((t) => t.series)).size} 条线）`} style={{ marginTop: 12 }}>
-            {trends.length
-              ? <Line data={trends} xField="sampled_at" yField="value" seriesField="series" height={320} smooth
-                  legend={{ color: { position: 'bottom', layout: { justifyContent: 'center' } } }} />
-              : <div style={{ color: '#999', padding: 8 }}>暂无趋势数据（采集几次后形成）</div>}
+          <Card size="small" style={{ marginTop: 12 }}
+            title={`指标趋势（全部指标 · 最近 1 小时 · ${new Set(trends.map((t) => t.series)).size} 条线）`}
+            extra={<Space size={6}><span style={{ fontSize: 12, color: '#8c8c8c' }}>按量级分组</span>
+              <Switch size="small" checked={groupByScale} onChange={setGroupByScale} /></Space>}>
+            {trends.length === 0
+              ? <div style={{ color: '#999', padding: 8 }}>暂无趋势数据（采集几次后形成）</div>
+              : !groupByScale
+                ? <Line data={trends} xField="sampled_at" yField="value" seriesField="series" height={320} smooth
+                    legend={{ color: { position: 'bottom', layout: { justifyContent: 'center' } } }} />
+                : (() => {
+                  const maxOf: Record<string, number> = {}
+                  trends.forEach((t) => { const s = t.series || t.metric_name; maxOf[s] = Math.max(maxOf[s] || 0, Number(t.value) || 0) })
+                  const bucketOf = (mx: number) => (mx <= 200 ? '小值 / 百分比（≤200）' : mx <= 1e6 ? '中值 / 计数（≤1e6）' : '大值 / 字节（>1e6）')
+                  const groups: Record<string, TrendPoint[]> = {}
+                  trends.forEach((t) => { const b = bucketOf(maxOf[t.series || t.metric_name] || 0); (groups[b] = groups[b] || []).push(t) })
+                  const order = ['小值 / 百分比（≤200）', '中值 / 计数（≤1e6）', '大值 / 字节（>1e6）']
+                  return order.filter((b) => groups[b]?.length).map((b) => (
+                    <div key={b} style={{ marginBottom: 16 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{b}</div>
+                      <Line data={groups[b]} xField="sampled_at" yField="value" seriesField="series" height={240} smooth
+                        legend={{ color: { position: 'bottom', layout: { justifyContent: 'center' } } }} />
+                    </div>
+                  ))
+                })()}
           </Card>
 
           <Card size="small" title={`慢 SQL（Top ${slowSQL.length}）`} style={{ marginTop: 12 }}>
