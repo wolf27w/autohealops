@@ -62,7 +62,13 @@ export default function DBMonitor() {
   const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => { getDBConnections().then((d) => setConns((d || []) as DBConn[])) }, [])
+  useEffect(() => {
+    getDBConnections().then((d) => {
+      const arr = (d || []) as DBConn[]
+      setConns(arr)
+      setConnId((v) => (v ?? (arr[0]?.id)))   // 默认选中第一个库
+    })
+  }, [])
 
   const load = (cid?: number) => {
     const id = cid ?? connId

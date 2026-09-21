@@ -74,8 +74,8 @@ async def _maintenance_loop() -> None:
     while True:
         await asyncio.sleep(30)
         loop_count += 1
-        # 慢 SQL 采集：每 5 分钟（10 个 30s 周期）
-        if loop_count % 10 == 0:
+        # 慢 SQL + 健康指标采集：每 1 分钟（2 个 30s 周期）
+        if loop_count % 2 == 0:
             try:
                 n = await scan_all_connections()
                 if n:
