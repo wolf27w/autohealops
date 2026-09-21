@@ -54,11 +54,18 @@ def _validate_nodes(nodes) -> tuple[bool, str]:
 
 
 async def _validate_users_exist(nodes) -> tuple[bool, str]:
-    """校验「指定用户」节点里的用户名在平台用户表中存在"""
+    """校验「指定用户」节点：允许 平台用户名 或 飞书 open_id（ou_/on_ 开头）
+
+    飞书 @ 必须用 open_id；平台用户名则通过「用户管理」里的 feishu_open_id 映射后 @。
+    """
     names: list[str] = []
     for n in nodes or []:
         if isinstance(n, dict) and n.get("type") == "user":
-            names += [str(x) for x in (n.get("users") or [])]
+            for x in (n.get("users") or []):
+                s = str(x)
+                if s.startswith(("ou_", "on_")):
+                    continue  # 飞书 open_id，直接 @
+                names.append(s)
     if not names:
         return True, ""
     from app.models import User
@@ -67,7 +74,8 @@ async def _validate_users_exist(nodes) -> tuple[bool, str]:
     exists = {r[0] for r in rows}
     missing = [x for x in names if x not in exists]
     if missing:
-        return False, f"指定用户不存在于「用户管理」：{', '.join(missing)}"
+        return False, (f"指定用户既不是平台用户名、也不是飞书 open_id（ou_/on_ 开头）：{', '.join(missing)}"
+                       f"。飞书 @ 必须用 open_id；若填平台用户名，需在「用户管理」里配置其 feishu_open_id")
     return True, ""
 
 

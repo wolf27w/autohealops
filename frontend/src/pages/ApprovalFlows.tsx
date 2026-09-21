@@ -81,15 +81,17 @@ function NodeFields({ form, field, index, configs, users }: { form: FormInstance
             )}
             {type === 'user' && (
               <>
-                <Form.Item name={[field.name, 'users']} label="指定用户（从平台用户选择）" style={{ marginBottom: 4 }}>
-                  <Select mode="multiple" placeholder="选择用户"
+                <Form.Item name={[field.name, 'users']} label="指定用户（平台用户名 或 飞书 open_id）" style={{ marginBottom: 4 }}>
+                  <Select mode="tags" placeholder="选平台用户，或直接粘飞书 open_id（ou_xxx）后回车"
+                    tokenSeparators={[',', '，', ' ']}
                     options={users.map((u) => ({
                       value: u.username,
                       label: `${u.username}${u.feishu_open_id ? '' : '（未绑飞书 open_id，群里 @ 不到）'}`,
                     }))} />
                 </Form.Item>
                 <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
-                  只能选「用户管理」里**存在**的用户；未填飞书 open_id 的用户，群消息 @ 不到（个人消息也发不出）。
+                  飞书群内 @ 必须用 <b>open_id</b>（ou_ 开头）——可直接粘 open_id；
+                  填<b>平台用户名</b>时会用「用户管理」里它的 feishu_open_id 去 @。
                 </div>
               </>
             )}

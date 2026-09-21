@@ -175,11 +175,15 @@ async def _notify_current_node(approval: Approval, summary: str, risk: str) -> N
     ntype = node.get("type", "duty")
 
     receiver_users = None
+    extra_at_open_ids: list[str] = []
     if ntype in ("duty", "admin", "user", "manager"):
         usernames = node.get("receiver_usernames") or []
-        if usernames:
+        # 「指定用户」节点可直接填飞书 open_id（ou_/on_ 开头）→ 直接 @，不要求是平台用户
+        plain_names = [str(x) for x in usernames if not str(x).startswith(("ou_", "on_"))]
+        extra_at_open_ids = [str(x) for x in usernames if str(x).startswith(("ou_", "on_"))]
+        if plain_names:
             async with async_session() as session:
-                result = await session.execute(select(User).where(User.username.in_(usernames)))
+                result = await session.execute(select(User).where(User.username.in_(plain_names)))
                 receiver_users = list(result.scalars())
     await notification_service.send_approval_notification(
         approval.id, summary, risk,
@@ -190,6 +194,7 @@ async def _notify_current_node(approval: Approval, summary: str, risk: str) -> N
         group_id=int(node.get("group_id") or 0),
         at_duty=bool(node.get("at_duty", False)),
         notify_config_id=int(node.get("notify_config_id") or 0),
+        extra_at_open_ids=extra_at_open_ids or None,
     )
 
 

@@ -515,7 +515,8 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                                      duty_users: list | None = None, node_type: str = "duty",
                                      at_all: bool = False, receiver_users: list | None = None,
                                      group_id: int = 0, at_duty: bool = False,
-                                     notify_config_id: int = 0) -> None:
+                                     notify_config_id: int = 0,
+                                     extra_at_open_ids: list[str] | None = None) -> None:
     """发送审批通知（按流程节点类型路由）
 
     node_type:
@@ -555,10 +556,13 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
         async with async_session() as session:
             cfg = await session.get(NotificationConfig, notify_config_id)
         if cfg and cfg.is_active:
-            at_ids: list[str] = []
-            if at_duty:
+            at_ids: list[str] = list(extra_at_open_ids or [])
+            if at_duty or node_type == "user":
                 _t = receiver_users if receiver_users is not None else (duty_users or [])
-                at_ids = [u.feishu_open_id for u in _t if getattr(u, "feishu_open_id", "")]
+                for u in _t:
+                    oid = getattr(u, "feishu_open_id", "")
+                    if oid and oid not in at_ids:
+                        at_ids.append(oid)
             await _send_webhook_with_retry(cfg, text, None, at_all=at_all,
                                            receiver=f"通知配置:{cfg.name}", at_open_ids=at_ids or None)
             return
@@ -571,11 +575,16 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
         async with async_session() as session:
             group = await session.get(IMGroup, group_id)
 
-    # @值班人 open_id（at_duty 且节点有接收人时）
+    # @ 的 open_id：at_duty（值班人）或 node_type=user（指定用户）时 @ 对应接收人；
+    # 另支持直接传入的飞书 open_id（extra_at_open_ids，流程里直接填 ou_xxx）
     at_open_ids: list[str] = []
-    if at_duty:
+    if at_duty or node_type == "user":
         targets = receiver_users if receiver_users is not None else (duty_users or [])
         at_open_ids = [u.feishu_open_id for u in targets if getattr(u, "feishu_open_id", "")]
+    if extra_at_open_ids:
+        for oid in extra_at_open_ids:
+            if oid and oid not in at_open_ids:
+                at_open_ids.append(oid)
 
     if group:
         # 3a. 绑定群：应用群（chat_id）优先，webhook 群兜底
