@@ -246,6 +246,12 @@ export const getPodMetrics = (clusterId: number, ns: string, pod: string, range 
 
 export const getPodLogs = (clusterId: number, ns: string, pod: string, container = '', tail = 200, previous = false) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/logs`, { params: { container, tail, previous } })
+// 容器内日志文件（只读）：列目录 / 读取文件内容（下载）
+export const listPodFiles = (clusterId: number, ns: string, pod: string, dir: string, container = '') =>
+  http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/files`, { params: { dir, container } })
+export const readPodFile = (clusterId: number, ns: string, pod: string, path: string, container = '', maxBytes?: number) =>
+  http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/file`, { params: { path, container, max_bytes: maxBytes } })
+
 export const getPodYaml = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/yaml`)
 export const applyPodYaml = (clusterId: number, ns: string, pod: string, yaml: string) =>

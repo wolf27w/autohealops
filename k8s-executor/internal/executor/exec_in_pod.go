@@ -2,6 +2,7 @@
 package executor
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"bytes"
 	"context"
 	"fmt"
@@ -55,6 +56,12 @@ func (e *Executor) ExecInPod(ctx context.Context, namespace, podName, container,
 	}
 	if e.restConfig == nil {
 		return "", fmt.Errorf("集群 rest.Config 不可用")
+	}
+	// 容器名为空时自动选主容器（多容器 Pod 不指定容器会被 API Server 拒绝）
+	if container == "" {
+		if pod, err := e.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{}); err == nil {
+			container = pickDefaultContainer(pod)
+		}
 	}
 
 	req := e.clientset.CoreV1().RESTClient().Post().

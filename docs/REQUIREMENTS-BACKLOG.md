@@ -468,3 +468,11 @@
 - 前端移除项目下拉与相关状态/请求（`getProjects`、`projectId`、queryKey 中的 projectId），保留集群筛选 + 时间段选择
 - 后端 `/stats/dashboard` 仍保留 `project_id` 参数（不影响使用，其它调用方可用）
 - 实测：全集群 → 水位 2 条（测试环境/uat）；`cluster_id=1` → cluster_total=1、水位 1 条
+
+### 容器日志抽屉支持「下载容器内指定路径的日志文件」✅ 2026-09-21
+- **入口**：集群管理 → 工作负载 → Pods → 日志 抽屉，新增「容器内日志文件（只读下载）」区
+- 能力：① 输入目录 → **列目录**（可下拉选文件）② 输入/选择文件路径 → **下载文件**（浏览器另存）③ **下载当前 stdout** 日志
+- 接口：`GET .../pods/{pod}/files?dir=`（列目录，返回 ls -l 原文 + 解析条目）、`GET .../pods/{pod}/file?path=`（读文件内容，返回 size/truncated/content/filename）
+- 安全：走执行器**只读命令白名单**（ls/cat/tail/wc），路径必须是绝对路径且禁止空格/引号/管道等元字符；越权字符直接 400；单次最多 5MB（超出取**末尾** 5MB 并标记 truncated）；沿用集群/ns 读权限
+- 顺带修复：执行器 `ExecInPod` 容器名为空时**自动选主容器**（多容器 Pod 否则报 "a container name must be specified"）
+- 实测（真实 Pod `qa-eft/efreight-prm-…`）：列 `/var/log` → 7 条；下载 `/var/log/dpkg.log` → 200（10595 字节，内容正常）；不存在文件 → 404 明确提示；`/var/log/x;ls` → 400 拒绝

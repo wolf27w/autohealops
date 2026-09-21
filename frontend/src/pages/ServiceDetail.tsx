@@ -1,12 +1,12 @@
 // 服务详情页（专项 D）：工作负载概览 + 副本增减 + 探针编辑 + 回滚/重启/重建 + Pods 列表（监控/日志/进容器/YAML）
 import { useEffect, useRef, useState } from 'react'
-import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip } from 'antd'
-import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined } from '@ant-design/icons'
+import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider } from 'antd'
+import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 
 const KIND_LABEL: Record<string, string> = {
@@ -378,6 +378,46 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   const timerRef = useRef<number | null>(null)
 
   const [containers, setContainers] = useState<string[]>([])
+  // 容器内日志文件下载
+  const [dirPath, setDirPath] = useState('/var/log')
+  const [filePath, setFilePath] = useState('')
+  const [dirEntries, setDirEntries] = useState<Array<{ name: string; size: string | number; is_dir: boolean; raw: string }>>([])
+  const [listing, setListing] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+
+  const fmtSize = (b: number) => b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(2)} MB` : b >= 1024 ? `${(b / 1024).toFixed(1)} KB` : `${b} B`
+
+  const saveText = (name: string, text: string) => {
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
+  }
+
+  const doListDir = async () => {
+    if (!pod) return
+    setListing(true)
+    try {
+      const d = await listPodFiles(pod.clusterId, pod.namespace, pod.name, dirPath, container) as unknown as {
+        dir?: string; entries?: Array<{ name: string; size: string | number; is_dir: boolean; raw: string }>
+      }
+      setDirEntries(d?.entries || [])
+      if (!(d?.entries || []).length) message.info('该目录下没有可列出的文件（或容器内无 ls 命令）')
+    } catch { /* 拦截器已提示 */ } finally { setListing(false) }
+  }
+
+  const doDownloadFile = async () => {
+    if (!pod) return
+    if (!filePath.trim()) { message.warning('请填写容器内文件路径'); return }
+    setDownloading(true)
+    try {
+      const d = await readPodFile(pod.clusterId, pod.namespace, pod.name, filePath.trim(), container) as unknown as {
+        content?: string; filename?: string; size?: number; truncated?: boolean
+      }
+      saveText(d?.filename || 'download.log', d?.content || '')
+      message.success(`已下载 ${d?.filename || ''}${d?.truncated ? `（文件 ${fmtSize(Number(d?.size) || 0)}，仅取末尾 5MB）` : ''}`)
+    } catch { /* 拦截器已提示 */ } finally { setDownloading(false) }
+  }
 
   const fetchLogs = (tail: number) => {
     if (!pod) return
@@ -450,7 +490,35 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
       <div style={{ marginBottom: 8, fontSize: 12, color: live ? '#52c41a' : '#8c8c8c' }}>
         {live ? '● 实时中（每 2 秒刷新，退出抽屉自动停止）' : '○ 实时已关闭（点「查询」看当前日志快照）'}
       </div>
-      <pre ref={preRef} style={{ maxHeight: '70vh', overflow: 'auto', background: '#f5f5f5', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>{loading && !logs ? '加载中...' : logs}</pre>
+      <pre ref={preRef} style={{ maxHeight: '52vh', overflow: 'auto', background: '#f5f5f5', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>{loading && !logs ? '加载中...' : logs}</pre>
+
+      {/* ===== 容器内日志文件（只读下载） ===== */}
+      <Divider orientation="left" style={{ marginTop: 16 }}>容器内日志文件（只读下载）</Divider>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Input value={dirPath} onChange={(e) => setDirPath(e.target.value)} placeholder="/var/log"
+          style={{ width: 220 }} />
+        <Button onClick={doListDir} loading={listing}>列目录</Button>
+        {dirEntries.length > 0 && (
+          <Select
+            style={{ minWidth: 260 }} placeholder="选择目录下的文件"
+            value={filePath || undefined}
+            onChange={(v: string) => setFilePath(v)}
+            options={dirEntries.filter((x) => !x.is_dir).map((x) => ({
+              value: `${dirPath.replace(/\/$/, '')}/${x.name}`, label: `${x.name}（${fmtSize(Number(x.size) || 0)}）`,
+            }))}
+          />
+        )}
+      </Space>
+      <Space wrap>
+        <Input value={filePath} onChange={(e) => setFilePath(e.target.value)}
+          placeholder="/var/log/app.log（容器内绝对路径）" style={{ width: 320 }} />
+        <Button type="primary" icon={<DownloadOutlined />} onClick={doDownloadFile} loading={downloading}>下载文件</Button>
+        <Button icon={<DownloadOutlined />} onClick={() => saveText(`stdout-${pod.name}.log`, logs)}>下载当前 stdout</Button>
+      </Space>
+      <div style={{ marginTop: 6, fontSize: 12, color: '#8c8c8c' }}>
+        只读下载（执行器白名单命令 cat/ls/tail/wc，不会修改容器）；单次最多 5MB，超出时取文件<strong>末尾</strong> 5MB。
+        容器内无 shell 工具（如 distroless 镜像）时无法读取。
+      </div>
     </Drawer>
   )
 }

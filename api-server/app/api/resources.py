@@ -247,6 +247,85 @@ async def exec_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict
     return {"code": 200, "message": "success", "data": {"output": r.get("output", "")}}
 
 
+# ============ 容器内日志文件（只读下载） ============
+
+import re as _re
+_SAFE_PATH = _re.compile(r"^/[A-Za-z0-9._+/@-]*$")   # 绝对路径；禁止空格/引号/管道等 shell 元字符
+_MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024                 # 单次最多取 5MB（超出取文件末尾）
+
+
+def _bad_path(path: str) -> bool:
+    return (not path) or (not path.startswith("/")) or (not _SAFE_PATH.match(path)) or (".." in path)
+
+
+async def _pod_exec(cluster_id: int, namespace: str, pod_name: str, command: str, container: str = ""):
+    """在容器内执行只读命令（执行器有白名单校验）"""
+    return await executor_client.acall(executor_client.exec_in_pod, cluster_id, namespace, pod_name,
+                                       command, container=container)
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/files")
+async def list_pod_files(cluster_id: int, namespace: str, pod_name: str, dir: str = "/", container: str = "",
+                         user=Depends(require_any_user)):
+    """列容器内目录（只读）：返回原始 ls -l 输出 + 简单解析结果，便于选择要下载的日志文件"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    if _bad_path(dir):
+        return {"code": 400, "message": "目录必须是绝对路径，且不含空格/引号等特殊字符", "data": None}
+    r = await _pod_exec(cluster_id, namespace, pod_name, f"ls -l {dir}", container)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "列目录失败（容器可能无 ls 或无该目录）"), "data": None}
+    text = r.get("output", "") or ""
+    entries = []
+    for line in text.split("\n"):
+        parts = line.split()
+        if len(parts) >= 9 and parts[0][:1] in ("-", "d", "l", "c", "b", "p", "s"):
+            entries.append({
+                "name": parts[-1].split(" -> ")[0],
+                "size": parts[4] if parts[4].isdigit() else 0,
+                "is_dir": parts[0].startswith("d"),
+                "raw": line,
+            })
+    return {"code": 200, "message": "success", "data": {"dir": dir, "raw": text, "entries": entries}}
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/file")
+async def download_pod_file(cluster_id: int, namespace: str, pod_name: str, path: str = "",
+                            container: str = "", max_bytes: int = _MAX_DOWNLOAD_BYTES,
+                            user=Depends(require_any_user)):
+    """读取容器内指定路径文件内容（只读，用于下载日志文件）
+
+    - 只读命令白名单（wc -c 取大小、tail -c 取内容），禁止任何写入
+    - max_bytes 限幅 1KB ~ 5MB：文件更大时返回**末尾** max_bytes 字节（并标记 truncated）
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    if _bad_path(path):
+        return {"code": 400, "message": "路径必须是绝对路径，且不含空格/引号等特殊字符", "data": None}
+    max_bytes = max(1024, min(int(max_bytes or _MAX_DOWNLOAD_BYTES), _MAX_DOWNLOAD_BYTES))
+
+    size_r = await _pod_exec(cluster_id, namespace, pod_name, f"wc -c {path}", container)
+    size = 0
+    if size_r.get("success"):
+        first = (size_r.get("output", "") or "").strip().split()
+        if first and first[0].isdigit():
+            size = int(first[0])
+    elif "No such file" in str(size_r.get("error", "")):
+        return {"code": 404, "message": f"容器内不存在该文件：{path}", "data": None}
+
+    read_r = await _pod_exec(cluster_id, namespace, pod_name, f"tail -c {max_bytes} {path}", container)
+    if not read_r.get("success"):
+        return {"code": 500, "message": read_r.get("error", "读取文件失败（容器可能无 tail 或权限不足）"), "data": None}
+    content = read_r.get("output", "") or ""
+    return {"code": 200, "message": "success", "data": {
+        "path": path, "container": container or "(默认容器)",
+        "size": size, "returned_bytes": len(content.encode("utf-8", errors="ignore")),
+        "truncated": bool(size and size > max_bytes),
+        "content": content,
+        "filename": path.rsplit("/", 1)[-1] or "download.log",
+    }}
+
+
 # ============ 工作负载运维（专项 D：集群管理云原生改造） ============
 
 @router.get("/clusters/{cluster_id}/workloads")
