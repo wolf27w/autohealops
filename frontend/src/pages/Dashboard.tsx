@@ -258,7 +258,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               <>
                 <div style={{ position: 'relative' }}>
                   <Pie
-                    data={aiDistDraw} angleField="value" colorField="color"
+                    data={aiDistDraw} angleField="value" colorField="key"
                     height={220} radius={0.78} innerRadius={0.6}
                     legend={false}
                     label={{
@@ -267,6 +267,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                       style: { fontSize: 14, fontWeight: 600, fill: '#1f2d3d' },
                     }}
                     tooltip={{ items: [{ channel: 'y', name: '告警数', valueFormatter: (v: number) => `${v} 条（${aiTotal ? Math.round((v / aiTotal) * 1000) / 10 : 0}%）` }] }}
+                    scale={{ color: { domain: aiDistDraw.map((d) => d.key), range: aiDistDraw.map((d) => d.color) } }}
                   />
                   {/* 环形中心总量（HTML 叠层，字号可控） */}
                   <div style={{
