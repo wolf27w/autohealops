@@ -97,6 +97,7 @@ export const createNotificationConfig = (data: Payload) => http.post('/notificat
 export const updateNotificationConfig = (id: number, data: Payload) => http.put(`/notifications/configs/${id}`, data)
 export const deleteNotificationConfig = (id: number) => http.delete(`/notifications/configs/${id}`)
 export const testNotificationConfig = (id: number) => http.post(`/notifications/configs/${id}/test`)
+export const listFeishuChats = (data: Payload) => http.post<{ chat_id: string; name: string }[]>('/notifications/feishu/chats', data)
 export const getNotificationLogs = () => http.get('/notifications/logs')
 export const getNotifyPolicy = () => http.get<NotifyPolicy>('/notifications/policy')
 export const updateNotifyPolicy = (data: NotifyPolicy) => http.put('/notifications/policy', data)

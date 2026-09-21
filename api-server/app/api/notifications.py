@@ -151,6 +151,30 @@ async def test_config(config_id: int, user=Depends(require_admin)):
             "data": {"ok": ok, "detail": detail}}
 
 
+@router.post("/feishu/chats")
+async def list_feishu_chats(payload: dict, user=Depends(require_admin)):
+    """列出飞书应用（机器人）所在的群，供「通知群 chat_id」选择
+
+    payload: {app_id, app_secret, config_id?}；app_secret 缺失时可传 config_id 用已存的。
+    """
+    app_id = (payload.get("app_id") or "").strip()
+    app_secret = (payload.get("app_secret") or "").strip()
+    config_id = payload.get("config_id")
+    if (not app_id or not app_secret) and config_id:
+        async with async_session() as session:
+            c = await session.get(NotificationConfig, config_id)
+        if c:
+            app_id = app_id or (c.app_id or "")
+            app_secret = app_secret or (c.app_secret or "")
+    if not app_id or not app_secret:
+        return {"code": 400, "message": "请先填 App ID / App Secret", "data": []}
+    from app.services.feishu_service import list_feishu_chats as _list
+    resp = await _list(app_id, app_secret)
+    if resp.get("status") != "success":
+        return {"code": 500, "message": f"获取群列表失败: {resp.get('body', '')}", "data": []}
+    return {"code": 200, "message": "success", "data": resp.get("data", [])}
+
+
 @router.delete("/configs/{config_id}")
 async def delete_config(config_id: int, user=Depends(require_admin)):
     async with async_session() as session:

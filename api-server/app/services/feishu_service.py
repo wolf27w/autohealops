@@ -106,3 +106,26 @@ async def send_feishu_group_text(chat_id: str, content: str, at_open_ids: list[s
     if not chat_id:
         return {"status": "skipped", "body": "无 chat_id"}
     return await send_feishu_message(chat_id, "chat_id", content, app_id, app_secret, at_open_ids=at_open_ids)
+
+
+async def list_feishu_chats(app_id: str = "", app_secret: str = "") -> dict:
+    """列出应用（机器人）所在的群 → [{"chat_id":..,"name":..}]
+
+    需应用权限 im:chat:readonly（或 im:chat）且机器人已在群内。
+    """
+    token = await _get_tenant_token(app_id, app_secret)
+    if not token:
+        return {"status": "failed", "body": "飞书应用未配置凭证或获取 token 失败", "data": []}
+    url = "https://open.feishu.cn/open-apis/im/v1/chats?page_size=100"
+    try:
+        client = get_http_client(trust_env=False)
+        resp = await client.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        data = resp.json()
+        if data.get("code") == 0:
+            items = (data.get("data") or {}).get("items") or []
+            return {"status": "success", "data": [
+                {"chat_id": i.get("chat_id", ""), "name": i.get("name", "")} for i in items
+            ]}
+        return {"status": "failed", "body": f"code={data.get('code')} msg={data.get('msg', data)}", "data": []}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "failed", "body": str(e), "data": []}

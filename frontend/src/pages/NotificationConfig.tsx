@@ -5,7 +5,7 @@ import { PlusOutlined, SendOutlined, SaveOutlined, DeleteOutlined } from '@ant-d
 import {
   getNotificationConfigs, createNotificationConfig, updateNotificationConfig,
   deleteNotificationConfig, getNotificationLogs, testNotificationConfig,
-  getNotifyPolicy, updateNotifyPolicy,
+  getNotifyPolicy, updateNotifyPolicy, listFeishuChats,
 } from '../services/api'
 import type { NotificationConfig, NotifyPolicy, SilenceWindow } from '../types'
 
@@ -73,6 +73,9 @@ export default function NotificationConfig() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<NotificationConfig | null>(null)
   const [form] = Form.useForm()
+  const [groupOptions, setGroupOptions] = useState<{ chat_id: string; name: string }[]>([])
+  const [groupModalOpen, setGroupModalOpen] = useState(false)
+  const [groupLoading, setGroupLoading] = useState(false)
   const channelType = Form.useWatch('channel_type', form)
   const sendMode = Form.useWatch('send_mode', form)
   const useAppMode = channelType === 'feishu' && sendMode === 'app'
@@ -171,6 +174,23 @@ export default function NotificationConfig() {
     }
     setModalOpen(false)
     load()
+  }
+
+  const loadFeishuChats = async () => {
+    const app_id = String(form.getFieldValue('app_id') || '').trim()
+    const app_secret = String(form.getFieldValue('app_secret') || '').trim()
+    setGroupLoading(true)
+    try {
+      const groups = await listFeishuChats({ app_id, app_secret, config_id: editing?.id })
+      if (!groups || groups.length === 0) {
+        message.warning('没查到群：确认机器人已被拉进群，且应用开了 im:chat:readonly 权限')
+        return
+      }
+      setGroupOptions(groups)
+      setGroupModalOpen(true)
+    } finally {
+      setGroupLoading(false)
+    }
   }
 
   const handleTest = async (id: number) => {
@@ -285,9 +305,14 @@ export default function NotificationConfig() {
               <Form.Item name="app_secret" label="App Secret（编辑留空=不修改）">
                 <Input.Password placeholder="应用凭证 App Secret" />
               </Form.Item>
-              <Form.Item name="receive_id" label="通知群 chat_id" rules={[{ required: true }]}
-                tooltip="应用机器人是一个独立身份，可给多个群/人发消息，所以要指定发到哪个群：填群 chat_id（oc_xxx）。群机器人 webhook 则因 URL 已绑定群而无需此项">
-                <Input placeholder="oc_xxxxx（把机器人拉进群后可在群设置/链接里看到）" />
+              <Form.Item label="通知群 chat_id" required
+                tooltip="应用机器人是一个独立身份，可给多个群/人发消息，所以要指定发到哪个群：填群 chat_id（oc_xxx），或点右侧按钮从机器人所在的群列表里选">
+                <Space.Compact style={{ width: '100%' }}>
+                  <Form.Item name="receive_id" noStyle rules={[{ required: true, message: '请填或选择群 chat_id' }]}>
+                    <Input placeholder="oc_xxxxx" />
+                  </Form.Item>
+                  <Button loading={groupLoading} onClick={loadFeishuChats}>列出机器人所在群</Button>
+                </Space.Compact>
               </Form.Item>
             </>
           ) : (
@@ -335,6 +360,17 @@ export default function NotificationConfig() {
             <Form.Item name="is_active" label="启用" valuePropName="checked"><Switch /></Form.Item>
           )}
         </Form>
+      </Modal>
+
+      <Modal title="选择通知群（机器人所在的群）" open={groupModalOpen} footer={null} onCancel={() => setGroupModalOpen(false)}>
+        {groupOptions.map((g) => (
+          <div key={g.chat_id}
+            onClick={() => { form.setFieldsValue({ receive_id: g.chat_id }); setGroupModalOpen(false); message.success(`已选择：${g.name || g.chat_id}`) }}
+            style={{ padding: '8px 4px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}>
+            <div style={{ fontWeight: 500 }}>{g.name || '(无名群)'}</div>
+            <div style={{ fontSize: 12, color: '#999' }}>{g.chat_id}</div>
+          </div>
+        ))}
       </Modal>
     </div>
   )
