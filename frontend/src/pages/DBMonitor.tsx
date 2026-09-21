@@ -28,12 +28,12 @@ interface TrendPoint { metric_name: string; metric_type?: string; series?: strin
 const TYPE_LABEL: Record<string, string> = {
   connections: '连接', throughput: '吞吐', network: '网络', cache: '缓存/缓冲池',
   query_quality: '查询质量', innodb: 'InnoDB', tablespace: '表空间/文件',
-  config: '参数配置', lock_wait: '锁等待', replication: '主从复制', rate: '速率',
+  config: '参数配置', lock_wait: '锁等待', replication: '主从复制', rate: '速率', memory: '内存',
 }
 const TYPE_COLOR: Record<string, string> = {
   connections: 'blue', throughput: 'geekblue', network: 'cyan', cache: 'green',
   query_quality: 'orange', innodb: 'purple', tablespace: 'magenta', config: 'default',
-  lock_wait: 'red', replication: 'gold', rate: 'lime',
+  lock_wait: 'red', replication: 'gold', rate: 'lime', memory: 'volcano',
 }
 
 const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数', max_connections: '最大连接数', connection_usage_pct: '连接使用率(%)',
@@ -54,6 +54,7 @@ const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数
   rx_bytes_per_sec: '接收速率(B/s)', tx_bytes_per_sec: '发送速率(B/s)',
   com_select: 'SELECT 次数', com_insert: 'INSERT 次数', com_update: 'UPDATE 次数', com_delete: 'DELETE 次数',
   com_commit: 'COMMIT 次数', com_rollback: 'ROLLBACK 次数',
+  mysql_memory_total_mb: 'MySQL 进程内存(MB)', innodb_buffer_pool_data_mb: '缓冲池已用(MB)',
 }
 
 export default function DBMonitor() {

@@ -381,6 +381,20 @@ async def _mysql_collect_health(conn_info: dict) -> list[dict]:
             out.append({"metric_type": "cache", "metric_name": "innodb_log_waits",
                         "value": _si("Innodb_log_waits"), "detail": ""})
 
+            # 内存（MySQL 进程自身占用；CPU 无标准 SQL 接口，需主机/Pod 维度采集）
+            out.append({"metric_type": "memory", "metric_name": "innodb_buffer_pool_data_mb",
+                        "value": round(_si("Innodb_buffer_pool_bytes_data") / 1048576, 2), "detail": "InnoDB 缓冲池已用"})
+            try:
+                await cur.execute(
+                    "SELECT ROUND(SUM(CURRENT_NUMBER_OF_BYTES_USED)/1048576,2) "
+                    "FROM performance_schema.memory_summary_global_by_event_name"
+                )
+                mr = await cur.fetchone()
+                out.append({"metric_type": "memory", "metric_name": "mysql_memory_total_mb",
+                            "value": float(mr[0] or 0) if mr else 0, "detail": "MySQL 进程内存（performance_schema）"})
+            except Exception:  # noqa: BLE001
+                pass
+
             # 查询质量 / 临时表 / 排序 / 全表扫描 / 表锁
             out.append({"metric_type": "query_quality", "metric_name": "slow_queries", "value": _si("Slow_queries"), "detail": ""})
             out.append({"metric_type": "query_quality", "metric_name": "select_scan_total", "value": _si("Select_scan"), "detail": "全表扫描次数（累计）"})
