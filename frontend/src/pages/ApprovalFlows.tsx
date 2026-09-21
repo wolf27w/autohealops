@@ -8,7 +8,7 @@ import type { FormInstance, FormListFieldData } from 'antd'
 import { PlusOutlined, ArrowUpOutlined, ArrowDownOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
   getApprovalFlows, createApprovalFlow, updateApprovalFlow,
-  deleteApprovalFlow, resetDefaultApprovalFlow, getNotificationConfigs,
+  deleteApprovalFlow, resetDefaultApprovalFlow, getNotificationConfigs, getUsers,
 } from '../services/api'
 import type { NotificationConfig } from '../types'
 
@@ -80,9 +80,18 @@ function NodeFields({ form, field, index, configs }: { form: FormInstance; field
               </>
             )}
             {type === 'user' && (
-              <Form.Item name={[field.name, 'users']} label="指定用户（用户名，回车分隔）" style={{ marginBottom: 8 }}>
-                <Select mode="tags" placeholder="输入用户名，回车添加" tokenSeparators={[',', '，']} />
-              </Form.Item>
+              <>
+                <Form.Item name={[field.name, 'users']} label="指定用户（从平台用户选择）" style={{ marginBottom: 4 }}>
+                  <Select mode="multiple" placeholder="选择用户"
+                    options={users.map((u) => ({
+                      value: u.username,
+                      label: `${u.username}${u.feishu_open_id ? '' : '（未绑飞书 open_id，群里 @ 不到）'}`,
+                    }))} />
+                </Form.Item>
+                <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
+                  只能选「用户管理」里**存在**的用户；未填飞书 open_id 的用户，群消息 @ 不到（个人消息也发不出）。
+                </div>
+              </>
             )}
           </Space>
         )
@@ -94,6 +103,7 @@ function NodeFields({ form, field, index, configs }: { form: FormInstance; field
 export default function ApprovalFlows() {
   const [flows, setFlows] = useState<ApprovalFlow[]>([])
   const [configs, setConfigs] = useState<NotificationConfig[]>([])
+  const [users, setUsers] = useState<Array<{ username: string; feishu_open_id?: string }>>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<ApprovalFlow | null>(null)
   const [form] = Form.useForm()
@@ -102,6 +112,7 @@ export default function ApprovalFlows() {
   const load = () => {
     getApprovalFlows().then((d) => setFlows((d || []) as ApprovalFlow[]))
     getNotificationConfigs().then((d) => setConfigs(d || []))
+    getUsers().then((d) => setUsers((d || []) as Array<{ username: string; feishu_open_id?: string }>)).catch(() => {})
   }
   useEffect(() => { load() }, [])
 

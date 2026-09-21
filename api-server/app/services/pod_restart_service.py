@@ -204,31 +204,20 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
     trace_id = generate_trace_id()
 
     # AI 诊断（ai-service 侧落 AIDiagnosisResult，与 api-server 共享同一张表）
-    diagnosis_text = ""
+    # 诊断结论只入库（供告警详情/故障诊断页查看），**不追加进告警 message**（避免通知里骚扰老板）
     try:
         diagnosis = await ai_client.diagnose(alert_id, alert_data, {}, trace_id)
-        root_cause = diagnosis.get("root_cause", "")
-        suggestions = diagnosis.get("suggestions", []) or []
-        if root_cause:
-            diagnosis_text = f"AI 诊断结论：{root_cause}"
-        else:
-            diagnosis_text = "AI 诊断未给出明确结论（模型返回为空，请重试或检查模型配置）"
-        if suggestions:
-            diagnosis_text += f"；处理建议：{'；'.join(str(s) for s in suggestions)[:300]}"
+        if not (diagnosis.get("root_cause") or diagnosis.get("suggestions")):
+            logger.info("Pod 重启告警 %d 诊断无结论（模型返回为空）", alert_id)
     except Exception as e:  # noqa: BLE001
         logger.warning("Pod 重启告警 %d AI 诊断失败: %s", alert_id, e)
-        diagnosis_text = f"AI 诊断失败（{str(e)[:120]}）"
-
-    async with async_session() as session:
-        a = await session.get(Alert, alert_id)
-        if a:
-            if diagnosis_text:
-                a.message = (a.message or "") + "\n" + diagnosis_text
-            await session.commit()
 
     # 通知：与集群/资源/DB 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
     try:
-        await notification_service.notify_alert(a)
+        async with async_session() as session:
+            a = await session.get(Alert, alert_id)
+        if a:
+            await notification_service.notify_alert(a)
     except Exception as e:  # noqa: BLE001
         logger.warning("Pod 重启告警 %d 通知失败: %s", alert_id, e)
 

@@ -45,6 +45,29 @@ def _validate_nodes(nodes) -> tuple[bool, str]:
             int(n.get("notify_config_id") or 0)
         except (TypeError, ValueError):
             return False, f"第 {i + 1} 个节点 notify_config_id 无效"
+        # 指定用户节点：用户名必须是平台用户（否则通知/@ 都发不出去）
+        if n.get("type") == "user":
+            us = n.get("users") or []
+            if not us:
+                return False, f"第 {i + 1} 个节点（指定用户）未选择用户"
+    return True, ""
+
+
+async def _validate_users_exist(nodes) -> tuple[bool, str]:
+    """校验「指定用户」节点里的用户名在平台用户表中存在"""
+    names: list[str] = []
+    for n in nodes or []:
+        if isinstance(n, dict) and n.get("type") == "user":
+            names += [str(x) for x in (n.get("users") or [])]
+    if not names:
+        return True, ""
+    from app.models import User
+    async with async_session() as session:
+        rows = (await session.execute(select(User.username).where(User.username.in_(names)))).all()
+    exists = {r[0] for r in rows}
+    missing = [x for x in names if x not in exists]
+    if missing:
+        return False, f"指定用户不存在于「用户管理」：{', '.join(missing)}"
     return True, ""
 
 
@@ -63,6 +86,9 @@ async def create_flow(payload: dict, user=Depends(require_admin)):
     if not name:
         return {"code": 400, "message": "流程名称必填", "data": None}
     ok, err = _validate_nodes(nodes)
+    if not ok:
+        return {"code": 400, "message": err, "data": None}
+    ok, err = await _validate_users_exist(nodes)
     if not ok:
         return {"code": 400, "message": err, "data": None}
     async with async_session() as session:
@@ -92,6 +118,9 @@ async def update_flow(flow_id: int, payload: dict, user=Depends(require_admin)):
             f.description = payload["description"]
         if "nodes" in payload:
             ok, err = _validate_nodes(payload["nodes"])
+            if not ok:
+                return {"code": 400, "message": err, "data": None}
+            ok, err = await _validate_users_exist(payload["nodes"])
             if not ok:
                 return {"code": 400, "message": err, "data": None}
             f.nodes = json.dumps(payload["nodes"], ensure_ascii=False)
