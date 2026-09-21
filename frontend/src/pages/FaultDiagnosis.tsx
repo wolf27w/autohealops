@@ -6,6 +6,7 @@ import { getFaultDiagnoses, getFaultDiagnosis, diagnoseAlert, getAiFeedback, add
 import type { AiFeedbackData, FaultDiagnosisItem } from '../types'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
+import Markdown from '../components/Markdown'
 
 export default function FaultDiagnosis({ category = '' }: { category?: string }) {
   // N3 诊断分离：category = cluster / app / ''（空=全部）
@@ -83,12 +84,24 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
       <Modal title="诊断结果" open={!!detail} onCancel={() => setDetail(null)} footer={null} width={720}>
         {detail && (() => {
           const j = parse(detail.diagnosis_json || '{}')
+          const sug = j.suggestions
           return (
             <div>
-              <p><b>根因：</b>{j.root_cause || '-'}</p>
-              {j.suggestions?.length > 0 && <div><b>处理意见：</b><ul>{j.suggestions.map((s: string, i: number) => <li key={i}>{s}</li>)}</ul></div>}
-              {j.handling_advice && <p style={{ background: '#fffbe6', padding: 8 }}>{j.handling_advice}</p>}
-              <p style={{ color: '#999' }}>置信度：{detail.confidence} ｜ 诊断时间：{detail.created_at}</p>
+              <div><b>根因</b></div>
+              <Markdown text={typeof j.root_cause === 'string' ? j.root_cause : JSON.stringify(j.root_cause || '')} />
+              {sug && (
+                <>
+                  <div style={{ marginTop: 8 }}><b>处理意见</b></div>
+                  {Array.isArray(sug)
+                    ? <ul style={{ paddingLeft: 20 }}>{sug.map((s: unknown, i: number) => <li key={i}>{String(s)}</li>)}</ul>
+                    : <Markdown text={String(sug)} />}
+                </>
+              )}
+              {j.handling_advice && <div style={{ background: '#fffbe6', padding: 8, marginTop: 8 }}><Markdown text={String(j.handling_advice)} /></div>}
+              <p style={{ color: '#999' }}>
+                {j.risk_level ? `风险：${j.risk_level} ｜ ` : ''}{j.root_cause_layer ? `层面：${j.root_cause_layer} ｜ ` : ''}
+                置信度：{detail.confidence} ｜ 诊断时间：{detail.created_at}
+              </p>
               <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
                 <Space>
                   <b>这个诊断有用吗？</b>

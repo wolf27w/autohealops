@@ -182,12 +182,12 @@ export default function AgentChat() {
           {fa.model_used ? <Tag>{fa.model_used}</Tag> : null}
           <Text strong>{fa.root_cause || '（未给出明确根因）'}</Text>
         </Space>
-        {fa.suggestions?.length > 0 && (
+        {fa.suggestions && (Array.isArray(fa.suggestions) ? fa.suggestions.length > 0 : String(fa.suggestions).length > 0) && (
           <div style={{ marginBottom: 6 }}>
             <Tag color="blue">处理意见</Tag>
-            <ul style={{ margin: '4px 0 0 20px', padding: 0 }}>
-              {fa.suggestions.map((s: string, i: number) => <li key={i}>{s}</li>)}
-            </ul>
+            {Array.isArray(fa.suggestions)
+              ? <ul style={{ margin: '4px 0 0 20px', padding: 0 }}>{(fa.suggestions as string[]).map((s: string, i: number) => <li key={i}>{String(s)}</li>)}</ul>
+              : <div style={{ marginTop: 4 }}>{String(fa.suggestions)}</div>}
           </div>
         )}
         {fa.handling_advice && (
