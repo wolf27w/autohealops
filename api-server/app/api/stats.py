@@ -617,12 +617,15 @@ async def dashboard(
         )).scalar() or 0
         # 资源快照：表为历史累计（百万行），取每个「集群 × 资源类型」的最新一次快照计数
         # 优化：不再对每个集群做 N+1 次 count 查询，改用「每集群每类型最新快照」临时表一次 JOIN 聚合
+        # 注：快照每 60s 写入一轮，最新一轮可能正在写入 → 跳过 75s 内以取完整轮
+        _snap_cut = now - timedelta(seconds=75)
         _latest = (
             select(
                 ResourceSnapshot.cluster_id.label("cid"),
                 ResourceSnapshot.resource_type.label("rt"),
                 func.max(ResourceSnapshot.snapshot_time).label("mt"),
             )
+            .where(ResourceSnapshot.snapshot_time <= _snap_cut)
             .group_by(ResourceSnapshot.cluster_id, ResourceSnapshot.resource_type)
             .subquery()
         )

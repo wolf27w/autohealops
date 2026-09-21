@@ -8,7 +8,7 @@
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -79,10 +79,13 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         pod_running = int(pod_row[1] or 0) if pod_row else 0
         await _set_progress(cluster_id, 45, "统计工作负载与活跃告警")
 
-        # 工作负载统计（resource_snapshots 最新一轮，按类型计数）
+        # 快照每 60s 写入一轮；最新一轮可能正在写入（不完整）→ 取 75s 前的最后一轮
+        _cut = datetime.now() - timedelta(seconds=75)
+        # 工作负载统计（resource_snapshots 最新完整一轮，按类型计数）
+        # 实测：逐类型 count 走复合索引(cluster_id,resource_type,snapshot_time) 比派生表 JOIN 快（2.0s vs 5.5s）
         latest_ts_rows = (await session.execute(
             select(ResourceSnapshot.resource_type, func.max(ResourceSnapshot.snapshot_time))
-            .where(ResourceSnapshot.cluster_id == cluster_id)
+            .where(ResourceSnapshot.cluster_id == cluster_id, ResourceSnapshot.snapshot_time <= _cut)
             .group_by(ResourceSnapshot.resource_type)
         )).all()
         workloads: dict[str, int] = {}
@@ -96,11 +99,15 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
             )).scalar() or 0
             workloads[rt] = int(cnt)
 
-        # 命名空间数
-        ns_count = (await session.execute(
+        # 命名空间数（取本集群最后一轮完整快照，避免全局 distinct 扫描 29s → 实测 1.3s）
+        _max_ts = (await session.execute(
+            select(func.max(ResourceSnapshot.snapshot_time)).where(
+                ResourceSnapshot.cluster_id == cluster_id, ResourceSnapshot.snapshot_time <= _cut)
+        )).scalar()
+        ns_count = int((await session.execute(
             select(func.count(func.distinct(ResourceSnapshot.namespace)))
-            .where(ResourceSnapshot.cluster_id == cluster_id)
-        )).scalar() or 0
+            .where(ResourceSnapshot.cluster_id == cluster_id, ResourceSnapshot.snapshot_time == _max_ts)
+        )).scalar() or 0)
 
         # 活跃告警（pending / awaiting_approval）
         active_alerts = (await session.execute(
