@@ -517,18 +517,8 @@ async def dashboard(
             "status": a.status, "detected_at": str(a.detected_at),
         } for a in abnormal_rows]
 
-        # --- kpi 趋势部分：heal_rate / mttr（随时间范围 + 过滤） ---
-        range_alert_total = (await session.execute(
-            _filter(select(func.count()).select_from(Alert).where(
-                Alert.detected_at >= range_since, Alert.detected_at <= range_end))
-        )).scalar() or 0
-        range_alert_healed = (await session.execute(
-            _filter(select(func.count()).select_from(Alert).where(
-                Alert.detected_at >= range_since, Alert.detected_at <= range_end,
-                Alert.status.in_(["resolved", "self_healed"])))
-        )).scalar() or 0
-        # MTTR：全量累计（不随时间窗变化）——所有已解决告警的平均处置时长
-        # 口径：avg(resolved_at − detected_at)，按告警解决时间不限；仍受集群/项目筛选约束
+        # --- kpi：heal_rate / mttr 均为**全量累计**（不随时间范围变化，仅受集群/项目筛选） ---
+        # MTTR：所有已解决告警的平均处置时长
         mttr_row = (await session.execute(
             _filter(select(
                 func.avg(text("TIMESTAMPDIFF(SECOND, alerts.detected_at, alerts.resolved_at)")),
@@ -537,7 +527,16 @@ async def dashboard(
         )).first()
         kpi_mttr = round(float(mttr_row[0]) / 60, 1) if mttr_row and mttr_row[0] is not None else 0.0
         kpi_mttr_count = int(mttr_row[1]) if mttr_row and mttr_row[1] else 0
-        kpi_heal_rate = round(range_alert_healed / range_alert_total, 4) if range_alert_total else 0.0
+        # 成功率：已解决(含自愈) ÷ 总告警
+        heal_row = (await session.execute(
+            _filter(select(
+                func.count(),
+                func.coalesce(func.sum(func.if_(Alert.status.in_(["resolved", "self_healed"]), 1, 0)), 0),
+            ).where(Alert.detected_at.isnot(None)))
+        )).first()
+        kpi_heal_total = int(heal_row[0]) if heal_row and heal_row[0] else 0
+        kpi_heal_done = int(heal_row[1]) if heal_row and heal_row[1] else 0
+        kpi_heal_rate = round(kpi_heal_done / kpi_heal_total, 4) if kpi_heal_total else 0.0
 
         # --- action_stat / action_timeline（近一年，按执行日志步骤命令分类） ---
         exec_join = (
@@ -589,6 +588,7 @@ async def dashboard(
             "manual_pending": manual_filtered,
             "db_abnormal": db_abnormal,
             "heal_rate": kpi_heal_rate,
+            "heal_count": kpi_heal_total,
             "mttr_minutes": kpi_mttr,
             "mttr_count": kpi_mttr_count,
         }
