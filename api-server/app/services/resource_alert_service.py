@@ -30,7 +30,7 @@ logger = get_logger("api-server.resource_alert")
 
 
 # 扫描周期（秒）
-SCAN_INTERVAL = 60
+SCAN_INTERVAL = 15
 
 # 资源告警 fault_type（auto_process_alerts 跳过，不自动修复）
 RESOURCE_ALERT_FAULT_TYPES = (
@@ -192,6 +192,41 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
     return True
 
 
+async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则已删除") -> int:
+    """删除/停用规则时，关闭其名下在途告警（按 metric→fault_type + 集群 + namespace 匹配）
+
+    同时清理 Redis 防抖时间戳，便重新添加规则后按新周期重新计时。
+    """
+    fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
+    async with async_session() as session:
+        q = select(Alert).where(
+            Alert.status == "pending",
+            Alert.resource_type == "pod",
+            Alert.fault_type == fault_type,
+        )
+        if rule.cluster_id:
+            q = q.where(Alert.cluster_id == rule.cluster_id)
+        rows = list((await session.execute(q)).scalars())
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        n = 0
+        for a in rows:
+            if not _ns_match(rule, a.namespace):
+                continue
+            a.status = "resolved"
+            a.resolved_at = now
+            a.resolved_by = "system"
+            a.message = (a.message or "") + f"（{reason}，系统自动关闭）"
+            n += 1
+        await session.commit()
+    try:
+        keys = await redis_pool.keys(f"res_alert:{rule.id}:*")
+        if keys:
+            await redis_pool.delete(*keys)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("清理规则 %s 防抖键失败: %s", rule.id, e)
+    return n
+
+
 async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -> None:
     """资源恢复 → 关闭 pending 告警（含历史 cluster_id=0 的脏数据）"""
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
@@ -270,7 +305,7 @@ async def scan_resource_alerts() -> int:
 
 
 async def background_loop() -> None:
-    """后台循环（main 调用，60s 一次）"""
+    """后台循环（main 调用，SCAN_INTERVAL 秒一次，当前 15s）"""
     while True:
         try:
             await scan_resource_alerts()

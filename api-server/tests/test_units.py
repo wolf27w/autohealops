@@ -362,6 +362,10 @@ class TestResourceAlertPromql(unittest.TestCase):
         self.assertIn("kube_pod_container_resource_limits", q)
         self.assertEqual(METRIC_META["memory"][0], "内存使用率（不含缓存）")
 
+    def test_scan_interval_15s(self):
+        from app.services.resource_alert_service import SCAN_INTERVAL
+        self.assertEqual(SCAN_INTERVAL, 15)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

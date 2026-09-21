@@ -1,13 +1,30 @@
 # -*- coding: utf-8 -*-
 """容器资源阈值告警规则 API"""
+import asyncio
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from app.core.database import async_session
+from app.core.logging import get_logger
 from app.middleware.permission import require_admin, require_any_user
 from app.models import ResourceAlertRule
+from app.services import resource_alert_service
+
+logger = get_logger("api-server.resource_alert_rules")
 
 router = APIRouter(prefix="/api/v1/resource-alert-rules")
+
+
+async def _scan_new_rule(rule_id: int) -> None:
+    """新增规则后立即扫一次（不等下一个周期，秒级生效）"""
+    try:
+        async with async_session() as session:
+            r = await session.get(ResourceAlertRule, rule_id)
+        if r:
+            await resource_alert_service._scan_rule(r)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("新规则 %s 立即扫描失败: %s", rule_id, e)
 
 
 def _rule_dict(r: ResourceAlertRule) -> dict:
@@ -49,6 +66,8 @@ async def create_rule(payload: dict, user=Depends(require_admin)):
         session.add(r)
         await session.commit()
         await session.refresh(r)
+        # 立即扫一次（秒级生效，不用等下一个扫描周期）
+        asyncio.create_task(_scan_new_rule(r.id))
         return {"code": 200, "message": "success", "data": _rule_dict(r)}
 
 
@@ -78,10 +97,12 @@ async def update_rule(rule_id: int, payload: dict, user=Depends(require_admin)):
 
 @router.delete("/{rule_id}")
 async def delete_rule(rule_id: int, user=Depends(require_admin)):
+    """删除规则：顺带关闭其名下在途告警（删除即消失）"""
     async with async_session() as session:
         r = await session.get(ResourceAlertRule, rule_id)
         if not r:
             return {"code": 404, "message": "规则不存在", "data": None}
+        closed = await resource_alert_service.close_alerts_for_rule(r)
         await session.delete(r)
         await session.commit()
-    return {"code": 200, "message": "success", "data": None}
+    return {"code": 200, "message": "success", "data": {"closed_alerts": closed}}
