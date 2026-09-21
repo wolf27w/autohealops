@@ -36,10 +36,10 @@ DEPRECATED_KEYS = {"es_url", "es_index_pattern", "es_username", "es_password"}
 # 默认设置项定义（key: 默认值 + 描述）
 DEFAULT_SETTINGS = {
     "prometheus_url": ("", "Prometheus 地址（监控指标查询）"),
-    "es_url": ("", "Elasticsearch 地址（已迁移到「日志源」，只读兜底）"),
-    "es_index_pattern": ("k8s-*", "ES 日志索引模式（已迁移到「日志源」，只读兜底）"),
-    "es_username": ("", "ES 用户名（已迁移到「日志源」，只读兜底）"),
-    "es_password": ("", "ES 密码（已迁移到「日志源」，只读兜底）"),
+    "es_url": ("", "Elasticsearch 地址（内置只读兜底）"),
+    "es_index_pattern": ("k8s-*", "ES 日志索引模式（内置只读兜底）"),
+    "es_username": ("", "ES 用户名（内置只读兜底）"),
+    "es_password": ("", "ES 密码（内置只读兜底）"),
     "ldap_enabled": ("false", "是否开启 LDAP 登录"),
     "ldap_host": ("", "LDAP 服务器地址"),
     "ldap_port": ("389", "LDAP 端口"),
@@ -83,7 +83,7 @@ async def get_all_settings() -> dict:
 async def update_settings(settings_dict: dict) -> None:
     """批量更新设置（upsert）；敏感字段加密存储，脱敏占位符/空值跳过不更新
 
-    已迁移到「日志源」的 ES 四项（DEPRECATED_KEYS）不再接受写入（只读兜底）。
+    已废弃的 ES 四项（DEPRECATED_KEYS）不再接受写入（仅作内置只读兜底）。
     """
     async with async_session() as session:
         for key, value in settings_dict.items():
