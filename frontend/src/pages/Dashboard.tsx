@@ -132,7 +132,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     { title: '待人工', value: kpi?.manual_pending ?? 0, color: (kpi?.manual_pending ?? 0) > 0 ? '#faad14' : '#1677ff' },
     { title: 'DB 异常', value: kpi?.db_abnormal ?? 0, color: (kpi?.db_abnormal ?? 0) > 0 ? '#ff4d4f' : '#1677ff' },
     { title: '成功率', value: `${(((kpi?.heal_rate ?? 0) * 100).toFixed(1))}%`, color: '#52c41a' },
-    { title: 'MTTR（分钟）', value: kpi?.mttr_minutes ?? 0, color: '#722ed1' },
+    { title: 'MTTR（分钟·全量）', value: kpi?.mttr_minutes ?? 0, color: '#722ed1' },
   ]
 
   const actionItems = [
