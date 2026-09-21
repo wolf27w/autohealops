@@ -418,7 +418,8 @@ async def _mysql_collect_health(conn_info: dict) -> list[dict]:
             # 线程 / 连接质量 / 打开表文件
             out.append({"metric_type": "connections", "metric_name": "threads_cached", "value": _si("Threads_cached"), "detail": ""})
             out.append({"metric_type": "connections", "metric_name": "threads_created", "value": _si("Threads_created"), "detail": ""})
-            out.append({"metric_type": "connections", "metric_name": "aborted_connects", "value": _si("Aborted_connects"), "detail": ""})
+            out.append({"metric_type": "connections", "metric_name": "aborted_connects", "value": _si("Aborted_connects"), "detail": "累计连接失败"})
+            out.append({"metric_type": "connections", "metric_name": "aborted_clients", "value": _si("Aborted_clients"), "detail": "累计客户端异常断开"})
             out.append({"metric_type": "connections", "metric_name": "max_used_connections", "value": _si("Max_used_connections"), "detail": ""})
             out.append({"metric_type": "connections", "metric_name": "thread_cache_size", "value": int(_sv("thread_cache_size")), "detail": ""})
             out.append({"metric_type": "tablespace", "metric_name": "open_tables", "value": _si("Open_tables"), "detail": ""})
@@ -589,7 +590,9 @@ async def collect_db_health(conn_id: int) -> list[dict]:
         prev_map: dict[str, tuple[float, datetime]] = {}
         _RATE_NAMES = {"queries_total": "qps", "tps_total": "tps",
                        "bytes_received": "rx_bytes_per_sec", "bytes_sent": "tx_bytes_per_sec",
-                       "slow_queries": "slow_queries_per_sec"}
+                       "slow_queries": "slow_queries_per_sec",
+                       "aborted_connects": "aborted_connects_per_sec",
+                       "aborted_clients": "aborted_clients_per_sec"}
         for name in _RATE_NAMES:
             prev = (await session.execute(
                 select(DBMetricSnapshot).where(

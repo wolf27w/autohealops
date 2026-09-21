@@ -38,7 +38,7 @@ const TYPE_COLOR: Record<string, string> = {
 
 const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数', max_connections: '最大连接数', connection_usage_pct: '连接使用率(%)',
   active_connections: '活跃连接', threads_cached: '线程缓存', threads_created: '已创建线程',
-  aborted_connects: '失败连接', max_used_connections: '历史最大连接', thread_cache_size: '线程缓存大小',
+  aborted_connects: '累计连接失败(次)', aborted_clients: '累计客户端异常断开(次)', max_used_connections: '历史最大连接', thread_cache_size: '线程缓存大小',
   queries_total: '总查询数', tps_total: '事务累计', qps: 'QPS', tps: 'TPS',
   buffer_pool_hit_rate: '缓冲池命中率(%)', buffer_pool_size_mb: '缓冲池大小(MB)',
   buffer_pool_usage_pct: '缓冲池使用率(%)', buffer_pool_dirty_pages: '脏页数', innodb_log_waits: '日志等待',
@@ -52,6 +52,7 @@ const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数
   innodb_buffer_pool_size_mb: '缓冲池配置(MB)', slave_running: '从库运行(1正常)', replication_lag_seconds: '复制延迟(s)',
   lock_wait_count: '锁等待数', bytes_received: '累计接收字节', bytes_sent: '累计发送字节',
   rx_bytes_per_sec: '接收速率(B/s)', tx_bytes_per_sec: '发送速率(B/s)',
+  aborted_connects_per_sec: '连接失败速率(/s)', aborted_clients_per_sec: '客户端异常断开速率(/s)',
   com_select: 'SELECT 次数', com_insert: 'INSERT 次数', com_update: 'UPDATE 次数', com_delete: 'DELETE 次数',
   com_commit: 'COMMIT 次数', com_rollback: 'ROLLBACK 次数',
   mysql_memory_total_mb: 'MySQL 进程内存(MB)', innodb_buffer_pool_data_mb: '缓冲池已用(MB)',
