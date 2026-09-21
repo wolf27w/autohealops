@@ -313,9 +313,13 @@ export interface AbnormalPod {
   cluster_name: string
   namespace: string
   pod_name: string
-  fault_type: string
-  severity: string
-  status: string
+  alert_count?: number
+  done_count?: number
+  last_at?: string
+  faults?: string
+  fault_type?: string
+  severity?: string
+  status?: string
   detected_at: string
 }
 

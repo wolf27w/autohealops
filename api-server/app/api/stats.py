@@ -502,20 +502,28 @@ async def dashboard(
             "status": a.status, "detected_at": str(a.detected_at),
         } for a in realtime_rows]
 
-        # --- abnormal_pods（有告警的 Pod Top20） ---
-        # 异常 Pod = **当前仍未恢复**的 Pod 告警（待处理 / 审批中）；
-        # 已解决 / 已自愈的不再算「异常」（否则列表里混进历史状态，看着像没处理）
+        # --- abnormal_pods（历史告警最多的 Pod Top20） ---
+        # 按历史累计告警次数排行（含已处理/自愈），全量不受时间窗影响；仍受集群/项目筛选
         abnormal_rows = (await session.execute(
-            _filter(select(Alert).where(Alert.resource_type == "pod",
-                                        Alert.status.in_(["pending", "awaiting_approval"]))
-                    .order_by(Alert.detected_at.desc()).limit(20))
-        )).scalars().all()
+            _filter(select(
+                Alert.cluster_id,
+                Alert.namespace,
+                Alert.resource_name,
+                func.count().label("cnt"),
+                func.coalesce(func.sum(func.if_(Alert.status.in_(["resolved", "self_healed"]), 1, 0)), 0).label("done"),
+                func.max(Alert.detected_at).label("last_at"),
+                func.group_concat(func.distinct(Alert.fault_type)).label("faults"),
+            ).where(Alert.resource_type == "pod")
+             .group_by(Alert.cluster_id, Alert.namespace, Alert.resource_name)
+             .order_by(func.count().desc()).limit(20))
+        )).all()
         abnormal_pods = [{
-            "cluster_name": cluster_names.get(a.cluster_id, ""),
-            "namespace": a.namespace, "pod_name": a.resource_name,
-            "fault_type": a.fault_type, "severity": a.severity,
-            "status": a.status, "detected_at": str(a.detected_at),
-        } for a in abnormal_rows]
+            "cluster_name": cluster_names.get(int(r[0]), ""),
+            "namespace": r[1], "pod_name": r[2],
+            "alert_count": int(r[3] or 0), "done_count": int(r[4] or 0),
+            "last_at": str(r[5] or ""), "faults": r[6] or "",
+            "detected_at": str(r[5] or ""),
+        } for r in abnormal_rows]
 
         # --- kpi：heal_rate / mttr 均为**全量累计**（不随时间范围变化，仅受集群/项目筛选） ---
         # MTTR：所有已解决告警的平均处置时长

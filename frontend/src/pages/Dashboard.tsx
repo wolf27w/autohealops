@@ -330,21 +330,21 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       {/* ===== 第 5 段 · 异常 Pod Top N（1/2） + 数据库健康概览（1/2） ===== */}
       <Row gutter={[12, 12]}>
         <Col xs={24} lg={12}>
-          <Card title="异常 Pod Top 20" size="small">
+          <Card title="异常 Pod Top 20（按历史告警次数）" size="small">
             <Table
-              rowKey={(r) => `${r.cluster_name}-${r.namespace}-${r.pod_name}-${r.fault_type}`}
+              rowKey={(r) => `${r.cluster_name}-${r.namespace}-${r.pod_name}`}
               size="small" pagination={false}
               dataSource={abnormalPods}
               scroll={{ y: 240 }}
-              locale={{ emptyText: <Empty description="暂无异常 Pod" /> }}
+              locale={{ emptyText: <Empty description="暂无历史告警" /> }}
               columns={[
-                { title: '集群', dataIndex: 'cluster_name', width: 110, ellipsis: true },
-                { title: '命名空间', dataIndex: 'namespace', width: 100, ellipsis: true },
+                { title: '集群', dataIndex: 'cluster_name', width: 100, ellipsis: true },
+                { title: '命名空间', dataIndex: 'namespace', width: 110, ellipsis: true },
                 { title: 'Pod', dataIndex: 'pod_name', ellipsis: true },
-                { title: '故障', dataIndex: 'fault_type', width: 140, ellipsis: true },
-                { title: '级别', dataIndex: 'severity', width: 72, render: (s: string) => <SeverityTag severity={s} /> },
-                { title: '状态', dataIndex: 'status', width: 86, render: (s: string) => <StatusTag status={s} label={ALERT_STATUS_LABEL[s] || s} /> },
-                { title: '时间', dataIndex: 'detected_at', width: 120, render: fmtTime },
+                { title: '告警数', dataIndex: 'alert_count', width: 80, defaultSortOrder: 'descend', sorter: (a: AbnormalPod, b: AbnormalPod) => (a.alert_count || 0) - (b.alert_count || 0) },
+                { title: '已处理', width: 90, render: (_: unknown, r: AbnormalPod) => `${r.done_count ?? 0}/${r.alert_count ?? 0}` },
+                { title: '故障类型', dataIndex: 'faults', ellipsis: true, render: (v: string) => v || '-' },
+                { title: '最近', dataIndex: 'last_at', width: 120, render: fmtTime },
               ]}
             />
           </Card>
