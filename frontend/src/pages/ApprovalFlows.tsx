@@ -45,7 +45,7 @@ interface ApprovalFlow {
   nodes?: ApprovalFlowNode[]
 }
 
-function NodeFields({ form, field, index, configs }: { form: FormInstance; field: FormListFieldData; index: number; configs: NotificationConfig[] }) {
+function NodeFields({ form, field, index, configs, users }: { form: FormInstance; field: FormListFieldData; index: number; configs: NotificationConfig[]; users: Array<{ username: string; feishu_open_id?: string }> }) {
   return (
     <Form.Item noStyle shouldUpdate={(prev, cur) =>
       prev.nodes?.[index]?.type !== cur.nodes?.[index]?.type
@@ -261,7 +261,7 @@ export default function ApprovalFlows() {
                         <InputNumber min={0} max={5} style={{ width: 100 }} />
                       </Form.Item>
                     </Space>
-                    <NodeFields form={form} field={field} index={index} configs={configs} />
+                    <NodeFields form={form} field={field} index={index} configs={configs} users={users} />
                   </Card>
                 ))}
                 <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({ ...DEFAULT_NODE })}>
