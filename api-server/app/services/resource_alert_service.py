@@ -49,8 +49,12 @@ PROMQL_TEMPLATES = {
         'kube_pod_container_resource_limits{resource="cpu"} * 100'
     ),
     "memory": (
-        'container_memory_working_set_bytes{container!="POD",container!=""} '
-        '/ on(namespace, pod, container) group_left '
+        # 内存使用率 =（working_set − page cache）÷ limit × 100
+        # 口径说明：直接用 working_set 会把 page cache（可回收）算进去，服务跑一阵就冲 80%+
+        # 造成误报；减 cache 得到「真实占用」。集群未暴露 container_memory_rss，故用此口径。
+        '(container_memory_working_set_bytes{container!="POD",container!=""}'
+        ' - container_memory_cache{container!="POD",container!=""})'
+        ' / on(namespace, pod, container) group_left '
         'kube_pod_container_resource_limits{resource="memory"} * 100'
     ),
     # 网络流量（cAdvisor 网卡计数器 → rate 转 MB/s；阈值单位 MB/s，与阈值字段共用 threshold_pct）
@@ -85,7 +89,7 @@ FAULT_TYPE_BY_METRIC = {
 # 说明：阈值统一存 resource_alert_rules.threshold_pct 字段，百分比类单位为 %，网络类单位为 MB/s
 METRIC_META: dict[str, tuple[str, str, bool]] = {
     "cpu": ("CPU 使用率", "%", True),
-    "memory": ("内存使用率", "%", True),
+    "memory": ("内存使用率（不含缓存）", "%", True),
     "net_rx": ("入站流量", "MB/s", False),
     "net_tx": ("出站流量", "MB/s", False),
 }

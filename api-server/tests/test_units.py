@@ -351,5 +351,17 @@ class TestDutyTimeRange(unittest.TestCase):
         self.assertFalse(_in_time_range("12:00", "10:00", "10:00"))
 
 
+class TestResourceAlertPromql(unittest.TestCase):
+    """容器资源告警 PromQL 口径（内存需排除 page cache 防误报）"""
+
+    def test_memory_excludes_cache(self):
+        from app.services.resource_alert_service import METRIC_META, PROMQL_TEMPLATES
+        q = PROMQL_TEMPLATES["memory"]
+        self.assertIn("container_memory_working_set_bytes", q)
+        self.assertIn("container_memory_cache", q)
+        self.assertIn("kube_pod_container_resource_limits", q)
+        self.assertEqual(METRIC_META["memory"][0], "内存使用率（不含缓存）")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
