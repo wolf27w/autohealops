@@ -143,15 +143,19 @@ def _parse_result(data_json: str) -> list[dict]:
     return out
 
 
-async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: float) -> bool:
-    """创建资源告警（已存在 pending 不重复建）；返回是否新建"""
+async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: float, cluster_id: int) -> bool:
+    """创建资源告警（已存在 pending 不重复建）；返回是否新建
+
+    cluster_id 为实际扫描到的集群（规则 cluster_id=0「全部集群」时必须用真实集群，
+    否则告警丢失集群、前端无法区分）。
+    """
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
     async with async_session() as session:
         exists = (await session.execute(
             select(Alert).where(
                 Alert.status == "pending",
                 Alert.fault_type == fault_type,
-                Alert.cluster_id == rule.cluster_id if rule.cluster_id else Alert.cluster_id >= 0,
+                Alert.cluster_id == cluster_id,
                 Alert.namespace == item["namespace"],
                 Alert.resource_name == item["pod"],
             )
@@ -159,7 +163,7 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
         if exists:
             return False
         alert = Alert(
-            cluster_id=rule.cluster_id if rule.cluster_id else 0,
+            cluster_id=cluster_id,
             resource_type="pod",
             resource_name=item["pod"],
             namespace=item["namespace"],
@@ -184,14 +188,15 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
     return True
 
 
-async def _resolve_alert(rule: ResourceAlertRule, item: dict) -> None:
-    """资源恢复 → 关闭 pending 告警"""
+async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -> None:
+    """资源恢复 → 关闭 pending 告警（含历史 cluster_id=0 的脏数据）"""
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
     async with async_session() as session:
         result = await session.execute(
             select(Alert).where(
                 Alert.status == "pending",
                 Alert.fault_type == fault_type,
+                Alert.cluster_id.in_([cluster_id, 0]),  # 0=历史无集群脏数据，一并关闭
                 Alert.namespace == item["namespace"],
                 Alert.resource_name == item["pod"],
             )
@@ -234,11 +239,11 @@ async def _scan_rule(rule: ResourceAlertRule) -> int:
                 if start_ts is None:
                     await redis_pool.set(key, str(now), ex=rule.duration_seconds * 3 + 300)
                 elif now - float(start_ts) >= rule.duration_seconds:
-                    if await _create_or_keep_alert(rule, item, usage):
+                    if await _create_or_keep_alert(rule, item, usage, cid):
                         new_alerts += 1
             else:
                 await redis_pool.delete(key)
-                await _resolve_alert(rule, item)
+                await _resolve_alert(rule, item, cid)
     return new_alerts
 
 
