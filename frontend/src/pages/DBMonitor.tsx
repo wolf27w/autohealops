@@ -29,11 +29,13 @@ const TYPE_LABEL: Record<string, string> = {
   connections: '连接', throughput: '吞吐', network: '网络', cache: '缓存/缓冲池',
   query_quality: '查询质量', innodb: 'InnoDB', tablespace: '表空间/文件',
   config: '参数配置', lock_wait: '锁等待', replication: '主从复制', rate: '速率', memory: '内存',
+  vacuum: '自动清理', wait: '等待事件',
 }
 const TYPE_COLOR: Record<string, string> = {
   connections: 'blue', throughput: 'geekblue', network: 'cyan', cache: 'green',
   query_quality: 'orange', innodb: 'purple', tablespace: 'magenta', config: 'default',
   lock_wait: 'red', replication: 'gold', rate: 'lime', memory: 'volcano',
+  vacuum: '#87d068', wait: '#c41d7f',
 }
 
 const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数', max_connections: '最大连接数', connection_usage_pct: '连接使用率(%)',
@@ -56,6 +58,29 @@ const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数
   com_select: 'SELECT 次数', com_insert: 'INSERT 次数', com_update: 'UPDATE 次数', com_delete: 'DELETE 次数',
   com_commit: 'COMMIT 次数', com_rollback: 'ROLLBACK 次数',
   mysql_memory_total_mb: 'MySQL 进程内存(MB)', innodb_buffer_pool_data_mb: '缓冲池已用(MB)',
+  // PostgreSQL 健康指标
+  idle_connections: '空闲连接', idle_in_transaction: '空闲事务连接', waiting_connections: '等待连接',
+  commits_total: '提交次数', rollbacks_total: '回滚次数', rollback_pct: '回滚率(%)',
+  blks_hit: '缓存命中块', blks_read: '磁盘读取块', checkpoint_timed: '定时检查点', checkpoint_req: '请求检查点',
+  conflicts: '冲突', temp_files: '临时文件数', temp_bytes: '临时文件字节', long_running_queries: '长查询数',
+  index_size_mb: '索引大小(MB)', blocked_queries: '被阻塞查询数', is_in_recovery: '恢复模式(1是)',
+  replication_lag_sec: '复制延迟(s)', dead_tuples: '死元组', live_tuples: '活跃元组',
+  tables_needing_vacuum: '待清理表数', autovacuum_count: '自动清理次数', last_vacuum_age_sec: '上次清理距今(s)',
+  shared_buffers_mb: '共享缓冲(MB)', work_mem_mb: '工作内存(MB)', max_worker_processes: '最大工作进程数',
+  effective_cache_size_mb: '有效缓存(MB)', temp_buffers_mb: '临时缓冲(MB)',
+  // Oracle 健康指标
+  sessions_total: '会话总数', sessions_active: '活跃会话', sessions_inactive: '非活跃会话',
+  sessions_usage_pct: '会话使用率(%)', processes_used: '已用进程数', processes_limit: '进程上限',
+  processes_usage_pct: '进程使用率(%)', executes_total: '执行次数', user_commits_total: '用户提交次数',
+  user_rollbacks_total: '用户回滚次数', qps_total: '查询累计',
+  buffer_cache_hit_rate: '缓冲缓存命中率(%)', library_cache_hit_rate: '库缓存命中率(%)',
+  dictionary_cache_hit_rate: '字典缓存命中率(%)', sorts_disk_ratio: '磁盘排序占比(%)',
+  physical_reads: '物理读次数', consistent_gets: '一致性读次数', db_block_gets: '当前块读次数',
+  parses_total: '解析次数', blocked_sessions: '被阻塞会话数', enqueue_waits: '队列等待次数',
+  top_wait_events: 'Top等待事件', total_wait_ms: '总等待(ms)', tablespace_max_pct: '表空间最大使用率(%)',
+  tablespace_count: '表空间数量', total_size_mb: '总大小(MB)', top_tablespace: 'Top表空间(MB)',
+  sga_size_mb: 'SGA 大小(MB)', pga_size_mb: 'PGA 大小(MB)', sga_free_mb: 'SGA 空闲(MB)',
+  dataguard_lag_sec: 'DataGuard 延迟(s)',
 }
 
 export default function DBMonitor() {
@@ -111,7 +136,7 @@ export default function DBMonitor() {
     if (name.endsWith('_pct') || name === 'buffer_pool_hit_rate') return '%'
     if (name.endsWith('_ms')) return 'ms'
     if (name.endsWith('_mb') || name === 'top_tables') return 'MB'
-    if (name.endsWith('_seconds') || name === 'long_query_time') return 's'
+    if (name.endsWith('_seconds') || name.endsWith('_sec') || name === 'long_query_time') return 's'
     if (name.endsWith('_bytes_per_sec')) return 'B/s'
     if (name.endsWith('_bytes')) return 'MB'
     if (name === 'qps' || name === 'tps' || name.endsWith('_per_sec')) return '/s'

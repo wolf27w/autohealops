@@ -5,7 +5,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import delete, func, select, text
 
 from app.core.database import async_session
+from app.core.logging import get_logger
 from app.models import QuotaSnapshot, ResourceSnapshot
+
+logger = get_logger("api-server.resource_service")
 
 
 async def get_cluster_overview(cluster_id: int) -> dict:
@@ -140,8 +143,97 @@ async def get_cluster_detail(cluster_id: int) -> list[dict]:
     return list(ns_map.values())
 
 
+async def _snapshot_partitions() -> list[tuple[str, str]]:
+    """读 resource_snapshots 的分区列表 [(name, description)]；未分区返回 []"""
+    try:
+        async with async_session() as session:
+            rows = (await session.execute(text(
+                "SELECT PARTITION_NAME, PARTITION_DESCRIPTION FROM information_schema.partitions "
+                "WHERE table_schema = DATABASE() AND table_name = 'resource_snapshots' "
+                "AND partition_name IS NOT NULL"
+            ))).all()
+        return [(r[0], r[1]) for r in rows if r[0]]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取快照分区信息失败: %s", e)
+        return []
+
+
+async def maintain_snapshot_partitions(retention_days: int = 7, ahead_days: int = 3) -> dict:
+    """`resource_snapshots` 按天分区维护（幂等，可安全重复调用）
+
+    - 未分区 → 返回 {"partitioned": False}（调用方回落到 DELETE 清理）
+    - 已分区 → ①DROP 超过保留期的每日分区（秒级 + 回收磁盘）
+                ②补齐今天 ~ today+ahead_days 的分区（REORGANIZE pmax，防未来日期插入报 1526）
+
+    分区命名 pYYYYMMDD，边界为次日零点（即命名日 = 该分区覆盖的日期）。
+    """
+    parts = await _snapshot_partitions()
+    if not parts:
+        return {"partitioned": False, "added": 0, "dropped": []}
+
+    has_pmax = any((d or "").strip().upper() == "MAXVALUE" for _, d in parts)
+    boundaries: list[tuple[str, datetime]] = []
+    for name, desc in parts:
+        d = (desc or "").strip().strip("'")
+        if not d or d.upper() == "MAXVALUE":
+            continue
+        try:
+            boundaries.append((name, datetime.fromisoformat(d)))
+        except ValueError:
+            continue
+    boundaries.sort(key=lambda x: x[1])
+
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 过期：分区覆盖日 < 保留起点（覆盖日 = 边界 - 1 天；边界 <= cutoff 即整体过期）
+    cutoff = today_start - timedelta(days=retention_days)
+    old = [n for n, b in boundaries if b <= cutoff]
+
+    dropped: list[str] = []
+    if old:
+        try:
+            async with async_session() as session:
+                await session.execute(text(
+                    f"ALTER TABLE resource_snapshots DROP PARTITION {', '.join(old)}"
+                ))
+                await session.commit()
+            dropped = old
+            logger.info("资源快照分区清理：DROP %d 个过期分区 %s", len(old), old)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("DROP 过期分区失败（保留 DELETE 兜底）: %s", e)
+
+    # 补齐未来分区（从最后一个分区的边界 = 下一个未覆盖日 开始）
+    added = 0
+    if has_pmax:
+        keep = [(n, b) for n, b in boundaries if n not in old]
+        cursor = keep[-1][1] if keep else today_start
+        limit_day = today_start + timedelta(days=ahead_days)
+        new_defs: list[str] = []
+        while cursor <= limit_day:
+            nxt = cursor + timedelta(days=1)
+            new_defs.append(f"PARTITION p{nxt:%Y%m%d} VALUES LESS THAN ('{nxt:%Y-%m-%d} 00:00:00')")
+            cursor = nxt
+        if new_defs:
+            try:
+                async with async_session() as session:
+                    await session.execute(text(
+                        "ALTER TABLE resource_snapshots REORGANIZE PARTITION pmax INTO ("
+                        + ", ".join(new_defs) + ", PARTITION pmax VALUES LESS THAN (MAXVALUE))"
+                    ))
+                    await session.commit()
+                added = len(new_defs)
+                logger.info("资源快照分区补齐：新增 %d 个分区（至 %s）", added, limit_day.date())
+            except Exception as e:  # noqa: BLE001
+                logger.warning("补齐快照分区失败: %s", e)
+
+    return {"partitioned": True, "added": added, "dropped": dropped}
+
+
 async def cleanup_old_snapshots(retention_days: int = 7, batch_size: int = 10000) -> int:
-    """清理 N 天前的历史数据（资源/配额快照 + Pod 指标 + 慢SQL），分批 DELETE LIMIT，返回删除总行数"""
+    """清理 N 天前的历史数据（资源/配额快照 + Pod 指标 + 慢SQL），分批 DELETE LIMIT，返回删除总行数
+
+    注：`resource_snapshots` 若已按天分区，则由 `maintain_snapshot_partitions()` 用
+    DROP PARTITION 秒级清理（并回收磁盘），此处跳过它的 DELETE。
+    """
     cutoff = datetime.now() - timedelta(days=retention_days)
     tables = [
         ("resource_snapshots", "snapshot_time"),
@@ -149,6 +241,9 @@ async def cleanup_old_snapshots(retention_days: int = 7, batch_size: int = 10000
         ("pod_metrics", "sampled_at"),
         ("slow_sql_records", "sampled_at"),
     ]
+    if await _snapshot_partitions():
+        # 已分区：历史分区由 DROP PARTITION 处理，不用逐行 DELETE
+        tables = [(t, c) for t, c in tables if t != "resource_snapshots"]
     total = 0
     for table, time_col in tables:
         while True:

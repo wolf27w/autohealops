@@ -78,3 +78,28 @@ GROUP BY t.cluster_id, t.resource_type;
 ## 四、后续监控
 
 - 观察 resource_snapshots 增长与慢 SQL；必要时降低快照写入频率或启用分区。
+
+## 五、resource_snapshots 按天分区（2026-09-21 实施）
+
+**背景**：每 60s 一轮写入，实施前 550 万行 / 数据 713MB + 索引 913MB；
+`cleanup_old_snapshots` 用分批 `DELETE` 清理历史 → 代价高、且 **不回收磁盘空间**。
+
+**方案**（迁移 `r1s2t3u4v5w6_partition_resource_snapshots.py`）：
+
+1. 主键 `(id)` → `(id, snapshot_time)`：MySQL 要求分区列出现在所有**唯一键**中
+   （表上除主键无其它 UNIQUE 键；`id` 仍为第一列，AUTO_INCREMENT 正常）。
+2. `PARTITION BY RANGE COLUMNS(snapshot_time)`，**每天一个分区** `pYYYYMMDD`
+   （边界为次日零点），末尾保留 `pmax VALUES LESS THAN (MAXVALUE)` 兜底，
+   避免未来日期无分区导致插入报 `1526`。
+3. 迁移时按现有 `MIN(snapshot_time)` 生成分区，并预留 `today + 3` 天。
+4. 运行期维护：`resource_service.maintain_snapshot_partitions(retention_days, ahead_days=3)`
+   - **DROP 过期分区**：`ALTER TABLE ... DROP PARTITION p20260914` —— 秒级完成且**回收磁盘**
+   - **补齐未来分区**：`REORGANIZE PARTITION pmax INTO (新分区..., pmax)`
+   - 挂载在 `main.py` 维护循环（每日，与 `snapshot_retention_days` 同源）
+5. 分区后 `cleanup_old_snapshots` 自动跳过 `resource_snapshots` 的逐行 DELETE
+   （其余表 quota_snapshots / pod_metrics / slow_sql_records 仍走 DELETE）。
+
+**注意**：
+- 该 ALTER 需整表重建（分区不支持 INPLACE），请在低峰执行；本次实测耗时见运行日志。
+- 降级（`downgrade`）：`REMOVE PARTITIONING` + 主键还原 `(id)`。
+- 若平台停机多日，数据会落在 `pmax`，重启后维护任务自动 `REORGANIZE` 出对应日分区。

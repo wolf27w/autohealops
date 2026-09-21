@@ -548,7 +548,11 @@ async def _mysql_collect_health(conn_info: dict) -> list[dict]:
 
 
 async def _pg_collect_health(conn_info: dict) -> list[dict]:
-    """PG 健康指标（可选依赖 asyncpg；未装降级返回空）"""
+    """PG 健康指标（可选依赖 asyncpg；未装降级返回空）
+
+    每个查询块单独 try/except：权限/扩展缺失（如 pg_stat_statements）只降级对应块，
+    不影响其它指标。queries_total 用 pg_stat_database.tup_returned 兜底。
+    """
     try:
         import asyncpg  # noqa: PLC0415
     except ImportError:
@@ -563,44 +567,458 @@ async def _pg_collect_health(conn_info: dict) -> list[dict]:
         logger.warning("PG %s 健康采集连接失败: %s", conn_info.get("name"), e)
         return []
     out: list[dict] = []
+
+    def add(mtype: str, mname: str, value, detail: str = "") -> None:
+        out.append({"metric_type": mtype, "metric_name": mname, "value": value, "detail": detail})
+
+    def warn(block: str, e: Exception) -> None:
+        logger.warning("PG %s %s 采集降级: %s", conn_info.get("name"), block, e)
+
     try:
-        # 连接数
-        total, active, maxc = await conn.fetchrow(
-            "SELECT count(*), count(*) FILTER (WHERE state='active'), "
-            "(SELECT setting::int FROM pg_settings WHERE name='max_connections') "
+        # 1. 连接数（pg_stat_activity + pg_settings.max_connections）
+        row = await conn.fetchrow(
+            "SELECT count(*) AS total, "
+            "count(*) FILTER (WHERE state='active') AS active, "
+            "count(*) FILTER (WHERE state='idle') AS idle, "
+            "count(*) FILTER (WHERE state='idle in transaction') AS idle_in_txn, "
+            "count(*) FILTER (WHERE wait_event IS NOT NULL) AS waiting, "
+            "count(*) FILTER (WHERE wait_event_type='Lock') AS lock_wait "
             "FROM pg_stat_activity"
         )
-        out.append({"metric_type": "connections", "metric_name": "connections_used", "value": int(total or 0), "detail": ""})
-        out.append({"metric_type": "connections", "metric_name": "max_connections", "value": int(maxc or 0), "detail": ""})
+        maxc = await conn.fetchval("SELECT setting::int FROM pg_settings WHERE name='max_connections'")
+        total = int(row["total"] or 0)
+        maxc = int(maxc or 0)
+        add("connections", "connections_used", total)
+        add("connections", "max_connections", maxc)
         if maxc:
-            out.append({"metric_type": "connections", "metric_name": "connection_usage_pct",
-                        "value": round(int(total or 0) / int(maxc) * 100, 2), "detail": ""})
-        # 锁等待
-        waiting = await conn.fetchval("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
-        out.append({"metric_type": "lock_wait", "metric_name": "lock_wait_count", "value": int(waiting or 0), "detail": ""})
-        # 库大小
-        if conn_info.get("database"):
-            size = await conn.fetchval("SELECT pg_database_size(current_database()) / 1048576.0")
-            out.append({"metric_type": "tablespace", "metric_name": "db_size_mb", "value": round(float(size or 0), 2), "detail": ""})
-        # 缓存命中率 + QPS/TPS 累计值（pg_stat_database）
+            add("connections", "connection_usage_pct", round(total / maxc * 100, 2))
+        add("connections", "active_connections", int(row["active"] or 0))
+        add("connections", "idle_connections", int(row["idle"] or 0))
+        add("connections", "idle_in_transaction", int(row["idle_in_txn"] or 0))
+        add("connections", "waiting_connections", int(row["waiting"] or 0))
+        add("lock_wait", "lock_wait_count", int(row["lock_wait"] or 0))
+
+        # 2. 吞吐 + 缓存 + 查询质量（pg_stat_database）
         stat = await conn.fetchrow(
-            "SELECT blks_hit, blks_read, xact_commit, xact_rollback, tup_returned "
+            "SELECT xact_commit, xact_rollback, tup_returned, blks_hit, blks_read, "
+            "temp_files, temp_bytes, deadlocks, conflicts "
             "FROM pg_stat_database WHERE datname = current_database()"
         )
         if stat:
+            commit = int(stat["xact_commit"] or 0)
+            rollback = int(stat["xact_rollback"] or 0)
+            add("throughput", "queries_total", int(stat["tup_returned"] or 0),
+                "tup_returned 兜底（pg_stat_statements 未装时用累计返回行数近似）")
+            add("throughput", "tps_total", commit + rollback)
+            add("throughput", "commits_total", commit)
+            add("throughput", "rollbacks_total", rollback)
+            if commit + rollback:
+                add("throughput", "rollback_pct", round(rollback / (commit + rollback) * 100, 2))
+
             blks_hit = int(stat["blks_hit"] or 0)
             blks_read = int(stat["blks_read"] or 0)
+            add("cache", "blks_hit", blks_hit)
+            add("cache", "blks_read", blks_read)
             if blks_hit + blks_read:
-                out.append({"metric_type": "cache", "metric_name": "buffer_pool_hit_rate",
-                            "value": round(blks_hit / (blks_hit + blks_read) * 100, 2), "detail": ""})
-            out.append({"metric_type": "throughput", "metric_name": "queries_total",
-                        "value": int(stat["tup_returned"] or 0), "detail": ""})
-            out.append({"metric_type": "throughput", "metric_name": "tps_total",
-                        "value": int(stat["xact_commit"] or 0) + int(stat["xact_rollback"] or 0), "detail": ""})
+                add("cache", "buffer_pool_hit_rate", round(blks_hit / (blks_hit + blks_read) * 100, 2))
+
+            add("query_quality", "deadlocks", int(stat["deadlocks"] or 0))
+            add("query_quality", "conflicts", int(stat["conflicts"] or 0))
+            add("query_quality", "temp_files", int(stat["temp_files"] or 0))
+            add("query_quality", "temp_bytes", int(stat["temp_bytes"] or 0))
+
+        # 2b. 检查点（pg_stat_bgwriter）
+        bw = await conn.fetchrow("SELECT checkpoints_timed, checkpoints_req FROM pg_stat_bgwriter")
+        if bw:
+            add("cache", "checkpoint_timed", int(bw["checkpoints_timed"] or 0))
+            add("cache", "checkpoint_req", int(bw["checkpoints_req"] or 0))
     except Exception as e:  # noqa: BLE001
-        logger.warning("PG %s 健康指标采集失败: %s", conn_info.get("name"), e)
-    finally:
+        warn("连接数/吞吐/缓存/查询质量", e)
+
+    try:
+        # 3. 长运行查询（active 且已跑 >5s）
+        lr = await conn.fetchval(
+            "SELECT count(*) FROM pg_stat_activity "
+            "WHERE state='active' AND query_start < now() - interval '5 second'"
+        )
+        add("query_quality", "long_running_queries", int(lr or 0))
+    except Exception as e:  # noqa: BLE001
+        warn("长运行查询", e)
+
+    try:
+        # 4. 表空间（库大小 / 表数 / 索引大小 / Top 大表）
+        if conn_info.get("database"):
+            size = await conn.fetchval("SELECT pg_database_size(current_database()) / 1048576.0")
+            add("tablespace", "db_size_mb", round(float(size or 0), 2))
+        tc = await conn.fetchval("SELECT count(*) FROM pg_stat_user_tables")
+        add("tablespace", "table_count", int(tc or 0))
+        idx = await conn.fetchval(
+            "SELECT COALESCE(sum(pg_relation_size(indexrelid)), 0) / 1048576.0 FROM pg_stat_user_indexes"
+        )
+        add("tablespace", "index_size_mb", round(float(idx or 0), 2))
+        top = await conn.fetch(
+            "SELECT relname AS name, pg_total_relation_size(relid) / 1048576.0 AS size_mb "
+            "FROM pg_stat_user_tables ORDER BY size_mb DESC LIMIT 5"
+        )
+        top_tables = [{"table": r["name"], "size_mb": round(float(r["size_mb"] or 0), 2)} for r in top]
+        add("tablespace", "top_tables",
+            top_tables[0]["size_mb"] if top_tables else 0,
+            json.dumps(top_tables, ensure_ascii=False))
+    except Exception as e:  # noqa: BLE001
+        warn("表空间", e)
+
+    try:
+        # 5. 锁等待（pg_locks 未授予）
+        blocked = await conn.fetchval("SELECT count(*) FROM pg_locks WHERE NOT granted")
+        add("lock_wait", "blocked_queries", int(blocked or 0))
+    except Exception as e:  # noqa: BLE001
+        warn("锁等待", e)
+
+    try:
+        # 6. 复制（主/备状态 + 延迟；无副本时给 0 并注明）
+        in_recovery = await conn.fetchval("SELECT pg_is_in_recovery()")
+        add("replication", "is_in_recovery", 1 if in_recovery else 0)
+        if in_recovery:
+            lag = await conn.fetchval(
+                "SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) "
+                "WHERE pg_last_xact_replay_timestamp() IS NOT NULL"
+            )
+            if lag is not None:
+                add("replication", "replication_lag_sec", round(float(lag), 2))
+            else:
+                add("replication", "replication_lag_sec", 0, "备库暂无重放事务")
+        else:
+            lag = await conn.fetchval(
+                "SELECT EXTRACT(EPOCH FROM replay_lag) FROM pg_stat_replication "
+                "WHERE replay_lag IS NOT NULL ORDER BY replay_lag DESC LIMIT 1"
+            )
+            if lag is not None:
+                add("replication", "replication_lag_sec", round(float(lag), 2))
+            else:
+                add("replication", "replication_lag_sec", 0, "无 standby 副本")
+    except Exception as e:  # noqa: BLE001
+        warn("复制", e)
+
+    try:
+        # 7. vacuum（pg_stat_user_tables 聚合）
+        v = await conn.fetchrow(
+            "SELECT COALESCE(sum(n_dead_tup), 0) AS dead_tuples, "
+            "COALESCE(sum(n_live_tup), 0) AS live_tuples, "
+            "count(*) FILTER (WHERE n_dead_tup > 0) AS need_vacuum, "
+            "COALESCE(sum(autovacuum_count), 0) AS autovacuum_count, "
+            "COALESCE(max(EXTRACT(EPOCH FROM (now() - COALESCE(GREATEST(last_autovacuum, last_vacuum), now())))), 0) AS last_vacuum_age "
+            "FROM pg_stat_user_tables"
+        )
+        if v:
+            add("vacuum", "dead_tuples", int(v["dead_tuples"] or 0))
+            add("vacuum", "live_tuples", int(v["live_tuples"] or 0))
+            add("vacuum", "tables_needing_vacuum", int(v["need_vacuum"] or 0))
+            add("vacuum", "autovacuum_count", int(v["autovacuum_count"] or 0))
+            add("vacuum", "last_vacuum_age_sec", round(float(v["last_vacuum_age"] or 0), 2))
+    except Exception as e:  # noqa: BLE001
+        warn("vacuum", e)
+
+    try:
+        # 8. 配置 + 内存（pg_settings，按 unit 换算 MB）
+        _UNIT_BYTES = {"B": 1, "kB": 1024, "MB": 1048576, "GB": 1073741824,
+                       "8kB": 8192, "16kB": 16384, "32kB": 32768}
+        settings = {r["name"]: r for r in await conn.fetch(
+            "SELECT name, setting, unit FROM pg_settings "
+            "WHERE name IN ('shared_buffers','work_mem','max_worker_processes',"
+            "'effective_cache_size','temp_buffers')"
+        )}
+
+        def _to_mb(name: str) -> float:
+            r = settings.get(name)
+            if not r:
+                return 0.0
+            try:
+                val = float(r["setting"])
+            except (TypeError, ValueError):
+                return 0.0
+            return round(val * _UNIT_BYTES.get(r["unit"] or "", 1) / 1048576, 2)
+
+        add("config", "shared_buffers_mb", _to_mb("shared_buffers"))
+        add("config", "work_mem_mb", _to_mb("work_mem"))
+        mp = settings.get("max_worker_processes")
+        add("config", "max_worker_processes",
+            int(float(mp["setting"])) if mp and mp["setting"] is not None else 0)
+        add("memory", "effective_cache_size_mb", _to_mb("effective_cache_size"))
+        add("memory", "temp_buffers_mb", _to_mb("temp_buffers"))
+    except Exception as e:  # noqa: BLE001
+        warn("配置/内存", e)
+
+    try:
         await conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _parse_ora_interval(value) -> float:
+    """解析 Oracle interval day to second 字符串（如 '+00 00:00:05'）→ 秒"""
+    import re
+    s = str(value).strip()
+    m = re.match(r"^([+-]?)(\d+)\s+(\d+):(\d+):(\d+)", s)
+    if not m:
+        return 0.0
+    sign = -1 if m.group(1) == "-" else 1
+    days = int(m.group(2))
+    hours = int(m.group(3))
+    minutes = int(m.group(4))
+    seconds = int(m.group(5))
+    return sign * (days * 86400 + hours * 3600 + minutes * 60 + seconds)
+
+
+async def _oracle_collect_health(conn_info: dict) -> list[dict]:
+    """Oracle 健康指标（可选依赖 oracledb；未装降级返回空）
+
+    v$ 视图普遍需要权限，每个查询块单独 try/except，权限不足只降级对应块。
+    """
+    try:
+        import oracledb  # noqa: PLC0415
+    except ImportError:
+        return []
+    dsn = f"{conn_info['host']}:{conn_info['port']}/{conn_info['database']}"
+    conn = None
+    try:
+        conn = await oracledb.connect_async(
+            user=conn_info["username"], password=conn_info["password"], dsn=dsn,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Oracle %s 健康采集连接失败: %s", conn_info.get("name"), e)
+        return []
+    out: list[dict] = []
+
+    def add(mtype: str, mname: str, value, detail: str = "") -> None:
+        out.append({"metric_type": mtype, "metric_name": mname, "value": value, "detail": detail})
+
+    def warn(block: str, e: Exception) -> None:
+        logger.warning("Oracle %s %s 采集降级: %s", conn_info.get("name"), block, e)
+
+    try:
+        cur = conn.cursor()
+
+        def qone(sql):
+            cur.execute(sql)
+            return cur.fetchone()
+
+        def qall(sql):
+            cur.execute(sql)
+            return cur.fetchall()
+
+        def qval(sql):
+            row = qone(sql)
+            return row[0] if row else None
+
+        # 1. 会话数 / 进程数（v$session / v$resource_limit / v$parameter）
+        try:
+            row = qone(
+                "SELECT COUNT(*), COUNT(CASE WHEN status='ACTIVE' THEN 1 END), "
+                "COUNT(CASE WHEN status='INACTIVE' THEN 1 END) FROM v$session"
+            )
+            sessions_total = int(row[0] or 0)
+            sessions_active = int(row[1] or 0)
+            sessions_inactive = int(row[2] or 0)
+            add("connections", "sessions_total", sessions_total)
+            add("connections", "sessions_active", sessions_active)
+            add("connections", "sessions_inactive", sessions_inactive)
+            try:
+                sess_limit = int(qval("SELECT value FROM v$parameter WHERE name='sessions'") or 0)
+            except (TypeError, ValueError):
+                sess_limit = 0
+            if sess_limit:
+                add("connections", "sessions_usage_pct", round(sessions_total / sess_limit * 100, 2))
+
+            procs = qall(
+                "SELECT current_utilization, limit_value FROM v$resource_limit WHERE resource_name='processes'"
+            )
+            if procs:
+                used = int(procs[0][0] or 0)
+                limit = int(procs[0][1] or 0)
+                add("connections", "processes_used", used)
+                add("connections", "processes_limit", limit)
+                if limit:
+                    add("connections", "processes_usage_pct", round(used / limit * 100, 2))
+        except Exception as e:  # noqa: BLE001
+            warn("会话/进程", e)
+
+        # 2. 吞吐 + 网络 + 查询质量（v$sysstat）
+        try:
+            rows = qall(
+                "SELECT name, value FROM v$sysstat WHERE name IN "
+                "('execute count','user commits','user rollbacks',"
+                "'bytes received via SQL*Net from client','bytes sent via SQL*Net to client',"
+                "'physical reads','consistent gets','db block gets','parse count (total)',"
+                "'sorts (disk)','sorts (memory)','enqueue waits')"
+            )
+            stat = {r[0]: (float(r[1]) if r[1] is not None else 0.0) for r in rows}
+
+            def _s(k: str) -> float:
+                return stat.get(k, 0.0)
+
+            executes = _s("execute count")
+            commits = _s("user commits")
+            rollbacks = _s("user rollbacks")
+            add("throughput", "executes_total", executes)
+            add("throughput", "qps_total", executes, "与 executes_total 同源（execute count 累计）")
+            add("throughput", "user_commits_total", commits)
+            add("throughput", "user_rollbacks_total", rollbacks)
+            add("throughput", "tps_total", commits + rollbacks)
+            if commits + rollbacks:
+                add("throughput", "rollback_pct", round(rollbacks / (commits + rollbacks) * 100, 2))
+
+            add("network", "bytes_received", _s("bytes received via SQL*Net from client"))
+            add("network", "bytes_sent", _s("bytes sent via SQL*Net to client"))
+
+            consistent = _s("consistent gets")
+            dbgets = _s("db block gets")
+            physical = _s("physical reads")
+            add("query_quality", "physical_reads", physical)
+            add("query_quality", "consistent_gets", consistent)
+            add("query_quality", "db_block_gets", dbgets)
+            add("query_quality", "parses_total", _s("parse count (total)"))
+            if consistent + dbgets:
+                add("query_quality", "buffer_cache_hit_rate",
+                    round((1 - physical / (consistent + dbgets)) * 100, 2))
+            sorts_disk = _s("sorts (disk)")
+            sorts_mem = _s("sorts (memory)")
+            if sorts_disk + sorts_mem:
+                add("query_quality", "sorts_disk_ratio",
+                    round(sorts_disk / (sorts_disk + sorts_mem) * 100, 2))
+            add("lock_wait", "enqueue_waits", _s("enqueue waits"))
+        except Exception as e:  # noqa: BLE001
+            warn("吞吐/网络/查询质量", e)
+
+        # 3. 库缓存 / 数据字典缓存命中率
+        try:
+            row = qone("SELECT SUM(pins), SUM(reloads) FROM v$librarycache")
+            if row and row[0]:
+                pins = float(row[0] or 0)
+                reloads = float(row[1] or 0)
+                if pins:
+                    add("query_quality", "library_cache_hit_rate", round((1 - reloads / pins) * 100, 2))
+        except Exception as e:  # noqa: BLE001
+            warn("库缓存", e)
+        try:
+            row = qone("SELECT SUM(gets), SUM(getmisses) FROM v$rowcache")
+            if row and row[0]:
+                gets = float(row[0] or 0)
+                misses = float(row[1] or 0)
+                if gets:
+                    add("query_quality", "dictionary_cache_hit_rate", round((1 - misses / gets) * 100, 2))
+        except Exception as e:  # noqa: BLE001
+            warn("数据字典缓存", e)
+
+        # 4. 锁等待（v$session blocking_session / v$lock）
+        try:
+            blocked = qval("SELECT COUNT(*) FROM v$session WHERE blocking_session IS NOT NULL")
+            add("lock_wait", "blocked_sessions", int(blocked or 0))
+        except Exception as e:  # noqa: BLE001
+            warn("阻塞会话", e)
+        try:
+            waits = qval("SELECT COUNT(*) FROM v$lock WHERE request > 0")
+            add("lock_wait", "lock_wait_count", int(waits or 0))
+        except Exception as e:  # noqa: BLE001
+            warn("锁等待", e)
+
+        # 5. 等待事件（v$system_event，非 Idle 类 Top5）
+        try:
+            rows = qall(
+                "SELECT event, total_waits, time_waited_micro FROM ("
+                "SELECT event, total_waits, time_waited_micro FROM v$system_event "
+                "WHERE wait_class <> 'Idle' ORDER BY time_waited_micro DESC) WHERE ROWNUM <= 5"
+            )
+            top_waits = [{"event": r[0], "waits": int(r[1] or 0),
+                          "time_waited_ms": round(float(r[2] or 0) / 1000, 2)} for r in rows]
+            total_ms = qval(
+                "SELECT COALESCE(SUM(time_waited_micro), 0) / 1000 FROM v$system_event WHERE wait_class <> 'Idle'"
+            )
+            add("wait", "top_wait_events",
+                top_waits[0]["time_waited_ms"] if top_waits else 0,
+                json.dumps(top_waits, ensure_ascii=False))
+            add("wait", "total_wait_ms", round(float(total_ms or 0), 2))
+        except Exception as e:  # noqa: BLE001
+            warn("等待事件", e)
+
+        # 6. 表空间（dba_tablespace_usage_metrics，权限不足降级 dba_data_files）
+        try:
+            block_size = qval("SELECT value FROM v$parameter WHERE name='db_block_size'")
+            try:
+                block_size = int(block_size or 8192)
+            except (TypeError, ValueError):
+                block_size = 8192
+            rows = qall(
+                "SELECT tablespace_name, used_percent, tablespace_size FROM dba_tablespace_usage_metrics"
+            )
+            if not rows:
+                raise RuntimeError("dba_tablespace_usage_metrics 无数据")
+            add("tablespace", "tablespace_count", len(rows))
+            add("tablespace", "tablespace_max_pct", round(max(float(r[1] or 0) for r in rows), 2))
+            total_mb = sum(float(r[2] or 0) * block_size / 1048576 for r in rows)
+            add("tablespace", "total_size_mb", round(total_mb, 2))
+            top = sorted(rows, key=lambda r: float(r[1] or 0), reverse=True)[:5]
+            top_ts = [{"name": r[0], "used_pct": round(float(r[1] or 0), 2),
+                       "size_mb": round(float(r[2] or 0) * block_size / 1048576, 2)} for r in top]
+            add("tablespace", "top_tablespace",
+                top_ts[0]["used_pct"] if top_ts else 0,
+                json.dumps(top_ts, ensure_ascii=False))
+        except Exception as e:  # noqa: BLE001
+            try:
+                total_mb = qval("SELECT COALESCE(SUM(bytes), 0) / 1048576 FROM dba_data_files")
+                cnt = qval("SELECT COUNT(DISTINCT tablespace_name) FROM dba_data_files")
+                add("tablespace", "total_size_mb", round(float(total_mb or 0), 2))
+                add("tablespace", "tablespace_count", int(cnt or 0))
+                logger.info("Oracle %s 表空间使用率降级为 dba_data_files: %s", conn_info.get("name"), e)
+            except Exception as e2:  # noqa: BLE001
+                warn("表空间", e2)
+
+        # 7. 内存（v$sgainfo / v$pgastat）
+        try:
+            rows = qall("SELECT name, bytes FROM v$sgainfo WHERE name IN ('Total SGA Size','Free SGA Memory Available')")
+            sga = {r[0]: float(r[1] or 0) for r in rows}
+            add("memory", "sga_size_mb", round(sga.get("Total SGA Size", 0) / 1048576, 2))
+            add("memory", "sga_free_mb", round(sga.get("Free SGA Memory Available", 0) / 1048576, 2))
+        except Exception as e:  # noqa: BLE001
+            warn("SGA", e)
+        try:
+            pga = qval("SELECT value FROM v$pgastat WHERE name='total PGA allocated'")
+            add("memory", "pga_size_mb", round(float(pga or 0) / 1048576, 2))
+        except Exception as e:  # noqa: BLE001
+            warn("PGA", e)
+
+        # 8. Data Guard 复制延迟（无 DG 时给 0；无 v$dataguard_stats 权限则跳过）
+        try:
+            lag = qval("SELECT value FROM v$dataguard_stats WHERE name='apply lag'")
+            if lag is None or str(lag).strip().upper() in ("", "N/A", "NULL"):
+                add("replication", "dataguard_lag_sec", 0, "无 Data Guard 环境")
+            else:
+                add("replication", "dataguard_lag_sec", _parse_ora_interval(lag),
+                    f"apply lag 原始值: {lag}")
+        except Exception as e:  # noqa: BLE001
+            warn("Data Guard", e)
+
+        # 9. 配置（版本 / 运行时长）
+        try:
+            banner = qval("SELECT banner FROM v$version WHERE ROWNUM = 1")
+            add("config", "db_version", 0, str(banner or ""))
+        except Exception as e:  # noqa: BLE001
+            warn("版本", e)
+        try:
+            uptime = qval("SELECT (SYSDATE - startup_time) * 86400 FROM v$instance")
+            add("config", "uptime_sec", round(float(uptime or 0), 2))
+        except Exception as e:  # noqa: BLE001
+            warn("运行时长", e)
+
+        cur.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Oracle %s 健康指标采集失败: %s", conn_info.get("name"), e)
+    finally:
+        if conn:
+            try:
+                await conn.close()
+            except Exception:  # noqa: BLE001
+                pass
     return out
 
 
@@ -618,8 +1036,10 @@ async def collect_db_health(conn_id: int) -> list[dict]:
         metrics = await _mysql_collect_health(conn_info)
     elif c.db_type == "pg":
         metrics = await _pg_collect_health(conn_info)
+    elif c.db_type == "oracle":
+        metrics = await _oracle_collect_health(conn_info)
     else:
-        metrics = []  # Oracle 健康采集骨架，后续补
+        metrics = []
 
     if not metrics:
         return []
@@ -630,10 +1050,13 @@ async def collect_db_health(conn_id: int) -> list[dict]:
         # QPS/TPS 差值：先读上一次累计值，算出速率后一并落库
         prev_map: dict[str, tuple[float, datetime]] = {}
         _RATE_NAMES = {"queries_total": "qps", "tps_total": "tps",
+                       "executes_total": "qps",  # Oracle 累计执行次数 → qps（与 MySQL queries_total 同口径）
                        "bytes_received": "rx_bytes_per_sec", "bytes_sent": "tx_bytes_per_sec",
                        "slow_queries": "slow_queries_per_sec",
                        "aborted_connects": "aborted_connects_per_sec",
                        "aborted_clients": "aborted_clients_per_sec"}
+        # 速率落库时归为 throughput 的累计指标名（其余归 rate）
+        _THROUGHPUT_RATE_NAMES = {"queries_total", "tps_total", "executes_total"}
         for name in _RATE_NAMES:
             prev = (await session.execute(
                 select(DBMetricSnapshot).where(
@@ -660,7 +1083,7 @@ async def collect_db_health(conn_id: int) -> list[dict]:
                     rate = round((m["value"] - prev_val) / dt, 2)
                     session.add(DBMetricSnapshot(
                         db_connection_id=conn_id,
-                        metric_type="throughput" if m["metric_name"] in ("queries_total", "tps_total") else "rate",
+                        metric_type="throughput" if m["metric_name"] in _THROUGHPUT_RATE_NAMES else "rate",
                         metric_name=_RATE_NAMES[m["metric_name"]],
                         value=rate,
                         detail="",

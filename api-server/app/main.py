@@ -85,12 +85,20 @@ async def _maintenance_loop() -> None:
         # 资源快照清理：首次启动清理一次 + 每天一次（2880 个 30s 周期）
         if loop_count == 1 or loop_count % 2880 == 0:
             try:
-                from app.services.resource_service import cleanup_old_snapshots
+                from app.services.resource_service import cleanup_old_snapshots, maintain_snapshot_partitions
                 from app.services.system_setting_service import get_setting
                 try:
                     _days = int(await get_setting("snapshot_retention_days", "7") or 7)
                 except (TypeError, ValueError):
                     _days = 7
+                # 分区维护：优先 DROP 过期分区（秒级 + 回收磁盘）+ 补齐未来分区
+                try:
+                    part = await maintain_snapshot_partitions(max(1, _days))
+                    if part.get("partitioned"):
+                        logger.info("资源快照分区维护：新增 %d 个 / DROP %d 个过期分区 %s",
+                                    part.get("added", 0), len(part.get("dropped") or []), part.get("dropped") or [])
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("资源快照分区维护 异常: %s", e)
                 n = await cleanup_old_snapshots(max(1, _days))
                 if n:
                     logger.info("资源快照清理完成（保留 %d 天）：删除 %d 条历史记录", _days, n)
