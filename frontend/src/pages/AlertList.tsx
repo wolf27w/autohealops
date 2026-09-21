@@ -277,9 +277,22 @@ function DiagnosisPanel({ alertId }: { alertId: number }) {
   }, [alertId])
   if (loading) return <div>加载中...</div>
   if (!data) return <div>暂无诊断结果（告警写入后系统立即自动诊断/修复，已恢复的会自动解决）</div>
+  let rc = ''
+  let sug: unknown = ''
+  try {
+    const j = JSON.parse(data.diagnosis_json || '{}')
+    rc = String(j.root_cause || j.conclusion || '')
+    sug = j.suggestions || j.handling_advice || ''
+  } catch { /* 非 JSON 直接展示原文 */ }
   return (
     <div>
       <div>置信度：{data.confidence}</div>
+      {rc
+        ? <>
+            <div style={{ marginTop: 4 }}><b>根因：</b>{rc}</div>
+            {!!sug && <div style={{ marginTop: 4 }}><b>处理意见：</b>{Array.isArray(sug) ? sug.join('；') : String(sug)}</div>}
+          </>
+        : <div style={{ marginTop: 4, color: '#faad14' }}>AI 未给出结论（模型返回为空/失败，可在告警操作里点「重新诊断」）</div>}
       <CodeBlock code={data.diagnosis_json} />
     </div>
   )

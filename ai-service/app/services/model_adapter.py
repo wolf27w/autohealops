@@ -165,6 +165,11 @@ async def call_with_fallback(
             start = time.perf_counter()
             resp = await adapter.chat_completion(system_prompt, user_prompt)
             latency_ms = int((time.perf_counter() - start) * 1000)
+            # 空返回视为失败：否则会存下一份空诊断（root_cause 空）并当成成功
+            if not (resp.content or "").strip():
+                last_err = "模型返回内容为空"
+                await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, latency_ms, "failed", last_err)
+                continue
             await _log_call(cfg.id, request_type, system_prompt, user_prompt, resp, latency_ms, "success")
             return resp, cfg.model_name
         except Exception as e:  # noqa: BLE001

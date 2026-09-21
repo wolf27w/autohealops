@@ -211,6 +211,8 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         suggestions = diagnosis.get("suggestions", []) or []
         if root_cause:
             diagnosis_text = f"AI 诊断结论：{root_cause}"
+        else:
+            diagnosis_text = "AI 诊断未给出明确结论（模型返回为空，请重试或检查模型配置）"
         if suggestions:
             diagnosis_text += f"；处理建议：{'；'.join(str(s) for s in suggestions)[:300]}"
     except Exception as e:  # noqa: BLE001
