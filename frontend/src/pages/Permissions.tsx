@@ -1,4 +1,5 @@
-// 权限管理页：用户集群授权 + 数据库授权（admin）+ 我的告警订阅
+// 权限管理页：按项目授权 / 按集群授权 / 按数据库授权（admin）+ 我的告警订阅
+// 生效逻辑：直接授权（集群/数据库） ∪ 项目授权，取最高权限（见 user_permission_service）
 import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Modal, Form, Input, Select, Space, Tag, message, Popconfirm, Switch, Empty,
@@ -11,6 +12,7 @@ import {
   getSubscriptions, addSubscription, deleteSubscription,
 } from '../services/api'
 import type { Cluster, DBConnection, User } from '../types'
+import ProjectManagement from './ProjectManagement'
 
 type ClusterWithEnv = Cluster & { env_tag?: string }
 
@@ -39,12 +41,13 @@ export default function Permissions() {
   const me = JSON.parse(localStorage.getItem('user') || '{}')
   const items = me.role === 'admin'
     ? [
-        { key: 'cluster', label: '集群授权', children: <ClusterPerms /> },
-        { key: 'db', label: '数据库授权', children: <DBPerms /> },
+        { key: 'project', label: '按项目授权', children: <ProjectManagement /> },
+        { key: 'cluster', label: '按集群授权', children: <ClusterPerms /> },
+        { key: 'db', label: '按数据库授权', children: <DBPerms /> },
         { key: 'subs', label: '我的告警订阅', children: <MySubscriptions /> },
       ]
     : [{ key: 'subs', label: '我的告警订阅', children: <MySubscriptions /> }]
-  return <Tabs defaultActiveKey={me.role === 'admin' ? 'cluster' : 'subs'} items={items} />
+  return <Tabs defaultActiveKey="project" items={items} />
 }
 
 // ============ 集群授权（admin）============
