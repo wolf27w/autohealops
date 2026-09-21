@@ -283,6 +283,7 @@ async def dashboard(
         elif range_ == "1y":
             range_since = now - timedelta(days=365)
         since_1y = now - timedelta(days=365)
+        since_24h = now - timedelta(hours=24)
 
         # --- health_score / kpi 基础量 ---
         clusters_filtered = cluster_rows if filter_cluster_ids is None else [c for c in cluster_rows if c.id in filter_cluster_ids]
@@ -545,28 +546,29 @@ async def dashboard(
             "detected_at": str(r[5] or ""),
         } for r in abnormal_rows]
 
-        # --- kpi：heal_rate / mttr 均为**全量累计**（不随时间范围变化，仅受集群/项目筛选） ---
-        # MTTR：所有已解决告警的平均处置时长
+        # --- kpi：heal_rate / mttr 均为**最近 24 小时**告警（与仪表盘其余口径统一） ---
+        # MTTR：窗口内产生且已解决告警的平均处置时长
         mttr_row = (await session.execute(
             _filter(select(
                 func.avg(text("TIMESTAMPDIFF(SECOND, alerts.detected_at, alerts.resolved_at)")),
                 func.count(),
-            ).where(Alert.resolved_at.isnot(None), Alert.detected_at.isnot(None)))
+            ).where(Alert.detected_at >= since_24h, Alert.detected_at <= now,
+                    Alert.resolved_at.isnot(None), Alert.detected_at.isnot(None)))
         )).first()
         kpi_mttr = round(float(mttr_row[0]) / 60, 1) if mttr_row and mttr_row[0] is not None else 0.0
         kpi_mttr_count = int(mttr_row[1]) if mttr_row and mttr_row[1] else 0
-        # 成功率：已解决(含自愈) ÷ 总告警
+        # 成功率：窗口内产生的告警中已解决（含自愈）占比
         heal_row = (await session.execute(
             _filter(select(
                 func.count(),
                 func.coalesce(func.sum(func.if_(Alert.status.in_(["resolved", "self_healed"]), 1, 0)), 0),
-            ).where(Alert.detected_at.isnot(None)))
+            ).where(Alert.detected_at >= since_24h, Alert.detected_at <= now))
         )).first()
         kpi_heal_total = int(heal_row[0]) if heal_row and heal_row[0] else 0
         kpi_heal_done = int(heal_row[1]) if heal_row and heal_row[1] else 0
         kpi_heal_rate = round(kpi_heal_done / kpi_heal_total, 4) if kpi_heal_total else 0.0
 
-        # --- action_stat / action_timeline（近一年，按执行日志步骤命令分类） ---
+        # --- action_stat / action_timeline（近 24 小时，按执行日志步骤命令分类） ---
         exec_join = (
             select(ExecutionLog, RepairPlan, Alert)
             .join(RepairPlan, RepairPlan.id == ExecutionLog.plan_id)
@@ -574,7 +576,8 @@ async def dashboard(
         )
         exec_1y_rows = (await session.execute(
             _filter(exec_join.where(
-                ExecutionLog.completed_at >= since_1y,
+                ExecutionLog.completed_at >= since_24h,
+                Alert.detected_at >= since_24h,
                 ExecutionLog.status.in_(["success", "failed", "rolled_back"]),
             )).limit(50000)
         )).all()
@@ -589,11 +592,12 @@ async def dashboard(
                     acted_alert_ids.add(alert.id)
             else:
                 action_failed += 1
-        # 自动处理（近一年）= 自愈告警数 ∪ 有成功执行动作的告警数（按告警去重）
+        # 自动处理（近 24 小时）= 窗口内自愈告警数 ∪ 窗口内有成功执行动作的告警数（按告警去重）
         healed_1y_ids = (await session.execute(
-            _filter(select(Alert.id).where(Alert.detected_at >= since_1y, Alert.status == "self_healed").limit(50000))
+            _filter(select(Alert.id).where(Alert.detected_at >= since_24h, Alert.detected_at <= now,
+                                           Alert.status == "self_healed").limit(50000))
         )).scalars().all()
-        auto_processed_1y = len(set(healed_1y_ids) | acted_alert_ids)
+        auto_processed_24h = len(set(healed_1y_ids) | acted_alert_ids)
 
         timeline_rows = (await session.execute(
             _filter(exec_join.order_by(ExecutionLog.id.desc()).limit(6))
@@ -627,7 +631,7 @@ async def dashboard(
         kpi = {
             "cluster_total": c_total,
             "alert_pending": active_filtered,
-            "auto_processed_1y": auto_processed_1y,
+            "auto_processed_24h": auto_processed_24h,
             "manual_pending": manual_filtered,
             "db_abnormal": db_abnormal,
             "heal_rate": kpi_heal_rate,

@@ -276,7 +276,8 @@ export interface HealthScore {
 export interface DashboardKpi {
   cluster_total: number
   alert_pending: number
-  auto_processed_1y: number
+  /** 自动处理（最近 24 小时）：自愈 ∪ 有成功执行动作的告警（去重） */
+  auto_processed_24h: number
   manual_pending: number
   approval_pending: number
   approval_decided_today: number
