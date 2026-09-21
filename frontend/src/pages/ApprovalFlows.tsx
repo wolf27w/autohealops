@@ -81,8 +81,8 @@ function NodeFields({ form, field, index, configs, users }: { form: FormInstance
             )}
             {type === 'user' && (
               <>
-                <Form.Item name={[field.name, 'users']} label="指定用户（平台用户名 或 飞书 open_id）" style={{ marginBottom: 4 }}>
-                  <Select mode="tags" placeholder="选平台用户，或直接粘飞书 open_id（ou_xxx）后回车"
+                <Form.Item name={[field.name, 'users']} label="指定用户（群成员姓名 / 平台用户名 / open_id）" style={{ marginBottom: 4 }}>
+                  <Select mode="tags" placeholder="选平台用户，或直接填群成员姓名 / 粘 open_id（ou_xxx）后回车"
                     tokenSeparators={[',', '，', ' ']}
                     options={users.map((u) => ({
                       value: u.username,
@@ -90,8 +90,8 @@ function NodeFields({ form, field, index, configs, users }: { form: FormInstance
                     }))} />
                 </Form.Item>
                 <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>
-                  飞书群内 @ 必须用 <b>open_id</b>（ou_ 开头）——可直接粘 open_id；
-                  填<b>平台用户名</b>时会用「用户管理」里它的 feishu_open_id 去 @。
+                  可填：<b>群成员姓名</b>（如 吴永辉，自动按群成员解析 @，需应用开通 im:chat.members:read）、
+                  <b>平台用户名</b>（走用户管理的 feishu_open_id）或 <b>open_id</b>（ou_ 开头）。
                 </div>
               </>
             )}

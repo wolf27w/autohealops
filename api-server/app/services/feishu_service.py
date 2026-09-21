@@ -108,9 +108,79 @@ async def send_feishu_group_text(chat_id: str, content: str, at_open_ids: list[s
     return await send_feishu_message(chat_id, "chat_id", content, app_id, app_secret, at_open_ids=at_open_ids)
 
 
+# 群成员 名字→open_id 缓存（chat_id -> {mapping, expire_at}）
+_member_cache: dict[str, dict] = {}
+
+
+async def list_chat_members(chat_id: str, app_id: str = "", app_secret: str = "") -> dict:
+    """拉群成员（member_id_type=open_id）→ {"status", "data":[{"open_id","name"}]}
+
+    需应用权限 im:chat.members:read / im:chat:readonly / im:chat（任一）且机器人在群内。
+    """
+    if not chat_id:
+        return {"status": "failed", "body": "无 chat_id", "data": []}
+    token = await _get_tenant_token(app_id, app_secret)
+    if not token:
+        return {"status": "failed", "body": "飞书应用未配置凭证或获取 token 失败", "data": []}
+    url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}/members"
+    out: list[dict] = []
+    page_token = ""
+    try:
+        client = get_http_client(trust_env=False)
+        for _ in range(10):  # 最多 10 页（1000 人）
+            params: dict = {"member_id_type": "open_id", "page_size": 100}
+            if page_token:
+                params["page_token"] = page_token
+            resp = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            data = resp.json()
+            if data.get("code") != 0:
+                return {"status": "failed", "body": f"code={data.get('code')} msg={data.get('msg', data)}", "data": []}
+            d = data.get("data") or {}
+            for i in (d.get("items") or []):
+                out.append({"open_id": i.get("member_id", ""), "name": (i.get("name") or "").strip()})
+            page_token = d.get("page_token") or ""
+            if not d.get("has_more"):
+                break
+        return {"status": "success", "data": out}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "failed", "body": str(e), "data": []}
+
+
+async def resolve_open_ids_by_names(chat_id: str, names: list[str], app_id: str = "", app_secret: str = "",
+                                    ttl: int = 600) -> dict[str, str]:
+    """按群成员**姓名**解析 open_id（带内存缓存，默认 10 分钟）
+
+    用于「指定用户」填中文名时也能真正 @ 到人；解析不到的会记 warn 并跳过。
+    """
+    names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    if not chat_id or not names:
+        return {}
+    cached = _member_cache.get(chat_id)
+    if not cached or time.time() > cached.get("expire_at", 0):
+        res = await list_chat_members(chat_id, app_id, app_secret)
+        if res.get("status") != "success":
+            logger.warning("拉群成员失败(chat=%s): %s", chat_id[-8:], res.get("body"))
+            return {}
+        mapping: dict[str, str] = {}
+        for it in res["data"]:
+            if it.get("name") and it.get("open_id"):
+                mapping[it["name"]] = it["open_id"]
+        cached = {"mapping": mapping, "expire_at": time.time() + ttl}
+        _member_cache[chat_id] = cached
+        logger.info("飞书群成员已缓存(chat=%s)：%d 人", chat_id[-8:], len(mapping))
+    mapping = cached["mapping"]
+    out: dict[str, str] = {}
+    for n in names:
+        uid = mapping.get(n)
+        if uid:
+            out[n] = uid
+        else:
+            logger.warning("群成员里找不到名字「%s」，不会被 @（可在审批流里改填其 open_id）", n)
+    return out
+
+
 async def list_feishu_chats(app_id: str = "", app_secret: str = "") -> dict:
     """列出应用（机器人）所在的群 → [{"chat_id":..,"name":..}]
-
     需应用权限 im:chat:readonly（或 im:chat）且机器人已在群内。
     """
     token = await _get_tenant_token(app_id, app_secret)

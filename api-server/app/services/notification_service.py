@@ -516,7 +516,8 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                                      at_all: bool = False, receiver_users: list | None = None,
                                      group_id: int = 0, at_duty: bool = False,
                                      notify_config_id: int = 0,
-                                     extra_at_open_ids: list[str] | None = None) -> None:
+                                     extra_at_open_ids: list[str] | None = None,
+                                     resolve_names: list[str] | None = None) -> None:
     """发送审批通知（按流程节点类型路由）
 
     node_type:
@@ -563,6 +564,15 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                     oid = getattr(u, "feishu_open_id", "")
                     if oid and oid not in at_ids:
                         at_ids.append(oid)
+            # 指定用户填的是中文名（非平台用户名）→ 拉群成员按名字解析 open_id（方案 A）
+            if resolve_names and getattr(cfg, "send_mode", "webhook") == "app" \
+                    and (getattr(cfg, "receive_id_type", "chat_id") == "chat_id") and cfg.receive_id:
+                from app.services.feishu_service import resolve_open_ids_by_names
+                _m = await resolve_open_ids_by_names(cfg.receive_id, resolve_names,
+                                                     cfg.app_id, cfg.app_secret)
+                for oid in _m.values():
+                    if oid and oid not in at_ids:
+                        at_ids.append(oid)
             await _send_webhook_with_retry(cfg, text, None, at_all=at_all,
                                            receiver=f"通知配置:{cfg.name}", at_open_ids=at_ids or None)
             return
@@ -589,7 +599,12 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
     if group:
         # 3a. 绑定群：应用群（chat_id）优先，webhook 群兜底
         if group.chat_id:
-            from app.services.feishu_service import send_feishu_group_text
+            from app.services.feishu_service import send_feishu_group_text, resolve_open_ids_by_names
+            if resolve_names:
+                _m = await resolve_open_ids_by_names(group.chat_id, resolve_names)
+                for oid in _m.values():
+                    if oid and oid not in at_open_ids:
+                        at_open_ids.append(oid)
             resp = await send_feishu_group_text(group.chat_id, text, at_open_ids or None)
             await _record_log(group.id, None, resp["status"], text, resp.get("body", ""),
                               channel=group.channel_type, receiver=f"群:{group.name}")

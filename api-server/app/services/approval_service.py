@@ -176,6 +176,7 @@ async def _notify_current_node(approval: Approval, summary: str, risk: str) -> N
 
     receiver_users = None
     extra_at_open_ids: list[str] = []
+    resolve_names: list[str] = []
     if ntype in ("duty", "admin", "user", "manager"):
         usernames = node.get("receiver_usernames") or []
         # 「指定用户」节点可直接填飞书 open_id（ou_/on_ 开头）→ 直接 @，不要求是平台用户
@@ -185,6 +186,9 @@ async def _notify_current_node(approval: Approval, summary: str, risk: str) -> N
             async with async_session() as session:
                 result = await session.execute(select(User).where(User.username.in_(plain_names)))
                 receiver_users = list(result.scalars())
+            # 非平台用户的名字（如中文名）→ 交给发送侧按群成员姓名解析 open_id
+            _found = {u.username for u in receiver_users}
+            resolve_names = [n for n in plain_names if n not in _found]
     await notification_service.send_approval_notification(
         approval.id, summary, risk,
         duty_users=receiver_users,
@@ -195,6 +199,7 @@ async def _notify_current_node(approval: Approval, summary: str, risk: str) -> N
         at_duty=bool(node.get("at_duty", False)),
         notify_config_id=int(node.get("notify_config_id") or 0),
         extra_at_open_ids=extra_at_open_ids or None,
+        resolve_names=resolve_names or None,
     )
 
 
