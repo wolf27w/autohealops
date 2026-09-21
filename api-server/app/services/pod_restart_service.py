@@ -26,6 +26,7 @@ import asyncio
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.clients.ai_client import ai_client
 from app.clients.executor_client import executor_client
@@ -146,6 +147,7 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
             select(Alert).where(
                 Alert.cluster_id == cluster_id,
                 Alert.resource_type == "pod",
+                Alert.namespace == pod["namespace"],
                 Alert.deployment_name == dep,
                 Alert.fault_type == fault_type,
                 Alert.status == "pending",
@@ -174,9 +176,15 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
         session.add(alert)
         try:
             await session.commit()
-        except Exception:  # noqa: BLE001  唯一索引竞态兑底 → 转聚合，不重复建单
+        except IntegrityError:
+            # 唯一索引竞态兜底 → 转聚合，不重复建单（只把「已存在」当聚合）
             await session.rollback()
             return 0
+        except Exception as e:  # noqa: BLE001
+            # 其它异常（DB 故障等）不静默吞：回滚并抛给上层感知，避免静默丢告警
+            await session.rollback()
+            logger.error("Pod 重启告警建单失败（非唯一冲突）: %s", e)
+            raise
         await session.refresh(alert)
         return alert.id
 
@@ -256,6 +264,7 @@ async def _resolve_pod_alerts(cluster_id: int, pod: dict) -> int:
             select(Alert).where(
                 Alert.cluster_id == cluster_id,
                 Alert.resource_type == "pod",
+                Alert.namespace == pod["namespace"],
                 Alert.deployment_name == dep,
                 Alert.resource_name == pod["name"],
                 Alert.fault_type.in_(POD_RESTART_FAULT_TYPES),

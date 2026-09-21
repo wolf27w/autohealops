@@ -17,6 +17,7 @@ import json
 import time
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.clients.executor_client import executor_client
 from app.core.config import settings
@@ -181,7 +182,12 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
             ),
         )
         session.add(alert)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # dedup_key 唯一索引竞态（并发建单 / 同源已在途）→ 视为已存在，跳过不重复建
+            await session.rollback()
+            return False
         await session.refresh(alert)
         alert_id = alert.id
     # 通知（统一入口：分级/静默/渠道/模板/限频都在 notify_alert 内）
@@ -192,12 +198,25 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
     return True
 
 
-async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则已删除") -> int:
-    """删除/停用规则时，关闭其名下在途告警（按 metric→fault_type + 集群 + namespace 匹配）
+async def clear_rule_debounce_keys(rule_id: int) -> None:
+    """清理某规则的全部防抖键（改阈值/时长/删除规则后调用，避免旧时间戳按旧参数误判）"""
+    try:
+        keys = await redis_pool.keys(f"res_alert:{rule_id}:*")
+        if keys:
+            await redis_pool.delete(*keys)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("清理规则 %s 防抖键失败: %s", rule_id, e)
 
+
+async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则已删除") -> int:
+    """删除/停用规则时，关闭其名下在途告警（按 metric→fault_type + 集群 + namespace + 规则名精确匹配）
+
+    精确匹配：只有消息带「（规则:{rule.name}）」标记的告警才属于本规则，
+    避免同 metric 多规则（不同 namespace/container/阈值）互相误关；
     同时清理 Redis 防抖时间戳，便重新添加规则后按新周期重新计时。
     """
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
+    rule_tag = f"（规则:{rule.name}）"
     async with async_session() as session:
         q = select(Alert).where(
             Alert.status == "pending",
@@ -212,23 +231,20 @@ async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则�
         for a in rows:
             if not _ns_match(rule, a.namespace):
                 continue
+            if rule_tag not in (a.message or ""):
+                continue  # 非本规则创建的告警，不越界关闭
             a.status = "resolved"
             a.resolved_at = now
             a.resolved_by = "system"
             a.message = (a.message or "") + f"（{reason}，系统自动关闭）"
             n += 1
         await session.commit()
-    try:
-        keys = await redis_pool.keys(f"res_alert:{rule.id}:*")
-        if keys:
-            await redis_pool.delete(*keys)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("清理规则 %s 防抖键失败: %s", rule.id, e)
+    await clear_rule_debounce_keys(rule.id)
     return n
 
 
 async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -> None:
-    """资源恢复 → 关闭 pending 告警（含历史 cluster_id=0 的脏数据）"""
+    """资源恢复 → 关闭 pending 告警（含历史 cluster_id=0 的脏数据）+ 清防抖键"""
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
     async with async_session() as session:
         result = await session.execute(
@@ -245,6 +261,13 @@ async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -
             a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
             a.message = (a.message or "") + "（指标已回落，系统自动关闭）"
         await session.commit()
+    # 清理该容器对应的防抖键：避免指标回落关闭后再超阈值时被旧时间戳误判立即重建（通知风暴）
+    try:
+        await redis_pool.delete(
+            f"res_alert:{rule.id}:{cluster_id}:{item['namespace']}:{item['pod']}:{item['container']}"
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("清理资源告警防抖键失败: %s", e)
 
 
 async def _scan_rule(rule: ResourceAlertRule) -> int:

@@ -9,15 +9,54 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.database import async_session
 from app.middleware.permission import require_any_user
-from app.models import Cluster, DiagnosticReport
+from app.models import Cluster, DiagnosticReport, DiagnosticTask
+from app.services.user_permission_service import check_cluster_permission, check_db_permission
 
 router = APIRouter(prefix="/api/v1/inspection-reports")
 
 _REPORT_TYPE_LABEL = {"cluster": "集群巡检报告", "db": "数据库巡检报告", "app": "应用诊断报告"}
+
+
+async def _check_report_permission(user, report: DiagnosticReport, conn_id, cluster_id) -> bool:
+    """下载报告前的权限校验（P1 越权修复）：非 admin 必须对报告所属资源有 read 权限。
+
+    - cluster 报告：校验集群权限（cluster_id 优先取新列，其次 raw_output）
+    - db 报告：校验数据库连接权限（conn_id 优先取新列，其次 raw_output）
+    - app/其它报告：优先按 cluster_id 校验集群权限；定位不到集群时按任务创建人放行
+      （task_id 关联 DiagnosticTask.created_by）；仍无法确定则拒绝（保守）。
+    admin 直接放行（check_cluster_permission / check_db_permission 对 admin 恒 True）。
+    """
+    if user.role == "admin":
+        return True
+    raw = {}
+    try:
+        raw = json.loads(report.raw_output or "{}")
+    except (json.JSONDecodeError, TypeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    if report.task_type == "cluster":
+        cid = cluster_id or raw.get("cluster_id")
+        return bool(cid) and await check_cluster_permission(user, int(cid))
+    if report.task_type == "db":
+        cid = conn_id or raw.get("conn_id")
+        return bool(cid) and await check_db_permission(user, int(cid))
+
+    # app/其它：目标为某集群的 Pod，尽量按集群校验
+    cid = cluster_id or raw.get("cluster_id")
+    if cid:
+        return await check_cluster_permission(user, int(cid))
+    if report.task_id:
+        async with async_session() as session:
+            t = await session.get(DiagnosticTask, report.task_id)
+            if t and t.created_by == user.id:
+                return True
+    return False
 
 
 def _md_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -134,11 +173,23 @@ async def download_report(report_id: int, user=Depends(require_any_user)):
         report = await session.get(DiagnosticReport, report_id)
         if not report:
             return Response(content="报告不存在", status_code=404, media_type="text/plain; charset=utf-8")
+        # 读 conn_id/cluster_id 新列（ORM 模型未映射，用原生 SQL；迁移未执行时静默退回 raw_output 解析）
+        conn_id = cluster_id = None
+        try:
+            row = (await session.execute(
+                text("SELECT conn_id, cluster_id FROM diagnostic_reports WHERE id = :id"), {"id": report_id}
+            )).first()
+            if row:
+                conn_id, cluster_id = row[0], row[1]
+        except Exception:  # noqa: BLE001
+            pass
+        if not await _check_report_permission(user, report, conn_id, cluster_id):
+            return Response(content="无权限访问该报告", status_code=403, media_type="text/plain; charset=utf-8")
         cluster_name = ""
         if report.task_type == "cluster":
             try:
                 raw = json.loads(report.raw_output or "{}")
-                cid = raw.get("cluster_id")
+                cid = cluster_id or raw.get("cluster_id")
                 if cid:
                     c = await session.get(Cluster, int(cid))
                     cluster_name = c.name if c else ""

@@ -37,8 +37,10 @@ async def list_approvals(status: str | None = None, page: int = 1, page_size: in
     """
     if page < 1:
         page = 1
-    if page_size < 1 or page_size > 200:
+    if page_size < 1:
         page_size = 20
+    if page_size > 1000:
+        page_size = 1000  # 上限放宽：待审批列表前端做服务端分页，不再静默截断成 20
     async with async_session() as session:
         query = select(Approval).order_by(Approval.id.desc())
         if status == "handled":
@@ -181,4 +183,7 @@ async def decide(approval_id: int, payload: dict, user=Depends(require_operator)
         status = await approval_service.reject(approval_id, user.id, comment)
     else:
         return {"code": 400, "message": "action 必须是 approve 或 reject", "data": None}
+    # 非本单审批人：approval_service 校验不通过时返回 forbidden（不再静默记票）
+    if status == "forbidden":
+        return {"code": 403, "message": "你不是该审批单的审批人，无权处理", "data": {"status": status}}
     return {"code": 200, "message": "success", "data": {"status": status}}

@@ -589,6 +589,21 @@ async def dashboard(
                 "status": elog.status,
             })
 
+        # 审核类指标（真实审批单口径）：当前待审批 + 今日已审核（approved/rejected）+ 全量已通过
+        approval_pending_v2 = (await session.execute(
+            select(func.count()).select_from(Approval).where(Approval.status == "pending")
+        )).scalar() or 0
+        _ap_today_rows = (await session.execute(
+            select(Approval.status, func.count()).where(
+                Approval.decided_at.isnot(None), Approval.decided_at >= today_start
+            ).group_by(Approval.status)
+        )).all()
+        _ap_today = {s: int(c) for s, c in _ap_today_rows}
+        approval_decided_today = _ap_today.get("approved", 0) + _ap_today.get("rejected", 0)
+        approval_approved_total = (await session.execute(
+            select(func.count()).select_from(Approval).where(Approval.status == "approved")
+        )).scalar() or 0
+
         kpi = {
             "cluster_total": c_total,
             "alert_pending": active_filtered,
@@ -599,6 +614,10 @@ async def dashboard(
             "heal_count": kpi_heal_total,
             "mttr_minutes": kpi_mttr,
             "mttr_count": kpi_mttr_count,
+            "approval_pending": approval_pending_v2,
+            "approval_decided_today": approval_decided_today,
+            "approval_cancelled_today": _ap_today.get("cancelled", 0),
+            "approval_approved_total": approval_approved_total,
         }
 
         # 告警级别分布

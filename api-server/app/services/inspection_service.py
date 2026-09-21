@@ -8,7 +8,7 @@
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import and_, delete, func, select, text
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -214,6 +214,12 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         session.add(report)
         await session.commit()
         await session.refresh(report)
+        # 写 cluster_id 列（ORM 模型未映射，用原生 SQL；供 list_reports 在 SQL 层按集群过滤）
+        await session.execute(
+            text("UPDATE diagnostic_reports SET cluster_id = :cid WHERE id = :rid"),
+            {"cid": cluster_id, "rid": report.id},
+        )
+        await session.commit()
         report_data["report_id"] = report.id
 
     await _set_progress(cluster_id, 100, "完成")
@@ -221,12 +227,15 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
 
 
 async def cleanup_old_inspection_reports(days: int = 30) -> int:
-    """清理超过保留期的巡检/诊断报告（task_type=cluster/db），默认保留 30 天"""
+    """清理超过保留期的巡检/诊断报告（task_type=cluster/db/app），默认保留 30 天
+
+    统一口径：三类报告都保留 30 天（此前漏了 app，导致 app 报告永久堆积）。
+    """
     cutoff = datetime.now() - timedelta(days=days)
     async with async_session() as session:
         result = await session.execute(
             delete(DiagnosticReport).where(
-                DiagnosticReport.task_type.in_(["cluster", "db"]),
+                DiagnosticReport.task_type.in_(["cluster", "db", "app"]),
                 DiagnosticReport.created_at < cutoff,
             )
         )
@@ -235,11 +244,16 @@ async def cleanup_old_inspection_reports(days: int = 30) -> int:
 
 
 async def list_reports(cluster_id: int, limit: int = 20) -> list[dict]:
-    """某集群巡检报告历史（仅 cluster 类型）"""
+    """某集群巡检报告历史（仅 cluster 类型）
+
+    P2 修复：改为 SQL 层按 cluster_id 过滤（cluster_id 列由迁移 q0r1s2t3u4v5 新增，ORM 未映射用 text()），
+    避免「先 limit(20) 再 Python 过滤 → 最近 20 条来自其它集群时本集群显示为空」。
+    """
     async with async_session() as session:
         rows = (await session.execute(
             select(DiagnosticReport).where(
                 DiagnosticReport.task_type == "cluster",
+                text(f"cluster_id = {int(cluster_id)}"),
             ).order_by(DiagnosticReport.id.desc()).limit(limit)
         )).scalars().all()
     out = []
@@ -249,16 +263,15 @@ async def list_reports(cluster_id: int, limit: int = 20) -> list[dict]:
             raw = json.loads(r.raw_output or "{}")
         except (json.JSONDecodeError, TypeError):
             raw = {}
-        if raw.get("cluster_id") == cluster_id:
-            out.append({
-                "report_id": r.id,
-                "health": raw.get("health", ""),
-                "summary": r.conclusion or "",
-                "items": raw.get("items", []),
-                "stats": raw.get("stats", {}),
-                "fault_top": raw.get("fault_top", []),
-                "inspected_at": raw.get("inspected_at", ""),
-            })
+        out.append({
+            "report_id": r.id,
+            "health": raw.get("health", ""),
+            "summary": r.conclusion or "",
+            "items": raw.get("items", []),
+            "stats": raw.get("stats", {}),
+            "fault_top": raw.get("fault_top", []),
+            "inspected_at": raw.get("inspected_at", ""),
+        })
     return out
 
 

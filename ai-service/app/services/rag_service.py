@@ -228,7 +228,12 @@ _DB_FT = {"DBConnFailed", "DBAuthFailed", "DBSlowQuery", "DBMetricHigh"}
 
 
 def diag_category_of(fault_type: str) -> str:
-    """诊断域：cluster / app / db（未知类型归 app）"""
+    """诊断域：cluster / app / db（未知类型归 app）
+
+    ⚠ 与 api-server/app/services/diag_category.py 的 category_of 口径镜像（两服务独立进程无法 import）。
+    这里额外识别 `db_` 前缀（db_diagnosis_service 写知识库用 db_{db_type}，如 db_mysql）→ db；
+    改口径时两处同步改，否则会重蹈「知识库按 db 存、检索按 app 过滤」的跨域错配。
+    """
     ft = (fault_type or "").strip()
     if ft in _CLUSTER_FT:
         return "cluster"

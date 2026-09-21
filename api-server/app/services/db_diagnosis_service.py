@@ -11,7 +11,7 @@
 import json
 import time
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.clients.ai_client import ai_client
 from app.core.database import async_session
@@ -126,6 +126,12 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
     except (TypeError, ValueError):
         _sug_json = json.dumps([{"title": str(x)} for x in suggestions], ensure_ascii=False)
 
+    # P2 修复：conclusion 与 root_cause 均为空 → AI 未给出结论，按失败/降级处理：
+    # 报告标注「AI 未给出结论」，不沉淀知识库，并记日志。
+    empty_conclusion = not (conclusion or "").strip() and not (root_cause or "").strip()
+    if empty_conclusion:
+        logger.warning("数据库 %d AI 未给出结论（conclusion 与 root_cause 均为空），报告标注失败且不沉淀知识库", conn_id)
+
     await _set_progress(conn_id, 90, "生成报告")
     # 3. 落报告（task_id=0：按需诊断，非定时任务）
     summary = f"db:{c.name} {c.db_type}"
@@ -133,10 +139,11 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
         report = DiagnosticReport(
             task_id=0,
             task_type="db",
-            conclusion=conclusion or "诊断完成（无明确结论）",
+            conclusion=("AI 未给出结论" if empty_conclusion else (conclusion or "").strip() or "诊断完成（无明确结论）"),
             root_cause=root_cause,
             suggestion=_sug_json,
             raw_output=json.dumps({
+                "conn_id": conn_id,  # 冗余存 conn_id，供历史回填/校验（同时落 conn_id 列，见下）
                 "db_name": c.name, "db_type": c.db_type,
                 "health": health_text, "slow_sql": slow_sql_text[:2000],
                 "ai_raw": raw[:2000], "summary": summary,
@@ -145,27 +152,35 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
         session.add(report)
         await session.commit()
         await session.refresh(report)
+        # 写 conn_id 列（ORM 模型未映射，用原生 SQL；供报告列表按连接过滤，阻止跨库越权）
+        await session.execute(
+            text("UPDATE diagnostic_reports SET conn_id = :cid WHERE id = :rid"),
+            {"cid": conn_id, "rid": report.id},
+        )
+        await session.commit()
         report_id = report.id
 
     # 4. 沉淀知识库（db_ 前缀，AI 生成锁定；只存结论+方案，不含执行）
-    try:
-        fault_type = f"db_{c.db_type}"
-        await knowledge_service.add_knowledge(
-            fault_type=fault_type,
-            root_cause=root_cause or "数据库健康问题",
-            repair_steps=conclusion or "",
-            tags=f"db,{c.db_type}",
-            execution_steps="",
-            source="ai", is_locked=True,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("数据库诊断结论沉淀知识库失败: %s", e)
+    #    空结论时不沉淀（避免把「无结论」当成有效知识）。
+    if not empty_conclusion:
+        try:
+            fault_type = f"db_{c.db_type}"
+            await knowledge_service.add_knowledge(
+                fault_type=fault_type,
+                root_cause=root_cause or "数据库健康问题",
+                repair_steps=conclusion or "",
+                tags=f"db,{c.db_type}",
+                execution_steps="",
+                source="ai", is_locked=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("数据库诊断结论沉淀知识库失败: %s", e)
 
     await _set_progress(conn_id, 100, "完成")
     return {"code": 200, "message": "success", "data": {
         "report_id": report_id, "conclusion": conclusion,
         "root_cause": root_cause, "suggestions": suggestions,
-        "health": metrics,
+        "health": metrics, "degraded": empty_conclusion,
     }}
 
 

@@ -25,8 +25,14 @@ logger = get_logger("api-server.alerts")
 @router.get("")
 async def list_alerts(cluster_id: int | None = None, severity: str | None = None, status: str | None = None,
                       fault_type: str | None = None, manual_required: bool | None = None,
-                      page: int = 1, page_size: int = 20, user=Depends(require_any_user)):
-    from sqlalchemy import and_
+                      page: int = 1, page_size: int = 20, with_total: bool = False,
+                      user=Depends(require_any_user)):
+    """告警列表。
+
+    with_total=true 时返回 `{items, total, page, page_size}`（服务端分页：告警列表/故障诊断台账用）；
+    默认仍返回数组（兼容旧前端）。
+    """
+    from sqlalchemy import and_, func
 
     async with async_session() as session:
         query = select(Alert)
@@ -46,6 +52,17 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             conditions.append(Alert.manual_required == manual_required)
         if conditions:
             query = query.where(and_(*conditions))
+        total = 0
+        if with_total:
+            total = (await session.execute(
+                select(func.count()).select_from(Alert).where(and_(*conditions))
+            )).scalar() or 0
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 20
+        if page_size > 1000:
+            page_size = 1000  # 上限放宽：支持服务端分页，不再静默截断
         query = query.order_by(Alert.id.desc()).offset((page - 1) * page_size).limit(page_size)
         result = await session.execute(query)
         alerts = list(result.scalars())
@@ -70,7 +87,7 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             for aid, ap in plan_rows:
                 if aid and aid not in ap_status_by_alert:
                     ap_status_by_alert[aid] = ap.status
-    return {"code": 200, "message": "success", "data": [
+    items = [
         {"id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
          "resource_type": a.resource_type, "resource_name": a.resource_name,
          "namespace": a.namespace, "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
@@ -82,7 +99,11 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
          "acknowledged": bool(a.acknowledged), "acknowledged_by": a.acknowledged_by or "",
          "occurred_at": str(a.occurred_at) if a.occurred_at else "", "detected_at": str(a.detected_at)}
         for a in alerts
-    ]}
+    ]
+    if with_total:
+        return {"code": 200, "message": "success",
+                "data": {"items": items, "total": total, "page": page, "page_size": page_size}}
+    return {"code": 200, "message": "success", "data": items}
 
 
 @router.get("/{alert_id}")

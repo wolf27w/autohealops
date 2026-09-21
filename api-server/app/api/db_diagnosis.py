@@ -4,11 +4,17 @@ import json
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.database import async_session
 from app.middleware.permission import require_any_user
-from app.models import DBMetricSnapshot, DiagnosticReport
+from app.models import (
+    DBMetricSnapshot,
+    DiagnosticReport,
+    ProjectDBConnection,
+    UserDBConnection,
+    UserProjectPermission,
+)
 from app.services.user_permission_service import check_db_permission
 
 router = APIRouter(prefix="/api/v1/db-diagnosis")
@@ -16,6 +22,26 @@ router = APIRouter(prefix="/api/v1/db-diagnosis")
 
 def _deny():
     return {"code": 403, "message": "无权限访问该数据库连接", "data": None}
+
+
+async def _visible_db_ids(user) -> set[int] | None:
+    """用户可见的数据库连接 id 集合；admin 返回 None（表示全部）。
+
+    可见连接 = 直接授权 ∪ 项目授权关联的连接（与 user_permission_service.check_db_permission 口径一致）。
+    """
+    if user.role == "admin":
+        return None
+    async with async_session() as session:
+        direct = (await session.execute(
+            select(UserDBConnection.db_connection_id)
+            .where(UserDBConnection.user_id == user.id).distinct()
+        )).scalars().all()
+        project = (await session.execute(
+            select(ProjectDBConnection.db_connection_id)
+            .join(UserProjectPermission, UserProjectPermission.project_id == ProjectDBConnection.project_id)
+            .where(UserProjectPermission.user_id == user.id).distinct()
+        )).scalars().all()
+    return set(direct) | set(project)
 
 
 @router.post("/{conn_id}/run")
@@ -34,13 +60,28 @@ async def list_reports(conn_id: int | None = None, page: int = 1, page_size: int
         return _deny()
     page = max(1, page)
     page_size = min(max(1, page_size), 200)
+
+    # conn_id 过滤（P1 越权修复）：admin 全量；单库用户只能看自己有权限的连接报告。
+    # conn_id 列为迁移 q0r1s2t3u4v5 新增（ORM 模型暂未映射该列），故用 text() 条件过滤；
+    # 值均为 int，直接内插无注入风险。IN 列表天然排除 conn_id IS NULL 的历史报告（不展示给单库用户）。
+    cond = "task_type = 'db'"
+    if conn_id is not None:
+        cond += f" AND conn_id = {int(conn_id)}"
+    else:
+        visible = await _visible_db_ids(user)
+        if visible is not None:
+            if not visible:
+                return {"code": 200, "message": "success", "data": {
+                    "items": [], "total": 0, "page": page, "page_size": page_size}}
+            cond += f" AND conn_id IN ({','.join(str(i) for i in visible)})"
+
     from sqlalchemy import func as _func
     async with async_session() as session:
         total = (await session.execute(
-            select(_func.count()).select_from(DiagnosticReport).where(DiagnosticReport.task_type == "db")
+            select(_func.count()).select_from(DiagnosticReport).where(text(cond))
         )).scalar() or 0
         rows = (await session.execute(
-            select(DiagnosticReport).where(DiagnosticReport.task_type == "db")
+            select(DiagnosticReport).where(text(cond))
             .order_by(DiagnosticReport.id.desc())
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars().all()

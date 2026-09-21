@@ -163,7 +163,12 @@ def score_steps(steps: list, env_tag: str = "prod", impact: str = "unknown", pol
 
 
 def decide_by_level(level: int, policy: dict) -> str:
-    """等级 → 决策：<阈值 auto；>=阈值且>=4级双人审；否则单人审"""
+    """等级 → 决策：<阈值 auto；>=阈值且>=4级双人审；否则单人审
+
+    注（审批人侧理解，勿改逻辑）：threshold 默认 4 → level<4 自动；level>=4 双人审批；
+    level==3（approval_1）落到「单人审批」。若业务要更少审批、把 4 级也改为单人审批，
+    需把 approval_threshold 配成 3（或单独调整双人判定），不要在本函数内改 4 这个边界。
+    """
     threshold = policy.get("approval_threshold", 4)
     if level < threshold:
         return "auto"

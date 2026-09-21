@@ -96,10 +96,17 @@ for _ft in DB_FAULT_TYPES:
 
 
 def category_of(resource_type: str | None, fault_type: str | None) -> str:
-    """判定诊断域：fault_type 优先，未知则按 resource_type 兜底，再兜底 app"""
+    """判定诊断域：fault_type 优先，未知则按 resource_type 兜底，再兜底 app
+
+    注意：db_diagnosis_service 写知识库时 fault_type 用 `db_{db_type}` 前缀（如 db_mysql），
+    此处必须识别 `db_` 前缀 → db，与 ai-service 的 rag_service.diag_category_of 保持一致
+    （两服务独立进程，无法互相 import，需镜像实现；改口径时两处同步改）。
+    """
     ft = (fault_type or "").strip()
     if ft in _FAULT_TYPE_CATEGORY:
         return _FAULT_TYPE_CATEGORY[ft]
+    if ft.startswith("db_"):
+        return DB
     rt = (resource_type or "").strip().lower()
     return _RESOURCE_TYPE_CATEGORY.get(rt, APP)
 

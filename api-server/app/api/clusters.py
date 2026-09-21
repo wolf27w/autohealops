@@ -197,6 +197,9 @@ async def inspect_progress(cluster_id: int, user=Depends(require_any_user)):
 @router.get("/{cluster_id}/inspection-reports")
 async def list_inspection_reports(cluster_id: int, limit: int = 20, user=Depends(require_any_user)):
     """集群巡检报告历史"""
+    # P1 越权修复：非 admin 需对该集群有权限（admin 全量）
+    if not await user_permission_service.check_cluster_permission(user, cluster_id):
+        return {"code": 403, "message": "无权限访问该集群", "data": None}
     from app.services import inspection_service
     reports = await inspection_service.list_reports(cluster_id, limit)
     return {"code": 200, "message": "success", "data": reports}

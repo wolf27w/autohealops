@@ -98,6 +98,16 @@ def _fill_kb_steps(steps: list, alert: Alert) -> list:
     return filled
 
 
+def _is_not_found(message) -> bool:
+    """判断 executor 返回的错误是否为「资源不存在」（而非查询失败/超时）
+
+    只有 K8s 明确返回 not found（Pod/Deployment 已删除）才视为资源消失；
+    executor 抖动（超时/集群不可达/kubeconfig 失败）绝不能当成「已删除」误关告警。
+    """
+    msg = (message or "").lower()
+    return "not found" in msg or "notfound" in msg or "不存在" in msg
+
+
 async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) -> bool:
     """查询 Pod 是否恢复/资源是否已删除（两种情况都视为告警可关闭）
 
@@ -105,10 +115,16 @@ async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) ->
     - 原 Pod 已删 + Deployment 所有 Pod Running+Ready → 恢复
     - 原 Pod 已删 + Deployment 不存在/无 Pod → 资源已删除，关闭告警
     只有 Deployment 仍有 Pod 但未 Ready（服务持续故障）才不关闭。
+
+    查询失败（success=False 且非 not found）→ 一律视为「不确定」，返回 False 保持 pending，
+    避免 executor 抖动（超时/集群不可达）被误判为「资源已删除」批量误关在途告警。
     """
     result = await executor_client.acall(executor_client.get_pod_status, cluster_id, namespace, pod_name)
     if result.get("success") and result.get("ready"):
         return True
+    # get_pod_status 失败：区分「Pod 不存在」与「查询失败」；查询失败直接保持 pending
+    if not result.get("success") and not _is_not_found(result.get("message")):
+        return False
     # Pod not found 或未 ready：查 Deployment 的所有 Pod（区分新旧版本副本）
     dep_name = infer_deployment_name(pod_name)
     if dep_name:
@@ -119,8 +135,8 @@ async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) ->
             if not dep_pods.get("pods"):
                 return True  # Deployment 无 Pod（已缩容/删除），资源已删除，关闭告警
             return False  # 仍有 Pod 但未 Ready，服务持续故障，告警不关
-        # Deployment 不存在 → 资源已删除，关闭告警
-        return True
+        # 查询失败（success=False）：仅当明确 not found 才视为资源已删除，否则保持 pending
+        return _is_not_found(dep_pods.get("message"))
     return False
 
 
@@ -450,7 +466,20 @@ async def _escalate_image_pull_to_approval(alert: Alert, msg: str) -> None:
 
 
 async def _repair_image_pull_alert(alert: Alert, trace_id: str) -> None:
-    """镜像拉取失败规则化修复（直接补 imagePullSecrets；补不了/无效则转人工审批）"""
+    """镜像拉取失败规则化修复（直接补 imagePullSecrets；补不了/无效则转人工审批）
+
+    循环抑制：同源镜像故障反复补 secrets 仍复发（补了但验证不过、或补失败），
+    5 分钟窗口内 ≥ SUPPRESS_THRESHOLD 次 → 转人工，避免无限重试补 secrets 永不转人工。
+    """
+    # 先查循环抑制：反复修复仍复发 → 转人工（镜像本身/仓库/配置根因，平台自愈无效）
+    if await _check_suppression(alert):
+        await _mark_manual_and_notify(
+            alert, "反复修复失败（循环抑制）",
+            f"5分钟内同源镜像拉取故障自动修复≥{SUPPRESS_THRESHOLD}次仍复发，疑似镜像本身/仓库/配置根因，需人工排查。",
+        )
+        logger.info("告警 %d 镜像修复触发循环抑制，转人工", alert.id)
+        return
+
     result = await executor_client.acall(executor_client.repair_image_pull, alert.cluster_id, alert.namespace, alert.resource_name, trace_id)
     fixed = result.get("fixed", False)
     msg = result.get("message", "")
@@ -460,9 +489,9 @@ async def _repair_image_pull_alert(alert: Alert, trace_id: str) -> None:
 
     if fixed:
         # 补 secrets 成功 → 验证 → 自愈
+        repaired = await _verify_auto_repair(alert)
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
-            repaired = await _verify_auto_repair(alert)
             if repaired:
                 a.status = "self_healed"
                 a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -470,6 +499,9 @@ async def _repair_image_pull_alert(alert: Alert, trace_id: str) -> None:
             elif "自动修复" not in (a.message or ""):
                 a.message = (a.message or "") + f"（已补 secrets，但验证未通过，保持待处理）"
             await session.commit()
+        if not repaired:
+            # 补 secrets 成功但验证未通过 → 记录一次修复失败（循环抑制计数）
+            await _record_suppression(alert)
         logger.info("告警 %d 闭环处理完成（镜像修复）", alert.id)
         return
 
@@ -484,7 +516,8 @@ async def _repair_image_pull_alert(alert: Alert, trace_id: str) -> None:
         logger.info("告警 %d 闭环处理完成（镜像修复，Pod 已重建）", alert.id)
         return
 
-    # 补 secrets 失败（镜像本身有问题）→ 转人工审批
+    # 补 secrets 失败（镜像本身有问题）→ 计数 + 转人工审批
+    await _record_suppression(alert)
     await _escalate_image_pull_to_approval(alert, msg)
     logger.info("告警 %d 镜像拉取失败，自动修复无效，已转人工审批", alert.id)
 
@@ -658,6 +691,8 @@ async def _process_one(alert: Alert) -> bool:
                     if a:
                         _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                         await session.commit()
+                # 兜底关当前告警时也解除其关联 pending 审批（避免残留审批最终被判「审核超时」）
+                await _cancel_related_approvals(alert.id)
             logger.info("告警 %d 恢复，关闭同源未关闭告警 %d 条", alert.id, closed)
             return True
 
@@ -964,10 +999,17 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
     每 60s 跑一次，与告警自动处理循环独立（互不阻塞）。
     """
     closed = 0
+    # 只扫描真正可自愈的 Pod 故障；资源阈值告警（只通知不修复）、Pod 重启诊断告警
+    # 各有自己的闭环（resource_alert_service / pod_restart_service），禁止此处误关，
+    # 否则会被 check_pod_recovered 判「Running+Ready」秒关 → 资源侧防抖键未清 → 每 15s 重建通知风暴。
+    from app.services.resource_alert_service import RESOURCE_ALERT_FAULT_TYPES
+    from app.services.pod_restart_service import POD_RESTART_FAULT_TYPES
+    skip_faults = set(RESOURCE_ALERT_FAULT_TYPES) | set(POD_RESTART_FAULT_TYPES)
     async with async_session() as session:
         rows = list((await session.execute(
             select(Alert).where(
                 Alert.resource_type == "pod",
+                Alert.fault_type.notin_(skip_faults),
                 Alert.status.in_(["pending", "awaiting_approval"]),
             ).order_by(Alert.detected_at.asc()).limit(limit)
         )).scalars())
@@ -984,6 +1026,7 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
                     if a:
                         _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                         await session.commit()
+                await _cancel_related_approvals(alert.id)
                 n = 1
             closed += n
             logger.info("恢复收敛：告警 %d（%s/%s）资源已恢复，关闭 %d 条", alert.id, alert.namespace, alert.resource_name, n)

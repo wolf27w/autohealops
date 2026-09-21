@@ -521,51 +521,104 @@ DECISION_LABELS = {
     "rejected": "❌ 已拒绝",
     "cancelled": "⚪ 已关闭（告警已恢复）",
     "expired": "⏰ 已超时",
+    "transferred": "🔄 已转办给",
+    "added_approver": "➕ 已加签",
+    "escalated": "⏫ 已升级至下一节点（值守人）",
+    "exec_failed": "⚠️ 已通过，但执行异常，需人工介入",
+    "verify_failed": "⚠️ 已通过并执行，但验证未通过，需人工介入",
 }
 
 
 async def _remember_approval_message(approval_id: int, resp: dict | None, text: str,
                                     app_id: str = "", app_secret: str = "") -> None:
-    """记录审批群消息 message_id（供审批决定后回写状态；仅应用机器人发出的消息可编辑）"""
+    """记录审批群消息 message_id（供审批决定后回写状态；仅应用机器人发出的消息可编辑）
+
+    用列表存最近 5 条（重推追加而非覆盖，避免更早那条消息再也回写不到）。
+    """
     mid = (resp or {}).get("message_id") or ""
     if not approval_id or not mid:
         return
+    key = f"approval_notify:{approval_id}"
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        await r.setex(f"approval_notify:{approval_id}", 7 * 86400, json.dumps(
-            {"message_id": mid, "text": text, "app_id": app_id, "app_secret": app_secret},
-            ensure_ascii=False))
+        raw = await r.get(key)
+        items: list[dict] = []
+        if raw:
+            try:
+                items = json.loads(raw)
+                if not isinstance(items, list):
+                    items = []
+            except (json.JSONDecodeError, TypeError):
+                items = []
+        # 去重：同一 message_id 不重复记录
+        items = [it for it in items if isinstance(it, dict) and it.get("message_id") != mid]
+        items.append({"message_id": mid, "text": text, "app_id": app_id, "app_secret": app_secret, "written": False})
+        items = items[-5:]  # 最多保留最近 5 条
+        await r.setex(key, 7 * 86400, json.dumps(items, ensure_ascii=False))
     except Exception as e:  # noqa: BLE001
         logger.warning("记录审批消息 message_id 失败(审批 %s): %s", approval_id, e)
 
 
 async def update_approval_message(approval_id: int, status: str, decided_by: str = "") -> None:
-    """审批决定后**回写群消息**（飞书应用模式）：原内容 + 决定结果，避免消息一直显示「待审批」"""
+    """审批决定后**回写群消息**（飞书应用模式）：原内容 + 决定结果，避免消息一直显示「待审批」
+
+    - 回写**所有**未回写过的消息（列表存多条 message_id），成功后标记 written
+    - partially_approved 是中间态：回写但不标记 written（等最终决定再写一次）
+    - 转办/加签/升级等：回写旧消息并标记 written（旧消息已被新消息取代，不再被最终决定覆盖）
+    - 全部回写完成后删除 key（terminal）；否则保留（等下次 / TTL 到期）
+    """
+    key = f"approval_notify:{approval_id}"
     try:
         from app.core.redis_client import get_redis
         r = await get_redis()
-        raw = await r.get(f"approval_notify:{approval_id}")
+        raw = await r.get(key)
         if not raw:
             return
-        info = json.loads(raw)
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            return
     except Exception:  # noqa: BLE001
         return
+
     label = DECISION_LABELS.get(status, status)
-    by = f"（{decided_by}）" if decided_by else ""
-    new_text = f"{info.get('text', '')}\n\n————\n{label}{by}  {time.strftime('%Y-%m-%d %H:%M')}"
+    # 转办：label 已含「转办给」，decided_by 直接拼在末尾（不用括号）
+    by = f" {decided_by}" if status == "transferred" and decided_by else (f"（{decided_by}）" if decided_by else "")
+    stamp = time.strftime("%Y-%m-%d %H:%M")
     from app.services.feishu_service import update_feishu_message
-    resp = await update_feishu_message(info.get("message_id", ""), new_text,
-                                       info.get("app_id", ""), info.get("app_secret", ""))
-    if resp.get("status") == "success":
+
+    mark_written = status != "partially_approved"  # 中间态不标记，等最终决定再写一次
+    any_written = False
+    all_written = True
+    for it in items:
+        if not isinstance(it, dict) or it.get("written"):
+            continue
+        mid = it.get("message_id", "")
+        if not mid:
+            it["written"] = True  # 无 message_id → 视为已处理
+            continue
+        new_text = f"{it.get('text', '')}\n\n————\n{label}{by}  {stamp}"
+        resp = await update_feishu_message(mid, new_text, it.get("app_id", ""), it.get("app_secret", ""))
+        if resp.get("status") == "success":
+            if mark_written:
+                it["written"] = True
+            any_written = True
+        else:
+            all_written = False
+            logger.warning("审批 %s 群消息回写失败：%s", approval_id, resp.get("body"))
+
+    if any_written:
         logger.info("审批 %s 群消息已回写：%s", approval_id, label)
-        if status != "partially_approved":
-            try:
-                await r.delete(f"approval_notify:{approval_id}")
-            except Exception:  # noqa: BLE001
-                pass
-    else:
-        logger.warning("审批 %s 群消息回写失败：%s", approval_id, resp.get("body"))
+
+    # 全部回写成功且为最终态 → 删 key；否则保留（等下次 / TTL 到期）。
+    # 中间态（部分批准）恒保留 key 且不标记 written。
+    try:
+        if all_written and status != "partially_approved":
+            await r.delete(key)
+        else:
+            await r.setex(key, 7 * 86400, json.dumps(items, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def send_approval_notification(approval_id: int, plan_summary: str, risk_level: str,

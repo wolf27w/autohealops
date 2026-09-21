@@ -7,7 +7,7 @@
 - 数据库诊断    → 诊断中心（/diagnostic，数据库）
 """
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.core.database import async_session
 from app.middleware.permission import require_any_user, require_operator
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1/fault-diagnoses")
 
 @router.get("")
 async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str = "",
-                              user=Depends(require_any_user)):
+                              with_total: bool = False, user=Depends(require_any_user)):
     """列出告警及其诊断状态（故障诊断列表）
 
     category（N3 诊断分离）：cluster=集群故障 / app=应用故障 / db=数据库故障；空=全部。
@@ -26,10 +26,19 @@ async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str
     """
     if category not in ("", "cluster", "app", "db"):
         return {"code": 400, "message": "category 仅支持 cluster/app/db", "data": None}
+    # 分页参数兜底（防 page/page_size 非法或过大拖库）
+    page = max(1, int(page or 1))
+    page_size = min(max(1, int(page_size or 50)), 500)
     async with async_session() as session:
         stmt = select(Alert)
         if category:
             stmt = stmt.where(Alert.diag_category == category)
+        total = 0
+        if with_total:
+            cnt_stmt = select(func.count()).select_from(Alert)
+            if category:
+                cnt_stmt = cnt_stmt.where(Alert.diag_category == category)
+            total = int((await session.execute(cnt_stmt)).scalar() or 0)
         alerts = list((await session.execute(
             stmt.order_by(Alert.detected_at.desc(), Alert.id.desc())
             .offset((page - 1) * page_size).limit(page_size)
@@ -66,6 +75,8 @@ async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str
             "diagnosis_time": str(d.created_at) if d else "",
             "root_cause": root_cause,
         })
+    if with_total:
+        return {"code": 200, "message": "success", "data": {"items": data, "total": total, "page": page, "page_size": page_size}}
     return {"code": 200, "message": "success", "data": data}
 
 

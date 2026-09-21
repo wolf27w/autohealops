@@ -122,7 +122,9 @@ async def _expand_dual_approvers(alert_id: int | None) -> tuple[list[dict], list
     nodes: list[dict] = []
     if manager_names:
         nodes.append({"type": "manager", "approve_count": 1, "receiver_usernames": manager_names})
-    nodes.append({"type": "admin", "approve_count": 1, "receiver_usernames": admin_names})
+    if admin_names:
+        # admin 为空则跳过该节点：否则 receivers=[] → 判定求交集永远 <1 → 永远 pending 死锁
+        nodes.append({"type": "admin", "approve_count": 1, "receiver_usernames": admin_names})
 
     approvers: list[str] = []
     for n in nodes:
@@ -145,11 +147,40 @@ async def _resolve_approve_status(approval: Approval, approved_by: list[str]) ->
             if cnt <= 0:
                 continue
             receivers = set(node.get("receiver_usernames") or [])
+            if not receivers:
+                continue  # 该节点无接收人（如无 admin）→ 跳过不计票，避免求交集永远 <1 死锁
             if len(set(approved_by) & receivers) < cnt:
                 return "pending"
         return "approved"
     required = await _current_approve_count(approval)
     return "approved" if len(approved_by) >= required else "pending"
+
+
+def _check_approver_permission(approval: Approval, username: str) -> str | None:
+    """校验操作者是否为该单审批人；返回 "forbidden" 表示无权，None 表示放行。
+
+    - 必须 `username ∈ approvers`；approvers 为空（旧数据）→ 放行并打 warning。
+    - 单节点流程：当前节点有 receiver_usernames 且非空时，还须 `username ∈ 当前节点 receivers`。
+    - 双人审批（含 manager 节点）：manager+admin 各节点**并行**生效，approvers 已是各节点
+      receiver 并集，不再用单一 current_node_index 去卡（否则会误挡另一节点的审批人）。
+    """
+    approvers = json.loads(approval.approvers or "[]")
+    if not approvers:
+        logger.warning("审批 %d approvers 为空（旧数据），跳过审批人身份校验（操作者 %s）", approval.id, username)
+        return None
+    if username not in approvers:
+        logger.warning("审批 %d 操作者 %s 不在审批人列表内，拒绝", approval.id, username)
+        return "forbidden"
+    nodes = json.loads(approval.flow_nodes or "[]")
+    if nodes and any(n.get("type") == "manager" for n in nodes):
+        return None  # 双人审批：approvers 即各节点 receiver 并集，上面的交集校验已足够
+    idx = min(approval.current_node_index or 0, len(nodes) - 1)
+    node = nodes[idx] if nodes else {}
+    receivers = node.get("receiver_usernames") or []
+    if receivers and username not in receivers:
+        logger.warning("审批 %d 操作者 %s 不在当前节点接收人内，拒绝", approval.id, username)
+        return "forbidden"
+    return None
 
 
 async def _current_approve_count(approval: Approval) -> int:
@@ -333,7 +364,11 @@ async def create_approval(plan_id: int, decision_level: int, current_user=None, 
 
 
 async def approve(approval_id: int, user_id: int, comment: str = "", execute_mode: str = "immediate", scheduled_at: str = "") -> str:
-    """批准（条件更新防并发）；支持立即执行 / 定时执行"""
+    """批准（条件更新防并发）；支持立即执行 / 定时执行
+
+    返回状态：approved / pending（部分批准）/ 已处理 / 重复审批 / forbidden（非本单审批人）。
+    api 层 `/decide` 直接取返回值当 status 用；为 "forbidden" 时父会话会调整 api 层返回 403。
+    """
     async with async_session() as session:
         result = await session.execute(
             select(Approval).where(Approval.id == approval_id).with_for_update()
@@ -344,6 +379,11 @@ async def approve(approval_id: int, user_id: int, comment: str = "", execute_mod
 
         user_row = await session.get(User, user_id)
         username = user_row.username if user_row else str(user_id)
+        # 审批人身份校验：操作者须在本单审批人内（当前节点有 receivers 时还须在其中）
+        deny = _check_approver_permission(approval, username)
+        if deny:
+            return deny
+
         approved_by = json.loads(approval.approved_by or "[]")
         if username in approved_by:
             return "重复审批"  # 幂等：同一人重复点
@@ -362,26 +402,30 @@ async def approve(approval_id: int, user_id: int, comment: str = "", execute_mod
                 approval.scheduled_at = scheduled_at
         await session.commit()
 
-        if status == "approved":
-            await audit_service.create_audit_record(
-                approval.trace_id if hasattr(approval, "trace_id") else "",
-                decision_detail=json.dumps({"approval_id": approval_id, "action": "approved", "by": user_id, "execute_mode": execute_mode}),
-            )
-            asyncio_create_task = __import__("asyncio").create_task
-            if approval.plan_id is None:
-                # 人工协助单（无 plan）：审批通过 = 值班人已受理 → 释放关联告警，不跑执行流程
-                await _settle_alert_for_manual(approval, "approved", username)
-            elif execute_mode == "scheduled" and scheduled_at:
-                _schedule_plan_execution(approval.plan_id, scheduled_at)
-            else:
-                asyncio_create_task(execute_approved_plan(approval.plan_id))
-        # 群内审批消息回写状态（避免消息一直显示「待审批」）
         try:
-            from app.services.notification_service import update_approval_message
-            await update_approval_message(
-                approval_id, status if status != "pending" else "partially_approved", username)
+            if status == "approved":
+                await audit_service.create_audit_record(
+                    approval.trace_id if hasattr(approval, "trace_id") else "",
+                    decision_detail=json.dumps({"approval_id": approval_id, "action": "approved", "by": user_id, "execute_mode": execute_mode}),
+                )
+                if approval.plan_id is None:
+                    # 人工协助单（无 plan）：审批通过 = 值班人已受理 → 释放关联告警，不跑执行流程
+                    await _settle_alert_for_manual(approval, "approved", username)
+                elif execute_mode == "scheduled" and scheduled_at:
+                    _schedule_plan_execution(approval.plan_id, scheduled_at)
+                else:
+                    __import__("asyncio").create_task(execute_approved_plan(approval.plan_id))
         except Exception as e:  # noqa: BLE001
-            logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
+            # _settle_alert_for_manual 等异常不阻断主流程；审批已落库
+            logger.error("审批 %d 通过后处理失败：%s", approval_id, e)
+        finally:
+            # 群内审批消息回写状态（放 finally 保证 _settle 等异常也不跳过回写）
+            try:
+                from app.services.notification_service import update_approval_message
+                await update_approval_message(
+                    approval_id, status if status != "pending" else "partially_approved", username)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
         return status
 
 
@@ -420,6 +464,12 @@ async def add_approver(approval_id: int, username: str) -> dict:
         approvers.append(username)
         approval.approvers = json.dumps(approvers, ensure_ascii=False)
         await session.commit()
+    # 先把旧群消息回写为「已加签」，再发新通知（避免旧消息一直显示「待审批」）
+    try:
+        from app.services.notification_service import update_approval_message
+        await update_approval_message(approval_id, "added_approver", username)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("审批 %s 加签消息回写失败：%s", approval_id, e)
     await _renotify_approval(approval_id, username)
     return {"ok": True, "approvers": approvers}
 
@@ -439,6 +489,12 @@ async def transfer(approval_id: int, to_username: str, by_username: str = "") ->
         approval.current_approver_index = 0
         approval.comments = (approval.comments + "\n" if approval.comments else "") + f"由 {by_username or '-'} 转办给 {to_username}"
         await session.commit()
+    # 先把旧群消息回写为「已转办」，再发新通知（避免旧消息一直显示「待审批」）
+    try:
+        from app.services.notification_service import update_approval_message
+        await update_approval_message(approval_id, "transferred", to_username)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("审批 %s 转办消息回写失败：%s", approval_id, e)
     await _renotify_approval(approval_id, to_username)
     return {"ok": True}
 
@@ -472,7 +528,10 @@ async def _settle_alert_for_manual(approval: Approval, action: str, username: st
 
     tail = "（人工已受理，后续修复走发布/工单）" if action == "approved" else "（人工裁定无需处理）"
     async with async_session() as session:
-        alert = await session.get(Alert, approval.alert_id)
+        result = await session.execute(
+            select(Alert).where(Alert.id == approval.alert_id).with_for_update()
+        )
+        alert = result.scalar_one_or_none()
         if not alert or alert.status != "awaiting_approval":
             return  # 已恢复/已关闭，不重复动
         alert.status = "resolved"
@@ -485,8 +544,38 @@ async def _settle_alert_for_manual(approval: Approval, action: str, username: st
                 approval.alert_id, "通过" if action == "approved" else "拒绝", username)
 
 
+async def _reject_risk_approval_alert(approval: Approval, username: str) -> None:
+    """风险审批被拒（有 plan）→ 告警置 resolved（人工裁定不处理）+ resolved_by 留痕。
+
+    plan 保持 pending 不再复用：告警已 resolved，`_process_one` 不会再处理该告警（也就不会复用 plan）。
+    """
+    if not approval.alert_id:
+        return
+    from app.models import Alert
+
+    tail = "（人工裁定不处理）"
+    async with async_session() as session:
+        result = await session.execute(
+            select(Alert).where(Alert.id == approval.alert_id).with_for_update()
+        )
+        alert = result.scalar_one_or_none()
+        if not alert or alert.status != "awaiting_approval":
+            return  # 已恢复/已关闭，不重复动
+        alert.status = "resolved"
+        alert.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        alert.resolved_by = username or ""
+        if tail not in (alert.message or ""):
+            alert.message = (alert.message or "") + tail
+        await session.commit()
+    logger.info("告警 %d 随风险审批被拒置 resolved（by %s）", approval.alert_id, username)
+
+
 async def reject(approval_id: int, user_id: int, comment: str = "") -> str:
-    """拒绝（任一人拒绝即 rejected）"""
+    """拒绝（任一人拒绝即 rejected）
+
+    返回：rejected / 已处理 / forbidden（非本单审批人）。
+    人工协助单（无 plan）被拒 → 释放关联告警；风险审批（有 plan）被拒 → 告警置 resolved（人工裁定不处理）。
+    """
     async with async_session() as session:
         result = await session.execute(
             select(Approval).where(Approval.id == approval_id).with_for_update()
@@ -494,32 +583,50 @@ async def reject(approval_id: int, user_id: int, comment: str = "") -> str:
         approval = result.scalar_one_or_none()
         if not approval or approval.status != "pending":
             return "已处理"
-        approval.status = "rejected"
+
         user_row = await session.get(User, user_id)
-        approval.rejected_by = user_row.username if user_row else str(user_id)
+        username = user_row.username if user_row else str(user_id)
+        # 审批人身份校验：操作者须在本单审批人内
+        deny = _check_approver_permission(approval, username)
+        if deny:
+            return deny
+
+        approval.status = "rejected"
+        approval.rejected_by = username
         approval.comments = comment
         approval.decided_at = time.strftime("%Y-%m-%d %H:%M:%S")
         await session.commit()
-        # 人工协助单被拒 → 同步释放关联告警，避免僵尸态
-        if approval.plan_id is None:
-            await _settle_alert_for_manual(approval, "rejected", approval.rejected_by)
+
         try:
-            from app.services.notification_service import update_approval_message
-            await update_approval_message(approval_id, "rejected", approval.rejected_by or "")
+            if approval.plan_id is None:
+                # 人工协助单被拒 → 同步释放关联告警，避免僵尸态
+                await _settle_alert_for_manual(approval, "rejected", username)
+            else:
+                # 风险审批被拒 → 告警置 resolved（人工裁定不处理），plan 保持 pending 不再复用
+                await _reject_risk_approval_alert(approval, username)
         except Exception as e:  # noqa: BLE001
-            logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
+            logger.error("审批 %d 拒绝后释放告警失败：%s", approval_id, e)
+        finally:
+            try:
+                from app.services.notification_service import update_approval_message
+                await update_approval_message(approval_id, "rejected", username)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
         return "rejected"
 
 
 async def handle_callback(source_msg_id: str, external_user_id: str, action: str, approval_id: int = 0, comment: str = "") -> dict:
-    """钉钉/企微/飞书回调处理：幂等 + 外部身份映射 + 审批ID解析"""
-    # 幂等检查
+    """钉钉/企微/飞书回调处理：幂等 + 外部身份映射 + 审批ID解析
+
+    幂等键在「用户映射 + 审批人校验」都通过后才写入：
+    避免未映射/无权用户 403 后 1 小时内重试被幂等键吞掉。
+    """
+    # 幂等检查（先查不写）
     key = f"approval_msg:{source_msg_id}"
     if await redis_pool.get(key):
         return {"code": 200, "message": "已处理（幂等）", "data": None}
-    await redis_pool.set(key, "1", ex=3600)
 
-    # 外部身份 → 平台用户映射
+    # 外部身份 → 平台用户映射（先映射，映射失败不写幂等键）
     async with async_session() as session:
         result = await session.execute(select(User).where(
             (User.dingtalk_user_id == external_user_id)
@@ -531,10 +638,16 @@ async def handle_callback(source_msg_id: str, external_user_id: str, action: str
     if not user:
         return {"code": 403, "message": "未识别的审批人（无映射）", "data": None}
 
+    # 走与平台内审批一致的校验路径（approve/reject 内已做审批人身份校验）
     if action == "approve":
         status = await approve(approval_id, user.id, comment)
     else:
         status = await reject(approval_id, user.id, comment)
+    if status == "forbidden":
+        return {"code": 403, "message": "非本单审批人，无权操作", "data": {"status": status}}
+
+    # 处理成功后再写幂等键（1 小时）
+    await redis_pool.set(key, "1", ex=3600)
     return {"code": 200, "message": "success", "data": {"status": status}}
 
 
@@ -650,6 +763,12 @@ async def timeout_handler() -> None:
                         await session.commit()
                 escalated += 1
                 try:
+                    # 先把旧群消息回写为「已升级至下一节点」，再发新通知
+                    from app.services.notification_service import update_approval_message
+                    await update_approval_message(a.id, "escalated")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("审批 %s 节点升级消息回写失败：%s", a.id, e)
+                try:
                     async with async_session() as s2:
                         plan = await s2.get(RepairPlan, a.plan_id) if a.plan_id else None
                         summary, risk = await _build_approval_summary(s2, plan, a.alert_id)
@@ -673,7 +792,13 @@ async def timeout_handler() -> None:
 
 
 async def execute_approved_plan(plan_id: int) -> None:
-    """审批通过后执行修复计划（流式接收进度 + 验证兜底）"""
+    """审批通过后执行修复计划（流式接收进度 + 验证兜底）
+
+    - 执行前校验：计划未执行过，且对应审批单仍为 approved（防超时取消/重复执行）
+    - 执行异常 → 计划置 failed（不卡 executing），告警转需人工 + 通知
+    - 验证未通过 → 计划置 failed，告警转需人工 + 通知 + 回写群消息（防僵尸告警）
+    - 验证通过 → 告警置 resolved（保持原逻辑）
+    """
     from app.clients.ai_client import ai_client
     from app.models import Alert
 
@@ -683,6 +808,17 @@ async def execute_approved_plan(plan_id: int) -> None:
         plan = result.scalar_one_or_none()
         if not plan:
             return
+        # 执行前校验：防超时取消/重复执行
+        if plan.status in ("completed", "executing"):
+            logger.warning("计划 %d 已执行/执行中（status=%s），跳过重复执行", plan_id, plan.status)
+            return
+        appr = (await session.execute(
+            select(Approval).where(Approval.plan_id == plan_id).order_by(Approval.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        if appr and appr.status != "approved":
+            logger.warning("计划 %d 对应审批单状态=%s（非 approved），跳过执行", plan_id, appr.status)
+            return
+        approval_id = appr.id if appr else None
         # 从关联告警拿 cluster_id（修复原 plan.alert_id 占位 bug）
         alert = await session.get(Alert, plan.alert_id)
         cluster_id = alert.cluster_id if alert else 0
@@ -696,14 +832,39 @@ async def execute_approved_plan(plan_id: int) -> None:
         plan_json = plan.plan_json
 
     # 执行（流式进度：在子线程消费 gRPC 生成器，避免阻塞事件循环）
-    progresses = await asyncio.to_thread(lambda: list(executor_client.execute_plan(cluster_id, plan_id, plan_json, trace_id)))
-    for progress in progresses:
-        logger.info("执行进度: step=%s success=%s", progress.get("step_index"), progress.get("success"))
+    exec_error = ""
+    try:
+        progresses = await asyncio.to_thread(lambda: list(executor_client.execute_plan(cluster_id, plan_id, plan_json, trace_id)))
+        for progress in progresses:
+            logger.info("执行进度: step=%s success=%s", progress.get("step_index"), progress.get("success"))
+    except Exception as e:  # noqa: BLE001
+        exec_error = str(e)
+        logger.error("计划 %d 执行异常：%s", plan_id, e)
 
-    # 执行完成 → 更新状态 + 沉淀知识库（执行成功才落库）
+    if exec_error:
+        # 执行异常兜底：计划置 failed（不卡 executing），告警转需人工 + 通知
+        async with async_session() as session:
+            p = await session.get(RepairPlan, plan_id)
+            if p:
+                p.status = "failed"
+            a = await session.get(Alert, plan.alert_id) if plan.alert_id else None
+            if a and a.status in ("awaiting_approval", "pending"):
+                a.status = "pending"
+                a.manual_required = True
+                a.manual_reason = "审批通过后执行异常"
+                if "执行异常" not in (a.message or ""):
+                    a.message = (a.message or "") + "（审批通过后执行异常，需人工介入）"
+            await session.commit()
+        await _notify_manual_required(alert, "执行异常", exec_error)
+        await _writeback_approval(approval_id, "exec_failed")
+        await audit_service.create_audit_record(trace_id, verification_detail=json.dumps({
+            "verdict": "exec_failed", "verified": False, "error": exec_error[:200],
+        }, ensure_ascii=False))
+        return
+
+    # 执行完成 → 更新状态（验证通过才算修复完成；未通过下面转 failed）
     async with async_session() as session:
-        result = await session.execute(select(RepairPlan).where(RepairPlan.id == plan_id))
-        plan = result.scalar_one_or_none()
+        plan = await session.get(RepairPlan, plan_id)
         if plan:
             plan.status = "completed"
             await session.commit()
@@ -736,30 +897,68 @@ async def execute_approved_plan(plan_id: int) -> None:
         repaired = True  # 非 Pod 资源无状态验证能力，默认通过
     verdict = "healed" if repaired else "unchanged"
 
-    # 人工审批通过 + 执行 + 验证通过 → 告警标记「已解决」（resolved）
-    if repaired and plan and plan.alert_id:
+    if repaired:
+        # 人工审批通过 + 执行 + 验证通过 → 告警标记「已解决」（resolved）
+        if plan and plan.alert_id:
+            async with async_session() as session:
+                a = await session.get(Alert, plan.alert_id)
+                if a and a.status in ("awaiting_approval", "pending"):
+                    # 处理人留痕：审批通过执行 → 记录审批人（便于处理记录追溯谁批准的）
+                    appr = (await session.execute(
+                        select(Approval).where(Approval.plan_id == plan_id).order_by(Approval.id.desc()).limit(1)
+                    )).scalar_one_or_none()
+                    if appr and appr.approved_by:
+                        try:
+                            names = json.loads(appr.approved_by)
+                            a.resolved_by = "、".join(str(x) for x in names) if isinstance(names, list) else str(names)
+                        except (json.JSONDecodeError, TypeError):
+                            a.resolved_by = str(appr.approved_by)
+                    a.status = "resolved"
+                    a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
+                    a.message = (a.message or "") + "（人工审批通过，已解决，验证通过）"
+                    await session.commit()
+    else:
+        # 验证未通过 → 计划置 failed，告警转需人工 + 通知 + 回写（防僵尸告警：不再停在 awaiting_approval）
+        logger.warning("审批计划 %d 执行完成但验证未通过（%s/%s），转需人工", plan_id, alert_ns, alert_resource)
         async with async_session() as session:
-            a = await session.get(Alert, plan.alert_id)
+            p = await session.get(RepairPlan, plan_id)
+            if p:
+                p.status = "failed"
+            a = await session.get(Alert, plan.alert_id) if plan.alert_id else None
             if a and a.status in ("awaiting_approval", "pending"):
-                # 处理人留痕：审批通过执行 → 记录审批人（便于处理记录追溯谁批准的）
-                appr = (await session.execute(
-                    select(Approval).where(Approval.plan_id == plan_id).order_by(Approval.id.desc()).limit(1)
-                )).scalar_one_or_none()
-                if appr and appr.approved_by:
-                    try:
-                        names = json.loads(appr.approved_by)
-                        a.resolved_by = "、".join(str(x) for x in names) if isinstance(names, list) else str(names)
-                    except (json.JSONDecodeError, TypeError):
-                        a.resolved_by = str(appr.approved_by)
-                a.status = "resolved"
-                a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
-                a.message = (a.message or "") + "（人工审批通过，已解决，验证通过）"
-                await session.commit()
+                a.status = "pending"
+                a.manual_required = True
+                a.manual_reason = "审批通过后执行但验证未通过"
+                if "验证未通过" not in (a.message or ""):
+                    a.message = (a.message or "") + "（审批通过后执行但验证未通过，需人工介入）"
+            await session.commit()
+        await _notify_manual_required(alert, "验证未通过", f"{alert_ns}/{alert_resource}")
+        await _writeback_approval(approval_id, "verify_failed")
 
-    if not repaired:
-        logger.warning("审批计划 %d 执行完成但验证未通过（%s/%s），通知仍需处理", plan_id, alert_ns, alert_resource)
     await notification_service.send_repair_complete_notification(alert, verdict)
     await audit_service.create_audit_record(trace_id, verification_detail=json.dumps({
         "verdict": verdict, "verified": repaired,
         "resource": f"{alert_ns}/{alert_resource}",
     }, ensure_ascii=False))
+
+
+async def _notify_manual_required(alert, reason: str, detail: str = "") -> None:
+    """审批通过后执行/验证失败 → 发一条「需人工介入」告警通知（复用统一告警通知策略）。"""
+    if not alert:
+        return
+    try:
+        # 用统一告警通知入口（分级/静默/限频/风暴抑制都在 notify_alert 内）
+        await notification_service.notify_alert(alert)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("需人工介入通知失败（%s %s）: %s", reason, detail, e)
+
+
+async def _writeback_approval(approval_id: int | None, status: str) -> None:
+    """审批群消息回写（失败仅告警，不影响主流程）。"""
+    if not approval_id:
+        return
+    try:
+        from app.services.notification_service import update_approval_message
+        await update_approval_message(approval_id, status)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
