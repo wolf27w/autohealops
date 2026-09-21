@@ -158,10 +158,10 @@ export default function DBMonitor() {
                 : (() => {
                   const maxOf: Record<string, number> = {}
                   trends.forEach((t) => { const s = t.series || t.metric_name; maxOf[s] = Math.max(maxOf[s] || 0, Number(t.value) || 0) })
-                  const bucketOf = (mx: number) => (mx <= 200 ? '小值 / 百分比（≤200）' : mx <= 1e6 ? '中值 / 计数（≤1e6）' : '大值 / 字节（>1e6）')
+                  const bucketOf = (mx: number) => (mx <= 200 ? '小值 / 百分比（≤ 200）' : mx <= 1e6 ? '中值 / 计数（≤ 100 万）' : '大值 / 字节（> 100 万）')
                   const groups: Record<string, TrendPoint[]> = {}
                   trends.forEach((t) => { const b = bucketOf(maxOf[t.series || t.metric_name] || 0); (groups[b] = groups[b] || []).push(t) })
-                  const order = ['小值 / 百分比（≤200）', '中值 / 计数（≤1e6）', '大值 / 字节（>1e6）']
+                  const order = ['小值 / 百分比（≤ 200）', '中值 / 计数（≤ 100 万）', '大值 / 字节（> 100 万）']
                   return order.filter((b) => groups[b]?.length).map((b) => (
                     <div key={b} style={{ marginBottom: 16 }}>
                       <div style={{ fontWeight: 600, marginBottom: 4 }}>{b}</div>
