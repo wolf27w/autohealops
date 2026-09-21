@@ -213,11 +213,12 @@ async def _storm_suppressed(alert: Alert) -> bool:
 
 async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_id: int | None = None,
                                    at_all: bool = False, receiver: str = "",
-                                   at_open_ids: list[str] | None = None) -> None:
+                                   at_open_ids: list[str] | None = None) -> dict | None:
     """统一发送（按渠道配置分发：应用机器人优先 → 群机器人 webhook；重试 3 次 + 记录日志）
 
     - 飞书 send_mode=app（或填了 app_id）→ 走应用 API（渠道自带 App 凭证，发到 receive_id）
     - 其它 → 群机器人 webhook（resp_ok 按返回码判成败；地址非法直接失败不重试）
+    返回值：成功时的 resp（含 message_id，供审批消息回写状态）；失败 None。
     """
     from app.services.messaging import check_webhook_url, resp_ok
 
@@ -240,6 +241,7 @@ async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_
 
     success = False
     last_err = ""
+    last_resp: dict | None = None
     for attempt in range(3):
         try:
             if is_app:
@@ -257,6 +259,7 @@ async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_
                 ok = resp_ok(cfg.channel_type, resp, cfg.webhook_url)
             if ok:
                 success = True
+                last_resp = resp
                 break
             last_err = resp.get("body") or resp.get("status")
         except Exception as e:  # noqa: BLE001
@@ -264,6 +267,7 @@ async def _send_webhook_with_retry(cfg: NotificationConfig, content: str, alert_
         await asyncio.sleep(2 ** attempt)
     await _record_log(cfg.id, alert_id, "success" if success else "failed", content, last_err,
                       channel=cfg.channel_type, receiver=receiver)
+    return last_resp
 
 
 # ============ 统一告警通知策略（N8）：全平台一份 ============
@@ -511,6 +515,59 @@ def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str
     )
 
 
+DECISION_LABELS = {
+    "approved": "✅ 已通过",
+    "partially_approved": "🟡 部分批准（待其他人）",
+    "rejected": "❌ 已拒绝",
+    "cancelled": "⚪ 已关闭（告警已恢复）",
+    "expired": "⏰ 已超时",
+}
+
+
+async def _remember_approval_message(approval_id: int, resp: dict | None, text: str,
+                                    app_id: str = "", app_secret: str = "") -> None:
+    """记录审批群消息 message_id（供审批决定后回写状态；仅应用机器人发出的消息可编辑）"""
+    mid = (resp or {}).get("message_id") or ""
+    if not approval_id or not mid:
+        return
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        await r.setex(f"approval_msg:{approval_id}", 7 * 86400, json.dumps(
+            {"message_id": mid, "text": text, "app_id": app_id, "app_secret": app_secret},
+            ensure_ascii=False))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("记录审批消息 message_id 失败(审批 %s): %s", approval_id, e)
+
+
+async def update_approval_message(approval_id: int, status: str, decided_by: str = "") -> None:
+    """审批决定后**回写群消息**（飞书应用模式）：原内容 + 决定结果，避免消息一直显示「待审批」"""
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        raw = await r.get(f"approval_msg:{approval_id}")
+        if not raw:
+            return
+        info = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return
+    label = DECISION_LABELS.get(status, status)
+    by = f"（{decided_by}）" if decided_by else ""
+    new_text = f"{info.get('text', '')}\n\n————\n{label}{by}  {time.strftime('%Y-%m-%d %H:%M')}"
+    from app.services.feishu_service import update_feishu_message
+    resp = await update_feishu_message(info.get("message_id", ""), new_text,
+                                       info.get("app_id", ""), info.get("app_secret", ""))
+    if resp.get("status") == "success":
+        logger.info("审批 %s 群消息已回写：%s", approval_id, label)
+        if status != "partially_approved":
+            try:
+                await r.delete(f"approval_msg:{approval_id}")
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        logger.warning("审批 %s 群消息回写失败：%s", approval_id, resp.get("body"))
+
+
 async def send_approval_notification(approval_id: int, plan_summary: str, risk_level: str,
                                      duty_users: list | None = None, node_type: str = "duty",
                                      at_all: bool = False, receiver_users: list | None = None,
@@ -573,8 +630,9 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                 for oid in _m.values():
                     if oid and oid not in at_ids:
                         at_ids.append(oid)
-            await _send_webhook_with_retry(cfg, text, None, at_all=at_all,
-                                           receiver=f"通知配置:{cfg.name}", at_open_ids=at_ids or None)
+            resp = await _send_webhook_with_retry(cfg, text, None, at_all=at_all,
+                                                 receiver=f"通知配置:{cfg.name}", at_open_ids=at_ids or None)
+            await _remember_approval_message(approval_id, resp, text, cfg.app_id, cfg.app_secret)
             return
 
     from app.services import messaging
@@ -606,6 +664,7 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
                     if oid and oid not in at_open_ids:
                         at_open_ids.append(oid)
             resp = await send_feishu_group_text(group.chat_id, text, at_open_ids or None)
+            await _remember_approval_message(approval_id, resp, text)
             await _record_log(group.id, None, resp["status"], text, resp.get("body", ""),
                               channel=group.channel_type, receiver=f"群:{group.name}")
             return

@@ -87,6 +87,35 @@ async def send_feishu_message(receive_id: str, receive_id_type: str, content: st
         )
         data = resp.json()
         if data.get("code") == 0:
+            mid = ((data.get("data") or {}).get("message_id") or "")
+            return {"status": "success", "body": "", "code": 0, "message_id": mid}
+        return {"status": "failed", "body": f"code={data.get('code')} msg={data.get('msg', data)}"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": "failed", "body": str(e)}
+
+
+async def update_feishu_message(message_id: str, content: str, app_id: str = "", app_secret: str = "") -> dict:
+    """更新（编辑）已发送的文本消息 → PUT /im/v1/messages/{message_id}
+
+    用于审批消息落地后回写状态（如「✅ 已通过（admin）」）。
+    仅能编辑**本应用自己发出**的消息；需 im:message / im:message:send_as_bot / im:message:update 任一权限。
+    """
+    if not message_id:
+        return {"status": "failed", "body": "无 message_id"}
+    token = await _get_tenant_token(app_id, app_secret)
+    if not token:
+        return {"status": "failed", "body": "飞书应用未配置凭证或获取 token 失败"}
+    url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}"
+    try:
+        client = get_http_client(trust_env=False)
+        resp = await client.put(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
+            json={"msg_type": "text", "content": json.dumps({"text": content}, ensure_ascii=False)},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("code") == 0:
             return {"status": "success", "body": "", "code": 0}
         return {"status": "failed", "body": f"code={data.get('code')} msg={data.get('msg', data)}"}
     except Exception as e:  # noqa: BLE001

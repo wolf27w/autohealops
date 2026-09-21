@@ -318,6 +318,13 @@ async def approve(approval_id: int, user_id: int, comment: str = "", execute_mod
                 _schedule_plan_execution(approval.plan_id, scheduled_at)
             else:
                 asyncio_create_task(execute_approved_plan(approval.plan_id))
+        # 群内审批消息回写状态（避免消息一直显示「待审批」）
+        try:
+            from app.services.notification_service import update_approval_message
+            await update_approval_message(
+                approval_id, status if status != "pending" else "partially_approved", username)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
         return status
 
 
@@ -439,6 +446,11 @@ async def reject(approval_id: int, user_id: int, comment: str = "") -> str:
         # 人工协助单被拒 → 同步释放关联告警，避免僵尸态
         if approval.plan_id is None:
             await _settle_alert_for_manual(approval, "rejected", approval.rejected_by)
+        try:
+            from app.services.notification_service import update_approval_message
+            await update_approval_message(approval_id, "rejected", approval.rejected_by or "")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("审批 %s 消息回写失败：%s", approval_id, e)
         return "rejected"
 
 
@@ -537,6 +549,11 @@ async def timeout_handler() -> None:
                         ap.decided_at = time.strftime("%Y-%m-%d %H:%M:%S")
                         ap.comments = "关联告警已恢复（自愈/已解决），审批流程解除"
                         await session.commit()
+                        try:
+                            from app.services.notification_service import update_approval_message
+                            await update_approval_message(ap.id, "cancelled")
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("审批 %s 消息回写失败：%s", ap.id, e)
                 cancelled += 1
                 continue
 

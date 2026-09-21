@@ -577,6 +577,7 @@ async def _cancel_related_approvals(alert_id: int) -> None:
         )
         cancelled = 0
         seen: set[int] = set()
+        cancelled_ids: list[int] = []
         for appr in result.scalars():
             if appr.id in seen:
                 continue  # 一张单可能命中多个关联行，去重
@@ -584,8 +585,15 @@ async def _cancel_related_approvals(alert_id: int) -> None:
             appr.status = "cancelled"
             appr.decided_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             appr.comments = "关联告警已恢复，审批流程解除"
+            cancelled_ids.append(appr.id)
             cancelled += 1
         await s.commit()
+        for _aid in cancelled_ids:
+            try:
+                from app.services.notification_service import update_approval_message
+                await update_approval_message(_aid, "cancelled")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("审批 %s 消息回写失败：%s", _aid, e)
         if cancelled:
             logger.info("告警 %d 资源已恢复，解除 pending 审批单 %d 张", alert_id, cancelled)
 
