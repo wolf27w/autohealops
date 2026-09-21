@@ -5,6 +5,7 @@
 替换原「操作类型 × 时间段」策略。
 """
 import json
+import re
 
 from sqlalchemy import select
 
@@ -30,8 +31,32 @@ LEVEL_NAMES = {
 }
 NAME_LEVELS = {v: k for k, v in LEVEL_NAMES.items()}
 
-# 高危命令（即使 auto 也强制至少单人审批）
-HIGH_RISK_KEYWORDS = ["delete", "rm ", "purge", "drop", "remove"]
+# 高危命令（即使 auto 也强制至少单人审批）：只针对**高影响面资源/破坏性操作**，
+# 单 Pod 级动作（delete pod --force / patch pod）不算高危 → 允许自动自愈。
+# 用词边界匹配：`uncordon` 不得命中 `cordon`；`--all-namespaces` 不算操作 namespace。
+_HIGH_RISK_RE = re.compile(
+    r"\b(delete|drain|evict)\s+"
+    r"(deploy(?:ment)?s?|sts|statefulsets?|ds|daemonsets?|svc|services?|ns|namespaces?|nodes?|"
+    r"pv|pvc|secrets?|configmaps?|ingress(?:es)?)\b"
+    r"|(?<!un)\bcordon\b|\brm\s+-rf\b|\bpurge\b|\bdrop\s+(table|database)\b"
+)
+# 兼容旧引用
+HIGH_RISK_KEYWORDS = ["delete deployment", "delete statefulset", "delete service",
+                      "delete namespace", "delete node", "drain ", "evict "]
+
+
+# 命名空间类参数/标志：识别资源时先剔除，避免把 `-n {namespace}` 误判为「操作 namespace 资源」
+_NS_FLAG_RE = re.compile(r"(--namespace(=|\s+)\S+)|(--all-namespaces\b)|(-n\s+\S+)|(\s-[aA]\b)")
+
+
+def _steps_text(steps: list) -> str:
+    """把 steps 里的命令拼成小写文本"""
+    return " ".join((s.get("command", "") if isinstance(s, dict) else str(s)).lower() for s in steps)
+
+
+def has_high_risk_command(steps: list) -> bool:
+    """是否含高影响面/破坏性命令（delete deployment/node、drain、cordon、rm -rf …）"""
+    return bool(_HIGH_RISK_RE.search(_steps_text(steps)))
 
 # 默认风险评分配置（system_settings risk_policy 可覆盖）
 DEFAULT_RISK_POLICY = {
@@ -70,14 +95,21 @@ def analyze_operation_type(command: str) -> str:
         return "DELETE"
     if any(k in cmd for k in ["create", "run", "install", "add"]):
         return "CREATE"
-    if any(k in cmd for k in ["edit", "patch", "set", "rollout", "upgrade", "update", "scale", "limit", "request"]):
+    if any(k in cmd for k in ["edit", "patch", "set", "rollout", "upgrade", "update", "scale",
+                              "limit", "request", "drain", "cordon", "uncordon", "restart",
+                              "evict", "rollback"]):
         return "UPDATE"
     return "READ"
 
 
 def _identify_resource(steps: list) -> str:
-    """从 steps 命令识别目标资源类型（取最高风险资源）"""
-    cmd_text = " ".join((s.get("command", "") if isinstance(s, dict) else str(s)).lower() for s in steps)
+    """从 steps 命令识别目标资源类型（取最高风险资源）
+
+    注意：必须先剔除 `-n {namespace}` / `--namespace xxx` 这类**命名空间参数**，
+    否则命令里出现 "namespace" 字样会被误判为「操作 namespace 资源」(40 分)，
+    把任意 Pod 级命令顶成高危 → 什么都进审批。
+    """
+    cmd_text = _NS_FLAG_RE.sub(" ", _steps_text(steps))
     checks = [
         ("namespace", ["namespace"]),
         ("node", ["node"]),
@@ -169,10 +201,7 @@ async def evaluate_plan(plan_id: int) -> dict:
     scoring = score_steps(steps, env_tag=env_tag, impact="unknown", policy=policy)
 
     # 高危命令强制至少单人审批
-    has_high_risk = any(
-        any(k in (s.get("command", "") if isinstance(s, dict) else str(s)).lower() for k in HIGH_RISK_KEYWORDS)
-        for s in steps
-    )
+    has_high_risk = has_high_risk_command(steps)
     decision = decide_by_level(scoring["level"], policy)
     if has_high_risk and decision == "auto":
         decision = "approval_1"

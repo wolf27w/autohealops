@@ -23,7 +23,7 @@ logger = get_logger("api-server.alert_auto")
 
 
 # 可自动判定"已恢复"的 Pod 故障类型（观察期外兜底）
-POD_RECOVERABLE_FAULTS = {"CrashLoopBackOff", "OOMKilled", "ImagePullBackOff", "ErrImagePull", "PendingTimeout"}
+POD_RECOVERABLE_FAULTS = {"CrashLoopBackOff", "OOMKilled", "ImagePullBackOff", "ErrImagePull", "PendingTimeout", "TerminatingStuck"}
 
 # K8s 资源名/命名空间合法性（DNS label：小写字母/数字开头结尾，中缀仅小写字母数字和连字符）
 # 用于命令拼接前的严格校验，防 kubectl 参数注入
@@ -185,12 +185,8 @@ async def _decide_action(alert: Alert, steps: list) -> str:
     scoring = decision_engine.score_steps(steps, env_tag=env_tag, impact="unknown", policy=policy)
     decision = decision_engine.decide_by_level(scoring["level"], policy)
 
-    # 高危命令强制至少单人审批
-    has_high_risk = any(
-        k in (s.get("command", "") if isinstance(s, dict) else str(s)).lower()
-        for s in steps for k in ("delete deployment", "delete statefulset", "delete service", "delete namespace")
-    )
-    if has_high_risk and decision == "auto":
+    # 高危命令强制至少单人审批（节点级/高影响面资源动作即使评分低也需人工放行）
+    if decision_engine.has_high_risk_command(steps) and decision == "auto":
         decision = "approval_1"
     logger.info("告警 %d 风险决策: 等级%d(分%d,环境%s) → %s",
                 alert.id, scoring["level"], scoring["score"], env_tag, decision)
