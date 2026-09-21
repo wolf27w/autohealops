@@ -162,6 +162,7 @@ export const deleteResourceAlertRule = (id: number) => http.delete(`/resource-al
 export const runDbDiagnosis = (connId: number) => http.post(`/db-diagnosis/${connId}/run`)
 export const getDbDiagnosisReports = (limit: number = 20) => http.get('/db-diagnosis/reports', { params: { limit } })
 export const getDbTrends = (connId: number, metricType: string) => http.get(`/db-diagnosis/${connId}/trends`, { params: { metric_type: metricType } })
+export const getDbDiagnosisProgress = (connId: number) => http.get<{ pct: number; step: string; ts: number }>(`/db-diagnosis/${connId}/progress`)
 
 // ============ 执行进度（轮询）============
 export const getExecutionStatus = (planId: number, sinceStep: number = 0) =>

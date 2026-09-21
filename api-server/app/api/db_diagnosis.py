@@ -42,6 +42,15 @@ async def list_reports(conn_id: int | None = None, limit: int = 20, user=Depends
     ]}
 
 
+@router.get("/{conn_id}/progress")
+async def diag_progress(conn_id: int, user=Depends(require_any_user)):
+    """诊断进度（前端轮询）：{pct, step}；idle=未在诊断"""
+    if not await check_db_permission(user, conn_id, "read"):
+        return _deny()
+    from app.services.db_diagnosis_service import get_diag_progress
+    return {"code": 200, "message": "success", "data": await get_diag_progress(conn_id)}
+
+
 @router.get("/{conn_id}/trends")
 async def list_trends(conn_id: int, metric_type: str = "connections", user=Depends(require_any_user)):
     """连接/锁/表空间趋势（db_metric_snapshots）"""

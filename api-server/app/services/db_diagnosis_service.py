@@ -16,10 +16,36 @@ from sqlalchemy import select
 from app.clients.ai_client import ai_client
 from app.core.database import async_session
 from app.core.logging import get_logger
+from app.core.redis_client import redis_pool
 from app.models import DBConnection, DiagnosticReport, SlowSQLRecord
 from app.services import knowledge_service
 
 logger = get_logger("api-server.db_diagnosis")
+
+# 诊断进度（前端轮询）：db_diag_progress:{conn_id} = {pct, step, ts}
+_PROGRESS_TTL = 600
+
+
+async def _set_progress(conn_id: int, pct: int, step: str) -> None:
+    try:
+        await redis_pool.set(
+            f"db_diag_progress:{conn_id}",
+            json.dumps({"pct": int(pct), "step": step, "ts": time.time()}, ensure_ascii=False),
+            ex=_PROGRESS_TTL,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("写诊断进度失败: %s", e)
+
+
+async def get_diag_progress(conn_id: int) -> dict:
+    """读诊断进度（无则返回 idle）"""
+    try:
+        raw = await redis_pool.get(f"db_diag_progress:{conn_id}")
+        if raw:
+            return json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读诊断进度失败: %s", e)
+    return {"pct": 0, "step": "idle", "ts": 0}
 
 
 def _format_health(metrics: list[dict]) -> str:
@@ -64,9 +90,11 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
     if not c.inspect_enabled:
         return {"code": 400, "message": "该数据库巡检开关已关闭", "data": None}
 
+    await _set_progress(conn_id, 10, "采集健康指标")
     # 1. 采集健康指标（只读账号，落趋势表）
     from app.services.db_collector import collect_db_health, collect_connection_slow_sql
     metrics = await collect_db_health(conn_id)
+    await _set_progress(conn_id, 45, "采集慢 SQL")
     try:
         await collect_connection_slow_sql(conn_id)
     except Exception as e:  # noqa: BLE001
@@ -75,6 +103,7 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
     health_text = _format_health(metrics)
     slow_sql_text = await _format_slow_sql(conn_id)
 
+    await _set_progress(conn_id, 65, "AI 分析中（生成结论/根因/优化建议）")
     # 2. AI 分析（只给方案）
     try:
         data = await ai_client._post("/api/v1/ai/db-diagnose", {
@@ -88,8 +117,10 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
         raw = data.get("raw", "")
     except Exception as e:  # noqa: BLE001
         logger.error("数据库 %d AI 诊断失败: %s", conn_id, e)
+        await _set_progress(conn_id, 100, f"失败：{e}")
         return {"code": 500, "message": f"AI 诊断失败: {e}", "data": None}
 
+    await _set_progress(conn_id, 90, "生成报告")
     # 3. 落报告（task_id=0：按需诊断，非定时任务）
     summary = f"db:{c.name} {c.db_type}"
     async with async_session() as session:
@@ -124,6 +155,7 @@ async def diagnose_db(conn_id: int, user=None) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("数据库诊断结论沉淀知识库失败: %s", e)
 
+    await _set_progress(conn_id, 100, "完成")
     return {"code": 200, "message": "success", "data": {
         "report_id": report_id, "conclusion": conclusion,
         "root_cause": root_cause, "suggestions": suggestions,

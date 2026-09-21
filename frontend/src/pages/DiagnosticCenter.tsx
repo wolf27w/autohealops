@@ -2,14 +2,14 @@
 import { useEffect, useState } from 'react'
 import type { DBConnection } from '../types'
 import {
-  Tabs, Card, Button, Table, Modal, Form, Input, Select, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch,
+  Tabs, Card, Button, Table, Modal, Form, Input, Select, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress,
 } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, getSlowSQL, collectSlowSQL, getSlowSQLTrend,
-  runDbDiagnosis, getDbDiagnosisReports, getDbTrends, downloadInspectionReport,
+  runDbDiagnosis, getDbDiagnosisReports, getDbTrends, downloadInspectionReport, getDbDiagnosisProgress,
 } from '../services/api'
 
 interface DBReport {
@@ -154,6 +154,7 @@ function DBConnections() {
   const [slowDrawer, setSlowDrawer] = useState(false)
   const [slowConn, setSlowConn] = useState<DBConnection | null>(null)
   const [sqlDetail, setSqlDetail] = useState<string>('')
+  const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
   const [form] = Form.useForm()
 
   const load = () => getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
@@ -199,13 +200,18 @@ function DBConnections() {
   }
 
   const runDiagnosis = async (c: DBConnection) => {
-    message.loading({ content: `正在诊断 ${c.name}...`, key: 'diag' })
+    setDiag({ name: c.name, pct: 5, step: '准备中…' })
+    const timer = setInterval(() => {
+      getDbDiagnosisProgress(c.id)
+        .then((p) => { if (p && typeof p.pct === 'number') setDiag((s) => (s ? { ...s, pct: p.pct, step: p.step } : s)) })
+        .catch(() => {})
+    }, 800)
     try {
       const res = (await runDbDiagnosis(c.id)) as { data?: DiagnosisResult }
       const d = res?.data
-      message.destroy('diag')
       if (d) {
-        message.success('诊断完成')
+        setDiag({ name: c.name, pct: 100, step: '完成' })
+        setTimeout(() => setDiag(null), 400)
         Modal.info({ title: `诊断结果：${c.name}`, width: 640, content: (
           <div>
             <div style={{ marginBottom: 8 }}><b>结论：</b>{d.conclusion || '-'}</div>
@@ -217,8 +223,10 @@ function DBConnections() {
         ) })
       }
     } catch (e) {
-      message.destroy('diag')
       message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '诊断失败')
+    } finally {
+      clearInterval(timer)
+      setDiag(null)
     }
   }
 
@@ -260,6 +268,12 @@ function DBConnections() {
             </Space>
           ) },
         ]} />
+
+      <Modal title={diag ? `正在诊断：${diag.name}` : '诊断'} open={!!diag} footer={null} closable={false}
+        maskClosable={false} keyboard={false} width={420}>
+        <Progress percent={diag?.pct ?? 0} status="active" />
+        <div style={{ marginTop: 10, color: '#666' }}>{diag?.step || ''}</div>
+      </Modal>
 
       <Modal title={editing ? '编辑数据库连接' : '添加数据库连接'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
