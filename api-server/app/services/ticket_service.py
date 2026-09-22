@@ -392,6 +392,83 @@ async def _create_from_payload(payload: dict, user, source: str, alert_id: int |
     return {"ok": True, "id": ticket_id, "ticket": t}
 
 
+async def auto_create_from_alert(alert: Alert, reason: str = "", detail: str = "") -> dict:
+    """告警**自动转工单**（系统建单，无需人工点击）。
+
+    适用：平台/AI 无法自动解决的故障（根因在应用/DB/基础设施层、镜像类、节点类、无可用方案等）
+    → 自动建单派给人/团队，走工单通知与闭环；**不再建 manual_assist 审核单**（老板口径 2026-09-22）。
+    幂等：同告警已建单则直接返回现有单。
+    """
+    async with async_session() as session:
+        existing = (await session.execute(
+            select(Ticket).where(Ticket.alert_id == alert.id).order_by(Ticket.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        if existing:
+            return {"ok": True, "id": existing.id, "ticket": existing, "existed": True}
+
+    payload = await _build_alert_ticket_payload(alert)
+    payload["title"] = f"[自动] {alert.fault_type} - {alert.resource_name}"
+    if reason:
+        payload["description"] += f"\n转单原因：{reason}"
+    if detail:
+        payload["description"] += f"\n处理建议：{detail}"
+
+    r = await _create_from_payload(payload, None, source="alert", alert_id=alert.id,
+                                   approval_id=None, action_text="告警自动转单（系统）")
+    if r.get("ok"):
+        try:
+            await _notify_auto_ticket(r["ticket"], alert, reason, detail)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("自动工单通知失败: %s", e)
+    return r
+
+
+async def _notify_auto_ticket(ticket: Ticket, alert: Alert, reason: str, detail: str) -> None:
+    """系统自动建单通知：值班人（站内 + 飞书个人），无值班人/飞书不可用时群兜底（复用告警通知通道）"""
+    cluster_name = ""
+    try:
+        cluster_name = await notification_service._cluster_name(ticket.cluster_id)
+    except Exception:  # noqa: BLE001
+        pass
+    text = (
+        f"【工单·自动创建】{ticket.ticket_no}\n"
+        f"故障：{alert.fault_type}\n"
+        f"集群：{cluster_name or '-'}\n"
+        f"资源：{ticket.namespace or '-'}/{ticket.resource_name or '-'}\n"
+        f"优先级：{ticket.priority}\n"
+        f"原因：{reason or '-'}\n"
+        f"建议：{detail or '-'}\n"
+        f"请到「工单」页处理（/tickets）"
+    )
+    from app.services import on_duty_service
+    from app.services.feishu_service import send_feishu_text
+    try:
+        duty_users = await on_duty_service.resolve_duty_user_objects()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("值班人解析失败: %s", e)
+        duty_users = []
+    delivered = False
+    for u in duty_users or []:
+        if getattr(u, "feishu_user_id", ""):
+            try:
+                await send_feishu_text(u.feishu_user_id, text)
+                delivered = True
+            except Exception as e:  # noqa: BLE001
+                logger.warning("飞书通知值班人失败: %s", e)
+        if getattr(u, "id", None):
+            try:
+                await notification_service.write_in_app_message(
+                    u.id, "【工单】自动创建", text, kind="ticket", link="/tickets")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("工单站内消息写入失败: %s", e)
+    if not delivered:
+        # 无值班人 / 飞书不可用 → 群兜底（复用告警通知通道，不另起一套）
+        try:
+            await notification_service.notify_alert(alert)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("工单兜底群通知失败: %s", e)
+
+
 # ============ 状态流转 ============
 
 async def _transition_status(session, ticket: Ticket, new_status: str, user, note: str = "") -> str | None:
@@ -407,6 +484,16 @@ async def _transition_status(session, ticket: Ticket, new_status: str, user, not
     ticket.status = new_status
     if new_status == "resolved":
         ticket.resolved_at = _now()
+        # 工单闭环 → 回写关联告警为已解决（避免「已转工单」告警悬空；仅动在途告警）
+        if ticket.alert_id:
+            try:
+                alert = await session.get(Alert, ticket.alert_id)
+                if alert and alert.status in ("pending", "awaiting_approval", "ticketed"):
+                    alert.status = "resolved"
+                    alert.resolved_at = _now()
+                    alert.message = (alert.message or "") + f"（工单 {ticket.ticket_no} 已解决）"
+            except Exception as e:  # noqa: BLE001
+                logger.warning("工单回写告警失败 ticket=%s: %s", ticket.id, e)
     if new_status == "closed":
         ticket.closed_at = _now()
         if not ticket.resolved_at:

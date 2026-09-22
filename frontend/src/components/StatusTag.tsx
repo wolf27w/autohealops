@@ -4,7 +4,7 @@ import { Tag } from 'antd'
 const GREEN = ['healthy', 'success', 'resolved', 'approved', 'completed', 'healed']
 const RED = ['unreachable', 'failed', 'rejected', 'worsened', 'critical']
 const BLUE = ['pending', 'acknowledged', 'running']
-const ORANGE = ['in_progress', 'executing']
+const ORANGE = ['in_progress', 'executing', 'ticketed']
 const GRAY = ['timeout', 'skipped', 'degraded']
 
 export default function StatusTag({ status, label }: { status: string; label?: string }) {

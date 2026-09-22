@@ -58,7 +58,7 @@ export interface Alert {
   namespace: string
   fault_type: string
   severity: string // critical / high / medium / low
-  status: string // pending / awaiting_approval / resolved / self_healed
+  status: string // pending / awaiting_approval / ticketed / resolved / self_healed
   message: string
   manual_required: boolean
   manual_reason: string

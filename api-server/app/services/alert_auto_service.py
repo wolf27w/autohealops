@@ -238,69 +238,43 @@ async def _dedup_knowledge(fault_type: str, root_cause: str, repair_steps: str, 
         logger.warning("知识库写入失败（embedding 可能未装）: %s", e)
 
 
-async def _create_manual_assist_approval(alert: Alert, reason: str, detail: str = "") -> None:
-    """创建人工协助审核单（kind=manual_assist，无 plan，直接关联告警；防重复）"""
-    from app.services.approval_service import create_approval
-    from app.services.decision_engine import DecisionLevel
-
-    async with async_session() as session:
-        existing = (await session.execute(
-            select(Approval).where(
-                Approval.alert_id == alert.id,
-                Approval.kind == "manual_assist",
-                Approval.status == "pending",
-            )
-        )).scalar_one_or_none()
-    if existing:
-        return
-    # manual_assist 走单人审批（值班人 → admin 现有流程）
-    await create_approval(0, DecisionLevel.approval_1, None, alert_id=alert.id, kind="manual_assist")
-
-
 async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -> None:
-    """平台/AI 无法解决 → 标记「需人工协助」+ 创建 manual_assist 审核单 + 通知值班人"""
-    # 1. 标记告警：manual_required + 状态移入审核列表（awaiting_approval，告警列表不再显示）
+    """平台/AI 无法自动解决 → **自动创建工单**（派给值班人/团队）+ 标记告警「已转工单」+ 通知。
+
+    老板口径（2026-09-22）：平台干不了的活不走「审核」——
+    审核只保留「平台要执行、需人放行」的 risk_approval；需要人/别的团队去解决的，
+    自动建工单，以工单方式通知/派单/闭环（不再建 manual_assist 审核单）。
+    """
+    from app.services import ticket_service
+
+    ticket_no = ""
+    ticket_ok = False
+    try:
+        r = await ticket_service.auto_create_from_alert(alert, reason=reason, detail=detail)
+        ticket_ok = bool(r.get("ok"))
+        if ticket_ok and r.get("ticket"):
+            ticket_no = getattr(r["ticket"], "ticket_no", "") or ""
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 自动建工单失败: %s", alert.id, e)
+
     async with async_session() as session:
         a = await session.get(Alert, alert.id)
-        if a:
+        if not a:
+            return
+        if ticket_ok:
+            # 已自动转工单：移出待处理/审核流，由工单闭环（不再挂审核列表 awaiting_approval）
             a.manual_required = True
             a.manual_reason = (reason or "")[:255]
-            a.status = "awaiting_approval"
-            if "已转人工" not in (a.message or ""):
-                a.message = (a.message or "") + f"（{reason}，已转人工）"
-            await session.commit()
-
-    # 2. 创建人工协助审核单
-    try:
-        await _create_manual_assist_approval(alert, reason, detail)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("人工协助审核单创建失败: %s", e)
-
-    # 3. 通知值班人（飞书个人 + 群兜底）
-    try:
-        from app.services import on_duty_service, notification_service
-        from app.services.feishu_service import send_feishu_text
-        cluster_name = await notification_service._cluster_name(alert.cluster_id)
-        content = (
-            f"【API-OPS 告警需人工处理】\n"
-            f"集群: {cluster_name}\n"
-            f"资源: {alert.resource_type}/{alert.resource_name}\n"
-            f"命名空间: {alert.namespace or '-'}\n"
-            f"故障: {alert.fault_type}\n"
-            f"原因: {reason} {detail}"
-        )
-        duty_users = await on_duty_service.resolve_duty_user_objects()
-        if duty_users:
-            for u in duty_users:
-                if u.feishu_user_id:
-                    try:
-                        await send_feishu_text(u.feishu_user_id, content)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("飞书通知值班人失败: %s", e)
+            a.status = "ticketed"
+            suffix = (f"（{reason}，已自动转工单 {ticket_no}）" if ticket_no
+                      else f"（{reason}，已自动转工单）")
+            if "已自动转工单" not in (a.message or ""):
+                a.message = (a.message or "") + suffix
         else:
-            await notification_service.notify_alert(alert)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("值班人通知失败: %s", e)
+            # 建单失败：不改状态/标记，保持可被下轮重试（避免告警悬空在「已转工单」）
+            if "工单创建失败" not in (a.message or ""):
+                a.message = (a.message or "") + f"（{reason}，工单创建失败，将重试）"
+        await session.commit()
 
 
 async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_id: str) -> None:

@@ -150,6 +150,7 @@ export default function AlertList() {
             { value: 'resolved', label: '已解决' },
             { value: 'self_healed', label: '已自愈' },
             { value: 'awaiting_approval', label: '待审批' },
+            { value: 'ticketed', label: '已转工单' },
           ]} />
         <Select placeholder="处理方式" allowClear style={{ width: 150 }} onChange={(v) => { setManualOnly(v === 'manual' ? true : v === 'auto' ? false : undefined); setPage(1) }}
           options={[
@@ -183,12 +184,13 @@ export default function AlertList() {
               <StatusTag
                 status={s}
                 label={
-                  s === 'resolved' && r.approval_status === 'approved' ? '已审核'
+                  s === 'ticketed' ? '已转工单'
+                    : s === 'resolved' && r.approval_status === 'approved' ? '已审核'
                     : s === 'resolved' && r.approval_status === 'rejected' ? '已驳回'
                       : undefined
                 }
               />
-              {r.manual_required && (
+              {r.manual_required && s !== 'ticketed' && (
                 <Tooltip title={r.manual_reason || '平台/AI 无法自动解决，需人工协助'}>
                   <Tag color="red">需人工协助</Tag>
                 </Tooltip>

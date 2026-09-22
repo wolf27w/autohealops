@@ -23,7 +23,7 @@ class Alert(Base):
     namespace: Mapped[str] = mapped_column(String(100), default="")
     fault_type: Mapped[str] = mapped_column(String(50), nullable=False)  # CrashLoopBackOff/NodeNotReady...
     severity: Mapped[str] = mapped_column(String(10), nullable=False)  # critical/high/medium/low
-    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending/resolved
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending/awaiting_approval/ticketed/resolved/self_healed
     message: Mapped[str] = mapped_column(Text, default="")
     # 需人工协助：平台/AI 无法自动解决（AI 诊断失败、应用/数据库/基础设施层根因、修复无效转人工等）
     manual_required: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

@@ -114,7 +114,7 @@ async def inspect_cluster(cluster_id: int, user_id: int) -> dict:
         active_alerts = (await session.execute(
             select(Alert).where(
                 Alert.cluster_id == cluster_id,
-                Alert.status.in_(["pending", "awaiting_approval"]),
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
             ).order_by(Alert.detected_at.desc()).limit(50)
         )).scalars().all()
         pending_cnt = sum(1 for a in active_alerts if a.status == "pending")

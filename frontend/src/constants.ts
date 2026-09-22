@@ -2,6 +2,7 @@
 export const ALERT_STATUS_LABEL: Record<string, string> = {
   pending: '待处理',
   awaiting_approval: '审批中',
+  ticketed: '已转工单',
   resolved: '已解决',
   self_healed: '已自愈',
 }

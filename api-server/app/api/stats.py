@@ -167,7 +167,7 @@ async def dashboard(
         manual_pending = (await session.execute(
             select(func.count()).select_from(Alert).where(
                 Alert.manual_required.is_(True),
-                Alert.status.in_(["pending", "awaiting_approval"]),
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
             )
         )).scalar() or 0
 
@@ -195,7 +195,7 @@ async def dashboard(
         cluster_names = {c.id: c.name for c in (await session.execute(select(Cluster))).scalars()}
         cluster_rows = (await session.execute(select(Cluster))).scalars().all()
         recent = (await session.execute(
-            select(Alert).where(Alert.status.in_(["pending", "awaiting_approval"]))
+            select(Alert).where(Alert.status.in_(["pending", "awaiting_approval", "ticketed"]))
             .order_by(Alert.detected_at.desc()).limit(15)
         )).scalars().all()
         flows = (await session.execute(
@@ -291,12 +291,12 @@ async def dashboard(
         c_healthy = sum(1 for c in clusters_filtered if c.status == "healthy")
         active_filtered = (await session.execute(
             _filter(select(func.count()).select_from(Alert).where(
-                Alert.status.in_(["pending", "awaiting_approval"])))
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"])))
         )).scalar() or 0
         manual_filtered = (await session.execute(
             _filter(select(func.count()).select_from(Alert).where(
                 Alert.manual_required.is_(True),
-                Alert.status.in_(["pending", "awaiting_approval"])))
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"])))
         )).scalar() or 0
 
         # --- DB 异常 / DB 健康（project_id 经 ProjectDBConnection 过滤；cluster_id 不影响 DB） ---
@@ -475,7 +475,7 @@ async def dashboard(
         #   approval       = 审批通过后修复（存在 status=approved 的审批单 —— 即人工审核过的那批）
         #   manual         = 人工处理（manual_required 且已 resolved 且无通过审批）
         #   auto_resolved  = 自动恢复关闭（resolved 且非人工且无审批：指标回落/删规则等）
-        #   open           = 未解决（pending / awaiting_approval）
+        #   open           = 未解决（pending / awaiting_approval / ticketed）
         # 窗口：ai_range 指定（24h/7d/30d）；空/follow = 跟随页面顶部时间筛选，与告警趋势同口径
         # 分布图窗口：ai_range 指定固定窗口；空/follow = 跟随上方时间筛选
         if ai_range == "24h":
@@ -498,7 +498,7 @@ async def dashboard(
                 func.coalesce(func.sum(func.if_(and_(Alert.status == "resolved",
                                                     Alert.manual_required.isnot(True),
                                                     not_(_approved_ex)), 1, 0)), 0).label("auto_resolved"),
-                func.coalesce(func.sum(func.if_(Alert.status.in_(["pending", "awaiting_approval"]), 1, 0)), 0).label("open"),
+                func.coalesce(func.sum(func.if_(Alert.status.in_(["pending", "awaiting_approval", "ticketed"]), 1, 0)), 0).label("open"),
             )).where(Alert.detected_at >= _ai_since, Alert.detected_at <= _ai_until)
         )).one()
         ai_window = {"since": str(_ai_since), "until": str(_ai_until),
@@ -513,7 +513,7 @@ async def dashboard(
 
         # --- realtime_alerts（pending/awaiting 倒序 Top15，字段同 recent_alerts） ---
         realtime_rows = (await session.execute(
-            _filter(select(Alert).where(Alert.status.in_(["pending", "awaiting_approval"]))
+            _filter(select(Alert).where(Alert.status.in_(["pending", "awaiting_approval", "ticketed"]))
                     .order_by(Alert.detected_at.desc()).limit(15))
         )).scalars().all()
         realtime_alerts = [{

@@ -34,7 +34,7 @@ async def build_report(range_days: int = 7) -> str:
         )).scalar() or 0
         manual = (await session.execute(
             select(func.count()).select_from(Alert).where(
-                Alert.manual_required.is_(True), Alert.status.in_(["pending", "awaiting_approval"])
+                Alert.manual_required.is_(True), Alert.status.in_(["pending", "awaiting_approval", "ticketed"])
             )
         )).scalar() or 0
         ctotal = (await session.execute(select(func.count()).select_from(Cluster))).scalar() or 0
