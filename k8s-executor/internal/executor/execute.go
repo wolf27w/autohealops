@@ -354,7 +354,20 @@ func (e *Executor) execRollout(ctx context.Context, pc *ParsedCommand, ns string
 
 func (e *Executor) execDelete(ctx context.Context, pc *ParsedCommand, ns string) (string, error) {
 	if pc.Resource == "pod" && pc.Name != "" {
-		if err := e.clientset.CoreV1().Pods(ns).Delete(ctx, pc.Name, metav1.DeleteOptions{}); err != nil {
+		opts := metav1.DeleteOptions{}
+		// 识别 --force / --grace-period=0：强删（立即 SIGKILL，不等优雅期）。
+		// 否则沿用 Pod 的 terminationGracePeriodSeconds（可能卡住数分钟，无法用于 TerminatingStuck 强删）。
+		force := false
+		for _, a := range pc.Args {
+			if a == "--force" || a == "--grace-period=0" || a == "--grace-period=0s" {
+				force = true
+			}
+		}
+		if force {
+			grace := int64(0)
+			opts.GracePeriodSeconds = &grace
+		}
+		if err := e.clientset.CoreV1().Pods(ns).Delete(ctx, pc.Name, opts); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("pod %s deleted", pc.Name), nil

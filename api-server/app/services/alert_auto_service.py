@@ -709,6 +709,12 @@ async def _process_one(alert: Alert) -> bool:
         logger.info("告警 %d 为镜像问题（%s），转人工", alert.id, alert.fault_type)
         return True
 
+    # TerminatingStuck：卡 Terminating 的 Pod「审不审都要删」→ 免审批直通车（强删，不进 AI/审批）
+    # 必须先于「恢复检查」：裸 Pod（无 Deployment）会被 check_pod_recovered 误判为「资源已删除」，
+    # 导致告警被直接关闭而 Pod 实际未删；故 TerminatingStuck 一律优先走强删。
+    if alert.fault_type == "TerminatingStuck":
+        return await _auto_force_delete_terminating(alert)
+
     # 1. 先查资源当前状态：已恢复则自动解决（无论 pending 还是 awaiting_approval，恢复就关闭同源所有告警）
     if alert.resource_type == "pod" and alert.fault_type in POD_RECOVERABLE_FAULTS:
         recovered = await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name)
@@ -726,10 +732,6 @@ async def _process_one(alert: Alert) -> bool:
                 await _cancel_related_approvals(alert.id)
             logger.info("告警 %d 恢复，关闭同源未关闭告警 %d 条", alert.id, closed)
             return True
-
-    # TerminatingStuck：卡 Terminating 的 Pod「审不审都要删」→ 免审批直通车（强删，不进 AI/审批）
-    if alert.fault_type == "TerminatingStuck":
-        return await _auto_force_delete_terminating(alert)
 
     # 已待审批（awaiting_approval）：若已有在途待审批单，直接跳过。
     # 防止后台每轮扫描把「待审批」告警重新决策一遍 → 不断新建审批单（B8：502 告警 30s 一张）。
