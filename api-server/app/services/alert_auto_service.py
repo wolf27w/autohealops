@@ -160,6 +160,18 @@ def build_standard_steps(alert: Alert) -> list:
             "expected_result": "Pod 删除后由控制器自动重建",
             "rollback_command": "",
         }]
+    # TerminatingStuck：卡 Terminating 的 Pod「审不审都要删」→ 免审批强删（force + grace 0）
+    if ft == "TerminatingStuck":
+        # 严格校验资源名/命名空间，非法则拒绝生成命令（防 kubectl 参数注入）
+        if not (_K8S_NAME_RE.match(name or "") and _K8S_NAME_RE.match(ns)):
+            logger.warning("资源名/命名空间非法，跳过标准修复步骤: pod=%r ns=%r", name, ns)
+            return []
+        return [{
+            "command": f"kubectl delete pod {name} -n {ns} --force --grace-period=0",
+            "description": "强制删除卡在 Terminating 的 Pod（force + grace 0）",
+            "expected_result": "Pod 被强制删除（若由控制器管理会自动重建）",
+            "rollback_command": "",
+        }]
     # ImagePullBackOff/ErrImagePull 用 executor 专门修复（补 imagePullSecrets），PendingTimeout 无标准动作
     return []
 
@@ -647,6 +659,51 @@ async def _create_plan_from_kb(alert: Alert, diag_row, steps: list) -> int:
         return plan.id
 
 
+async def _auto_force_delete_terminating(alert: Alert) -> bool:
+    """TerminatingStuck 免审批直通车。
+
+    卡 Terminating 的 Pod 删除是**确定性动作**——审不审核都要删，走审批纯属空转。
+    因此强制免审批直接强删（force + grace 0），不走 AI 诊断 / 风险评分 / 转人工，
+    避免产生无意义的审批单（老板口径：该类删除不需要人工审核）。
+    watcher 侧另有「卡满 120s 免审批强删」兜底，二者幂等（pod 已删则 delete 得 not found，无害）。
+    """
+    # 幂等：本条告警已执行过强删则不再重复（避免后台每轮扫描反复删已删 Pod）
+    if "免审批自动强删" in (alert.message or ""):
+        return False
+    steps = build_standard_steps(alert)
+    if not steps:
+        # 资源名/命名空间非法 → 无法生成安全命令，转人工（极少数脏数据）
+        await _mark_manual_and_notify(
+            alert, "TerminatingStuck 无法生成强删命令",
+            f"资源名/命名空间非法（pod={alert.resource_name!r} ns={alert.namespace!r}），需人工处理。",
+        )
+        return True
+    # 解除历史误建的 pending 审批单（本类故障不再走审批流程）
+    await _cancel_related_approvals(alert.id)
+    trace_id = generate_trace_id()
+    plan_id = await _create_plan_from_kb(alert, None, steps)
+    await _execute_auto_plan(alert, plan_id, json.dumps({"steps": steps}, ensure_ascii=False), trace_id)
+    if await _verify_auto_repair(alert):
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a:
+                a.status = "self_healed"
+                a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                a.message = (a.message or "") + "（TerminatingStuck 免审批自动强删，验证通过）"
+                await session.commit()
+        logger.info("告警 %d TerminatingStuck 免审批自动强删成功（无审批）", alert.id)
+    else:
+        # 强删未生效（API 侧失败/集群暂不可达）→ 标记已执行（避免后台每轮扫描反复强删），
+        # 保持 pending，交由 watcher 兜底强删后关闭告警。
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a and "免审批自动强删" not in (a.message or ""):
+                a.message = (a.message or "") + "（TerminatingStuck 免审批自动强删已执行，未通过验证，待 watcher 兜底）"
+                await session.commit()
+        logger.warning("告警 %d TerminatingStuck 自动强删未通过验证，交由 watcher 兜底", alert.id)
+    return True
+
+
 async def _process_one(alert: Alert) -> bool:
     """处理单条告警的完整闭环：知识库优先 → AI 诊断 → AI 修复 → 转人工。
 
@@ -695,6 +752,10 @@ async def _process_one(alert: Alert) -> bool:
                 await _cancel_related_approvals(alert.id)
             logger.info("告警 %d 恢复，关闭同源未关闭告警 %d 条", alert.id, closed)
             return True
+
+    # TerminatingStuck：卡 Terminating 的 Pod「审不审都要删」→ 免审批直通车（强删，不进 AI/审批）
+    if alert.fault_type == "TerminatingStuck":
+        return await _auto_force_delete_terminating(alert)
 
     # 已待审批（awaiting_approval）：若已有在途待审批单，直接跳过。
     # 防止后台每轮扫描把「待审批」告警重新决策一遍 → 不断新建审批单（B8：502 告警 30s 一张）。

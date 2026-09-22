@@ -418,5 +418,27 @@ class TestInspectionSuggestionRender(unittest.TestCase):
         self.assertIn("hello", "\n".join(_render_suggestions("hello")))
 
 
+class TestTerminatingStuckForceDelete(unittest.TestCase):
+    """TerminatingStuck 免审批强删（老板口径：审不审都要删，不走人工审核）"""
+
+    def _alert(self, name="app-7f9c-x2k", ns="default"):
+        from types import SimpleNamespace
+        return SimpleNamespace(resource_name=name, namespace=ns, fault_type="TerminatingStuck")
+
+    def test_force_delete_command(self):
+        from app.services.alert_auto_service import build_standard_steps
+        steps = build_standard_steps(self._alert())
+        self.assertEqual(len(steps), 1)
+        cmd = steps[0]["command"]
+        self.assertIn("kubectl delete pod app-7f9c-x2k -n default", cmd)
+        self.assertIn("--force", cmd)
+        self.assertIn("--grace-period=0", cmd)
+
+    def test_illegal_name_rejected(self):
+        from app.services.alert_auto_service import build_standard_steps
+        self.assertEqual(build_standard_steps(self._alert(name="Bad_Name!")), [])
+        self.assertEqual(build_standard_steps(self._alert(ns="Bad NS")), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
