@@ -11,13 +11,18 @@ router = APIRouter(prefix="/api/v1/tickets")
 @router.get("")
 async def list_tickets(status: str | None = None, priority: str | None = None,
                        source: str | None = None, cluster_id: int | None = None,
+                       keyword: str | None = None,
+                       created_after: str | None = None, created_before: str | None = None,
                        page: int = 1, page_size: int = 20, user=Depends(require_any_user)):
-    """工单列表：分页 + 状态/优先级/来源/集群筛选 + 可见范围收敛"""
+    """工单列表：分页 + 状态/优先级/来源/集群筛选 + 关键词搜索 + 创建时间范围 + 可见范围收敛"""
     filters = {
         "status": status,
         "priority": priority,
         "source": source,
         "cluster_id": cluster_id,
+        "keyword": keyword,
+        "created_after": created_after,
+        "created_before": created_before,
     }
     data = await ticket_service.list_tickets(filters, page, page_size, user)
     return {"code": 200, "message": "success", "data": data}

@@ -1,6 +1,7 @@
 // 工单列表 + 详情抽屉 + 新建工单（N1 平台内部工单）
 import { useEffect, useState } from 'react'
-import { Button, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Table, Tag, Typography, DatePicker, message } from 'antd'
+import dayjs, { type Dayjs } from 'dayjs'
 import { PlusOutlined, UserOutlined, CommentOutlined, DeleteOutlined } from '@ant-design/icons'
 import {
   getUsers, getClusters, getDBConnections,
@@ -43,6 +44,8 @@ export default function Tickets() {
   const [priority, setPriority] = useState<string | undefined>()
   const [source, setSource] = useState<string | undefined>()
   const [clusterId, setClusterId] = useState<number | undefined>()
+  const [keyword, setKeyword] = useState('')
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null)
 
   const [detail, setDetail] = useState<TicketDetail | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -64,6 +67,9 @@ export default function Tickets() {
     if (priority) params.priority = priority
     if (source) params.source = source
     if (clusterId) params.cluster_id = clusterId
+    if (keyword) params.keyword = keyword
+    if (dateRange?.[0]) params.created_after = dateRange[0].format('YYYY-MM-DD 00:00:00')
+    if (dateRange?.[1]) params.created_before = dateRange[1].format('YYYY-MM-DD 23:59:59')
     getTickets(params)
       .then((d) => { setItems(d?.items ?? []); setTotal(d?.total ?? 0) })
       .catch(() => {})
@@ -76,7 +82,7 @@ export default function Tickets() {
       .catch(() => {})
   }
 
-  useEffect(() => { loadList() }, [page, status, priority, source, clusterId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadList() }, [page, status, priority, source, clusterId, keyword, dateRange]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     getUsers().then((d) => setUsers(d ?? [])).catch(() => {})
     getClusters().then((d) => setClusters(d ?? [])).catch(() => {})
@@ -179,6 +185,10 @@ export default function Tickets() {
         <Select allowClear placeholder="来源" style={{ width: 110 }} value={source}
           onChange={(v) => { setSource(v); setPage(1) }}
           options={Object.entries(SOURCE_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
+        <Input.Search allowClear placeholder="搜工单号/标题/资源" style={{ width: 220 }}
+          onSearch={(v) => { setKeyword(v); setPage(1) }} />
+        <DatePicker.RangePicker value={dateRange}
+          onChange={(v) => { setDateRange(v && v[0] && v[1] ? (v as [Dayjs, Dayjs]) : null); setPage(1) }} />
         <Select allowClear showSearch optionFilterProp="label" placeholder="集群" style={{ width: 180 }}
           value={clusterId} onChange={(v) => { setClusterId(v); setPage(1) }} options={clusterOptions} />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建工单</Button>

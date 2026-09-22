@@ -608,7 +608,7 @@ async def add_comment(ticket_id: int, content: str, user) -> dict:
 # ============ 查询 ============
 
 async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
-    """列表：分页 + 状态/优先级/来源/集群筛选 + 可见范围收敛"""
+    """列表：分页 + 状态/优先级/来源/集群/关键词/时间范围筛选 + 可见范围收敛"""
     if page < 1:
         page = 1
     if page_size < 1 or page_size > 200:
@@ -624,6 +624,20 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
         conditions.append(Ticket.source == filters["source"])
     if filters.get("cluster_id"):
         conditions.append(Ticket.cluster_id == filters["cluster_id"])
+    # 关键词搜索：工单号/标题/资源名/命名空间（排查历史问题常用）
+    if filters.get("keyword"):
+        kw = f"%{str(filters['keyword']).strip()}%"
+        conditions.append(or_(
+            Ticket.ticket_no.like(kw),
+            Ticket.title.like(kw),
+            Ticket.resource_name.like(kw),
+            Ticket.namespace.like(kw),
+        ))
+    # 创建时间范围（历史排查：按时间窗过滤）
+    if filters.get("created_after"):
+        conditions.append(Ticket.created_at >= filters["created_after"])
+    if filters.get("created_before"):
+        conditions.append(Ticket.created_at <= filters["created_before"])
 
     where_clauses = [scope] if scope is not None else []
     where_clauses.extend(conditions)
