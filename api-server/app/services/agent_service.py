@@ -119,14 +119,23 @@ async def _kb_precheck(problem: str, session: DiagnosisSession) -> dict | None:
 
 
 async def _collect_quick_evidence(session: DiagnosisSession) -> tuple[str, list[dict]]:
-    """单轮快速诊断：平台预采集只读证据（describe/日志/指标），拼接为证据文本"""
-    parts: list[str] = []
-    steps: list[dict] = []
-    for i, (tool_name, args) in enumerate(QUICK_EVIDENCE_TOOLS):
+    """单轮快速诊断：平台预采集只读证据（describe/日志/指标/容器内），拼接为证据文本。
+
+    并行采集（asyncio.gather）：多个工具同时取证，总耗时≈最慢单个工具，避免串行累加导致超时。
+    结果仍按 QUICK_EVIDENCE_TOOLS 顺序落盘/拼接，保证输出稳定。
+    """
+    async def _run_one(tool_name: str, args: dict) -> tuple[str, dict, dict]:
         try:
             res = await _execute_tool(tool_name, args, session)
         except Exception as e:  # noqa: BLE001
             res = {"success": False, "output": "", "error": str(e)}
+        return tool_name, args, res
+
+    results = await asyncio.gather(*(_run_one(tn, a) for tn, a in QUICK_EVIDENCE_TOOLS))
+
+    parts: list[str] = []
+    steps: list[dict] = []
+    for i, (tool_name, args, res) in enumerate(results):
         out = (res.get("output") or res.get("error") or "").strip()
         if res.get("success") and out:
             parts.append(f"### {tool_registry.tool_label(tool_name)}\n{out}")

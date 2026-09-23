@@ -136,13 +136,12 @@ export default function AgentChat() {
     const text = input.trim()
     if (!text || !activeId || sending) return
     setInput('')
-    setSending(true)
     try {
-      await sendAgentMessage(activeId, text, deep)
-      await loadMessages(activeId)
-    } finally {
+      await sendAgentMessage(activeId, text, deep)  // 后端已改为后台诊断，立即返回
+      pollUntilAnswered(activeId)  // 后台轮询直到出结论（内部管理 sending 状态）
+    } catch {
+      message.error('发送失败')
       setSending(false)
-      loadSessions()
     }
   }
 

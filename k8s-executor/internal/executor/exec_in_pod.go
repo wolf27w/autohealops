@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -75,7 +76,10 @@ func (e *Executor) ExecInPod(ctx context.Context, namespace, podName, container,
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	// 15s 显式超时：慢集群/挂起的 exec 快速失败，不拖满 30s gRPC deadline（否则拖慢整轮诊断）
+	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	err = exec.StreamWithContext(execCtx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})

@@ -36,6 +36,20 @@ async def _run_first_turn(sid: int, problem: str, cluster_name: str, deep: bool)
         logger.warning("会话 %d 首轮诊断失败（后台）: %s", sid, e)
 
 
+async def _run_turn(sid: int, content: str, cluster_name: str, deep: bool) -> None:
+    """后台执行一轮诊断（发送消息接口立即返回，诊断丢后台，前端轮询结果）"""
+    try:
+        async with async_session() as s:
+            sess = await s.get(DiagnosisSession, sid)
+        if not sess:
+            logger.warning("后台诊断：会话 %d 不存在", sid)
+            return
+        await agent_service.run_agent_turn(sess, content, cluster_name, deep=deep)
+        logger.info("会话 %d 诊断完成（后台）", sid)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("会话 %d 诊断失败（后台）: %s", sid, e)
+
+
 @router.post("/sessions")
 async def create_session(payload: dict, user=Depends(require_any_user)):
     """创建诊断会话（校验集群权限 + RBAC 可见集群）"""
@@ -133,7 +147,11 @@ async def list_messages(session_id: int, user=Depends(require_any_user)):
 
 @router.post("/sessions/{session_id}/messages")
 async def send_message(session_id: int, payload: dict, user=Depends(require_any_user)):
-    """发送消息，触发一轮诊断（默认快速单轮；deep=true 走多轮深度诊断）"""
+    """发送消息，触发一轮诊断（默认快速单轮；deep=true 走多轮深度诊断）。
+
+    诊断在后台异步执行（不阻塞 HTTP），避免慢诊断触发前端 axios 30s 超时；
+    前端轮询 /messages 获取结论（与首轮诊断一致）。
+    """
     content = payload.get("content", "").strip()
     if not content:
         return {"code": 400, "message": "消息内容不能为空", "data": None}
@@ -147,14 +165,13 @@ async def send_message(session_id: int, payload: dict, user=Depends(require_any_
         c = await s.get(Cluster, sess.cluster_id)
         if c:
             cluster_name = c.name
+        sid = sess.id
 
-    result = await agent_service.run_agent_turn(sess, content, cluster_name, deep=deep)
+    task = asyncio.create_task(_run_turn(sid, content, cluster_name, deep))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
-    return {"code": 200, "message": "success", "data": {
-        "final_answer": result["final_answer"],
-        "tool_steps": result["tool_steps"],
-        "error": result["error"],
-    }}
+    return {"code": 200, "message": "success", "data": {"diagnosing": True}}
 
 
 @router.post("/sessions/{session_id}/close")
