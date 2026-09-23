@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """修复验证服务：前后快照对比 + AI 判定"""
-import json
-
 from sqlalchemy import select
 
 from app.core.database import async_session
 from app.models import PromptTemplate, RepairVerification
 from app.services import prompt_engine
 from app.services.model_adapter import call_with_fallback
+from app.utils.json_util import extract_json
 
 
 async def verify_repair(plan_id: int, before_snapshot: str, after_snapshot: str, metrics_comparison: str) -> dict:
@@ -52,19 +51,4 @@ async def verify_repair(plan_id: int, before_snapshot: str, after_snapshot: str,
 
 
 def _parse_verdict(content: str) -> dict:
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-        return {"verdict": "unchanged", "reason": text, "follow_up": []}
+    return extract_json(content, default={"verdict": "unchanged", "reason": content, "follow_up": []})

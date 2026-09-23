@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
 """AI 服务辅助 API：模型管理、嵌入、RAG、日志"""
-import json
-import re
-
 from fastapi import APIRouter
 from sqlalchemy import case, func, select
 
@@ -12,6 +9,7 @@ from app.models import AICallLog, AIModelConfig
 from app.services.embedding_service import batch_embed, embed, invalidate_config_cache, test_config
 from app.services.es_client import ESClient
 from app.services.rag_service import add_knowledge, dedup_existing, search_similar
+from app.utils.json_util import extract_json
 
 router = APIRouter(prefix="/api/v1/ai")
 
@@ -161,25 +159,9 @@ async def rag_dedup():
 
 
 def _extract_json_dict(text: str) -> dict | None:
-    """从模型输出里健壮地取出 JSON 对象（容忍 ```json 代码块/前后说明文字）"""
-    t = (text or "").strip()
-    if not t:
-        return None
-    t = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", t)
-    t = re.sub(r"\s*```$", "", t).strip()
-    try:
-        v = json.loads(t)
-        return v if isinstance(v, dict) else None
-    except (json.JSONDecodeError, TypeError):
-        pass
-    i, j = t.find("{"), t.rfind("}")
-    if i >= 0 and j > i:
-        try:
-            v = json.loads(t[i:j + 1])
-            return v if isinstance(v, dict) else None
-        except (json.JSONDecodeError, TypeError):
-            return None
-    return None
+    """从模型输出里健壮地取出 JSON 对象（容忍 ```json 代码块/前后说明文字）；非 dict / 失败返回 None"""
+    v = extract_json(text, default=None)
+    return v if isinstance(v, dict) else None
 
 
 @router.post("/db-diagnose")

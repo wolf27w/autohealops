@@ -11,6 +11,7 @@
 import json
 
 from app.services.model_adapter import call_with_fallback
+from app.utils.json_util import extract_json
 
 # 单轮决策允许的最大工具调用步数（由 api-server 编排循环控制，这里仅作提示上限）
 MAX_TOOL_STEPS = 12
@@ -64,22 +65,7 @@ SYSTEM_PROMPT_ONCE = """你是 Kubernetes 应用层故障诊断专家。
 
 def _parse_decision(content: str) -> dict:
     """解析 LLM 返回的决策 JSON（容忍 markdown 包裹/多余文字）"""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-        return {"action": "final_answer", "root_cause": text, "suggestions": [], "handling_advice": ""}
+    return extract_json(content, default={"action": "final_answer", "root_cause": content, "suggestions": [], "handling_advice": ""})
 
 
 async def decide_next_step(

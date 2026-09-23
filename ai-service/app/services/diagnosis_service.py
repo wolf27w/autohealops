@@ -11,6 +11,7 @@ from app.services import prompt_engine
 from app.services.es_client import ESClient
 from app.services.model_adapter import call_with_fallback
 from app.services.prometheus_client import PrometheusClient
+from app.utils.json_util import extract_json
 
 # 故障类型 → 模板映射
 POD_FAULTS = {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "OOMKilled", "PendingTimeout"}
@@ -312,24 +313,7 @@ def _normalize_layer(value) -> str:
 
 def _parse_diagnosis_json(content: str) -> dict:
     """解析 AI 返回的 JSON（容忍 markdown 代码块包裹），并归一化 confidence / root_cause_layer"""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        # 尝试提取第一个 {...}
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                parsed = json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                parsed = {"root_cause": text, "suggestions": [], "risk_level": "low", "confidence": 0.0}
-        else:
-            parsed = {"root_cause": text, "suggestions": [], "risk_level": "low", "confidence": 0.0}
+    parsed = extract_json(content, default={"root_cause": content, "suggestions": [], "risk_level": "low", "confidence": 0.0})
     # 归一化 confidence（AI 可能返回等级字符串而非小数，直接写 float 列会截断报错）
     parsed["confidence"] = _normalize_confidence(parsed.get("confidence"))
     # 归一化根因层（A/B/C/D）

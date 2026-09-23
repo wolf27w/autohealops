@@ -16,14 +16,13 @@ import time
 import uuid
 from datetime import datetime
 
-import httpx
 from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import async_session
-from app.core.http_client import get_http_client
 from app.core.logging import get_logger
 from app.models import Alert, NotificationConfig, NotificationLog, Project, ProjectClusterNS
 from app.core.redis_client import redis_pool
+from app.services import messaging
 
 logger = get_logger("api-server.notification")
 
@@ -53,58 +52,32 @@ SCENE_MATCH = {
 
 async def send_dingtalk_text(webhook: str, content: str, at_mobiles: list[str] | None = None, at_all: bool = False) -> dict:
     """钉钉文本消息"""
-    payload = {"msgtype": "text", "text": {"content": content}}
-    if at_all:
-        payload["at"] = {"isAtAll": True}
-    elif at_mobiles:
-        payload["at"] = {"atMobiles": at_mobiles, "isAtAll": False}
-    client = get_http_client(trust_env=True)
-    resp = await client.post(webhook, json=payload, timeout=10)
-    return {"status": resp.status_code, "body": resp.text}
+    return await messaging.send_text("dingtalk", webhook, content, at_mobiles, at_all)
 
 
 async def send_dingtalk_markdown(webhook: str, title: str, content: str, at_mobiles: list[str] | None = None) -> dict:
-    """钉钉 markdown 消息"""
-    payload = {"msgtype": "markdown", "markdown": {"title": title, "text": content}}
-    if at_mobiles:
-        payload["at"] = {"atMobiles": at_mobiles, "isAtAll": False}
-    client = get_http_client(trust_env=True)
-    resp = await client.post(webhook, json=payload, timeout=10)
-    return {"status": resp.status_code, "body": resp.text}
+    """钉钉 markdown 消息（messaging 的钉钉 markdown 不支持 @人，at_mobiles 保留签名但不生效）"""
+    return await messaging.send_markdown("dingtalk", webhook, title, content)
 
 
 async def send_dingtalk_action_card(webhook: str, title: str, text: str, buttons: list[dict], at_mobiles: list[str] | None = None) -> dict:
     """钉钉 ActionCard（按钮跳转查看详情，审批操作走机器人消息交互）"""
-    payload = {"msgtype": "actionCard", "actionCard": {"title": title, "text": text, "btns": buttons}}
-    client = get_http_client(trust_env=True)
-    resp = await client.post(webhook, json=payload, timeout=10)
-    return {"status": resp.status_code, "body": resp.text}
+    return await messaging.send_action_card("dingtalk", webhook, title, text, buttons)
 
 
 async def send_wechat_text(webhook: str, content: str, mentioned_list: list[str] | None = None, at_all: bool = False) -> dict:
     """企微文本消息"""
-    if at_all:
-        mentioned_list = ["@all"]
-    payload = {"msgtype": "text", "text": {"content": content, "mentioned_list": mentioned_list or []}}
-    client = get_http_client(trust_env=True)
-    resp = await client.post(webhook, json=payload, timeout=10)
-    return {"status": resp.status_code, "body": resp.text}
+    return await messaging.send_text("wechat", webhook, content, mentioned_list, at_all)
 
 
 async def send_wechat_markdown(webhook: str, content: str) -> dict:
     """企微 markdown 消息"""
-    payload = {"msgtype": "markdown", "markdown": {"content": content}}
-    client = get_http_client(trust_env=True)
-    resp = await client.post(webhook, json=payload, timeout=10)
-    return {"status": resp.status_code, "body": resp.text}
+    return await messaging.send_markdown("wechat", webhook, "", content)
 
 
 async def send_feishu_webhook_text(webhook: str, content: str) -> dict:
     """飞书群机器人文本消息"""
-    payload = {"msg_type": "text", "content": {"text": content}}
-    client = get_http_client(trust_env=False)
-    resp = await client.post(webhook, json=payload, timeout=10)
-    return {"status": resp.status_code, "body": resp.text}
+    return await messaging.send_text("feishu", webhook, content)
 
 
 # ============ 配置查询 ============

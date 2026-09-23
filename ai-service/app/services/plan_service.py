@@ -8,6 +8,7 @@ from app.core.database import async_session
 from app.models import PromptTemplate, RepairPlan
 from app.services import prompt_engine
 from app.services.model_adapter import call_with_fallback
+from app.utils.json_util import extract_json
 
 # 操作类型识别关键字
 READ_KEYWORDS = ["get", "describe", "logs", "top", "explain", "list", "watch"]
@@ -120,19 +121,4 @@ async def generate_plan(diagnosis_data: dict, alert_data: dict) -> dict:
 
 def _extract_json(content: str):
     """提取 AI 返回的 JSON（容忍 markdown）"""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-        return {}
+    return extract_json(content, default={})
