@@ -692,6 +692,9 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
     conditions = []
     if filters.get("status"):
         conditions.append(Ticket.status == filters["status"])
+    else:
+        # 默认只显示在途工单（待受理/处理中），已解决/已关闭默认不显示（老板 2026-09-23 口径）
+        conditions.append(Ticket.status.in_(["open", "processing"]))
     if filters.get("priority"):
         conditions.append(Ticket.priority == filters["priority"])
     if filters.get("source"):

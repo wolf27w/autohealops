@@ -1,8 +1,8 @@
 // 工单列表 + 详情抽屉 + 新建工单（N1 平台内部工单）
 import { useEffect, useState } from 'react'
-import { Button, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Table, Tag, Typography, DatePicker, message } from 'antd'
+import { Button, Card, Col, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography, DatePicker, message } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
-import { PlusOutlined, UserOutlined, CommentOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, UserOutlined, CommentOutlined, DeleteOutlined, ClockCircleOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, InboxOutlined } from '@ant-design/icons'
 import {
   getUsers, getClusters, getDBConnections,
   getTickets, getTicket, createTicket, updateTicket, assignTicket, addTicketComment, deleteTicket, getTicketStats,
@@ -32,14 +32,6 @@ const NEXT_STATUS: Record<string, string[]> = {
   resolved: ['closed'],
   closed: [],
 }
-
-// 我处理工单的状态统计顺序
-const MINE_STAT = [
-  { key: 'open', label: '待受理' },
-  { key: 'processing', label: '处理中' },
-  { key: 'resolved', label: '已解决' },
-  { key: 'closed', label: '已关闭' },
-] as const
 
 // ============ 类型化请求门面（复用默认 api 实例，拦截器已解包 body.data） ============
 export default function Tickets() {
@@ -194,23 +186,31 @@ export default function Tickets() {
 
   return (
     <div>
-      <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0' }}>
-        <Space size={18} wrap>
-          <span style={{ fontWeight: 600 }}>我处理的工单</span>
-          {MINE_STAT.map((m) => (
-            <span key={m.key}>
-              <Tag color={STATUS_COLOR[m.key]}>{m.label}</Tag>
-              <b style={{ marginLeft: 2 }}>{stats?.mine?.[m.key] ?? 0}</b>
-            </span>
-          ))}
-          <span style={{ color: '#999' }}>
-            共 <b>{stats?.mine?.total ?? 0}</b> · 我创建 <b>{stats?.created ?? 0}</b>
-          </span>
-        </Space>
-      </div>
+      <Card size="small" style={{ marginBottom: 12 }} title="我处理的工单">
+        <Row gutter={[12, 12]}>
+          <Col xs={12} sm={8} md={4}>
+            <Statistic title="待受理" value={stats?.mine?.open ?? 0} prefix={<ClockCircleOutlined style={{ color: '#8c8c8c' }} />} />
+          </Col>
+          <Col xs={12} sm={8} md={4}>
+            <Statistic title="处理中" value={stats?.mine?.processing ?? 0} prefix={<SyncOutlined spin style={{ color: '#1677ff' }} />} />
+          </Col>
+          <Col xs={12} sm={8} md={4}>
+            <Statistic title="已解决" value={stats?.mine?.resolved ?? 0} prefix={<CheckCircleOutlined style={{ color: '#52c41a' }} />} />
+          </Col>
+          <Col xs={12} sm={8} md={4}>
+            <Statistic title="已关闭" value={stats?.mine?.closed ?? 0} prefix={<CloseCircleOutlined style={{ color: '#8c8c8c' }} />} />
+          </Col>
+          <Col xs={12} sm={8} md={4}>
+            <Statistic title="总计" value={stats?.mine?.total ?? 0} prefix={<InboxOutlined style={{ color: '#722ed1' }} />} />
+          </Col>
+          <Col xs={12} sm={8} md={4}>
+            <Statistic title="我创建" value={stats?.created ?? 0} prefix={<UserOutlined style={{ color: '#faad14' }} />} />
+          </Col>
+        </Row>
+      </Card>
 
       <Space style={{ marginBottom: 12 }} wrap>
-        <Select allowClear placeholder="状态" style={{ width: 120 }} value={status}
+        <Select allowClear placeholder="状态（默认待处理/处理中）" style={{ width: 170 }} value={status}
           onChange={(v) => { setStatus(v); setPage(1) }}
           options={Object.entries(STATUS_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
         <Select allowClear placeholder="优先级" style={{ width: 110 }} value={priority}
