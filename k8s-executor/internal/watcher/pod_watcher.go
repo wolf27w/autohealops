@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/api-ops-platform/k8s-executor/internal/database"
@@ -27,6 +28,9 @@ const (
 	terminatingTimeout   = 60 * time.Second // TerminatingStuck 阈值：卡 Terminating 满 60s → 告警
 	terminatingForceDel  = 60 * time.Second // 告警后 60s 仍未删除 → 自动强删（force + grace 0）
 	terminatingScanTick  = 20 * time.Second // Terminating 扫描间隔
+
+	terminatingPageSize   = int64(500) // Terminating 分页拉取：每页 Pod 数（单次响应体小，降低超时/connection reset）
+	terminatingMaxRetries = 3          // 单页 List 瞬时错误最大重试次数
 )
 
 // observedFault A 类故障（OOM/CrashLoop）观察状态
@@ -62,6 +66,8 @@ type PodWatcher struct {
 	observed map[string]*observedFault
 	// 告警策略（fault_type → 配置）
 	policies map[string]*policyConfig
+	// Terminating 扫描进行中标志（防重叠：上一轮未结束时跳过本轮）
+	terminatingScanning int32
 }
 
 // NewPodWatcher 创建 Pod watcher
@@ -510,15 +516,73 @@ func (w *PodWatcher) terminatingLoop() {
 	}
 }
 
+// scanTerminating 扫描卡在 Terminating 的 Pod。
+// 全集群 Pod 一次性 List 在大集群下偶发 connection reset（API 读超时），
+// 改为分页（Limit+Continue）+ 单页瞬时错误有限重试，降低超时概率。
 func (w *PodWatcher) scanTerminating() {
 	if inMaintenanceWindow(w.clusterID) {
 		return
 	}
-	pods, err := w.clientset.CoreV1().Pods("").List(w.ctx, metav1.ListOptions{})
-	if err != nil {
-		w.logger.Error("Terminating 扫描失败", zap.Uint("cluster", w.clusterID), zap.Error(err))
+	// 防重叠：上一轮扫描尚未结束时跳过本轮（避免大集群下扫描慢导致重叠）
+	if !atomic.CompareAndSwapInt32(&w.terminatingScanning, 0, 1) {
 		return
 	}
+	defer atomic.StoreInt32(&w.terminatingScanning, 0)
+
+	continueToken := ""
+	for {
+		pods, err := w.listPodsPage(continueToken)
+		if err != nil {
+			// 整轮失败放弃：跳过本轮，不影响主循环
+			w.logger.Error("Terminating 扫描失败", zap.Uint("cluster", w.clusterID), zap.Error(err))
+			return
+		}
+		w.processTerminatingPage(pods)
+		continueToken = pods.Continue
+		if continueToken == "" {
+			return
+		}
+	}
+}
+
+// listPodsPage 分页拉取一页 Pod，单页瞬时错误做有限重试（指数退避，尊重 ctx 取消）。
+func (w *PodWatcher) listPodsPage(continueToken string) (*corev1.PodList, error) {
+	var lastErr error
+	for attempt := 0; attempt <= terminatingMaxRetries; attempt++ {
+		pods, err := w.clientset.CoreV1().Pods("").List(w.ctx, metav1.ListOptions{
+			Limit:    terminatingPageSize,
+			Continue: continueToken,
+		})
+		if err == nil {
+			return pods, nil
+		}
+		lastErr = err
+		if attempt == terminatingMaxRetries {
+			break
+		}
+		select {
+		case <-w.ctx.Done():
+			return nil, w.ctx.Err()
+		case <-time.After(terminatingBackoff(attempt)):
+		}
+	}
+	return nil, lastErr
+}
+
+// terminatingBackoff 第 attempt 次（从 0 起）重试前的退避时长：200ms → 500ms → 1s（封顶 1s）。
+func terminatingBackoff(attempt int) time.Duration {
+	switch attempt {
+	case 0:
+		return 200 * time.Millisecond
+	case 1:
+		return 500 * time.Millisecond
+	default:
+		return time.Second
+	}
+}
+
+// processTerminatingPage 就地处理一页 Pod：DeletionTimestamp 已设置且超阈值的报/强删，逻辑保持原样。
+func (w *PodWatcher) processTerminatingPage(pods *corev1.PodList) {
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if pod.DeletionTimestamp == nil {
