@@ -484,6 +484,7 @@ export interface TicketDetail {
 }
 
 export interface TicketStats {
+  scope: 'all' | 'mine'
   mine: {
     total: number
     open: number

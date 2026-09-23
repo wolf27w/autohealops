@@ -186,7 +186,7 @@ export default function Tickets() {
 
   return (
     <div>
-      <Card size="small" style={{ marginBottom: 12 }} title="我处理的工单">
+      <Card size="small" style={{ marginBottom: 12 }} title={stats?.scope === 'all' ? '全部工单' : '我参与的工单'}>
         <Row gutter={[12, 12]}>
           <Col xs={12} sm={8} md={4}>
             <Statistic title="待受理" value={stats?.mine?.open ?? 0} prefix={<ClockCircleOutlined style={{ color: '#8c8c8c' }} />} />
@@ -203,9 +203,11 @@ export default function Tickets() {
           <Col xs={12} sm={8} md={4}>
             <Statistic title="总计" value={stats?.mine?.total ?? 0} prefix={<InboxOutlined style={{ color: '#722ed1' }} />} />
           </Col>
-          <Col xs={12} sm={8} md={4}>
-            <Statistic title="我创建" value={stats?.created ?? 0} prefix={<UserOutlined style={{ color: '#faad14' }} />} />
-          </Col>
+          {stats?.scope !== 'all' && (
+            <Col xs={12} sm={8} md={4}>
+              <Statistic title="我创建" value={stats?.created ?? 0} prefix={<UserOutlined style={{ color: '#faad14' }} />} />
+            </Col>
+          )}
         </Row>
       </Card>
 

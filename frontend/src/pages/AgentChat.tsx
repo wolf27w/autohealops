@@ -47,7 +47,7 @@ export default function AgentChat() {
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [pods, setPods] = useState<PodOption[]>([])
   const [loadingMsgs, setLoadingMsgs] = useState(false)
-  const [deep, setDeep] = useState(false)  // 深度诊断开关（多轮工具取证，较慢）
+  const [deep, setDeep] = useState(true)  // 深度诊断开关（多轮工具取证，默认开：直接给结果）
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<number | null>(null)  // 当前会话 id（轮询时防竞态）
 
@@ -238,7 +238,7 @@ export default function AgentChat() {
                 <Text type="secondary">{activeSession.namespace}/{activeSession.pod_name}</Text>
               </Space>
               <Space>
-                <Tooltip title="开启后走多轮工具取证（更充分但较慢）；默认关闭 = 平台预采集证据单轮出结论">
+                <Tooltip title="默认开启：AI 多轮自主取证直接给诊断结果；关闭 = 平台预采集证据单轮快出结论">
                   <Space size={4}>
                     <Text type="secondary" style={{ fontSize: 12 }}>深度诊断</Text>
                     <Switch size="small" checked={deep} onChange={setDeep} />
@@ -317,8 +317,8 @@ export default function AgentChat() {
           <Form.Item name="problem" label="问题描述">
             <Input.TextArea rows={3} placeholder="描述应用的问题现象，如：服务 502、内存泄漏、启动失败..." />
           </Form.Item>
-          <Form.Item name="deep" label="深度诊断" valuePropName="checked" initialValue={false}
-            tooltip="默认关闭：平台先采集证据、单轮出结论（快）。开启：AI 多轮自主取证（更充分但较慢）。">
+          <Form.Item name="deep" label="深度诊断" valuePropName="checked" initialValue={true}
+            tooltip="默认开启：AI 多轮自主取证直接给诊断结果（较慢）。关闭：平台预采集证据单轮快出结论。">
             <Switch />
           </Form.Item>
         </Form>
