@@ -476,3 +476,19 @@
 - 安全：走执行器**只读命令白名单**（ls/cat/tail/wc），路径必须是绝对路径且禁止空格/引号/管道等元字符；越权字符直接 400；单次最多 5MB（超出取**末尾** 5MB 并标记 truncated）；沿用集群/ns 读权限
 - 顺带修复：执行器 `ExecInPod` 容器名为空时**自动选主容器**（多容器 Pod 否则报 "a container name must be specified"）
 - 实测（真实 Pod `qa-eft/efreight-prm-…`）：列 `/var/log` → 7 条；下载 `/var/log/dpkg.log` → 200（10595 字节，内容正常）；不存在文件 → 404 明确提示；`/var/log/x;ls` → 400 拒绝
+
+---
+
+## 2026-09-23 告警↔工单闭环 + 告警合并 + 扫描加固 + 重复收敛（全部完成）
+
+| # | 需求 | 状态 |
+|---|---|---|
+| 1 | **工单解决/关闭/删除 → 告警自动闭环**（老板口径：告警↔工单是一个闭环，无需在告警处理里再手动「解决」）| ✅ `ticket_service._close_alert_flow`：resolved/closed/删除 关闭「同故障同服务」全部在途告警 + 解除关联审批单 |
+| 2 | **已开单抑制**（同故障同服务已有未关闭工单时新告警并入，不重复建单/通知）| ✅ `alert_auto_service._find_open_ticket_for_alert` |
+| 3 | **告警合并显示**（同类型同服务只列最新，合并计数）| ✅ `alerts.py group 参数` + `alert_grouping.py` + 前端「同类型×N」标签 |
+| 4 | executor TerminatingStuck 扫描加固（分页 List + 重试）| ✅ `pod_watcher.go` |
+| 5 | 深层次重复收敛：AI JSON 解析×5 统一、IM 发送层委托 messaging | ✅ `ai-service/app/utils/json_util.py` + `notification_service` |
+
+- 待办账本核对：RAG 向量索引 / CI-CD+日志归档 早在 09-12 已完成（本文件历史条目过期）。
+- 数据回填：2 条孤儿 ticketed 告警（#603/#604）→ resolved。
+- CI 全绿；四服务已重启。提交 ee58a5f / 031dc2f / 4823f3c / 3ae4eaa。
