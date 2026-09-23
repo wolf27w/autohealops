@@ -48,6 +48,10 @@ QUICK_EVIDENCE_TOOLS: list[tuple[str, dict]] = [
     ("describe_pod", {}),
     ("search_logs", {"tail": 100}),
     ("get_pod_metrics", {}),
+    # 进容器直接采集（只读白名单命令；容器未运行/命令不存在时自动降级为失败，不影响整体诊断）
+    ("exec_in_pod", {"command": "ps aux"}),
+    ("exec_in_pod", {"command": "df -h"}),
+    ("exec_in_pod", {"command": "free -m"}),
 ]
 
 # 诊断工具集：由统一工具注册表提供（tool_registry.py，P0-1），此处不再硬编码

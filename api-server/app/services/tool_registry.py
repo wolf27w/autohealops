@@ -105,7 +105,7 @@ async def _h_exec_in_pod(args: dict, context: dict) -> dict:
     container = (args.get("container") or "").strip() or None
     r = await executor_client.acall(executor_client.exec_in_pod, context["cluster_id"], context["namespace"], context["pod_name"], command,
         container=container,)
-    return {"success": r.get("success", False), "output": r.get("output", ""), "error": r.get("error", "")}
+    return {"success": r.get("success", False), "output": (r.get("output") or "")[:4000], "error": r.get("error", "")}
 
 
 async def _h_describe_pod(args: dict, context: dict) -> dict:
