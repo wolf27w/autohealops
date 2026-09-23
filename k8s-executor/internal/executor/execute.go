@@ -244,9 +244,74 @@ func (e *Executor) execGet(ctx context.Context, pc *ParsedCommand, ns string) (s
 		if err != nil {
 			return "", err
 		}
+		if len(list.Items) == 0 {
+			return "(该命名空间无 Deployment)", nil
+		}
 		var b strings.Builder
 		for _, d := range list.Items {
-			b.WriteString(fmt.Sprintf("%s\t%d\n", d.Name, *d.Spec.Replicas))
+			replicas := int32(0)
+			if d.Spec.Replicas != nil {
+				replicas = *d.Spec.Replicas
+			}
+			b.WriteString(fmt.Sprintf("deployment %s: replicas=%d ready=%d\n", d.Name, replicas, d.Status.ReadyReplicas))
+			for _, c := range d.Spec.Template.Spec.Containers {
+				b.WriteString(fmt.Sprintf("  container %s: image=%s\n", c.Name, c.Image))
+				if len(c.Resources.Requests) > 0 {
+					b.WriteString("    requests:")
+					for k, v := range c.Resources.Requests {
+						b.WriteString(fmt.Sprintf(" %s=%s", k, v.String()))
+					}
+					b.WriteString("\n")
+				}
+				if len(c.Resources.Limits) > 0 {
+					b.WriteString("    limits:")
+					for k, v := range c.Resources.Limits {
+						b.WriteString(fmt.Sprintf(" %s=%s", k, v.String()))
+					}
+					b.WriteString("\n")
+				}
+			}
+		}
+		return b.String(), nil
+	case "hpa", "horizontalpodautoscaler", "horizontalpodautoscalers":
+		list, err := e.clientset.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		if len(list.Items) == 0 {
+			return "(该命名空间无 HPA)", nil
+		}
+		var b strings.Builder
+		for _, h := range list.Items {
+			min := int32(0)
+			if h.Spec.MinReplicas != nil {
+				min = *h.Spec.MinReplicas
+			}
+			b.WriteString(fmt.Sprintf("HPA %s: min=%d max=%d current=%d\n", h.Name, min, h.Spec.MaxReplicas, h.Status.CurrentReplicas))
+			for _, m := range h.Spec.Metrics {
+				if m.Resource != nil {
+					tgt := ""
+					if m.Resource.Target.AverageUtilization != nil {
+						tgt = fmt.Sprintf("%d%%", *m.Resource.Target.AverageUtilization)
+					} else if m.Resource.Target.AverageValue != nil {
+						tgt = m.Resource.Target.AverageValue.String()
+					}
+					b.WriteString(fmt.Sprintf("  metric resource %s target=%s\n", m.Resource.Name, tgt))
+				} else {
+					b.WriteString(fmt.Sprintf("  metric %s\n", m.Type))
+				}
+			}
+			for _, cm := range h.Status.CurrentMetrics {
+				if cm.Resource != nil {
+					cur := ""
+					if cm.Resource.Current.AverageUtilization != nil {
+						cur = fmt.Sprintf("%d%%", *cm.Resource.Current.AverageUtilization)
+					} else if cm.Resource.Current.AverageValue != nil {
+						cur = cm.Resource.Current.AverageValue.String()
+					}
+					b.WriteString(fmt.Sprintf("  current resource %s=%s\n", cm.Resource.Name, cur))
+				}
+			}
 		}
 		return b.String(), nil
 	case "pod", "pods":

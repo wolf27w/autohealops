@@ -244,6 +244,32 @@ async def _h_rag_search(args: dict, context: dict) -> dict:
     return {"success": True, "output": "\n".join(lines), "error": ""}
 
 
+async def _h_get_hpa(args: dict, context: dict) -> dict:
+    """只读：查询命名空间下 HPA 扩缩容配置（min/max 副本数、指标与阈值、当前值）"""
+    r = await executor_client.acall(
+        executor_client.execute_command,
+        context["cluster_id"],
+        context["namespace"],
+        "get hpa",
+    )
+    if r.get("success"):
+        return {"success": True, "output": r.get("output", "")[:6000], "error": ""}
+    return {"success": False, "output": "", "error": r.get("error", "get hpa 执行失败")}
+
+
+async def _h_get_deployment(args: dict, context: dict) -> dict:
+    """只读：查询命名空间下 Deployment 配置（副本数、各容器镜像与资源 requests/limits）"""
+    r = await executor_client.acall(
+        executor_client.execute_command,
+        context["cluster_id"],
+        context["namespace"],
+        "get deployment",
+    )
+    if r.get("success"):
+        return {"success": True, "output": r.get("output", "")[:8000], "error": ""}
+    return {"success": False, "output": "", "error": r.get("error", "get deployment 执行失败")}
+
+
 # ============ 注册表 ============
 
 TOOL_REGISTRY: dict[str, dict] = {}
@@ -256,7 +282,7 @@ def _register(tool_def: dict) -> None:
 _register({
     "name": "exec_in_pod",
     "label": "容器内命令",
-    "description": "在 Pod 容器内执行诊断命令（可安装缺失工具、调整配置等写操作；单命令执行、不经 shell，sh/python 等解释器被拦截）。多容器 Pod 必须从 describe_pod 结果中获取容器名并用 container 参数指定",
+    "description": "在 Pod 容器内执行诊断命令（单命令执行、不经 shell，sh/python 等解释器被拦截）。**容器内缺诊断命令时可自行安装**（apt-get/yum/apk 装 ps/curl/jstat 等，加 -y 非交互）。多容器 Pod 必须从 describe_pod 结果中获取容器名并用 container 参数指定。**只诊断容器本身，不要用 free/top/df 查宿主机资源**；查容器真实内存用 cgroup 文件或 get_pod_metrics",
     "args_schema": {
         "command": {"type": "string", "required": True, "description": "诊断命令，如 'ps aux'、'df -h'、'apt-get install -y curl'、'sed -i s/foo/bar/ /etc/x.conf'（不要用管道|、重定向>、命令连接&&/; 等 shell 语法）"},
         "container": {"type": "string", "required": False, "description": "容器名（多容器 Pod 必填，从 describe_pod 结果获取）", "default": ""},
@@ -323,6 +349,26 @@ _register({
     "permission": "readonly",
     "domain": "all",
     "handler": _h_rag_search,
+})
+
+_register({
+    "name": "get_hpa",
+    "label": "HPA 扩缩容配置",
+    "description": "查询命名空间下 HPA（水平自动扩缩容）配置：min/max 副本数、扩容指标与阈值、当前副本数与指标值。用于诊断「一直扩容不回收/不扩容/副本数异常」类问题（只读）",
+    "args_schema": {},
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_hpa,
+})
+
+_register({
+    "name": "get_deployment",
+    "label": "Deployment 配置",
+    "description": "查询命名空间下 Deployment 配置：副本数、各容器镜像与资源 requests/limits（CPU/内存配额）。用于确认应用资源配额与 HPA 扩容依据是否匹配（只读）",
+    "args_schema": {},
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_deployment,
 })
 
 

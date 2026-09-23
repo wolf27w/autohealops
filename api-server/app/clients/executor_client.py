@@ -215,7 +215,7 @@ class ExecutorClient:
                     cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
                     container=container, command=command, trace_id=trace_id,
                 ),
-                timeout=self.TIMEOUT,
+                timeout=120,
                 metadata=_metadata(trace_id),
             )
             return {"success": resp.success, "output": resp.output, "error": resp.error}

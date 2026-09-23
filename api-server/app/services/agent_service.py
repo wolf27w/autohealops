@@ -44,14 +44,15 @@ async def _get_max_tool_steps() -> int:
 # ===== 批二·提速：快速诊断（默认）=====
 KB_HIT_THRESHOLD = 0.9  # 知识库直接复用阈值（相似度 ≥ 此值则零 AI 复用历史方案）
 # 单轮预采集工具（平台先取证，再一次性喂给 AI）
+# 应用诊断 = 容器诊断：只采容器自身资源，不读宿主机（free/df/top 读宿主机 /proc，会显示节点资源误导）
 QUICK_EVIDENCE_TOOLS: list[tuple[str, dict]] = [
     ("describe_pod", {}),
     ("search_logs", {"tail": 100}),
     ("get_pod_metrics", {}),
-    # 进容器直接采集（只读白名单命令；容器未运行/命令不存在时自动降级为失败，不影响整体诊断）
+    # 进程级真实内存/CPU（RSS 是进程真实占用，可定位吃内存的进程）
     ("exec_in_pod", {"command": "ps aux"}),
-    ("exec_in_pod", {"command": "df -h"}),
-    ("exec_in_pod", {"command": "free -m"}),
+    # 容器真实内存（cgroup 限制/用量，字节），替代 free（free 读宿主机 /proc/meminfo 显示节点资源）
+    ("exec_in_pod", {"command": "cat /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory/memory.usage_in_bytes"}),
 ]
 
 # 诊断工具集：由统一工具注册表提供（tool_registry.py，P0-1），此处不再硬编码

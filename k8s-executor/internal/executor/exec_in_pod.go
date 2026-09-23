@@ -76,8 +76,8 @@ func (e *Executor) ExecInPod(ctx context.Context, namespace, podName, container,
 	}
 
 	var stdout, stderr bytes.Buffer
-	// 15s 显式超时：慢集群/挂起的 exec 快速失败，不拖满 30s gRPC deadline（否则拖慢整轮诊断）
-	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	// 90s 显式超时：覆盖安装缺失诊断工具（apt-get/yum/apk）等耗时命令；挂起的 exec 仍能较快失败
+	execCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	err = exec.StreamWithContext(execCtx, remotecommand.StreamOptions{
 		Stdout: &stdout,
