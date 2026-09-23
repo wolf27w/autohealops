@@ -255,13 +255,13 @@ def _register(tool_def: dict) -> None:
 
 _register({
     "name": "exec_in_pod",
-    "label": "容器内只读命令",
-    "description": "在 Pod 容器内执行只读诊断命令（白名单：ps/env/cat/ls/ss/netstat/df/free/top 等），查看进程、环境变量、磁盘、内存、端口监听；多容器 Pod 必须从 describe_pod 结果中获取容器名并用 container 参数指定",
+    "label": "容器内命令",
+    "description": "在 Pod 容器内执行诊断命令（可安装缺失工具、调整配置等写操作；单命令执行、不经 shell，sh/python 等解释器被拦截）。多容器 Pod 必须从 describe_pod 结果中获取容器名并用 container 参数指定",
     "args_schema": {
-        "command": {"type": "string", "required": True, "description": "只读命令，如 'ps aux'、'env'、'df -h'、'free -m'、'ss -tlnp'、'cat /etc/hosts'（不要用管道|、重定向>、grep 等复杂语法）"},
+        "command": {"type": "string", "required": True, "description": "诊断命令，如 'ps aux'、'df -h'、'apt-get install -y curl'、'sed -i s/foo/bar/ /etc/x.conf'（不要用管道|、重定向>、命令连接&&/; 等 shell 语法）"},
         "container": {"type": "string", "required": False, "description": "容器名（多容器 Pod 必填，从 describe_pod 结果获取）", "default": ""},
     },
-    "permission": "readonly",
+    "permission": "operate",
     "domain": "application",
     "handler": _h_exec_in_pod,
 })

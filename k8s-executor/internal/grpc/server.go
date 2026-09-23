@@ -263,7 +263,7 @@ func (s *Server) GetDeploymentStatus(ctx context.Context, req *pb.GetDeploymentS
 	}, nil
 }
 
-// ExecInPod 容器内只读命令执行（应用诊断）
+// ExecInPod 容器内命令执行（应用诊断，可安装/配置等写操作，单命令不经 shell）
 func (s *Server) ExecInPod(ctx context.Context, req *pb.ExecInPodRequest) (*pb.ExecInPodResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)
 	if err != nil {

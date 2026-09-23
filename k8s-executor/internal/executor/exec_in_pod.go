@@ -1,4 +1,4 @@
-// Package executor 容器内只读命令执行（应用诊断）：ExecInPod
+// Package executor 容器内命令执行（应用诊断）：ExecInPod
 package executor
 
 import (
@@ -13,45 +13,38 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// readOnlyCommands 容器内诊断命令白名单（只读，拒绝任何写操作）
-// 已移除可写/可执行外部命令的 awk/sed/echo：
-//   - awk/sed 支持 -i 原地写文件、可调 system() 执行任意命令 → 命令注入风险
-//   - echo 无诊断价值且可配合其他途径写文件
-var readOnlyCommands = []string{
-	"ps", "env", "cat", "ls", "ss", "netstat", "df", "free", "top",
-	"pwd", "wc", "head", "tail", "grep", "du", "uptime", "uname", "id",
-	"which", "lsof", "pidof", "stat", "hostname", "date", "printenv",
+// blockedShellVerbs 拦截 shell / 脚本解释器：防止用 `sh -c "..."` / `python -c "..."` 绕过单命令限制执行任意代码
+var blockedShellVerbs = map[string]bool{
+	"sh": true, "bash": true, "ash": true, "dash": true, "zsh": true, "fish": true,
+	"python": true, "python2": true, "python3": true, "perl": true, "ruby": true,
+	"php": true, "node": true, "lua": true, "pwsh": true, "powershell": true,
 }
 
-// checkReadOnlyCommand 校验诊断命令：首词在白名单 + 拒绝管道/重定向/命令替换
-func checkReadOnlyCommand(command string) error {
+// checkCommand 校验诊断命令：非空 + 拒绝 shell 特性 + 拦截解释器。
+// 老板口径（2026-09-23）：应用诊断应在容器内「操作所有东西」（安装缺失工具、调整配置），
+// 故不再限制为只读白名单，允许任意命令。但仍以单命令（binary+args）执行、不经 shell，
+// 并拦截 sh/python 等解释器，从根上阻断命令注入/串联。
+func checkCommand(command string) error {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
 		return fmt.Errorf("空命令")
 	}
 	verb := fields[0]
-	allowed := false
-	for _, w := range readOnlyCommands {
-		if w == verb {
-			allowed = true
-			break
-		}
+	if blockedShellVerbs[verb] {
+		return fmt.Errorf("命令 %q 被拦截（不允许 shell/脚本解释器）", verb)
 	}
-	if !allowed {
-		return fmt.Errorf("诊断命令 %q 不在只读白名单", verb)
-	}
-	// 拒绝 shell 特性（管道/重定向/命令替换/分号），防注入
+	// 拒绝 shell 特性（管道/重定向/命令替换/分号/连接符），防注入
 	for _, ch := range []string{"|", ">", "<", ";", "$(", "`", "&&", "||"} {
 		if strings.Contains(command, ch) {
-			return fmt.Errorf("诊断命令包含非法字符 %q", ch)
+			return fmt.Errorf("诊断命令包含非法字符 %q（不允许管道/重定向/命令连接）", ch)
 		}
 	}
 	return nil
 }
 
-// ExecInPod 在指定 Pod 容器内执行只读诊断命令，返回输出
+// ExecInPod 在指定 Pod 容器内执行诊断命令，返回输出
 func (e *Executor) ExecInPod(ctx context.Context, namespace, podName, container, command string) (string, error) {
-	if err := checkReadOnlyCommand(command); err != nil {
+	if err := checkCommand(command); err != nil {
 		return "", err
 	}
 	if e.restConfig == nil {
