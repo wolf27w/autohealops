@@ -471,36 +471,98 @@ async def _notify_auto_ticket(ticket: Ticket, alert: Alert, reason: str, detail:
 
 # ============ 状态流转 ============
 
-async def _transition_status(session, ticket: Ticket, new_status: str, user, note: str = "") -> str | None:
-    """校验并执行状态流转（写 action 留言 + 时间戳）；返回错误信息或 None"""
+def apply_ticket_closure_to_alert(alert, ticket_no: str, final_status: str) -> bool:
+    """工单关闭/解决 → 回写关联告警（纯函数，无 DB 依赖，便于单测）
+
+    规则：
+    - 告警非终态（resolved/self_healed）→ 置 resolved + resolved_at/resolved_by，
+      message 追加「（工单 {ticket_no} 已{解决|关闭}）」，返回 True（发生了状态变更）。
+    - 已是终态 → 不动状态，也不重复追加 message（幂等），返回 False。
+    - 无论是否变更状态，manual_required 一律置 False（不再挂「需人工协助」）。
+
+    final_status：工单流转后的新状态（resolved/closed），决定 message 文案（已解决/已关闭）。
+    """
+    label = "已解决" if final_status == "resolved" else "已关闭"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    changed = False
+    if getattr(alert, "status", None) not in ("resolved", "self_healed"):
+        alert.status = "resolved"
+        alert.resolved_at = now
+        if not getattr(alert, "resolved_by", ""):
+            alert.resolved_by = "工单闭环"
+        alert.message = (getattr(alert, "message", "") or "") + f"（工单 {ticket_no} {label}）"
+        changed = True
+    alert.manual_required = False
+    return changed
+
+
+def _alert_service_key(alert) -> tuple:
+    """同服务聚合键：cluster_id + namespace + fault_type + 服务名（deployment_name 优先，否则 resource_name）"""
+    return (
+        getattr(alert, "cluster_id", None),
+        (getattr(alert, "namespace", "") or ""),
+        getattr(alert, "fault_type", ""),
+        (getattr(alert, "deployment_name", "") or getattr(alert, "resource_name", "")),
+    )
+
+
+async def _close_alert_flow(session, source_alert, ticket_no: str, final_status: str) -> list[int]:
+    """工单闭环：关闭「同故障同服务」的全部在途告警（含工单关联那条），返回被关闭的 alert id 列表。
+
+    老板口径（2026-09-23）：工单解决/关闭后，整个告警流程随之关闭，无需人工再到告警处理里单独操作一次。
+    历史原因：同一故障在工单未关闭期间可能累积多条告警（此前无「已开单抑制」），
+    单靠 ticket.alert_id 只回写一条会留下同故障其它在途告警悬空。
+    """
+    key = _alert_service_key(source_alert)
+    rows = (await session.execute(
+        select(Alert).where(
+            Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
+            Alert.fault_type == key[2],
+        )
+    )).scalars().all()
+    closed_ids: list[int] = []
+    for a in rows:
+        if _alert_service_key(a) != key:
+            continue
+        apply_ticket_closure_to_alert(a, ticket_no, final_status)
+        closed_ids.append(a.id)
+    return closed_ids
+
+
+async def _transition_status(session, ticket: Ticket, new_status: str, user, note: str = "") -> tuple[str | None, list[int]]:
+    """校验并执行状态流转（写 action 留言 + 时间戳）。
+
+    返回 (错误信息或 None, 本次被关闭的告警 id 列表)。
+    第二个返回值：resolved/closed 回写告警时，返回「同故障同服务」被置终态的告警 id，
+    供调用方决定解除这些告警关联的在途审批单。
+    """
     old = ticket.status
     if new_status not in VALID_STATUSES:
-        return f"状态不合法：{new_status}"
+        return f"状态不合法：{new_status}", []
     if new_status == old:
-        return None  # 无变化，不写留痕
+        return None, []  # 无变化，不写留痕
     allowed = VALID_TRANSITIONS.get(old, set())
     if new_status not in allowed:
-        return f"不允许从 {old} 流转到 {new_status}"
+        return f"不允许从 {old} 流转到 {new_status}", []
     ticket.status = new_status
     if new_status == "resolved":
         ticket.resolved_at = _now()
-        # 工单闭环 → 回写关联告警为已解决（避免「已转工单」告警悬空；仅动在途告警）
-        if ticket.alert_id:
-            try:
-                alert = await session.get(Alert, ticket.alert_id)
-                if alert and alert.status in ("pending", "awaiting_approval", "ticketed"):
-                    alert.status = "resolved"
-                    alert.resolved_at = _now()
-                    alert.message = (alert.message or "") + f"（工单 {ticket.ticket_no} 已解决）"
-            except Exception as e:  # noqa: BLE001
-                logger.warning("工单回写告警失败 ticket=%s: %s", ticket.id, e)
     if new_status == "closed":
         ticket.closed_at = _now()
         if not ticket.resolved_at:
             ticket.resolved_at = _now()
+    closed_ids: list[int] = []
+    # 工单闭环（resolved/closed）→ 关闭同故障同服务全部在途告警（closed 之前完全没回写，此处补上）
+    if new_status in ("resolved", "closed") and ticket.alert_id:
+        try:
+            source = await session.get(Alert, ticket.alert_id)
+            if source:
+                closed_ids = await _close_alert_flow(session, source, ticket.ticket_no, new_status)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("工单回写告警失败 ticket=%s: %s", ticket.id, e)
     content = f"状态流转：{old} → {new_status}" + (f"（{note}）" if note else "")
     await _append_action(session, ticket, user, content)
-    return None
+    return None, closed_ids
 
 
 async def update_ticket(ticket_id: int, payload: dict, user) -> dict:
@@ -529,11 +591,15 @@ async def update_ticket(ticket_id: int, payload: dict, user) -> dict:
         # 状态流转
         new_status = payload.get("status")
         status_changed = False
+        closed_alert_ids: list[int] = []
         if new_status is not None and new_status != t.status:
-            err = await _transition_status(session, t, new_status, user, (payload.get("note") or ""))
+            err, closed_alert_ids = await _transition_status(session, t, new_status, user, (payload.get("note") or ""))
             if err:
                 return {"ok": False, "reason": err}
             status_changed = True
+            # closed 一律解除关联在途审批单（即使没扫到同键告警，也兜底解除 alert_id 那条的审批）
+            if new_status == "closed" and t.alert_id:
+                closed_alert_ids = closed_alert_ids or [t.alert_id]
 
         await session.commit()
         await session.refresh(t)
@@ -541,6 +607,14 @@ async def update_ticket(ticket_id: int, payload: dict, user) -> dict:
 
     if status_changed:
         await _notify_ticket(result_ticket, "状态变更", getattr(user, "username", ""))
+        # 工单闭环后在 ticket commit 之后再解除在途审批单（避免事务交错）
+        for aid in closed_alert_ids:
+            try:
+                from app.services.alert_auto_service import _cancel_related_approvals
+                await _cancel_related_approvals(aid)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("解除工单关联在途审批单失败 ticket=%s alert=%s: %s",
+                               ticket_id, aid, e)
     return {"ok": True, "ticket": result_ticket}
 
 
@@ -687,14 +761,29 @@ async def get_ticket(ticket_id: int, user) -> dict | None:
 # ============ 删除（N1 补充：manager/admin 可删除；仅 admin 落地） ============
 
 async def delete_ticket(ticket_id: int, user) -> dict:
-    """删除工单（仅 admin）+ 连带删除留言留痕；工单与告警/审批解耦，不影响其状态"""
+    """删除工单（仅 admin）+ 连带删除留言留痕。
+
+    删除 = 放弃/闭环该问题：关联告警（及同故障同服务在途告警）一并置 resolved，
+    避免「工单删了、告警还挂着 ticketed」的孤儿状态（老板 2026-09-23 口径：告警↔工单是一个闭环）。
+    """
     if getattr(user, "role", "") != "admin":
         return {"ok": False, "reason": "仅管理员可删除工单"}
+    closed_ids: list[int] = []
     async with async_session() as session:
         t = await session.get(Ticket, ticket_id)
         if not t:
             return {"ok": False, "reason": "工单不存在"}
+        if t.alert_id:
+            source = await session.get(Alert, t.alert_id)
+            if source:
+                closed_ids = await _close_alert_flow(session, source, t.ticket_no, "closed")
         await session.execute(delete(TicketComment).where(TicketComment.ticket_id == ticket_id))
         await session.delete(t)
         await session.commit()
+    for aid in closed_ids:
+        try:
+            from app.services.alert_auto_service import _cancel_related_approvals
+            await _cancel_related_approvals(aid)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("删除工单后解除审批失败 ticket=%s alert=%s: %s", ticket_id, aid, e)
     return {"ok": True, "id": ticket_id}

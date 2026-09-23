@@ -238,6 +238,37 @@ async def _dedup_knowledge(fault_type: str, root_cause: str, repair_steps: str, 
         logger.warning("知识库写入失败（embedding 可能未装）: %s", e)
 
 
+async def _find_open_ticket_for_alert(alert: Alert):
+    """已开单抑制：找「同故障同服务」的在途工单（open/processing）。
+
+    老板口径（2026-09-23）：同一故障同一服务已有未关闭工单时，新告警应并入而非重复建单。
+    匹配键 = cluster_id + namespace + fault_type + 服务名（deployment_name 优先，否则 resource_name）。
+    返回在途 Ticket 或 None。
+    """
+    from app.models import Ticket
+    svc = (alert.deployment_name or alert.resource_name)
+    async with async_session() as session:
+        cands = (await session.execute(
+            select(Alert).where(
+                Alert.status == "ticketed",
+                Alert.fault_type == alert.fault_type,
+                Alert.cluster_id == alert.cluster_id,
+            )
+        )).scalars().all()
+        for a in cands:
+            if (a.deployment_name or a.resource_name) != svc:
+                continue
+            t = (await session.execute(
+                select(Ticket).where(
+                    Ticket.alert_id == a.id,
+                    Ticket.status.in_(["open", "processing"]),
+                ).order_by(Ticket.id.desc()).limit(1)
+            )).scalar_one_or_none()
+            if t is not None:
+                return t
+    return None
+
+
 async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -> None:
     """平台/AI 无法自动解决 → **自动创建工单**（派给值班人/团队）+ 标记告警「已转工单」+ 通知。
 
@@ -246,6 +277,25 @@ async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -
     自动建工单，以工单方式通知/派单/闭环（不再建 manual_assist 审核单）。
     """
     from app.services import ticket_service
+
+    # 已开单抑制（2026-09-23）：同故障同服务已有在途工单 → 本条并入，不重复建单/通知
+    try:
+        existing = await _find_open_ticket_for_alert(alert)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 已开单抑制检查失败: %s", alert.id, e)
+        existing = None
+    if existing is not None:
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a:
+                a.manual_required = True
+                a.manual_reason = (reason or "")[:255]
+                a.status = "ticketed"
+                if "并入在途工单" not in (a.message or ""):
+                    a.message = (a.message or "") + f"（同故障已有在途工单 {existing.ticket_no}，本条并入，不重复建单）"
+                await session.commit()
+        logger.info("告警 %d 已并入在途工单 %s（已开单抑制）", alert.id, existing.ticket_no)
+        return
 
     ticket_no = ""
     ticket_ok = False
