@@ -22,6 +22,8 @@ export interface BatchDecideResult {
 export interface PageParams {
   page?: number
   page_size?: number
+  /** 告警列表是否按「同类型同服务」合并（后端默认 true；false 保留逐条） */
+  group?: boolean
   [key: string]: unknown
 }
 
@@ -63,6 +65,10 @@ export interface Alert {
   manual_required: boolean
   manual_reason: string
   event_count: number
+  /** 合并后的同类型同服务告警条数（未合并=1） */
+  group_count?: number
+  /** 合并组内全部告警 id（含最新，按 id desc；未合并=[id]） */
+  group_ids?: number[]
   occurred_at?: string | null
   detected_at: string
   resolved_at?: string | null

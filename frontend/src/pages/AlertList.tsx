@@ -203,7 +203,16 @@ export default function AlertList() {
               {v ? <Tag color="blue">认领：{v}</Tag> : <span style={{ color: '#bbb' }}>未认领</span>}
             </Space>
           ) },
-          { title: '事件数', dataIndex: 'event_count' },
+          { title: '事件数', dataIndex: 'event_count', render: (v, r: Alert) => (
+            <Space size={4}>
+              <span>{v}</span>
+              {(r.group_count ?? 1) > 1 && (
+                <Tooltip title={`已合并 ${r.group_count} 条同类型同服务告警，仅显示最新`}>
+                  <Tag color="orange">同类型 ×{r.group_count}</Tag>
+                </Tooltip>
+              )}
+            </Space>
+          ) },
           { title: '报错时间', dataIndex: 'occurred_at', render: (t) => t || '-' },
           { title: '检测时间', dataIndex: 'detected_at' },
           {

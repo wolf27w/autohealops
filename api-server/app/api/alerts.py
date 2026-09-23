@@ -15,6 +15,7 @@ from app.core.security import generate_trace_id
 from app.middleware.permission import require_any_user, require_operator
 from app.models import AIDiagnosisResult, Alert, AlertComment, Approval, Cluster, RepairPlan
 from app.services import audit_service
+from app.services.alert_grouping import group_alerts
 
 router = APIRouter(prefix="/api/v1/alerts")
 
@@ -26,11 +27,15 @@ logger = get_logger("api-server.alerts")
 async def list_alerts(cluster_id: int | None = None, severity: str | None = None, status: str | None = None,
                       fault_type: str | None = None, manual_required: bool | None = None,
                       page: int = 1, page_size: int = 20, with_total: bool = False,
+                      group: bool = True,
                       user=Depends(require_any_user)):
     """告警列表。
 
     with_total=true 时返回 `{items, total, page, page_size}`（服务端分页：告警列表/故障诊断台账用）；
     默认仍返回数组（兼容旧前端）。
+
+    group=true（默认）时按「同 cluster + namespace + fault_type + 服务」合并同类型告警：
+    每组只保留最新一条，total 为分组数（而非原始行数）；group=false 保留逐条行为。
     """
     from sqlalchemy import and_, func
 
@@ -52,20 +57,32 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             conditions.append(Alert.manual_required == manual_required)
         if conditions:
             query = query.where(and_(*conditions))
-        total = 0
-        if with_total:
-            total = (await session.execute(
-                select(func.count()).select_from(Alert).where(and_(*conditions))
-            )).scalar() or 0
         if page < 1:
             page = 1
         if page_size < 1:
             page_size = 20
         if page_size > 1000:
             page_size = 1000  # 上限放宽：支持服务端分页，不再静默截断
-        query = query.order_by(Alert.id.desc()).offset((page - 1) * page_size).limit(page_size)
-        result = await session.execute(query)
-        alerts = list(result.scalars())
+        query = query.order_by(Alert.id.desc())
+        total = 0
+        # group_info: alert_id -> 该组合并信息（group_count/group_ids）；不合并时为空
+        group_info: dict[int, dict] = {}
+        if group:
+            # 全量取回匹配行（告警量不大，全量分组可接受），分组后再分页
+            all_alerts = list((await session.execute(query)).scalars())
+            grouped = group_alerts(all_alerts)
+            if with_total:
+                total = len(grouped)
+            page_groups = grouped[(page - 1) * page_size:(page - 1) * page_size + page_size]
+            alerts = [g["alert"] for g in page_groups]
+            group_info = {g["alert"].id: g for g in page_groups}
+        else:
+            if with_total:
+                total = (await session.execute(
+                    select(func.count()).select_from(Alert).where(and_(*conditions))
+                )).scalar() or 0
+            result = await session.execute(query.offset((page - 1) * page_size).limit(page_size))
+            alerts = list(result.scalars())
         # 查集群名称（多集群区分）
         cluster_result = await session.execute(select(Cluster))
         cluster_names = {c.id: c.name for c in cluster_result.scalars()}
@@ -97,7 +114,9 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
          "resolved_by": a.resolved_by or "",
          "assigned_to": a.assigned_to or "", "assigned_at": str(a.assigned_at) if a.assigned_at else "",
          "acknowledged": bool(a.acknowledged), "acknowledged_by": a.acknowledged_by or "",
-         "occurred_at": str(a.occurred_at) if a.occurred_at else "", "detected_at": str(a.detected_at)}
+         "occurred_at": str(a.occurred_at) if a.occurred_at else "", "detected_at": str(a.detected_at),
+         "group_count": group_info.get(a.id, {}).get("group_count", 1),
+         "group_ids": group_info.get(a.id, {}).get("group_ids", [a.id])}
         for a in alerts
     ]
     if with_total:

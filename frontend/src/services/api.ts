@@ -77,7 +77,8 @@ export const downloadInspectionReport = (reportId: number) =>
 
 // ============ 告警 ============
 export const getAlerts = (params?: PageParams) => http.get<Alert[]>('/alerts', { params })
-// 服务端分页版：with_total=true 返回 {items,total,page,page_size}（告警列表用）
+// 服务端分页版：with_total=true 返回 {items,total,page,page_size}（告警列表用）；
+// group 透传后端（默认不传=后端默认 true 合并同类型同服务）
 export const getAlertsPaged = (params?: PageParams) => http.get<PageResult<Alert>>('/alerts', { params: { ...params, with_total: true } })
 export const getAlert = (id: number) => http.get<Alert>(`/alerts/${id}`)
 export const resolveAlert = (id: number) => http.post(`/alerts/${id}/resolve`)
