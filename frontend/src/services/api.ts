@@ -3,7 +3,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { message } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
-  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotificationLog, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, Ticket, TicketComment, TicketDetail, User, Workload,
+  FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotificationLog, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, Ticket, TicketComment, TicketDetail, TicketStats, User, Workload,
 } from '../types'
 
 const api = axios.create({
@@ -402,6 +402,7 @@ export const updateRiskPolicy = (data: Payload) => http.put('/decisions/risk-pol
 
 // ============ 工单（N1） ============
 export const getTickets = (params?: PageParams) => http.get<PageResult<Ticket>>('/tickets', { params })
+export const getTicketStats = () => http.get<TicketStats>('/tickets/stats')
 export const getTicket = (id: number) => http.get<TicketDetail>(`/tickets/${id}`)
 export const createTicket = (data: Payload) => http.post<Ticket>('/tickets', data)
 export const createTicketFromAlert = (alertId: number) => http.post<Ticket>(`/tickets/from-alert/${alertId}`)

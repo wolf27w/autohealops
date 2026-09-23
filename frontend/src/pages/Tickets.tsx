@@ -5,9 +5,9 @@ import dayjs, { type Dayjs } from 'dayjs'
 import { PlusOutlined, UserOutlined, CommentOutlined, DeleteOutlined } from '@ant-design/icons'
 import {
   getUsers, getClusters, getDBConnections,
-  getTickets, getTicket, createTicket, updateTicket, assignTicket, addTicketComment, deleteTicket,
+  getTickets, getTicket, createTicket, updateTicket, assignTicket, addTicketComment, deleteTicket, getTicketStats,
 } from '../services/api'
-import type { Cluster, User, Ticket, TicketDetail, TicketComment } from '../types'
+import type { Cluster, User, Ticket, TicketDetail, TicketComment, TicketStats } from '../types'
 
 // ============ 本地类型（不修改 api.ts/types.ts，避免与并行任务冲突） ============
 // ============ 常量（与后端口径一致） ============
@@ -32,6 +32,14 @@ const NEXT_STATUS: Record<string, string[]> = {
   resolved: ['closed'],
   closed: [],
 }
+
+// 我处理工单的状态统计顺序
+const MINE_STAT = [
+  { key: 'open', label: '待受理' },
+  { key: 'processing', label: '处理中' },
+  { key: 'resolved', label: '已解决' },
+  { key: 'closed', label: '已关闭' },
+] as const
 
 // ============ 类型化请求门面（复用默认 api 实例，拦截器已解包 body.data） ============
 export default function Tickets() {
@@ -59,6 +67,8 @@ export default function Tickets() {
   const [clusters, setClusters] = useState<Cluster[]>([])
   // N1 补充：DB 类工单可关联数据库连接
   const [dbOptions, setDbOptions] = useState<{ value: number; label: string }[]>([])
+  // 当前用户处理工单统计（处理人=当前用户 按状态分布）
+  const [stats, setStats] = useState<TicketStats | null>(null)
 
   const loadList = () => {
     setLoading(true)
@@ -76,6 +86,10 @@ export default function Tickets() {
       .finally(() => setLoading(false))
   }
 
+  const loadStats = () => {
+    getTicketStats().then((d) => setStats(d ?? null)).catch(() => {})
+  }
+
   const loadDetail = (id: number) => {
     getTicket(id)
       .then((d) => setDetail(d))
@@ -83,6 +97,7 @@ export default function Tickets() {
   }
 
   useEffect(() => { loadList() }, [page, status, priority, source, clusterId, keyword, dateRange]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadStats() }, [])
   useEffect(() => {
     getUsers().then((d) => setUsers(d ?? [])).catch(() => {})
     getClusters().then((d) => setClusters(d ?? [])).catch(() => {})
@@ -100,6 +115,7 @@ export default function Tickets() {
     message.success(`已流转到「${STATUS_LABEL[next]}」`)
     loadDetail(t.id)
     loadList()
+    loadStats()
   }
 
   const doAssign = async () => {
@@ -110,6 +126,7 @@ export default function Tickets() {
     setAssignUserId(undefined)
     loadDetail(detail.ticket.id)
     loadList()
+    loadStats()
   }
 
   const doComment = async () => {
@@ -130,6 +147,7 @@ export default function Tickets() {
       message.success('已删除')
       setDrawerOpen(false)
       loadList()
+      loadStats()
     } catch { /* 拦截器已提示 */ }
   }
 
@@ -140,6 +158,7 @@ export default function Tickets() {
     setCreateOpen(false)
     createForm.resetFields()
     loadList()
+    loadStats()
   }
 
   const columns = [
@@ -175,6 +194,21 @@ export default function Tickets() {
 
   return (
     <div>
+      <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0' }}>
+        <Space size={18} wrap>
+          <span style={{ fontWeight: 600 }}>我处理的工单</span>
+          {MINE_STAT.map((m) => (
+            <span key={m.key}>
+              <Tag color={STATUS_COLOR[m.key]}>{m.label}</Tag>
+              <b style={{ marginLeft: 2 }}>{stats?.mine?.[m.key] ?? 0}</b>
+            </span>
+          ))}
+          <span style={{ color: '#999' }}>
+            共 <b>{stats?.mine?.total ?? 0}</b> · 我创建 <b>{stats?.created ?? 0}</b>
+          </span>
+        </Space>
+      </div>
+
       <Space style={{ marginBottom: 12 }} wrap>
         <Select allowClear placeholder="状态" style={{ width: 120 }} value={status}
           onChange={(v) => { setStatus(v); setPage(1) }}

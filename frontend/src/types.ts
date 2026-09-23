@@ -483,6 +483,17 @@ export interface TicketDetail {
   comments: TicketComment[]
 }
 
+export interface TicketStats {
+  mine: {
+    total: number
+    open: number
+    processing: number
+    resolved: number
+    closed: number
+  }
+  created: number
+}
+
 // ============ 去重：原本在多页各写一份的通用类型（2026-09-20） ============
 export interface PodTarget {
   clusterId: number

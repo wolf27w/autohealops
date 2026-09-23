@@ -28,6 +28,13 @@ async def list_tickets(status: str | None = None, priority: str | None = None,
     return {"code": 200, "message": "success", "data": data}
 
 
+@router.get("/stats")
+async def get_ticket_stats(user=Depends(require_any_user)):
+    """当前用户处理工单的统计（处理人=当前用户 按状态分布 + 我创建数）"""
+    data = await ticket_service.ticket_stats(user)
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.post("")
 async def create_ticket(payload: dict, user=Depends(require_operator)):
     """手动建单"""

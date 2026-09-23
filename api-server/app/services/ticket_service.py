@@ -733,6 +733,35 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+async def ticket_stats(user) -> dict:
+    """当前用户处理工单的统计：处理人=当前用户 的工单按状态分布（待受理/处理中/已解决/已关闭）+ 我创建数"""
+    uid = getattr(user, "id", None)
+    async with async_session() as session:
+        mine: dict[str, int] = {}
+        if uid is not None:
+            rows = (await session.execute(
+                select(Ticket.status, func.count())
+                .where(Ticket.assignee_id == uid)
+                .group_by(Ticket.status)
+            )).all()
+            mine = {s: c for s, c in rows}
+        created = 0
+        if uid is not None:
+            created = (await session.execute(
+                select(func.count()).select_from(Ticket).where(Ticket.created_by == uid)
+            )).scalar() or 0
+    return {
+        "mine": {
+            "total": sum(mine.values()),
+            "open": mine.get("open", 0),
+            "processing": mine.get("processing", 0),
+            "resolved": mine.get("resolved", 0),
+            "closed": mine.get("closed", 0),
+        },
+        "created": created,
+    }
+
+
 async def get_ticket(ticket_id: int, user) -> dict | None:
     """详情（含留言列表），带可见性校验"""
     async with async_session() as session:
