@@ -1,8 +1,8 @@
 // 仪表盘 v2：6 段布局（集群/时间筛选 + 全局健康分 + 平台健康 + KPI + 趋势/分布 + 实时告警/排行 + 异常 Pod/DB 健康 + 动作统计/时间线 + 集群水位）
 // 注：按老板口径只按「集群」维度看，不做项目筛选（项目颗粒度太粗）
-// 数据源：GET /api/v1/stats/dashboard?range|start/end&cluster_id（5s 轮询）+ /stats/platform-health
+// 数据源：GET /api/v1/stats/dashboard?range|start/end&cluster_id（15s 轮询，后端每 10s 预热）+ /stats/platform-health
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch,
 } from 'antd'
@@ -45,7 +45,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   // 时间范围：默认【实时】（跟随最新，滚动窗口），也可自定义起止时间段
   const [live, setLive] = useState(true)
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null)
-  const LIVE_RANGE = '24h'  // 实时模式滚动窗口（统一为最近 24 小时，5s 刷新）
+  const LIVE_RANGE = '24h'  // 实时模式滚动窗口（统一为最近 24 小时，15s 刷新）
   const presetValue = (key: string): [Dayjs, Dayjs] => {
     const span: Record<string, [number, string]> = { '10m': [10, 'minute'], '3h': [3, 'hour'], '8h': [8, 'hour'], '24h': [24, 'hour'] }
     const [n, unit] = span[key] || span['10m']
@@ -79,7 +79,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     refetchInterval: 15000,
   })
 
-  // 仪表盘主数据（5s 轮询；筛选变化自动重查）
+  // 仪表盘主数据（15s 轮询：后端已 10s 预热缓存；筛选变化自动重查）
+  // placeholderData: keepPreviousData → 切筛选/回页面时先展示上一次数据，不再短暂空白
   const { data, isFetching, refetch } = useQuery<DashboardData>({
     queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
     queryFn: () => (!live && customRange
@@ -89,7 +90,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           cluster_id: clusterId, ai_range: '24h',
         })
       : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, ai_range: '24h' })),
-    refetchInterval: 5000,
+    placeholderData: keepPreviousData,
+    refetchInterval: 15000,
   })
 
   const hs: HealthScore = data?.health_score ?? { total: 0, cluster_score: 0, alert_score: 0, db_score: 0 }

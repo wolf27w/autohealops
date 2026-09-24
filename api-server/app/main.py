@@ -185,7 +185,10 @@ async def startup_tasks() -> None:
     ):
         _background_tasks.append(asyncio.create_task(_interval_worker(name, 30, fn, timeout)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
-    logger.info("后台定时任务已拆分启动：审批超时/告警自动处理/日志告警扫描（每 30 秒，独立隔离）+ 周期维护")
+    # 仪表盘预热（每 10 秒）：把默认「实时」视图预先算好写缓存，前端轮询不再踩冷路径
+    from app.api.stats import prewarm_dashboard
+    _background_tasks.append(asyncio.create_task(_interval_worker("仪表盘预热", 10, prewarm_dashboard, 60.0)))
+    logger.info("后台定时任务已拆分启动：审批超时/告警自动处理/日志告警扫描（每 30 秒，独立隔离）+ 周期维护 + 仪表盘预热（每 10 秒）")
 
     # 云原生 RBAC：启动时自动接入存量集群（未接入的自动补上，无需人工触发）
     asyncio.create_task(_auto_setup_rbac_on_startup())
