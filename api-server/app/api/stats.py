@@ -4,17 +4,20 @@ import asyncio
 import json
 from datetime import datetime, time, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+from jose import JWTError
 from sqlalchemy import and_, exists, func, not_, or_, select, text
 
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import (acquire_lock, get_dashboard_generation, redis_pool,
                                    release_lock)
+from app.core.security import decode_jwt
 from app.middleware.permission import require_any_user
 from app.models import (AICallLog, AIModelConfig, Alert, Approval, Cluster, DBMetricSnapshot,
                         DBConnection, ExecutionLog, KnowledgeEntry, PodMetric, ProjectClusterNS,
-                        ProjectDBConnection, QuotaSnapshot, RepairPlan, ResourceSnapshot)
+                        ProjectDBConnection, QuotaSnapshot, RepairPlan, ResourceSnapshot, User)
 
 router = APIRouter(prefix="/api/v1/stats")
 
@@ -1080,6 +1083,61 @@ async def dashboard(
     """仪表盘 / 大屏聚合数据（fresh 缓存 45s + 单飞锁 + last-good 兜底 + 后台 10s 预热）"""
     payload = await dashboard_cached(range_, start, end, cluster_id, project_id, ai_range)
     return {"code": 200, "message": "success", "data": payload}
+
+
+@router.get("/dashboard/stream")
+async def dashboard_stream(request: Request, token: str = Query("")):
+    """仪表盘实时推送（SSE）：缓存代次一变即下发事件，前端收到即刷新（<1s）。
+
+    鉴权：EventSource 无法带 Authorization 头 → 用 ?token=；也兼容 Bearer 头。
+    实现：本端点仅每秒 GET 一次 Redis 里的「缓存代次」（极轻），代次变化
+    （告警/工单/审批/任务任一写入触发，见 app/core/orm_hooks.py）便推送一次 →
+    前端 invalidate 仪表盘查询。前端保留 5s 轮询作兜底。
+    """
+    # ---- 鉴权（复用 JWT 校验逻辑）----
+    if not token:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="未认证")
+    try:
+        if await redis_pool.get(f"token_blacklist:{token}"):
+            raise HTTPException(status_code=401, detail="token 已失效")
+        payload = decode_jwt(token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="无效的 token")
+    async with async_session() as session:
+        user = (await session.execute(
+            select(User).where(User.id == int(payload.get("sub", 0)))
+        )).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+
+    async def _event_gen():
+        last = await get_dashboard_generation()
+        yield f"event: dashboard\ndata: {{\"gen\": {last}}}\n\n"  # 首帧：立即刷新一次
+        ticks = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(1)
+            ticks += 1
+            cur = await get_dashboard_generation()
+            if cur != last:
+                last = cur
+                yield f"event: dashboard\ndata: {{\"gen\": {cur}}}\n\n"
+                ticks = 0
+            elif ticks >= 15:
+                yield ": keep-alive\n\n"  # 心跳，防代理断连
+                ticks = 0
+
+    return StreamingResponse(
+        _event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
+    )
 
 
 async def prewarm_dashboard() -> None:

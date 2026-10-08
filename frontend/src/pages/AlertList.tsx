@@ -33,11 +33,11 @@ export default function AlertList() {
   const [commentText, setCommentText] = useState('')
   const [sendingComment, setSendingComment] = useState(false)
 
-  // react-query：告警列表查询（15s 轮询 + 缓存 + 筛选变化自动重查；服务端分页）
+  // react-query：告警列表查询（5s 轮询 + 缓存 + 筛选变化自动重查；服务端分页）
   const { data: alertsData, isLoading: loading, refetch } = useQuery({
     queryKey: ['alerts', severity, status, manualOnly, page],
     queryFn: () => getAlertsPaged({ severity, status, manual_required: manualOnly, page, page_size: PAGE_SIZE }),
-    refetchInterval: 15000,
+    refetchInterval: 5000,
   })
   const alerts = alertsData?.items ?? []
   const alertTotal = alertsData?.total ?? 0

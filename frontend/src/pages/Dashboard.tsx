@@ -2,7 +2,7 @@
 // 注：按老板口径只按「集群」维度看，不做项目筛选（项目颗粒度太粗）
 // 数据源：GET /api/v1/stats/dashboard?range|start/end&cluster_id（15s 轮询，后端每 10s 预热）+ /stats/platform-health
 import { useEffect, useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch,
 } from 'antd'
@@ -71,6 +71,19 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     if (document.fullscreenElement) document.exitFullscreen()
     else document.documentElement.requestFullscreen?.()
   }
+
+  // 实时推送（SSE）：后端缓存代次变化（告警/工单/审批/任务变更）→ 立即刷新，5s 轮询作兜底
+  const qc = useQueryClient()
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    const es = new EventSource(`/api/v1/stats/dashboard/stream?token=${encodeURIComponent(token)}`)
+    es.addEventListener('dashboard', () => {
+      qc.invalidateQueries({ queryKey: ['dashboard-v2'] })
+      qc.invalidateQueries({ queryKey: ['platform-health'] })
+    })
+    return () => es.close()
+  }, [qc])
 
   // 平台健康（右上角小标，独立接口）
   const { data: platformHealth } = useQuery({
