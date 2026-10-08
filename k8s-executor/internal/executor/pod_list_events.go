@@ -79,6 +79,96 @@ func (e *Executor) ListPods(ctx context.Context, namespace string) ([]PodBriefIn
 	return out, nil
 }
 
+// ContainerDetail 容器详情（含镜像/状态）
+type ContainerDetail struct {
+	Name         string
+	Image        string
+	State        string // running/waiting/terminated
+	Ready        bool
+	RestartCount int32
+	Reason       string
+	StartedAt    string // RFC3339
+	FinishedAt   string // RFC3339
+	IsInit       bool
+}
+
+// PodDetail Pod 详情（含容器组内容）
+type PodDetail struct {
+	Name           string
+	Namespace      string
+	Phase          string
+	Ready          bool
+	RestartCount   int32
+	CreatedAt      string
+	NodeName       string
+	PodIP          string
+	HostIP         string
+	Containers     []ContainerDetail
+	InitContainers []ContainerDetail
+}
+
+// GetPodDetail 获取 Pod 详情：基本信息 + 容器组内各容器（镜像/状态/就绪/重启）
+func (e *Executor) GetPodDetail(ctx context.Context, namespace, podName string) (*PodDetail, error) {
+	p, err := e.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	d := &PodDetail{
+		Name: p.Name, Namespace: p.Namespace, Phase: string(p.Status.Phase),
+		NodeName: p.Spec.NodeName, PodIP: p.Status.PodIP, HostIP: p.Status.HostIP,
+	}
+	if !p.CreationTimestamp.IsZero() {
+		d.CreatedAt = p.CreationTimestamp.Time.Format(time.RFC3339)
+	}
+	// 镜像：spec 里按名字建索引（status 只给状态，不给镜像）
+	imgMap := map[string]string{}
+	for _, c := range p.Spec.Containers {
+		imgMap[c.Name] = c.Image
+	}
+	for _, c := range p.Spec.InitContainers {
+		imgMap[c.Name] = c.Image
+	}
+
+	totalRestart := int32(0)
+	allReady := len(p.Status.ContainerStatuses) > 0
+	for _, cs := range p.Status.ContainerStatuses {
+		totalRestart += cs.RestartCount
+		if !cs.Ready {
+			allReady = false
+		}
+		d.Containers = append(d.Containers, buildContainerDetail(cs, imgMap[cs.Name], false))
+	}
+	for _, cs := range p.Status.InitContainerStatuses {
+		totalRestart += cs.RestartCount
+		d.InitContainers = append(d.InitContainers, buildContainerDetail(cs, imgMap[cs.Name], true))
+	}
+	d.RestartCount = totalRestart
+	d.Ready = allReady && p.Status.Phase == corev1.PodRunning
+	return d, nil
+}
+
+func buildContainerDetail(cs corev1.ContainerStatus, image string, isInit bool) ContainerDetail {
+	cd := ContainerDetail{Name: cs.Name, Image: image, Ready: cs.Ready, RestartCount: cs.RestartCount, IsInit: isInit}
+	switch {
+	case cs.State.Running != nil:
+		cd.State = "running"
+		cd.StartedAt = cs.State.Running.StartedAt.Time.Format(time.RFC3339)
+	case cs.State.Waiting != nil:
+		cd.State = "waiting"
+		cd.Reason = cs.State.Waiting.Reason
+	case cs.State.Terminated != nil:
+		cd.State = "terminated"
+		cd.Reason = cs.State.Terminated.Reason
+		if !cs.State.Terminated.StartedAt.IsZero() {
+			cd.StartedAt = cs.State.Terminated.StartedAt.Time.Format(time.RFC3339)
+		}
+		if !cs.State.Terminated.FinishedAt.IsZero() {
+			cd.FinishedAt = cs.State.Terminated.FinishedAt.Time.Format(time.RFC3339)
+		}
+	}
+	return cd
+}
+
 // PodEventInfo 单个 k8s Event（Pod 相关）
 type PodEventInfo struct {
 	Type           string

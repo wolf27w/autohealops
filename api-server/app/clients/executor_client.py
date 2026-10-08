@@ -400,6 +400,34 @@ class ExecutorClient:
             logger.error("get_pod_events 失败: %s", e)
             return {"success": False, "events": [], "error": str(e)}
 
+    def get_pod_detail(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
+        """Pod 详情（含容器组内容）→ 返回 {success, detail, error}"""
+        try:
+            resp = _get_stub().GetPodDetail(
+                executor_pb2.GetPodDetailRequest(cluster_id=cluster_id, namespace=namespace, pod_name=pod_name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            if not resp.success:
+                return {"success": False, "detail": None, "error": resp.error}
+
+            def _conv(cs):
+                return {"name": cs.name, "image": cs.image, "state": cs.state, "ready": cs.ready,
+                        "restart_count": cs.restart_count, "reason": cs.reason,
+                        "started_at": cs.started_at, "finished_at": cs.finished_at, "is_init": cs.is_init}
+
+            return {"success": True, "detail": {
+                "name": resp.name, "namespace": resp.namespace, "phase": resp.phase,
+                "ready": resp.ready, "restart_count": resp.restart_count,
+                "created_at": resp.created_at, "node_name": resp.node_name,
+                "pod_ip": resp.pod_ip, "host_ip": resp.host_ip,
+                "containers": [_conv(c) for c in resp.containers],
+                "init_containers": [_conv(c) for c in resp.init_containers],
+            }, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_pod_detail 失败: %s", e)
+            return {"success": False, "detail": None, "error": str(e)}
+
     def get_workload_yaml(self, cluster_id: int, kind: str, namespace: str, name: str, trace_id: str = "") -> dict:
         """获取工作负载（整个服务）YAML → 返回 {success, yaml, error}"""
         try:

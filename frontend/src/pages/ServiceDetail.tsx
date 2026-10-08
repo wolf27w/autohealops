@@ -6,6 +6,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
+import PodDetailDrawer from '../components/PodDetailDrawer'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, getClusterPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
@@ -53,6 +54,7 @@ export default function ServiceDetail() {
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
+  const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [podTab, setPodTab] = useState('pods')
   const [pods, setPods] = useState<ServicePod[]>([])
   const [events, setEvents] = useState<WorkloadEvent[]>([])
@@ -221,7 +223,7 @@ export default function ServiceDetail() {
           { key: 'pods', label: 'Pods', children: (
             <Table rowKey="name" size="small" dataSource={pods} pagination={false}
               columns={[
-                { title: '名称', dataIndex: 'name' },
+                { title: '名称', dataIndex: 'name', render: (v, r) => <a onClick={() => setDetailPod({ clusterId, namespace: r.namespace, name: r.name })}>{v}</a> },
                 { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'Running' ? 'green' : 'red'}>{s}</Tag> },
                 { title: '容器', dataIndex: 'containers', width: 240, render: (v, r) => {
                   const cs = Array.isArray(v) ? (v as string[]) : []
@@ -285,6 +287,7 @@ export default function ServiceDetail() {
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
+      <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
 
       <Modal title={`编辑探针：${name}`} open={probeModal} onOk={handleProbeSubmit} onCancel={() => setProbeModal(false)} width={560}>
         <Form form={probeForm} layout="vertical">

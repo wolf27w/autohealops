@@ -404,6 +404,35 @@ func (s *Server) GetPodEvents(ctx context.Context, req *pb.GetPodEventsRequest) 
 	return &pb.GetPodEventsResponse{Success: true, Events: events}, nil
 }
 
+// GetPodDetail Pod 详情（含容器组内容）
+func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) (*pb.GetPodDetailResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetPodDetailResponse{Success: false, Error: err.Error()}, nil
+	}
+	d, err := ex.GetPodDetail(ctx, req.Namespace, req.PodName)
+	if err != nil {
+		return &pb.GetPodDetailResponse{Success: false, Error: err.Error()}, nil
+	}
+	conv := func(in []executor.ContainerDetail) []*pb.ContainerDetail {
+		out := make([]*pb.ContainerDetail, 0, len(in))
+		for _, c := range in {
+			out = append(out, &pb.ContainerDetail{
+				Name: c.Name, Image: c.Image, State: c.State, Ready: c.Ready,
+				RestartCount: c.RestartCount, Reason: c.Reason,
+				StartedAt: c.StartedAt, FinishedAt: c.FinishedAt, IsInit: c.IsInit,
+			})
+		}
+		return out
+	}
+	return &pb.GetPodDetailResponse{
+		Success: true, Name: d.Name, Namespace: d.Namespace, Phase: d.Phase,
+		Ready: d.Ready, RestartCount: d.RestartCount, CreatedAt: d.CreatedAt,
+		NodeName: d.NodeName, PodIp: d.PodIP, HostIp: d.HostIP,
+		Containers: conv(d.Containers), InitContainers: conv(d.InitContainers),
+	}, nil
+}
+
 // GetWorkloadYaml 获取工作负载（整个服务）YAML
 func (s *Server) GetWorkloadYaml(ctx context.Context, req *pb.GetWorkloadYamlRequest) (*pb.GetWorkloadYamlResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)

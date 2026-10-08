@@ -48,6 +48,8 @@ service ExecutorService {
   rpc ApplyPodYaml(ApplyPodYamlRequest) returns (ApplyPodYamlResponse);
   // 命名空间 Pod 列表（含创建时间/就绪/重启，集群管理容器组用）
   rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
+  // Pod 详情（含容器组内各容器：镜像/状态/就绪/重启；点击 Pod 展开用）
+  rpc GetPodDetail(GetPodDetailRequest) returns (GetPodDetailResponse);
   // 单个 Pod 的事件（k8s Event）
   rpc GetPodEvents(GetPodEventsRequest) returns (GetPodEventsResponse);
   // 获取工作负载（整个服务）YAML：Deployment/StatefulSet/DaemonSet/CronJob
@@ -366,6 +368,39 @@ message ListPodsResponse {
   bool success = 1;
   repeated PodBriefInfo pods = 2;
   string error = 3;
+}
+
+// ---------- GetPodDetail（Pod 详情 / 容器组内容） ----------
+message GetPodDetailRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+}
+message ContainerDetail {
+  string name = 1;
+  string image = 2;            // 镜像
+  string state = 3;            // running/waiting/terminated
+  bool ready = 4;
+  int32 restart_count = 5;
+  string reason = 6;           // waiting/terminated 的 reason
+  string started_at = 7;       // RFC3339
+  string finished_at = 8;      // RFC3339
+  bool is_init = 9;            // 是否 init 容器
+}
+message GetPodDetailResponse {
+  bool success = 1;
+  string name = 2;
+  string namespace = 3;
+  string phase = 4;
+  bool ready = 5;
+  int32 restart_count = 6;
+  string created_at = 7;       // RFC3339
+  string node_name = 8;
+  string pod_ip = 9;
+  string host_ip = 10;
+  repeated ContainerDetail containers = 11;
+  repeated ContainerDetail init_containers = 12;
+  string error = 13;
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------

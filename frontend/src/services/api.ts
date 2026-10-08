@@ -299,6 +299,9 @@ export const getClusterPods = (clusterId: number, namespace = '') =>
 // 单个 Pod 的事件（k8s Event）
 export const getPodEvents = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/events`)
+// Pod 详情（含容器组内容）
+export const getPodDetail = (clusterId: number, ns: string, pod: string) =>
+  http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/detail`)
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')

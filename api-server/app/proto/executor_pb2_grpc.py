@@ -135,6 +135,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.ListPodsRequest.SerializeToString,
                 response_deserializer=executor__pb2.ListPodsResponse.FromString,
                 _registered_method=True)
+        self.GetPodDetail = channel.unary_unary(
+                '/executor.ExecutorService/GetPodDetail',
+                request_serializer=executor__pb2.GetPodDetailRequest.SerializeToString,
+                response_deserializer=executor__pb2.GetPodDetailResponse.FromString,
+                _registered_method=True)
         self.GetPodEvents = channel.unary_unary(
                 '/executor.ExecutorService/GetPodEvents',
                 request_serializer=executor__pb2.GetPodEventsRequest.SerializeToString,
@@ -340,6 +345,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetPodDetail(self, request, context):
+        """Pod 详情（含容器组内各容器：镜像/状态/就绪/重启；点击 Pod 展开用）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetPodEvents(self, request, context):
         """单个 Pod 的事件（k8s Event）
         """
@@ -521,6 +533,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.ListPods,
                     request_deserializer=executor__pb2.ListPodsRequest.FromString,
                     response_serializer=executor__pb2.ListPodsResponse.SerializeToString,
+            ),
+            'GetPodDetail': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPodDetail,
+                    request_deserializer=executor__pb2.GetPodDetailRequest.FromString,
+                    response_serializer=executor__pb2.GetPodDetailResponse.SerializeToString,
             ),
             'GetPodEvents': grpc.unary_unary_rpc_method_handler(
                     servicer.GetPodEvents,
@@ -1124,6 +1141,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/ListPods',
             executor__pb2.ListPodsRequest.SerializeToString,
             executor__pb2.ListPodsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPodDetail(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetPodDetail',
+            executor__pb2.GetPodDetailRequest.SerializeToString,
+            executor__pb2.GetPodDetailResponse.FromString,
             options,
             channel_credentials,
             insecure,

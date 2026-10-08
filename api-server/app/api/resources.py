@@ -254,6 +254,17 @@ async def pod_events(cluster_id: int, namespace: str, pod_name: str, user=Depend
     return {"code": 200, "message": "success", "data": {"events": r.get("events", [])}}
 
 
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/detail")
+async def pod_detail(cluster_id: int, namespace: str, pod_name: str, user=Depends(require_any_user)):
+    """Pod 详情：基本信息 + 容器组内各容器（镜像/状态/就绪/重启）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_pod_detail, cluster_id, namespace, pod_name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "Pod 详情获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": r.get("detail")}
+
+
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
 async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
     """获取工作负载（整个服务）YAML（只读）"""

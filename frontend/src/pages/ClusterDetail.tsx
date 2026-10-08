@@ -9,6 +9,7 @@ import { Line } from '@ant-design/charts'
 import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
+import PodDetailDrawer from '../components/PodDetailDrawer'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -69,6 +70,7 @@ export default function ClusterDetail() {
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
   const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
+  const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
@@ -297,7 +299,9 @@ export default function ClusterDetail() {
           pagination={paginationConfig}
           columns={[
             { title: '命名空间', dataIndex: 'namespace', width: 180 },
-            { title: '名称', dataIndex: 'name' },
+            { title: '名称', dataIndex: 'name', render: (v: string, r: ResourceItem) => (
+              <a onClick={() => setDetailPod({ clusterId: Number(id), namespace: r.namespace, name: r.name })}>{v}</a>
+            ) },
             { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
             { title: '容器', dataIndex: 'containers', width: 240, render: (v: unknown, r: ResourceItem) => {
               const cs = Array.isArray(v) ? (v as string[]) : []
@@ -384,6 +388,7 @@ export default function ClusterDetail() {
       <ExecPodModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
+      <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>
