@@ -1,7 +1,7 @@
 // 编辑设置：ConfigMap→键值；Secret→按类型（镜像服务/证书/普通键值）
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Alert, message } from 'antd'
-import { getObjectDetail, updateObjectData } from '../services/api'
+import { getObjectDetail, updateObjectData, applyObject } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
@@ -26,9 +26,16 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [secType, setSecType] = useState('Opaque')
+  const isCreate = !!target?.create
 
   useEffect(() => {
     if (!target) return
+    if (target.create) {
+      form.resetFields()
+      setSecType('Opaque')
+      form.setFieldsValue({ name: '', namespace: target.namespace || 'default', data: [{ key: '', value: '' }] })
+      return
+    }
     setLoading(true)
     getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
       .then((d) => {
@@ -96,13 +103,22 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
     setLoading(true)
     try {
       const data = target.kind === 'configmap' ? fromKvList(v.data) : buildSecretData(v)
-      await updateObjectData(target.clusterId, target.kind, target.namespace, target.name, data,
-        target.kind === 'secret' ? secType : undefined)
-      message.success('已保存')
+      if (isCreate) {
+        const metadata = { name: (v.name || '').trim(), namespace: (v.namespace || '').trim() || 'default' }
+        const object = target.kind === 'configmap'
+          ? { apiVersion: 'v1', kind: 'ConfigMap', metadata, data }
+          : { apiVersion: 'v1', kind: 'Secret', metadata, type: secType, stringData: data }
+        await applyObject(target.clusterId, target.kind, object)
+        message.success('已创建')
+      } else {
+        await updateObjectData(target.clusterId, target.kind, target.namespace, target.name, data,
+          target.kind === 'secret' ? secType : undefined)
+        message.success('已保存')
+      }
       onSaved?.()
       onClose()
     } catch {
-      message.error('保存失败')
+      message.error(isCreate ? '创建失败' : '保存失败')
     } finally {
       setLoading(false)
     }
@@ -111,9 +127,13 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
   const isSecret = target?.kind === 'secret'
   const label = isSecret ? '保密字典' : '配置字典'
   return (
-    <Modal title={`编辑设置：${target?.name || ''}（${label}）`} open={!!target} onCancel={onClose}
-      onOk={submit} okText="保存" confirmLoading={loading} width={760}>
+    <Modal title={`${isCreate ? '创建' : '编辑设置'}：${isCreate ? label : (target?.name || '')}${isCreate ? '' : `（${label}）`}`} open={!!target} onCancel={onClose}
+      onOk={submit} okText={isCreate ? '创建' : '保存'} confirmLoading={loading} width={760}>
       <Form form={form} layout="vertical">
+        {isCreate && (
+          <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
+          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item></>
+        )}
         {!isSecret && (
           <Form.Item label="数据（key → value）" style={{ marginBottom: 0 }}>
             <KeyValueList name="data" addLabel="添加数据项" />

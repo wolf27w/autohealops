@@ -465,6 +465,31 @@ async def object_update_spec(cluster_id: int, kind: str, namespace: str, name: s
     return {"code": 200, "message": "success", "data": {"message": "已保存"}}
 
 
+@router.post("/clusters/{cluster_id}/objects/{kind}/apply")
+async def object_apply(cluster_id: int, kind: str, payload: dict, user=Depends(require_operator)):
+    """按结构化对象（body.object 为 k8s 对象 JSON）创建/更新（需操作员权限）
+
+    用于 KubeSphere 风格的结构化创建表单：前端拼好对象，后端转 YAML 后 server-side apply。
+    """
+    import yaml as _yaml
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    obj = payload.get("object") or {}
+    if not isinstance(obj, dict):
+        return {"code": 400, "message": "object 必填", "data": None}
+    md = obj.get("metadata") or {}
+    if not (md.get("name") or "").strip():
+        return {"code": 400, "message": "object.metadata.name 必填", "data": None}
+    ns = md.get("namespace", "") or ""
+    if denied := await _deny_cluster(user, cluster_id, ns, required="operate"):
+        return denied
+    y = _yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, ns, "", y)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": "已应用"}}
+
+
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
 async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
     """获取工作负载（整个服务）YAML（只读）"""

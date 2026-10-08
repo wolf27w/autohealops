@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Button, Space, Alert, message } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec } from '../services/api'
+import { getObjectDetail, updateObjectSpec, applyObject } from '../services/api'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
 interface PathRow { host?: string; path?: string; pathType?: string; serviceName?: string; servicePort?: string }
@@ -14,9 +14,15 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const isCreate = !!target?.create
 
   useEffect(() => {
     if (!target) return
+    if (target.create) {
+      form.resetFields()
+      form.setFieldsValue({ name: '', namespace: target.namespace || 'default', ingressClassName: '', rows: [{ pathType: 'Prefix', path: '/' }] })
+      return
+    }
     setLoading(true)
     getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
       .then((d) => {
@@ -56,24 +62,37 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
     const rules = Object.entries(grouped).map(([host, paths]) => ({ host, http: { paths } }))
     setLoading(true)
     try {
-      await updateObjectSpec(target.clusterId, target.kind, target.namespace, target.name, {
-        ingressClassName: v.ingressClassName || undefined, rules,
-      })
-      message.success('已保存')
+      if (isCreate) {
+        await applyObject(target.clusterId, 'ingress', {
+          apiVersion: 'networking.k8s.io/v1', kind: 'Ingress',
+          metadata: { name: (v.name || '').trim(), namespace: (v.namespace || '').trim() || 'default' },
+          spec: { ingressClassName: v.ingressClassName || undefined, rules },
+        })
+        message.success('已创建')
+      } else {
+        await updateObjectSpec(target.clusterId, target.kind, target.namespace, target.name, {
+          ingressClassName: v.ingressClassName || undefined, rules,
+        })
+        message.success('已保存')
+      }
       onSaved?.()
       onClose()
     } catch {
-      message.error('保存失败')
+      message.error(isCreate ? '创建失败' : '保存失败')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <Modal title={`编辑设置：${target?.name || ''}（路由）`} open={!!target} onCancel={onClose}
-      onOk={submit} okText="保存" confirmLoading={loading} width={860}>
+    <Modal title={isCreate ? '创建路由' : `编辑设置：${target?.name || ''}（路由）`} open={!!target} onCancel={onClose}
+      onOk={submit} okText={isCreate ? '创建' : '保存'} confirmLoading={loading} width={860}>
       <Alert type="info" showIcon style={{ marginBottom: 8 }} message="规则按 host 分组；一行 = 一条 path → 后端服务。" />
       <Form form={form} layout="vertical">
+        {isCreate && (
+          <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
+          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item></>
+        )}
         <Form.Item name="ingressClassName" label="IngressClass">
           <Input placeholder="如 nginx" style={{ width: 260 }} />
         </Form.Item>

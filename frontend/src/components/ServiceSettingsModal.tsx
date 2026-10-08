@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Button, Space, Alert, message } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec } from '../services/api'
+import { getObjectDetail, updateObjectSpec, applyObject } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
@@ -15,9 +15,15 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const isCreate = !!target?.create
 
   useEffect(() => {
     if (!target) return
+    if (target.create) {
+      form.resetFields()
+      form.setFieldsValue({ name: '', namespace: target.namespace || 'default', type: 'ClusterIP', selector: [{ key: '', value: '' }], ports: [{ protocol: 'TCP' }] })
+      return
+    }
     setLoading(true)
     getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
       .then((d) => {
@@ -48,24 +54,37 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
     })
     setLoading(true)
     try {
-      await updateObjectSpec(target.clusterId, target.kind, target.namespace, target.name, {
-        type: v.type, selector: fromKvList(v.selector), ports,
-      })
-      message.success('已保存')
+      if (isCreate) {
+        await applyObject(target.clusterId, 'service', {
+          apiVersion: 'v1', kind: 'Service',
+          metadata: { name: (v.name || '').trim(), namespace: (v.namespace || '').trim() || 'default' },
+          spec: { type: v.type, selector: fromKvList(v.selector), ports },
+        })
+        message.success('已创建')
+      } else {
+        await updateObjectSpec(target.clusterId, target.kind, target.namespace, target.name, {
+          type: v.type, selector: fromKvList(v.selector), ports,
+        })
+        message.success('已保存')
+      }
       onSaved?.()
       onClose()
     } catch {
-      message.error('保存失败')
+      message.error(isCreate ? '创建失败' : '保存失败')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <Modal title={`编辑设置：${target?.name || ''}（服务）`} open={!!target} onCancel={onClose}
-      onOk={submit} okText="保存" confirmLoading={loading} width={760}>
+    <Modal title={isCreate ? '创建服务' : `编辑设置：${target?.name || ''}（服务）`} open={!!target} onCancel={onClose}
+      onOk={submit} okText={isCreate ? '创建' : '保存'} confirmLoading={loading} width={760}>
       <Alert type="info" showIcon style={{ marginBottom: 8 }} message="仅合并更新 类型/选择器/端口，其余字段（如 clusterIP）保留。" />
       <Form form={form} layout="vertical">
+        {isCreate && (
+          <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
+          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item></>
+        )}
         <Form.Item name="type" label="类型" rules={[{ required: true }]}>
           <Select options={['ClusterIP', 'NodePort', 'LoadBalancer', 'ExternalName'].map((v) => ({ value: v, label: v }))} style={{ width: 220 }} />
         </Form.Item>

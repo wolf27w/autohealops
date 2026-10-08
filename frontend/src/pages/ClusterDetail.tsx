@@ -573,12 +573,14 @@ export default function ClusterDetail() {
           <Empty description="暂无数据，请先触发采集或添加集群" />
         ) : (
           <Tabs activeKey={activeType} onChange={changeType} items={tabItems}
-            tabBarExtraContent={(activeType === 'configmaps' || activeType === 'secrets') ? (
-              <Button type="primary" size="small"
-                onClick={() => setConfigObj({ clusterId: Number(id), kind: activeType === 'secrets' ? 'secret' : 'configmap', namespace: activeNs === '_all_' ? 'default' : activeNs, name: '', create: true })}>
-                创建{activeType === 'secrets' ? '保密字典' : '配置字典'}
-              </Button>
-            ) : undefined} />
+            tabBarExtraContent={(() => {
+              const ns = activeNs === '_all_' ? 'default' : activeNs
+              if (activeType === 'configmaps') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'configmap', namespace: ns, name: '', create: true })}>创建配置字典</Button>
+              if (activeType === 'secrets') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'secret', namespace: ns, name: '', create: true })}>创建保密字典</Button>
+              if (activeType === 'services') return <Button type="primary" size="small" onClick={() => setSvcObj({ clusterId: Number(id), kind: 'service', namespace: ns, name: '', create: true })}>创建服务</Button>
+              if (activeType === 'ingresses') return <Button type="primary" size="small" onClick={() => setIngObj({ clusterId: Number(id), kind: 'ingress', namespace: ns, name: '', create: true })}>创建路由</Button>
+              return undefined
+            })()} />
         )}
       </Card>
 

@@ -320,6 +320,8 @@ export const updateObjectData = (clusterId: number, kind: string, ns: string, na
   http.put(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/data`, { data, type })
 export const updateObjectSpec = (clusterId: number, kind: string, ns: string, name: string, spec: Record<string, unknown>) =>
   http.put(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/spec`, { spec })
+export const applyObject = (clusterId: number, kind: string, object: Record<string, unknown>) =>
+  http.post(`/resources/clusters/${clusterId}/objects/${kind}/apply`, { object })
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')
