@@ -140,6 +140,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.GetPodDetailRequest.SerializeToString,
                 response_deserializer=executor__pb2.GetPodDetailResponse.FromString,
                 _registered_method=True)
+        self.ListMiscResources = channel.unary_unary(
+                '/executor.ExecutorService/ListMiscResources',
+                request_serializer=executor__pb2.ListMiscResourcesRequest.SerializeToString,
+                response_deserializer=executor__pb2.ListMiscResourcesResponse.FromString,
+                _registered_method=True)
         self.GetPodEvents = channel.unary_unary(
                 '/executor.ExecutorService/GetPodEvents',
                 request_serializer=executor__pb2.GetPodEventsRequest.SerializeToString,
@@ -352,6 +357,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListMiscResources(self, request, context):
+        """集群管理其它资源：服务/路由(Ingress)/ConfigMap/Secret/存储(PVC)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetPodEvents(self, request, context):
         """单个 Pod 的事件（k8s Event）
         """
@@ -538,6 +550,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.GetPodDetail,
                     request_deserializer=executor__pb2.GetPodDetailRequest.FromString,
                     response_serializer=executor__pb2.GetPodDetailResponse.SerializeToString,
+            ),
+            'ListMiscResources': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListMiscResources,
+                    request_deserializer=executor__pb2.ListMiscResourcesRequest.FromString,
+                    response_serializer=executor__pb2.ListMiscResourcesResponse.SerializeToString,
             ),
             'GetPodEvents': grpc.unary_unary_rpc_method_handler(
                     servicer.GetPodEvents,
@@ -1168,6 +1185,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/GetPodDetail',
             executor__pb2.GetPodDetailRequest.SerializeToString,
             executor__pb2.GetPodDetailResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListMiscResources(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ListMiscResources',
+            executor__pb2.ListMiscResourcesRequest.SerializeToString,
+            executor__pb2.ListMiscResourcesResponse.FromString,
             options,
             channel_credentials,
             insecure,

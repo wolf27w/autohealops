@@ -428,6 +428,31 @@ class ExecutorClient:
             logger.error("get_pod_detail 失败: %s", e)
             return {"success": False, "detail": None, "error": str(e)}
 
+    def list_misc_resources(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> dict:
+        """集群管理其它资源（服务/路由/ConfigMap/Secret/PVC）→ 返回 {success, services, ingresses, configmaps, secrets, pvcs, error}"""
+        try:
+            resp = _get_stub().ListMiscResources(
+                executor_pb2.ListMiscResourcesRequest(cluster_id=cluster_id, namespace=namespace),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "error": resp.error,
+                    "services": [{"namespace": x.namespace, "name": x.name, "type": x.type,
+                                   "cluster_ip": x.cluster_ip, "ports": x.ports, "external_ip": x.external_ip}
+                                  for x in resp.services],
+                    "ingresses": [{"namespace": x.namespace, "name": x.name, "hosts": x.hosts,
+                                    "class": getattr(x, "class", ""), "address": x.address} for x in resp.ingresses],
+                    "configmaps": [{"namespace": x.namespace, "name": x.name, "data_count": x.data_count}
+                                    for x in resp.configmaps],
+                    "secrets": [{"namespace": x.namespace, "name": x.name, "type": x.type,
+                                  "data_count": x.data_count} for x in resp.secrets],
+                    "pvcs": [{"namespace": x.namespace, "name": x.name, "status": x.status,
+                               "capacity": x.capacity, "storage_class": x.storage_class,
+                               "volume_name": x.volume_name, "access_modes": x.access_modes} for x in resp.pvcs]}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_misc_resources 失败: %s", e)
+            return {"success": False, "error": str(e)}
+
     def get_workload_yaml(self, cluster_id: int, kind: str, namespace: str, name: str, trace_id: str = "") -> dict:
         """获取工作负载（整个服务）YAML → 返回 {success, yaml, error}"""
         try:

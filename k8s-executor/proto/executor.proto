@@ -50,6 +50,8 @@ service ExecutorService {
   rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
   // Pod 详情（含容器组内各容器：镜像/状态/就绪/重启；点击 Pod 展开用）
   rpc GetPodDetail(GetPodDetailRequest) returns (GetPodDetailResponse);
+  // 集群管理其它资源：服务/路由(Ingress)/ConfigMap/Secret/存储(PVC)
+  rpc ListMiscResources(ListMiscResourcesRequest) returns (ListMiscResourcesResponse);
   // 单个 Pod 的事件（k8s Event）
   rpc GetPodEvents(GetPodEventsRequest) returns (GetPodEventsResponse);
   // 获取工作负载（整个服务）YAML：Deployment/StatefulSet/DaemonSet/CronJob
@@ -401,6 +403,56 @@ message GetPodDetailResponse {
   repeated ContainerDetail containers = 11;
   repeated ContainerDetail init_containers = 12;
   string error = 13;
+}
+
+// ---------- ListMiscResources（集群管理：服务/路由/ConfigMap/Secret/存储） ----------
+message ListMiscResourcesRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;    // 空=全部命名空间
+}
+message ServiceInfo {
+  string namespace = 1;
+  string name = 2;
+  string type = 3;          // ClusterIP/NodePort/LoadBalancer/ExternalName
+  string cluster_ip = 4;
+  string ports = 5;         // 端口串，如 "80:8080/TCP"
+  string external_ip = 6;
+}
+message IngressInfo {
+  string namespace = 1;
+  string name = 2;
+  string hosts = 3;         // 逗号分隔
+  string class = 4;         // ingressClass
+  string address = 5;       // LB 地址
+}
+message ConfigMapInfo {
+  string namespace = 1;
+  string name = 2;
+  int32 data_count = 3;     // data 键数
+}
+message SecretInfo {
+  string namespace = 1;
+  string name = 2;
+  string type = 3;          // Opaque/kubernetes.io/tls/...
+  int32 data_count = 4;
+}
+message PvcInfo {
+  string namespace = 1;
+  string name = 2;
+  string status = 3;        // Bound/Pending/Lost
+  string capacity = 4;      // 容量
+  string storage_class = 5;
+  string volume_name = 6;   // 绑定的 PV
+  string access_modes = 7;
+}
+message ListMiscResourcesResponse {
+  bool success = 1;
+  repeated ServiceInfo services = 2;
+  repeated IngressInfo ingresses = 3;
+  repeated ConfigMapInfo configmaps = 4;
+  repeated SecretInfo secrets = 5;
+  repeated PvcInfo pvcs = 6;
+  string error = 7;
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------

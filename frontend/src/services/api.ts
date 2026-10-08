@@ -302,6 +302,9 @@ export const getPodEvents = (clusterId: number, ns: string, pod: string) =>
 // Pod 详情（含容器组内容）
 export const getPodDetail = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/detail`)
+// 集群管理其它资源：服务/路由/ConfigMap/Secret/存储(PVC)
+export const getMiscResources = (clusterId: number, namespace = '') =>
+  http.get(`/resources/clusters/${clusterId}/misc-resources`, { params: { namespace } })
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')

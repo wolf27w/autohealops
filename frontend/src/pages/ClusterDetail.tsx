@@ -6,7 +6,7 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
@@ -38,6 +38,20 @@ interface NamespaceDetail {
   pods: ResourceItem[]
 }
 
+interface MiscRow {
+  namespace: string
+  name: string
+  [key: string]: unknown
+}
+
+interface MiscData {
+  services: MiscRow[]
+  ingresses: MiscRow[]
+  configmaps: MiscRow[]
+  secrets: MiscRow[]
+  pvcs: MiscRow[]
+}
+
 export default function ClusterDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -54,7 +68,7 @@ export default function ClusterDetail() {
       return '_all_'
     }
   })
-  const VALID_TYPES = ['deployments', 'statefulsets', 'daemonsets', 'pods', 'cronjobs']
+  const VALID_TYPES = ['deployments', 'statefulsets', 'daemonsets', 'pods', 'cronjobs', 'services', 'ingresses', 'configmaps', 'secrets', 'pvcs']
   const [activeType, setActiveType] = useState<string>(() => {
     const fromUrl = searchParams.get('type')
     if (fromUrl && VALID_TYPES.includes(fromUrl)) return fromUrl
@@ -72,6 +86,7 @@ export default function ClusterDetail() {
   const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
+  const [misc, setMisc] = useState<MiscData>({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] })
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
@@ -123,6 +138,16 @@ export default function ClusterDetail() {
         setLivePods(m)
       })
       .catch(() => setLivePods({}))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, activeType, activeNs])
+
+  // 其它资源（服务/路由/ConfigMap/Secret/存储）：切到对应 Tab 时按命名空间实时拉取
+  const MISC_TYPES = ['services', 'ingresses', 'configmaps', 'secrets', 'pvcs']
+  useEffect(() => {
+    if (!MISC_TYPES.includes(activeType)) return
+    getMiscResources(Number(id), activeNs === '_all_' ? '' : activeNs)
+      .then((d) => setMisc(d as unknown as MiscData))
+      .catch(() => setMisc({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, activeType, activeNs])
 
@@ -333,6 +358,86 @@ export default function ClusterDetail() {
               render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
           ]}
           locale={{ emptyText: '无 CronJob' }} />
+      ),
+    },
+    {
+      key: 'services',
+      label: '服务',
+      children: (
+        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.services}
+          pagination={paginationConfig}
+          columns={[
+            { title: '命名空间', dataIndex: 'namespace', width: 180 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '类型', dataIndex: 'type', width: 130, render: (v: string) => <Tag color={v === 'LoadBalancer' ? 'blue' : v === 'NodePort' ? 'green' : 'default'}>{v}</Tag> },
+            { title: 'ClusterIP', dataIndex: 'cluster_ip', width: 150 },
+            { title: '端口', dataIndex: 'ports', render: (v: string) => v || '-' },
+            { title: '外部 IP', dataIndex: 'external_ip', width: 150, render: (v: string) => v || '-' },
+          ]}
+          locale={{ emptyText: '无 Service' }} />
+      ),
+    },
+    {
+      key: 'ingresses',
+      label: '路由',
+      children: (
+        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.ingresses}
+          pagination={paginationConfig}
+          columns={[
+            { title: '命名空间', dataIndex: 'namespace', width: 180 },
+            { title: '名称', dataIndex: 'name' },
+            { title: 'Hosts', dataIndex: 'hosts', render: (v: string) => v || '-' },
+            { title: 'Class', dataIndex: 'class', width: 130, render: (v: string) => v || '-' },
+            { title: '地址', dataIndex: 'address', width: 150, render: (v: string) => v || '-' },
+          ]}
+          locale={{ emptyText: '无 Ingress' }} />
+      ),
+    },
+    {
+      key: 'configmaps',
+      label: 'ConfigMap',
+      children: (
+        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.configmaps}
+          pagination={paginationConfig}
+          columns={[
+            { title: '命名空间', dataIndex: 'namespace', width: 220 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '数据项数', dataIndex: 'data_count', width: 120 },
+          ]}
+          locale={{ emptyText: '无 ConfigMap' }} />
+      ),
+    },
+    {
+      key: 'secrets',
+      label: 'Secret',
+      children: (
+        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.secrets}
+          pagination={paginationConfig}
+          columns={[
+            { title: '命名空间', dataIndex: 'namespace', width: 220 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '类型', dataIndex: 'type', width: 200, render: (v: string) => v || '-' },
+            { title: '数据项数', dataIndex: 'data_count', width: 120 },
+          ]}
+          locale={{ emptyText: '无 Secret' }} />
+      ),
+    },
+    {
+      key: 'pvcs',
+      label: '存储',
+      children: (
+        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.pvcs}
+          pagination={paginationConfig}
+          columns={[
+            { title: '命名空间', dataIndex: 'namespace', width: 180 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag color={v === 'Bound' ? 'green' : v === 'Pending' ? 'orange' : 'red'}>{v}</Tag> },
+            { title: '容量', dataIndex: 'capacity', width: 100 },
+            { title: 'StorageClass', dataIndex: 'storage_class', width: 160, render: (v: string) => v || '-' },
+            { title: '绑定 PV', dataIndex: 'volume_name', ellipsis: true, render: (v: string) => v || '-' },
+            { title: '访问模式', dataIndex: 'access_modes', width: 130, render: (v: string) => v || '-' },
+          ]}
+          locale={{ emptyText: '无 PVC' }} />
       ),
     },
   ]

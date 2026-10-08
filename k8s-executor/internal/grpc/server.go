@@ -433,6 +433,35 @@ func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) 
 	}, nil
 }
 
+// ListMiscResources 集群管理其它资源（服务/路由/ConfigMap/Secret/PVC）
+func (s *Server) ListMiscResources(ctx context.Context, req *pb.ListMiscResourcesRequest) (*pb.ListMiscResourcesResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListMiscResourcesResponse{Success: false, Error: err.Error()}, nil
+	}
+	r, err := ex.ListMiscResources(ctx, req.Namespace)
+	if err != nil {
+		return &pb.ListMiscResourcesResponse{Success: false, Error: err.Error()}, nil
+	}
+	resp := &pb.ListMiscResourcesResponse{Success: true}
+	for _, v := range r.Services {
+		resp.Services = append(resp.Services, &pb.ServiceInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, ClusterIp: v.ClusterIP, Ports: v.Ports, ExternalIp: v.ExternalIP})
+	}
+	for _, v := range r.Ingresses {
+		resp.Ingresses = append(resp.Ingresses, &pb.IngressInfo{Namespace: v.Namespace, Name: v.Name, Hosts: v.Hosts, Class: v.Class, Address: v.Address})
+	}
+	for _, v := range r.ConfigMaps {
+		resp.Configmaps = append(resp.Configmaps, &pb.ConfigMapInfo{Namespace: v.Namespace, Name: v.Name, DataCount: v.DataCount})
+	}
+	for _, v := range r.Secrets {
+		resp.Secrets = append(resp.Secrets, &pb.SecretInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, DataCount: v.DataCount})
+	}
+	for _, v := range r.PVCs {
+		resp.Pvcs = append(resp.Pvcs, &pb.PvcInfo{Namespace: v.Namespace, Name: v.Name, Status: v.Status, Capacity: v.Capacity, StorageClass: v.StorageClass, VolumeName: v.VolumeName, AccessModes: v.AccessModes})
+	}
+	return resp, nil
+}
+
 // GetWorkloadYaml 获取工作负载（整个服务）YAML
 func (s *Server) GetWorkloadYaml(ctx context.Context, req *pb.GetWorkloadYamlRequest) (*pb.GetWorkloadYamlResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)
