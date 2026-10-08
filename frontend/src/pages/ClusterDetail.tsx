@@ -2,8 +2,8 @@
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
 import { useEffect, useMemo, useState } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
-import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress, Popconfirm } from 'antd'
-import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress } from 'antd'
+import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject } from '../services/api'
@@ -11,6 +11,8 @@ import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../components/ConfigObjectYamlModal'
+import ConfigObjectInfoModal from '../components/ConfigObjectInfoModal'
+import ConfigObjectDataModal from '../components/ConfigObjectDataModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -89,6 +91,8 @@ export default function ClusterDetail() {
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [misc, setMisc] = useState<MiscData>({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] })
   const [configObj, setConfigObj] = useState<ConfigObjectTarget | null>(null)
+  const [infoObj, setInfoObj] = useState<ConfigObjectTarget | null>(null)
+  const [dataObj, setDataObj] = useState<ConfigObjectTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
@@ -421,14 +425,22 @@ export default function ClusterDetail() {
             { title: '命名空间', dataIndex: 'namespace', width: 220 },
             { title: '名称', dataIndex: 'name' },
             { title: '数据项数', dataIndex: 'data_count', width: 120 },
-            { title: '操作', width: 200, render: (_: unknown, r: MiscRow) => (
-              <Space size="small">
-                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name, readOnly: true })}>查看</Button>
-                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name })}>编辑</Button>
-                <Popconfirm title={`删除配置字典 ${r.name}？`} okButtonProps={{ danger: true }} onConfirm={() => handleDeleteObject('configmap', r.namespace, r.name)}>
-                  <Button size="small" type="link" danger>删除</Button>
-                </Popconfirm>
-              </Space>
+            { title: '操作', width: 80, render: (_: unknown, r: MiscRow) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'info', label: '编辑信息' },
+                { key: 'settings', label: '编辑设置' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                const t = { clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name }
+                if (key === 'info') setInfoObj(t)
+                else if (key === 'settings') setDataObj(t)
+                else if (key === 'yaml') setConfigObj(t)
+                else if (key === 'delete') Modal.confirm({ title: `删除配置字典 ${r.name}？`, okButtonProps: { danger: true }, onOk: () => handleDeleteObject('configmap', r.namespace, r.name) })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
             ) },
           ]}
           locale={{ emptyText: '无配置字典' }} />
@@ -445,14 +457,22 @@ export default function ClusterDetail() {
             { title: '名称', dataIndex: 'name' },
             { title: '类型', dataIndex: 'type', width: 200, render: (v: string) => v || '-' },
             { title: '数据项数', dataIndex: 'data_count', width: 120 },
-            { title: '操作', width: 200, render: (_: unknown, r: MiscRow) => (
-              <Space size="small">
-                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name, readOnly: true })}>查看</Button>
-                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name })}>编辑</Button>
-                <Popconfirm title={`删除保密字典 ${r.name}？`} okButtonProps={{ danger: true }} onConfirm={() => handleDeleteObject('secret', r.namespace, r.name)}>
-                  <Button size="small" type="link" danger>删除</Button>
-                </Popconfirm>
-              </Space>
+            { title: '操作', width: 80, render: (_: unknown, r: MiscRow) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'info', label: '编辑信息' },
+                { key: 'settings', label: '编辑设置' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                const t = { clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name }
+                if (key === 'info') setInfoObj(t)
+                else if (key === 'settings') setDataObj(t)
+                else if (key === 'yaml') setConfigObj(t)
+                else if (key === 'delete') Modal.confirm({ title: `删除保密字典 ${r.name}？`, okButtonProps: { danger: true }, onOk: () => handleDeleteObject('secret', r.namespace, r.name) })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
             ) },
           ]}
           locale={{ emptyText: '无保密字典' }} />
@@ -531,6 +551,8 @@ export default function ClusterDetail() {
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
       <ConfigObjectYamlModal target={configObj} onClose={() => setConfigObj(null)} onSaved={reloadMisc} />
+      <ConfigObjectInfoModal target={infoObj} onClose={() => setInfoObj(null)} onSaved={reloadMisc} />
+      <ConfigObjectDataModal target={dataObj} onClose={() => setDataObj(null)} onSaved={reloadMisc} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>

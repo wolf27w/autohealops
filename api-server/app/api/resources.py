@@ -337,6 +337,106 @@ async def delete_object(cluster_id: int, kind: str, namespace: str, name: str, u
     return {"code": 200, "message": "success", "data": {"message": r.get("message", "已删除")}}
 
 
+@router.get("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}/detail")
+async def object_detail(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
+    """配置类对象结构化详情（名称/标签/注解/类型/数据键值，Secret 为明文）——供 编辑信息/编辑设置 用"""
+    import yaml as _yaml
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "获取失败"), "data": None}
+    try:
+        obj = _yaml.safe_load(r.get("yaml", "")) or {}
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"YAML 解析失败: {e}", "data": None}
+    md = obj.get("metadata") or {}
+    if kind == "secret":
+        data = {k: str(v) for k, v in (obj.get("stringData") or {}).items()}
+        for k, v in (obj.get("data") or {}).items():
+            data.setdefault(k, f"(二进制/base64) {v}")
+        data = {k: ("" if v is None else str(v)) for k, v in data.items()}
+        typ = obj.get("type", "Opaque")
+    else:
+        data = {k: ("" if v is None else str(v)) for k, v in (obj.get("data") or {}).items()}
+        typ = None
+    return {"code": 200, "message": "success", "data": {
+        "name": md.get("name", name), "namespace": md.get("namespace", namespace), "kind": obj.get("kind", ""),
+        "type": typ, "labels": md.get("labels") or {}, "annotations": md.get("annotations") or {}, "data": data,
+    }}
+
+
+async def _load_object_or_err(cluster_id, kind, namespace, name):
+    import yaml as _yaml
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return None, {"code": 500, "message": r.get("error", "获取失败"), "data": None}
+    try:
+        return _yaml.safe_load(r.get("yaml", "")) or {}, None
+    except Exception as e:  # noqa: BLE001
+        return None, {"code": 500, "message": f"YAML 解析失败: {e}", "data": None}
+
+
+@router.put("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}/metadata")
+async def object_update_metadata(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
+                                 user=Depends(require_operator)):
+    """编辑信息：更新 labels / annotations（需操作员权限）"""
+    import yaml as _yaml
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    obj, err = await _load_object_or_err(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    md = obj.setdefault("metadata", {})
+    labels = {str(k): str(v) for k, v in (payload.get("labels") or {}).items() if str(k)}
+    annos = {str(k): str(v) for k, v in (payload.get("annotations") or {}).items() if str(k)}
+    if labels:
+        md["labels"] = labels
+    else:
+        md.pop("labels", None)
+    if annos:
+        md["annotations"] = annos
+    else:
+        md.pop("annotations", None)
+    y = _yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, y)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "保存失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": "已保存"}}
+
+
+@router.put("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}/data")
+async def object_update_data(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
+                             user=Depends(require_operator)):
+    """编辑设置：更新数据键值（ConfigMap→data；Secret→明文 stringData），保留 type（需操作员权限）"""
+    import yaml as _yaml
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    obj, err = await _load_object_or_err(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    data = {str(k): ("" if v is None else str(v)) for k, v in (payload.get("data") or {}).items() if str(k)}
+    if kind == "secret":
+        obj.pop("data", None)
+        obj["stringData"] = data
+        if payload.get("type"):
+            obj["type"] = payload["type"]
+    else:
+        obj.pop("stringData", None)
+        obj["data"] = data
+    y = _yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, y)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "保存失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": "已保存"}}
+
+
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
 async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
     """获取工作负载（整个服务）YAML（只读）"""
