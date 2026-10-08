@@ -3,9 +3,11 @@ package executor
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"sort"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -258,6 +260,9 @@ func (e *Executor) GetWorkloadYaml(ctx context.Context, kind, namespace, name st
 	u.SetResourceVersion("")
 	u.SetUID("")
 	u.SetCreationTimestamp(metav1.Time{})
+	if kind == "secret" {
+		revealSecretData(u)
+	}
 	data, err := yaml.Marshal(u.Object)
 	if err != nil {
 		return "", fmt.Errorf("YAML 序列化失败: %w", err)
@@ -324,6 +329,34 @@ func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name str
 		return fmt.Errorf("删除失败: %w", err)
 	}
 	return nil
+}
+
+// revealSecretData 把 Secret 的 data（base64）解码为 stringData（明文），便于查看/编辑
+// （如 imagePullSecret 的 .dockerconfigjson 解码后可直接看到用户名/密码）。
+// 仅对合法 UTF-8 值解码；二进制值保留在 data（避免 stringData 二次编码破坏内容）。
+func revealSecretData(u *unstructured.Unstructured) {
+	dataMap, found, _ := unstructured.NestedStringMap(u.Object, "data")
+	if !found || len(dataMap) == 0 {
+		return
+	}
+	stringData := map[string]interface{}{}
+	remaining := map[string]interface{}{}
+	for k, v := range dataMap {
+		b, err := base64.StdEncoding.DecodeString(v)
+		if err == nil && utf8.Valid(b) {
+			stringData[k] = string(b)
+		} else {
+			remaining[k] = v
+		}
+	}
+	if len(stringData) > 0 {
+		_ = unstructured.SetNestedMap(u.Object, stringData, "stringData")
+	}
+	if len(remaining) > 0 {
+		_ = unstructured.SetNestedMap(u.Object, remaining, "data")
+	} else {
+		delete(u.Object, "data")
+	}
 }
 
 // kindMatches kind 名与内部小写类型匹配

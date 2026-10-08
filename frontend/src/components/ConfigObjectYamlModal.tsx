@@ -73,8 +73,8 @@ export default function ConfigObjectYamlModal({ target, onClose, onSaved }: {
         type={ro ? 'info' : 'info'}
         showIcon
         style={{ marginBottom: 8 }}
-        message={ro ? '只读查看（如需修改请用「编辑」）。Secret 内容以 base64 展示。'
-          : '改的是 k8s 原生 YAML（apiVersion/kind/metadata/data），应用后立即生效；Secret 建议用 stringData 写明文（k8s 自动 base64）。'}
+        message={ro ? '只读查看（如需修改请用「编辑」）。Secret 的 data 已自动解码为明文 stringData（如镜像认证可见用户名/密码）。'
+          : '改的是 k8s 原生 YAML（apiVersion/kind/metadata）。Secret 已把 data 解码为明文 stringData；修改后用 stringData 写入（k8s 自动 base64）。'}
       />
       <Input.TextArea
         value={yaml}
