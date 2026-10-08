@@ -228,6 +228,36 @@ def parse_feedback(text: str) -> tuple[str, str, str]:
     return "", "", text
 
 
+# 工单 IM 反馈：接单/解决/关闭 + 工单号（TK...）
+_TICKET_NO_RE = re.compile(r"(TK[0-9A-Za-z]+)")
+_TICKET_CLOSE_RE = re.compile(r"(关闭|关单|关闭工单)")
+_TICKET_RESOLVE_RE = re.compile(r"(解决|已解决|完成|修复|处理完成)")
+_TICKET_ACCEPT_RE = re.compile(r"(接单|认领|受理|接受|我来处理)")
+
+
+def parse_ticket_feedback(text: str) -> tuple[str, str, str]:
+    """解析工单文本反馈 → (action, ticket_no, comment)
+
+    action: accept / resolve / close / ""（无有效反馈）
+    ticket_no: 工单号（如 TK202610080916358a63）
+    comment: 附带的说明文字
+    用法：群内回复「接单 TK...」「解决 TK... 说明」「关闭 TK...」
+    """
+    text = (text or "").strip()
+    m = _TICKET_NO_RE.search(text)
+    if not m:
+        return "", "", text
+    tno = m.group(1)
+    if _TICKET_CLOSE_RE.search(text):
+        return "close", tno, ""
+    if _TICKET_RESOLVE_RE.search(text):
+        comment = _TICKET_NO_RE.sub("", _TICKET_RESOLVE_RE.sub("", text)).strip()
+        return "resolve", tno, comment
+    if _TICKET_ACCEPT_RE.search(text):
+        return "accept", tno, ""
+    return "", "", text
+
+
 def build_approval_buttons(approval_id: int) -> list[dict]:
     """构造审批卡片按钮"""
     return [

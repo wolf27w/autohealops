@@ -161,7 +161,8 @@ async def _notify_ticket(ticket: Ticket, event: str, actor_name: str = "") -> No
         f"【工单】{ticket.ticket_no}｜{ticket.title}\n"
         f"事件：{event}（操作人：{actor_name or '-'}）\n"
         f"状态：{ticket.status}｜优先级：{ticket.priority}\n"
-        f"资源：{ticket.cluster_id or '-'}/{ticket.namespace or '-'}/{ticket.resource_name or '-'}"
+        f"资源：{ticket.cluster_id or '-'}/{ticket.namespace or '-'}/{ticket.resource_name or '-'}\n"
+        f"回复「接单/解决/关闭 {ticket.ticket_no}」可直接处理"
     )
     target_ids: set[int] = set()
     if ticket.assignee_id:
@@ -442,7 +443,7 @@ async def _notify_auto_ticket(ticket: Ticket, alert: Alert, reason: str, detail:
         f"优先级：{ticket.priority}\n"
         f"原因：{reason or '-'}\n"
         f"建议：{detail or '-'}\n"
-        f"请到「工单」页处理（/tickets）"
+        f"回复「接单 {ticket.ticket_no}」接单、「解决 {ticket.ticket_no} [说明]」解决、「关闭 {ticket.ticket_no}」关闭（无需登录平台）"
     )
     from app.services import on_duty_service
     from app.services.feishu_service import send_feishu_text
@@ -651,6 +652,67 @@ async def _transition_status(session, ticket: Ticket, new_status: str, user, not
     content = f"状态流转：{old} → {new_status}" + (f"（{note}）" if note else "")
     await _append_action(session, ticket, user, content)
     return None, closed_ids
+
+
+async def handle_im_callback(feishu_user_id: str, action: str, ticket_no: str, comment: str = "",
+                             source_msg_id: str = "") -> dict:
+    """IM 回执处理（不登平台）：接单 / 解决 / 关闭
+
+    按发送人外部身份（open_id/user_id 等）映射平台用户，按工单号定位工单。
+    - accept：指派给自己 + open→processing
+    - resolve / close：走状态机（会联动关闭同故障同服务的在途告警）
+    返回 {code, message}（供长连接回执）。
+    """
+    if not feishu_user_id:
+        return {"code": 400, "message": "无法识别用户"}
+    if action not in ("accept", "resolve", "close"):
+        return {"code": 400, "message": f"不支持的操作 {action}"}
+    from app.core.redis_client import redis_pool
+    key = f"ticket_msg:{source_msg_id}" if source_msg_id else ""
+    if key:
+        try:
+            if await redis_pool.get(key):
+                return {"code": 200, "message": "已处理（幂等）"}
+        except Exception:  # noqa: BLE001
+            pass
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(
+            (User.dingtalk_user_id == feishu_user_id)
+            | (User.wechat_userid == feishu_user_id)
+            | (User.feishu_user_id == feishu_user_id)
+            | (User.feishu_open_id == feishu_user_id)
+        ))).scalars().first()
+        if not u:
+            return {"code": 404, "message": "未找到对应平台用户（请先在用户管理配置飞书 user_id/open_id）"}
+        t = (await session.execute(select(Ticket).where(Ticket.ticket_no == ticket_no))).scalars().first()
+        if not t:
+            return {"code": 404, "message": f"工单不存在：{ticket_no}"}
+        if action == "accept":
+            if t.status in ("resolved", "closed"):
+                return {"code": 400, "message": f"工单已{'解决' if t.status == 'resolved' else '关闭'}"}
+            t.assignee_id = u.id
+            if t.status == "open":
+                err, _ids = await _transition_status(session, t, "processing", u, comment or "IM 接单")
+                if err:
+                    return {"code": 400, "message": err}
+            else:
+                await _append_action(session, t, u, "IM 接单（重新指派）")
+            await session.commit()
+            reply = {"code": 200, "message": f"已接单：{ticket_no}（处理人：{u.username}）"}
+        else:
+            target = "resolved" if action == "resolve" else "closed"
+            verb = "解决" if action == "resolve" else "关闭"
+            err, _ids = await _transition_status(session, t, target, u, comment or f"IM {verb}")
+            if err:
+                return {"code": 400, "message": err}
+            await session.commit()
+            reply = {"code": 200, "message": f"已{verb}：{ticket_no}"}
+    if key:
+        try:
+            await redis_pool.set(key, "1", ex=3600)
+        except Exception:  # noqa: BLE001
+            pass
+    return reply
 
 
 async def update_ticket(ticket_id: int, payload: dict, user) -> dict:

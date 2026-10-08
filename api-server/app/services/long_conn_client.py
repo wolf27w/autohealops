@@ -47,14 +47,34 @@ _main_loop: asyncio.AbstractEventLoop | None = None
 
 async def _handle_incoming(channel: str, external_user_id: str, text: str, source_msg_id: str,
                            chat_id: str = "", app_id: str = "", app_secret: str = "") -> None:
-    """长连接收到消息 → 分发到审批反馈处理 + 回执"""
-    from app.services.messaging import parse_feedback
+    """长连接收到消息 → 分发到 工单回执 / 审批反馈 + 回执"""
+    from app.services.messaging import parse_feedback, parse_ticket_feedback
 
     logger.info("长连接收到消息(%s) 用户=%s 群=%s: %s", channel, external_user_id or "", chat_id or "", (text or "")[:80])
+
+    # 优先：工单 IM 回执（接单/解决/关闭 TK...）
+    t_action, ticket_no, t_comment = parse_ticket_feedback(text)
+    if t_action and ticket_no:
+        try:
+            from app.services import ticket_service
+            res = await ticket_service.handle_im_callback(external_user_id, t_action, ticket_no, t_comment, source_msg_id)
+            reply = res.get("message", "") if isinstance(res, dict) else "已处理"
+        except Exception as e:  # noqa: BLE001
+            logger.warning("工单 IM 回执处理异常: %s", e)
+            reply = f"处理失败：{e}"
+        if reply and chat_id:
+            try:
+                from app.services.feishu_service import send_feishu_message
+                if channel == "feishu":
+                    await send_feishu_message(chat_id, "chat_id", f"【API-OPS】{reply}", app_id, app_secret)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("回执发送失败: %s", e)
+        return
+
     action, approval_id, comment = parse_feedback(text)
 
     if not action or not approval_id:
-        reply = "收到。本机器人用于审批反馈：请回复「批准/拒绝 + 审批ID」，或点卡片按钮。"
+        reply = "收到。回复「接单 TK工单号」/「解决 TK工单号 [说明]」/「关闭 TK工单号」处理工单；或「批准/拒绝 + 审批ID」处理审批。"
     else:
         try:
             res = await approval_service.handle_callback(
