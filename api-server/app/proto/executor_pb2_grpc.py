@@ -130,6 +130,26 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.ApplyPodYamlRequest.SerializeToString,
                 response_deserializer=executor__pb2.ApplyPodYamlResponse.FromString,
                 _registered_method=True)
+        self.ListPods = channel.unary_unary(
+                '/executor.ExecutorService/ListPods',
+                request_serializer=executor__pb2.ListPodsRequest.SerializeToString,
+                response_deserializer=executor__pb2.ListPodsResponse.FromString,
+                _registered_method=True)
+        self.GetPodEvents = channel.unary_unary(
+                '/executor.ExecutorService/GetPodEvents',
+                request_serializer=executor__pb2.GetPodEventsRequest.SerializeToString,
+                response_deserializer=executor__pb2.GetPodEventsResponse.FromString,
+                _registered_method=True)
+        self.GetWorkloadYaml = channel.unary_unary(
+                '/executor.ExecutorService/GetWorkloadYaml',
+                request_serializer=executor__pb2.GetWorkloadYamlRequest.SerializeToString,
+                response_deserializer=executor__pb2.GetWorkloadYamlResponse.FromString,
+                _registered_method=True)
+        self.ApplyWorkloadYaml = channel.unary_unary(
+                '/executor.ExecutorService/ApplyWorkloadYaml',
+                request_serializer=executor__pb2.ApplyWorkloadYamlRequest.SerializeToString,
+                response_deserializer=executor__pb2.ApplyWorkloadYamlResponse.FromString,
+                _registered_method=True)
         self.SetupRBAC = channel.unary_unary(
                 '/executor.ExecutorService/SetupRBAC',
                 request_serializer=executor__pb2.SetupRBACRequest.SerializeToString,
@@ -313,6 +333,34 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListPods(self, request, context):
+        """命名空间 Pod 列表（含创建时间/就绪/重启，集群管理容器组用）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPodEvents(self, request, context):
+        """单个 Pod 的事件（k8s Event）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetWorkloadYaml(self, request, context):
+        """获取工作负载（整个服务）YAML：Deployment/StatefulSet/DaemonSet/CronJob
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ApplyWorkloadYaml(self, request, context):
+        """应用工作负载（整个服务）YAML
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SetupRBAC(self, request, context):
         """云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
         """
@@ -468,6 +516,26 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.ApplyPodYaml,
                     request_deserializer=executor__pb2.ApplyPodYamlRequest.FromString,
                     response_serializer=executor__pb2.ApplyPodYamlResponse.SerializeToString,
+            ),
+            'ListPods': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListPods,
+                    request_deserializer=executor__pb2.ListPodsRequest.FromString,
+                    response_serializer=executor__pb2.ListPodsResponse.SerializeToString,
+            ),
+            'GetPodEvents': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPodEvents,
+                    request_deserializer=executor__pb2.GetPodEventsRequest.FromString,
+                    response_serializer=executor__pb2.GetPodEventsResponse.SerializeToString,
+            ),
+            'GetWorkloadYaml': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetWorkloadYaml,
+                    request_deserializer=executor__pb2.GetWorkloadYamlRequest.FromString,
+                    response_serializer=executor__pb2.GetWorkloadYamlResponse.SerializeToString,
+            ),
+            'ApplyWorkloadYaml': grpc.unary_unary_rpc_method_handler(
+                    servicer.ApplyWorkloadYaml,
+                    request_deserializer=executor__pb2.ApplyWorkloadYamlRequest.FromString,
+                    response_serializer=executor__pb2.ApplyWorkloadYamlResponse.SerializeToString,
             ),
             'SetupRBAC': grpc.unary_unary_rpc_method_handler(
                     servicer.SetupRBAC,
@@ -1029,6 +1097,114 @@ class ExecutorService(object):
             '/executor.ExecutorService/ApplyPodYaml',
             executor__pb2.ApplyPodYamlRequest.SerializeToString,
             executor__pb2.ApplyPodYamlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListPods(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ListPods',
+            executor__pb2.ListPodsRequest.SerializeToString,
+            executor__pb2.ListPodsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPodEvents(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetPodEvents',
+            executor__pb2.GetPodEventsRequest.SerializeToString,
+            executor__pb2.GetPodEventsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetWorkloadYaml(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetWorkloadYaml',
+            executor__pb2.GetWorkloadYamlRequest.SerializeToString,
+            executor__pb2.GetWorkloadYamlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ApplyWorkloadYaml(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ApplyWorkloadYaml',
+            executor__pb2.ApplyWorkloadYamlRequest.SerializeToString,
+            executor__pb2.ApplyWorkloadYamlResponse.FromString,
             options,
             channel_credentials,
             insecure,

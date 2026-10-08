@@ -5,6 +5,7 @@ import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOut
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
+import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
@@ -49,6 +50,7 @@ export default function ServiceDetail() {
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
+  const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [podTab, setPodTab] = useState('pods')
   const [pods, setPods] = useState<ServicePod[]>([])
   const [events, setEvents] = useState<WorkloadEvent[]>([])
@@ -179,6 +181,7 @@ export default function ServiceDetail() {
             menu={{
               items: [
                 { key: 'restart', label: '滚动重启' },
+                { key: 'yaml', label: '编辑 YAML（整个服务）' },
                 ...(kind === 'deployment' ? [
                   { key: 'undo', label: '回滚上一版本' },
                   { key: 'probe', label: '编辑探针' },
@@ -188,6 +191,7 @@ export default function ServiceDetail() {
               ],
               onClick: ({ key }) => {
                 if (key === 'restart') handleRollout('restart')
+                else if (key === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
                 else if (key === 'undo') { Modal.confirm({ title: '回滚到上一版本？', onOk: () => handleRollout('undo') }) }
                 else if (key === 'probe') openProbe()
                 else if (key === 'recreate') { Modal.confirm({ title: '确认重新创建该服务？', okButtonProps: { danger: true }, onOk: () => handleRecreate() }) }
@@ -244,6 +248,7 @@ export default function ServiceDetail() {
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
+      <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
 
       <Modal title={`编辑探针：${name}`} open={probeModal} onOk={handleProbeSubmit} onCancel={() => setProbeModal(false)} width={560}>
         <Form form={probeForm} layout="vertical">

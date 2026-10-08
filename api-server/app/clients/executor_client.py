@@ -367,6 +367,68 @@ class ExecutorClient:
             logger.error("apply_pod_yaml 失败: %s", e)
             return {"success": False, "message": "", "error": str(e)}
 
+    def list_pods(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> dict:
+        """命名空间 Pod 列表（含创建时间/就绪/重启）→ 返回 {success, pods, error}"""
+        try:
+            resp = _get_stub().ListPods(
+                executor_pb2.ListPodsRequest(cluster_id=cluster_id, namespace=namespace),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "pods": [
+                {"namespace": p.namespace, "name": p.name, "phase": p.phase, "ready": p.ready,
+                 "restart_count": p.restart_count, "created_at": p.created_at,
+                 "node_name": p.node_name, "pod_ip": p.pod_ip} for p in resp.pods], "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_pods 失败: %s", e)
+            return {"success": False, "pods": [], "error": str(e)}
+
+    def get_pod_events(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
+        """单个 Pod 的 k8s Event → 返回 {success, events, error}"""
+        try:
+            resp = _get_stub().GetPodEvents(
+                executor_pb2.GetPodEventsRequest(cluster_id=cluster_id, namespace=namespace, pod_name=pod_name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "events": [
+                {"type": e.type, "reason": e.reason, "message": e.message, "count": e.count,
+                 "first_timestamp": e.first_timestamp, "last_timestamp": e.last_timestamp,
+                 "source": e.source} for e in resp.events], "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_pod_events 失败: %s", e)
+            return {"success": False, "events": [], "error": str(e)}
+
+    def get_workload_yaml(self, cluster_id: int, kind: str, namespace: str, name: str, trace_id: str = "") -> dict:
+        """获取工作负载（整个服务）YAML → 返回 {success, yaml, error}"""
+        try:
+            resp = _get_stub().GetWorkloadYaml(
+                executor_pb2.GetWorkloadYamlRequest(cluster_id=cluster_id, kind=kind, namespace=namespace, name=name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "yaml": resp.yaml, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_workload_yaml 失败: %s", e)
+            return {"success": False, "yaml": "", "error": str(e)}
+
+    def apply_workload_yaml(self, cluster_id: int, kind: str, namespace: str, name: str,
+                            yaml_content: str, trace_id: str = "") -> dict:
+        """应用工作负载（整个服务）YAML → 返回 {success, message, error}"""
+        try:
+            resp = _get_stub().ApplyWorkloadYaml(
+                executor_pb2.ApplyWorkloadYamlRequest(
+                    cluster_id=cluster_id, kind=kind, namespace=namespace, name=name,
+                    yaml_content=yaml_content, trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("apply_workload_yaml 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
     def setup_rbac(self, cluster_id: int, trace_id: str = "") -> dict:
         """云原生 RBAC 接入：能力探测 + 下发 ClusterRole + 自举 automation SA
         → 返回 {success, rbac_capable, impersonate_capable, cluster_roles, sa_created, error}

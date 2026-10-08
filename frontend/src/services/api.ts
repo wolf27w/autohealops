@@ -122,6 +122,7 @@ export const getAIModels = () => http.get('/ai/models')
 export const createAIModel = (data: Payload) => http.post('/ai/models', data)
 export const updateAIModel = (id: number, data: Payload) => http.put(`/ai/models/${id}`, data)
 export const deleteAIModel = (id: number) => http.delete(`/ai/models/${id}`)
+export const setDefaultModel = (id: number) => http.post(`/ai/models/${id}/default`)
 export const getAICallLogs = (params?: PageParams) => http.get('/ai/logs', { params })
 export const getAICallLogStats = () => http.get('/ai/logs/stats')
 export const getAIDashboard = (range_days = 7) => http.get('/stats/ai-dashboard', { params: { range_days } })
@@ -287,6 +288,17 @@ export const updateWorkloadProbe = (clusterId: number, data: Payload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/probe`, data)
 export const recreateWorkload = (clusterId: number, data: Payload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/recreate`, data)
+// 工作负载（整个服务）YAML：查看 / 应用
+export const getWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string) =>
+  http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`)
+export const applyWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string, yaml: string) =>
+  http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`, { yaml })
+// 集群 Pod 实时列表（含创建时间）：namespace 空=全部
+export const getClusterPods = (clusterId: number, namespace = '') =>
+  http.get(`/resources/clusters/${clusterId}/pods`, { params: { namespace } })
+// 单个 Pod 的事件（k8s Event）
+export const getPodEvents = (clusterId: number, ns: string, pod: string) =>
+  http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/events`)
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')

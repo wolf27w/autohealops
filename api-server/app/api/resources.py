@@ -232,6 +232,54 @@ async def apply_pod_yaml(cluster_id: int, namespace: str, pod_name: str, payload
     return {"code": 200, "message": "success", "data": {"message": r.get("message", "已应用")}}
 
 
+@router.get("/clusters/{cluster_id}/pods")
+async def cluster_pods(cluster_id: int, namespace: str = "", user=Depends(require_any_user)):
+    """集群 Pod 实时列表（含创建时间/状态/重启/节点，集群管理「容器组」用；namespace 空=全部）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.list_pods, cluster_id, namespace)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "Pod 列表获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"pods": r.get("pods", [])}}
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/events")
+async def pod_events(cluster_id: int, namespace: str, pod_name: str, user=Depends(require_any_user)):
+    """单个 Pod 的事件（k8s Event，按时间倒序）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_pod_events, cluster_id, namespace, pod_name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "事件获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"events": r.get("events", [])}}
+
+
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
+async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
+    """获取工作负载（整个服务）YAML（只读）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "YAML 获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"yaml": r.get("yaml", "")}}
+
+
+@router.put("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
+async def apply_workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
+                              user=Depends(require_operator)):
+    """应用工作负载（整个服务）YAML（需操作员权限）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    yaml_content = (payload.get("yaml") or "").strip()
+    if not yaml_content:
+        return {"code": 400, "message": "yaml 必填", "data": None}
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, yaml_content)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "YAML 应用失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message", "已应用")}}
+
+
 @router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/exec")
 async def exec_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict, user=Depends(require_operator)):
     """进入容器执行命令（只读白名单，需操作员权限）"""

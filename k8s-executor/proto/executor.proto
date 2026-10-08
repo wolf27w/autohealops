@@ -46,6 +46,14 @@ service ExecutorService {
   rpc GetPodYaml(GetPodYamlRequest) returns (GetPodYamlResponse);
   // 应用 Pod YAML（修改配置后应用）
   rpc ApplyPodYaml(ApplyPodYamlRequest) returns (ApplyPodYamlResponse);
+  // 命名空间 Pod 列表（含创建时间/就绪/重启，集群管理容器组用）
+  rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
+  // 单个 Pod 的事件（k8s Event）
+  rpc GetPodEvents(GetPodEventsRequest) returns (GetPodEventsResponse);
+  // 获取工作负载（整个服务）YAML：Deployment/StatefulSet/DaemonSet/CronJob
+  rpc GetWorkloadYaml(GetWorkloadYamlRequest) returns (GetWorkloadYamlResponse);
+  // 应用工作负载（整个服务）YAML
+  rpc ApplyWorkloadYaml(ApplyWorkloadYamlRequest) returns (ApplyWorkloadYamlResponse);
 
   // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
   rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
@@ -332,6 +340,74 @@ message ApplyPodYamlRequest {
   string trace_id = 4;
 }
 message ApplyPodYamlResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+// ---------- ListPods（命名空间 Pod 列表：创建时间/状态/就绪/重启） ----------
+message ListPodsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;    // 空=全部命名空间
+}
+message PodBriefInfo {
+  string namespace = 1;
+  string name = 2;
+  string phase = 3;         // Running/Pending/Failed/...
+  bool ready = 4;           // 所有容器 Ready 且 phase=Running
+  int32 restart_count = 5;  // 全部容器重启次数之和
+  string created_at = 6;    // RFC3339（Pod 创建时间）
+  string node_name = 7;
+  string pod_ip = 8;
+}
+message ListPodsResponse {
+  bool success = 1;
+  repeated PodBriefInfo pods = 2;
+  string error = 3;
+}
+
+// ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------
+message GetPodEventsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod_name = 3;
+}
+message PodEventInfo {
+  string type = 1;             // Normal/Warning
+  string reason = 2;
+  string message = 3;
+  int32 count = 4;
+  string first_timestamp = 5;  // RFC3339
+  string last_timestamp = 6;   // RFC3339
+  string source = 7;           // 来源组件（如 kubelet）
+}
+message GetPodEventsResponse {
+  bool success = 1;
+  repeated PodEventInfo events = 2;
+  string error = 3;
+}
+
+// ---------- GetWorkloadYaml / ApplyWorkloadYaml（整个服务工作负载 YAML） ----------
+message GetWorkloadYamlRequest {
+  int64 cluster_id = 1;
+  string kind = 2;         // deployment/statefulset/daemonset/cronjob
+  string namespace = 3;
+  string name = 4;
+}
+message GetWorkloadYamlResponse {
+  bool success = 1;
+  string yaml = 2;
+  string error = 3;
+}
+message ApplyWorkloadYamlRequest {
+  int64 cluster_id = 1;
+  string kind = 2;
+  string namespace = 3;
+  string name = 4;
+  string yaml_content = 5;
+  string trace_id = 6;
+}
+message ApplyWorkloadYamlResponse {
   bool success = 1;
   string message = 2;
   string error = 3;

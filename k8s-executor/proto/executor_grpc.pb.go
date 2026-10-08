@@ -40,6 +40,10 @@ const (
 	ExecutorService_GetPodLogs_FullMethodName            = "/executor.ExecutorService/GetPodLogs"
 	ExecutorService_GetPodYaml_FullMethodName            = "/executor.ExecutorService/GetPodYaml"
 	ExecutorService_ApplyPodYaml_FullMethodName          = "/executor.ExecutorService/ApplyPodYaml"
+	ExecutorService_ListPods_FullMethodName              = "/executor.ExecutorService/ListPods"
+	ExecutorService_GetPodEvents_FullMethodName          = "/executor.ExecutorService/GetPodEvents"
+	ExecutorService_GetWorkloadYaml_FullMethodName       = "/executor.ExecutorService/GetWorkloadYaml"
+	ExecutorService_ApplyWorkloadYaml_FullMethodName     = "/executor.ExecutorService/ApplyWorkloadYaml"
 	ExecutorService_SetupRBAC_FullMethodName             = "/executor.ExecutorService/SetupRBAC"
 	ExecutorService_ReconcileRoleBindings_FullMethodName = "/executor.ExecutorService/ReconcileRoleBindings"
 	ExecutorService_ListWorkloads_FullMethodName         = "/executor.ExecutorService/ListWorkloads"
@@ -94,6 +98,14 @@ type ExecutorServiceClient interface {
 	GetPodYaml(ctx context.Context, in *GetPodYamlRequest, opts ...grpc.CallOption) (*GetPodYamlResponse, error)
 	// 应用 Pod YAML（修改配置后应用）
 	ApplyPodYaml(ctx context.Context, in *ApplyPodYamlRequest, opts ...grpc.CallOption) (*ApplyPodYamlResponse, error)
+	// 命名空间 Pod 列表（含创建时间/就绪/重启，集群管理容器组用）
+	ListPods(ctx context.Context, in *ListPodsRequest, opts ...grpc.CallOption) (*ListPodsResponse, error)
+	// 单个 Pod 的事件（k8s Event）
+	GetPodEvents(ctx context.Context, in *GetPodEventsRequest, opts ...grpc.CallOption) (*GetPodEventsResponse, error)
+	// 获取工作负载（整个服务）YAML：Deployment/StatefulSet/DaemonSet/CronJob
+	GetWorkloadYaml(ctx context.Context, in *GetWorkloadYamlRequest, opts ...grpc.CallOption) (*GetWorkloadYamlResponse, error)
+	// 应用工作负载（整个服务）YAML
+	ApplyWorkloadYaml(ctx context.Context, in *ApplyWorkloadYamlRequest, opts ...grpc.CallOption) (*ApplyWorkloadYamlResponse, error)
 	// 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
 	SetupRBAC(ctx context.Context, in *SetupRBACRequest, opts ...grpc.CallOption) (*SetupRBACResponse, error)
 	// 项目/成员变更 → reconcile RoleBinding（绑组）
@@ -325,6 +337,46 @@ func (c *executorServiceClient) ApplyPodYaml(ctx context.Context, in *ApplyPodYa
 	return out, nil
 }
 
+func (c *executorServiceClient) ListPods(ctx context.Context, in *ListPodsRequest, opts ...grpc.CallOption) (*ListPodsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPodsResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ListPods_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) GetPodEvents(ctx context.Context, in *GetPodEventsRequest, opts ...grpc.CallOption) (*GetPodEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPodEventsResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_GetPodEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) GetWorkloadYaml(ctx context.Context, in *GetWorkloadYamlRequest, opts ...grpc.CallOption) (*GetWorkloadYamlResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWorkloadYamlResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_GetWorkloadYaml_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) ApplyWorkloadYaml(ctx context.Context, in *ApplyWorkloadYamlRequest, opts ...grpc.CallOption) (*ApplyWorkloadYamlResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyWorkloadYamlResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ApplyWorkloadYaml_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) SetupRBAC(ctx context.Context, in *SetupRBACRequest, opts ...grpc.CallOption) (*SetupRBACResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetupRBACResponse)
@@ -461,6 +513,14 @@ type ExecutorServiceServer interface {
 	GetPodYaml(context.Context, *GetPodYamlRequest) (*GetPodYamlResponse, error)
 	// 应用 Pod YAML（修改配置后应用）
 	ApplyPodYaml(context.Context, *ApplyPodYamlRequest) (*ApplyPodYamlResponse, error)
+	// 命名空间 Pod 列表（含创建时间/就绪/重启，集群管理容器组用）
+	ListPods(context.Context, *ListPodsRequest) (*ListPodsResponse, error)
+	// 单个 Pod 的事件（k8s Event）
+	GetPodEvents(context.Context, *GetPodEventsRequest) (*GetPodEventsResponse, error)
+	// 获取工作负载（整个服务）YAML：Deployment/StatefulSet/DaemonSet/CronJob
+	GetWorkloadYaml(context.Context, *GetWorkloadYamlRequest) (*GetWorkloadYamlResponse, error)
+	// 应用工作负载（整个服务）YAML
+	ApplyWorkloadYaml(context.Context, *ApplyWorkloadYamlRequest) (*ApplyWorkloadYamlResponse, error)
 	// 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
 	SetupRBAC(context.Context, *SetupRBACRequest) (*SetupRBACResponse, error)
 	// 项目/成员变更 → reconcile RoleBinding（绑组）
@@ -540,6 +600,18 @@ func (UnimplementedExecutorServiceServer) GetPodYaml(context.Context, *GetPodYam
 }
 func (UnimplementedExecutorServiceServer) ApplyPodYaml(context.Context, *ApplyPodYamlRequest) (*ApplyPodYamlResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyPodYaml not implemented")
+}
+func (UnimplementedExecutorServiceServer) ListPods(context.Context, *ListPodsRequest) (*ListPodsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPods not implemented")
+}
+func (UnimplementedExecutorServiceServer) GetPodEvents(context.Context, *GetPodEventsRequest) (*GetPodEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPodEvents not implemented")
+}
+func (UnimplementedExecutorServiceServer) GetWorkloadYaml(context.Context, *GetWorkloadYamlRequest) (*GetWorkloadYamlResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkloadYaml not implemented")
+}
+func (UnimplementedExecutorServiceServer) ApplyWorkloadYaml(context.Context, *ApplyWorkloadYamlRequest) (*ApplyWorkloadYamlResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyWorkloadYaml not implemented")
 }
 func (UnimplementedExecutorServiceServer) SetupRBAC(context.Context, *SetupRBACRequest) (*SetupRBACResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetupRBAC not implemented")
@@ -917,6 +989,78 @@ func _ExecutorService_ApplyPodYaml_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_ListPods_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPodsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ListPods(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ListPods_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ListPods(ctx, req.(*ListPodsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_GetPodEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPodEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).GetPodEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_GetPodEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).GetPodEvents(ctx, req.(*GetPodEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_GetWorkloadYaml_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkloadYamlRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).GetWorkloadYaml(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_GetWorkloadYaml_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).GetWorkloadYaml(ctx, req.(*GetWorkloadYamlRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_ApplyWorkloadYaml_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyWorkloadYamlRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ApplyWorkloadYaml(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ApplyWorkloadYaml_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ApplyWorkloadYaml(ctx, req.(*ApplyWorkloadYamlRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_SetupRBAC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetupRBACRequest)
 	if err := dec(in); err != nil {
@@ -1142,6 +1286,22 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApplyPodYaml",
 			Handler:    _ExecutorService_ApplyPodYaml_Handler,
+		},
+		{
+			MethodName: "ListPods",
+			Handler:    _ExecutorService_ListPods_Handler,
+		},
+		{
+			MethodName: "GetPodEvents",
+			Handler:    _ExecutorService_GetPodEvents_Handler,
+		},
+		{
+			MethodName: "GetWorkloadYaml",
+			Handler:    _ExecutorService_GetWorkloadYaml_Handler,
+		},
+		{
+			MethodName: "ApplyWorkloadYaml",
+			Handler:    _ExecutorService_ApplyWorkloadYaml_Handler,
 		},
 		{
 			MethodName: "SetupRBAC",

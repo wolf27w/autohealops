@@ -363,6 +363,71 @@ func (s *Server) ApplyPodYaml(ctx context.Context, req *pb.ApplyPodYamlRequest) 
 	return &pb.ApplyPodYamlResponse{Success: true, Message: "已应用"}, nil
 }
 
+// ListPods 命名空间 Pod 列表（含创建时间）
+func (s *Server) ListPods(ctx context.Context, req *pb.ListPodsRequest) (*pb.ListPodsResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListPodsResponse{Success: false, Error: err.Error()}, nil
+	}
+	items, err := ex.ListPods(ctx, req.Namespace)
+	if err != nil {
+		return &pb.ListPodsResponse{Success: false, Error: err.Error()}, nil
+	}
+	pods := make([]*pb.PodBriefInfo, 0, len(items))
+	for _, p := range items {
+		pods = append(pods, &pb.PodBriefInfo{
+			Namespace: p.Namespace, Name: p.Name, Phase: p.Phase, Ready: p.Ready,
+			RestartCount: p.RestartCount, CreatedAt: p.CreatedAt, NodeName: p.NodeName, PodIp: p.PodIP,
+		})
+	}
+	return &pb.ListPodsResponse{Success: true, Pods: pods}, nil
+}
+
+// GetPodEvents 单个 Pod 的 k8s Event
+func (s *Server) GetPodEvents(ctx context.Context, req *pb.GetPodEventsRequest) (*pb.GetPodEventsResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetPodEventsResponse{Success: false, Error: err.Error()}, nil
+	}
+	items, err := ex.GetPodEvents(ctx, req.Namespace, req.PodName)
+	if err != nil {
+		return &pb.GetPodEventsResponse{Success: false, Error: err.Error()}, nil
+	}
+	events := make([]*pb.PodEventInfo, 0, len(items))
+	for _, e := range items {
+		events = append(events, &pb.PodEventInfo{
+			Type: e.Type, Reason: e.Reason, Message: e.Message, Count: e.Count,
+			FirstTimestamp: e.FirstTimestamp, LastTimestamp: e.LastTimestamp, Source: e.Source,
+		})
+	}
+	return &pb.GetPodEventsResponse{Success: true, Events: events}, nil
+}
+
+// GetWorkloadYaml 获取工作负载（整个服务）YAML
+func (s *Server) GetWorkloadYaml(ctx context.Context, req *pb.GetWorkloadYamlRequest) (*pb.GetWorkloadYamlResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetWorkloadYamlResponse{Success: false, Error: err.Error()}, nil
+	}
+	y, err := ex.GetWorkloadYaml(ctx, req.Kind, req.Namespace, req.Name)
+	if err != nil {
+		return &pb.GetWorkloadYamlResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.GetWorkloadYamlResponse{Success: true, Yaml: y}, nil
+}
+
+// ApplyWorkloadYaml 应用工作负载（整个服务）YAML
+func (s *Server) ApplyWorkloadYaml(ctx context.Context, req *pb.ApplyWorkloadYamlRequest) (*pb.ApplyWorkloadYamlResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ApplyWorkloadYamlResponse{Success: false, Error: err.Error()}, nil
+	}
+	if err := ex.ApplyWorkloadYaml(ctx, req.Kind, req.Namespace, req.Name, req.YamlContent); err != nil {
+		return &pb.ApplyWorkloadYamlResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.ApplyWorkloadYamlResponse{Success: true, Message: "已应用"}, nil
+}
+
 // SetupRBAC 云原生 RBAC 接入：能力探测 + 下发 ClusterRole + 自举 automation SA
 func (s *Server) SetupRBAC(ctx context.Context, req *pb.SetupRBACRequest) (*pb.SetupRBACResponse, error) {
 	client, err := s.manager.GetClient(ctx, uint(req.ClusterId))

@@ -6,7 +6,9 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods } from '../services/api'
+import PodEventsModal from '../components/PodEventsModal'
+import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -66,6 +68,9 @@ export default function ClusterDetail() {
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
+  const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
+  const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
+  const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
@@ -103,6 +108,21 @@ export default function ClusterDetail() {
   }
 
   useEffect(load, [id])
+
+  // 实时 Pod 信息（创建时间/重启/节点）：拉 k8s 实时列表，按 命名空间/名称 合并到容器组表
+  // （DB 快照无创建时间；namespace 空=全部）
+  useEffect(() => {
+    if (activeType !== 'pods') return
+    getClusterPods(Number(id), activeNs === '_all_' ? '' : activeNs)
+      .then((d) => {
+        const pods = (d as { pods?: Array<{ namespace: string; name: string; created_at?: string; restart_count?: number; node_name?: string; ready?: boolean }> }).pods || []
+        const m: Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean }> = {}
+        for (const p of pods) m[`${p.namespace}-${p.name}`] = p
+        setLivePods(m)
+      })
+      .catch(() => setLivePods({}))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, activeType, activeNs])
 
   // URL 没有 ns 但本地记住了 → 同步进 URL，保证「返回」也停留在原命名空间
   useEffect(() => {
@@ -189,6 +209,15 @@ export default function ClusterDetail() {
     }
   }, [dataByType, statusFilter])
 
+  // 容器组行：合并实时信息（创建时间/重启/节点）
+  const podsRows = useMemo(
+    () => (finalData.pods || []).map((p) => {
+      const live = livePods[`${p.namespace}-${p.name}`]
+      return { ...p, created_at: live?.created_at, restart_count: live?.restart_count, node_name: live?.node_name }
+    }),
+    [finalData.pods, livePods],
+  )
+
   // 「状态」列表头：筛选图标放在文字前面（避免看着像挂在“更新时间”上）
   const statusHeader = (
     <Space size={4}>
@@ -226,6 +255,10 @@ export default function ClusterDetail() {
     },
     { title: '更新时间', key: 'update_time', dataIndex: 'update_time', width: 180,
       render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
+    { title: '操作', key: 'actions', width: 90, render: (_: unknown, r: ResourceItem) => (
+      <Button size="small" type="link"
+        onClick={() => setWlYaml({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })}>YAML</Button>
+    ) },
   ]
 
   const tabItems = [
@@ -260,18 +293,20 @@ export default function ClusterDetail() {
       key: 'pods-group',
       label: '容器组',
       children: (
-        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={finalData.pods}
+        <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={podsRows}
           pagination={paginationConfig}
           columns={[
             { title: '命名空间', dataIndex: 'namespace', width: 180 },
             { title: '名称', dataIndex: 'name' },
             { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+            { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
             { title: '资源（最小~最大）', render: (_: unknown, r: ResourceItem) => renderResources(r) || '-' },
-            { title: '操作', width: 230, render: (_: unknown, r: ResourceItem) => (
+            { title: '操作', width: 290, render: (_: unknown, r: ResourceItem) => (
               <Space size="small">
                 <Button size="small" type="link" onClick={() => setMetricsPod({ ...r, clusterId: Number(id) })}>监控</Button>
                 <Button size="small" type="link" onClick={() => setLogPod({ ...r, clusterId: Number(id) })}>日志</Button>
                 <Button size="small" type="link" onClick={() => setExecTarget({ ...r, clusterId: Number(id) })}>进容器</Button>
+                <Button size="small" type="link" onClick={() => setEventsPod({ ...r, clusterId: Number(id) })}>事件</Button>
                 <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId: Number(id) })}>YAML</Button>
               </Space>
             ) },
@@ -342,6 +377,8 @@ export default function ClusterDetail() {
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
       <ExecPodModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
+      <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
+      <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>
   )
