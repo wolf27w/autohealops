@@ -282,6 +282,48 @@ async def misc_resources(cluster_id: int, namespace: str = "", user=Depends(requ
     }}
 
 
+# 可编辑的配置类对象类型（ConfigMap/Secret）
+_CONFIG_OBJECT_KINDS = {"configmap", "secret"}
+
+
+@router.get("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}/yaml")
+async def object_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
+    """获取配置类对象（ConfigMap/Secret）的 YAML（只读）"""
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "YAML 获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"yaml": r.get("yaml", "")}}
+
+
+@router.put("/clusters/{cluster_id}/objects/{kind}/yaml")
+async def apply_object_yaml(cluster_id: int, kind: str, payload: dict, user=Depends(require_operator)):
+    """创建/编辑配置类对象（ConfigMap/Secret）：server-side apply（需操作员权限）
+
+    kind 从路径取（configmap/secret）；name/namespace 从 YAML 解析。创建与编辑同一个接口。
+    """
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    yaml_content = (payload.get("yaml") or "").strip()
+    if not yaml_content:
+        return {"code": 400, "message": "yaml 必填", "data": None}
+    # 命名空间权限：从 YAML 粗略提取 namespace 做校验（缺省则用集群级读）
+    ns = ""
+    for line in yaml_content.splitlines():
+        if line.strip().startswith("namespace:"):
+            ns = line.split(":", 1)[1].strip().strip('"\'')
+            break
+    if denied := await _deny_cluster(user, cluster_id, ns, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, ns, "", yaml_content)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "YAML 应用失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message", "已应用")}}
+
+
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
 async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
     """获取工作负载（整个服务）YAML（只读）"""

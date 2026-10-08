@@ -305,6 +305,11 @@ export const getPodDetail = (clusterId: number, ns: string, pod: string) =>
 // 集群管理其它资源：服务/路由/ConfigMap/Secret/存储(PVC)
 export const getMiscResources = (clusterId: number, namespace = '') =>
   http.get(`/resources/clusters/${clusterId}/misc-resources`, { params: { namespace } })
+// 配置类对象（ConfigMap/Secret）YAML：查看 / 创建·编辑
+export const getObjectYaml = (clusterId: number, kind: string, ns: string, name: string) =>
+  http.get(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/yaml`)
+export const applyObjectYaml = (clusterId: number, kind: string, yaml: string) =>
+  http.put(`/resources/clusters/${clusterId}/objects/${kind}/yaml`, { yaml })
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')

@@ -220,7 +220,7 @@ func (e *Executor) GetPodEvents(ctx context.Context, namespace, podName string) 
 	return out, nil
 }
 
-// workloadGVR 工作负载类型 → GVR
+// workloadGVR 工作负载/配置类资源类型 → GVR
 func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 	switch kind {
 	case "deployment":
@@ -231,8 +231,12 @@ func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, nil
 	case "cronjob":
 		return schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}, nil
+	case "configmap":
+		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}, nil
+	case "secret":
+		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}, nil
 	default:
-		return schema.GroupVersionResource{}, fmt.Errorf("不支持的工作负载类型 %q（仅 deployment/statefulset/daemonset/cronjob）", kind)
+		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（仅 deployment/statefulset/daemonset/cronjob/configmap/secret）", kind)
 	}
 }
 
@@ -300,7 +304,7 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 	return nil
 }
 
-// kindMatches 工作组 kind 名与内部小写类型匹配
+// kindMatches kind 名与内部小写类型匹配
 func kindMatches(kind, internal string) bool {
 	switch internal {
 	case "deployment":
@@ -311,6 +315,10 @@ func kindMatches(kind, internal string) bool {
 		return kind == "DaemonSet"
 	case "cronjob":
 		return kind == "CronJob"
+	case "configmap":
+		return kind == "ConfigMap"
+	case "secret":
+		return kind == "Secret"
 	}
 	return false
 }

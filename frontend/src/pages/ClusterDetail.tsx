@@ -10,6 +10,7 @@ import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLog
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
+import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../components/ConfigObjectYamlModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -87,6 +88,7 @@ export default function ClusterDetail() {
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [misc, setMisc] = useState<MiscData>({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] })
+  const [configObj, setConfigObj] = useState<ConfigObjectTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
@@ -150,6 +152,12 @@ export default function ClusterDetail() {
       .catch(() => setMisc({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, activeType, activeNs])
+
+  const reloadMisc = () => {
+    getMiscResources(Number(id), activeNs === '_all_' ? '' : activeNs)
+      .then((d) => setMisc(d as unknown as MiscData))
+      .catch(() => { /* ignore */ })
+  }
 
   // URL 没有 ns 但本地记住了 → 同步进 URL，保证「返回」也停留在原命名空间
   useEffect(() => {
@@ -395,7 +403,7 @@ export default function ClusterDetail() {
     },
     {
       key: 'configmaps',
-      label: 'ConfigMap',
+      label: '配置字典',
       children: (
         <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.configmaps}
           pagination={paginationConfig}
@@ -403,13 +411,16 @@ export default function ClusterDetail() {
             { title: '命名空间', dataIndex: 'namespace', width: 220 },
             { title: '名称', dataIndex: 'name' },
             { title: '数据项数', dataIndex: 'data_count', width: 120 },
+            { title: '操作', width: 90, render: (_: unknown, r: MiscRow) => (
+              <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name })}>编辑</Button>
+            ) },
           ]}
-          locale={{ emptyText: '无 ConfigMap' }} />
+          locale={{ emptyText: '无配置字典' }} />
       ),
     },
     {
       key: 'secrets',
-      label: 'Secret',
+      label: '保密字典',
       children: (
         <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={misc.secrets}
           pagination={paginationConfig}
@@ -418,8 +429,11 @@ export default function ClusterDetail() {
             { title: '名称', dataIndex: 'name' },
             { title: '类型', dataIndex: 'type', width: 200, render: (v: string) => v || '-' },
             { title: '数据项数', dataIndex: 'data_count', width: 120 },
+            { title: '操作', width: 90, render: (_: unknown, r: MiscRow) => (
+              <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name })}>编辑</Button>
+            ) },
           ]}
-          locale={{ emptyText: '无 Secret' }} />
+          locale={{ emptyText: '无保密字典' }} />
       ),
     },
     {
@@ -478,7 +492,13 @@ export default function ClusterDetail() {
         {namespaces.length === 0 ? (
           <Empty description="暂无数据，请先触发采集或添加集群" />
         ) : (
-          <Tabs activeKey={activeType} onChange={changeType} items={tabItems} />
+          <Tabs activeKey={activeType} onChange={changeType} items={tabItems}
+            tabBarExtraContent={(activeType === 'configmaps' || activeType === 'secrets') ? (
+              <Button type="primary" size="small"
+                onClick={() => setConfigObj({ clusterId: Number(id), kind: activeType === 'secrets' ? 'secret' : 'configmap', namespace: activeNs === '_all_' ? 'default' : activeNs, name: '', create: true })}>
+                创建{activeType === 'secrets' ? '保密字典' : '配置字典'}
+              </Button>
+            ) : undefined} />
         )}
       </Card>
 
@@ -488,6 +508,7 @@ export default function ClusterDetail() {
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
+      <ConfigObjectYamlModal target={configObj} onClose={() => setConfigObj(null)} onSaved={reloadMisc} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>
