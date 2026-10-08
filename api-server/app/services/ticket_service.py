@@ -481,7 +481,9 @@ async def _notify_auto_ticket_group(text: str, ticket: Ticket) -> None:
     """
     from app.services import messaging
     from app.services.feishu_service import send_feishu_message
-    configs = await notification_service._get_configs(notification_service.SCENE_ADMIN)
+    # 渠道优先：专门「工单」场景（SCENE_TICKET）；未配置则回退「管理员群」（SCENE_ADMIN）
+    configs = await notification_service._get_configs(notification_service.SCENE_TICKET) \
+        or await notification_service._get_configs(notification_service.SCENE_ADMIN)
     for c in configs:
         try:
             is_app = c.channel_type == "feishu" and (c.send_mode == "app" or (c.app_id or "").strip())

@@ -41,12 +41,14 @@ async def write_in_app_message(user_id: int, title: str, content: str, kind: str
 SCENE_ALERT = "alert"
 SCENE_DUTY = "approval_duty"
 SCENE_ADMIN = "approval_admin"
+SCENE_TICKET = "ticket"
 SCENE_BOTH = "both"
 
 SCENE_MATCH = {
     SCENE_ALERT: (SCENE_ALERT, SCENE_BOTH),
     SCENE_DUTY: (SCENE_DUTY, SCENE_BOTH),
     SCENE_ADMIN: (SCENE_ADMIN, SCENE_BOTH),
+    SCENE_TICKET: (SCENE_TICKET, SCENE_BOTH),
 }
 
 

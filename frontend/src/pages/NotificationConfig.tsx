@@ -36,11 +36,12 @@ const SCENE_OPTIONS = [
   { value: 'alert', label: '告警机器人' },
   { value: 'approval_duty', label: '审批-值班机器人' },
   { value: 'approval_admin', label: '审批-管理员机器人' },
+  { value: 'ticket', label: '工单' },
   { value: 'both', label: '通用（告警+审批都收）' },
 ]
 
 const SCENE_COLOR: Record<string, string> = {
-  alert: 'red', approval_duty: 'blue', approval_admin: 'purple', both: 'default',
+  alert: 'red', approval_duty: 'blue', approval_admin: 'purple', ticket: 'orange', both: 'default',
 }
 
 // IM 通知模板预置（按渠道各一套，占位符：{project}/{cluster}/{namespace}/{resource}/{fault_type}/{severity}/{message}/{approval_id}/{plan_summary}/{risk_level}）
