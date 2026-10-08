@@ -424,7 +424,11 @@ async def auto_create_from_alert(alert: Alert, reason: str = "", detail: str = "
 
 
 async def _notify_auto_ticket(ticket: Ticket, alert: Alert, reason: str, detail: str) -> None:
-    """系统自动建单通知：值班人（站内 + 飞书个人），无值班人/飞书不可用时群兜底（复用告警通知通道）"""
+    """系统自动建单通知：值班人（站内 + 飞书个人），无值班人/飞书不可用时群兜底（走管理员群）。
+
+    2026-10-08 修：原群兜底复用 notify_alert（scene=alert），但平台常只配了 approval_admin 群、
+    没配 alert 群 → 找不到渠道 → 静默无提醒；转工单本质是「派给人工处理」，应发管理员群。
+    """
     cluster_name = ""
     try:
         cluster_name = await notification_service._cluster_name(ticket.cluster_id)
@@ -462,11 +466,45 @@ async def _notify_auto_ticket(ticket: Ticket, alert: Alert, reason: str, detail:
             except Exception as e:  # noqa: BLE001
                 logger.warning("工单站内消息写入失败: %s", e)
     if not delivered:
-        # 无值班人 / 飞书不可用 → 群兜底（复用告警通知通道，不另起一套）
+        # 群兜底：发「管理员群」场景（approval_admin）的渠道（应用飞书群 / webhook 群）
         try:
-            await notification_service.notify_alert(alert)
+            await _notify_auto_ticket_group(text, ticket)
         except Exception as e:  # noqa: BLE001
             logger.warning("工单兜底群通知失败: %s", e)
+
+
+async def _notify_auto_ticket_group(text: str, ticket: Ticket) -> None:
+    """转工单群提醒：发管理员群（approval_admin）场景的渠道。
+
+    应用飞书群（send_mode=app + receive_id_type=chat_id）走 send_feishu_message；
+    webhook 群走 messaging 兜底。与审批管理员群通知同一套发送机制。
+    """
+    from app.services import messaging
+    from app.services.feishu_service import send_feishu_message
+    configs = await notification_service._get_configs(notification_service.SCENE_ADMIN)
+    for c in configs:
+        try:
+            is_app = c.channel_type == "feishu" and (c.send_mode == "app" or (c.app_id or "").strip())
+            if is_app:
+                resp = await send_feishu_message(c.receive_id, c.receive_id_type or "chat_id", text,
+                                                c.app_id, c.app_secret)
+                ok = resp.get("status") == "success"
+            elif c.channel_type == "feishu":
+                resp = await messaging.send_text(c.channel_type, c.webhook_url, text)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
+            elif c.channel_type == "dingtalk":
+                resp = await messaging.send_markdown(c.channel_type, c.webhook_url, "【工单】自动创建", text)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
+            elif c.channel_type == "wechat":
+                resp = await messaging.send_markdown(c.channel_type, c.webhook_url, "【工单】自动创建", text)
+                ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
+            else:
+                continue
+            await notification_service._record_log(
+                c.id, None, "success" if ok else "failed", text,
+                resp.get("body", ""), channel=c.channel_type, receiver=f"通知配置:{c.name}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("工单群通知失败 cfg=%s: %s", c.name, e)
 
 
 # ============ 状态流转 ============
