@@ -501,6 +501,37 @@ async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, u
     return {"code": 200, "message": "success", "data": {"yaml": r.get("yaml", "")}}
 
 
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/service-info")
+async def workload_service_info(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
+    """从工作负载提取 Service 自动带出信息：选择器 + 容器端口（KubeSphere 指定工作负载用）"""
+    import yaml as _yaml
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "获取失败"), "data": None}
+    try:
+        obj = _yaml.safe_load(r.get("yaml", "")) or {}
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"YAML 解析失败: {e}", "data": None}
+    spec = obj.get("spec") or {}
+    sel = spec.get("selector") or {}
+    if isinstance(sel, dict) and "matchLabels" in sel:
+        selector = sel.get("matchLabels") or {}
+    else:
+        selector = sel if isinstance(sel, dict) else {}
+    tpl = ((spec.get("template") or {}).get("spec") or {})
+    ports, seen = [], set()
+    for c in (tpl.get("containers") or []):
+        for p in (c.get("ports") or []):
+            key = (p.get("name"), p.get("containerPort"), p.get("protocol"))
+            if key in seen:
+                continue
+            seen.add(key)
+            ports.append({"name": p.get("name", "") or "", "port": p.get("containerPort"), "protocol": p.get("protocol", "TCP") or "TCP"})
+    return {"code": 200, "message": "success", "data": {"selector": selector, "ports": ports}}
+
+
 @router.put("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
 async def apply_workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
                               user=Depends(require_operator)):

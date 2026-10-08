@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Button, Space, Alert, message } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec, applyObject } from '../services/api'
+import { getObjectDetail, updateObjectSpec, applyObject, getWorkloads, getWorkloadServiceInfo } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
@@ -15,7 +15,34 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [workloads, setWorkloads] = useState<Array<{ kind: string; name: string }>>([])
+  const [wlKey, setWlKey] = useState<string>('')
   const isCreate = !!target?.create
+
+  useEffect(() => {
+    if (!target) return
+    setWlKey('')
+    getWorkloads(target.clusterId, target.namespace || 'default')
+      .then((d) => setWorkloads(((d || []) as Array<{ kind: string; name: string }>).filter((w) => ['deployment', 'statefulset', 'daemonset'].includes(w.kind))))
+      .catch(() => setWorkloads([]))
+  }, [target])
+
+  const onPickWorkload = async (val?: string) => {
+    setWlKey(val || '')
+    if (!val || !target) return
+    const [k, n] = val.split('/')
+    try {
+      const d = await getWorkloadServiceInfo(target.clusterId, k, target.namespace || 'default', n) as
+        { selector?: Record<string, string>; ports?: Array<{ name?: string; port?: number; protocol?: string }> }
+      form.setFieldsValue({
+        selector: toKvList(d.selector || {}),
+        ports: (d.ports || []).map((p) => ({ name: p.name || '', port: p.port, targetPort: p.port, nodePort: undefined, protocol: p.protocol || 'TCP' })),
+      })
+      message.success('已按工作负载填充选择器/端口')
+    } catch {
+      message.error('填充失败')
+    }
+  }
 
   useEffect(() => {
     if (!target) return
@@ -87,6 +114,11 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
         )}
         <Form.Item name="type" label="类型" rules={[{ required: true }]}>
           <Select options={['ClusterIP', 'NodePort', 'LoadBalancer', 'ExternalName'].map((v) => ({ value: v, label: v }))} style={{ width: 220 }} />
+        </Form.Item>
+        <Form.Item label="指定工作负载（自动带出选择器/端口，可选）">
+          <Select value={wlKey || undefined} placeholder="选择工作负载自动填充" allowClear style={{ width: 360 }}
+            onChange={onPickWorkload}
+            options={workloads.map((w) => ({ value: `${w.kind}/${w.name}`, label: `${w.kind}/${w.name}` }))} />
         </Form.Item>
         <Form.Item label="选择器 Selector">
           <KeyValueList name="selector" addLabel="添加选择器" keyPlaceholder="如 app" valuePlaceholder="如 eft-auth" />

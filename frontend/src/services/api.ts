@@ -291,6 +291,8 @@ export const recreateWorkload = (clusterId: number, data: Payload) =>
 // 工作负载（整个服务）YAML：查看 / 应用
 export const getWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string) =>
   http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`)
+export const getWorkloadServiceInfo = (clusterId: number, kind: string, ns: string, name: string) =>
+  http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/service-info`)
 export const applyWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string, yaml: string) =>
   http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`, { yaml })
 // 集群 Pod 实时列表（含创建时间）：namespace 空=全部
