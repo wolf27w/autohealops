@@ -5,7 +5,7 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import or_, select
 
@@ -238,6 +238,48 @@ async def _dedup_knowledge(fault_type: str, root_cause: str, repair_steps: str, 
         logger.warning("知识库写入失败（embedding 可能未装）: %s", e)
 
 
+async def _find_recently_closed_ticket_for_alert(alert: Alert, minutes: int):
+    """建单冷却：找「同故障同服务」最近 minutes 分钟内关闭的工单（resolved/closed）。
+
+    匹配键 = cluster_id + fault_type + 服务名（deployment_name 优先，否则 resource_name），
+    与「已开单抑制」口径一致，只是把「在途工单」换成「刚关闭的工单」。返回 Ticket 或 None。
+    """
+    from app.models import Ticket
+    svc = (alert.deployment_name or alert.resource_name)
+    since = datetime.now() - timedelta(minutes=minutes)
+    conds = [
+        Ticket.status.in_(["resolved", "closed"]),
+        Ticket.resolved_at >= since,
+        Alert.fault_type == alert.fault_type,
+        Ticket.cluster_id.is_(None) if alert.cluster_id is None else Ticket.cluster_id == alert.cluster_id,
+    ]
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(Ticket, Alert).join(Alert, Alert.id == Ticket.alert_id)
+            .where(*conds).order_by(Ticket.id.desc()).limit(20)
+        )).all()
+    for t, a in rows:
+        if (a.deployment_name or a.resource_name) == svc:
+            return t
+    return None
+
+
+async def _in_ticket_cooldown(alert_id: int) -> bool:
+    """是否处于建单冷却期内（Redis 标记，失败一律当 False）"""
+    try:
+        return bool(await redis_pool.get(f"alert:ticket_cooldown:{alert_id}"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _set_ticket_cooldown(alert_id: int, seconds: int) -> None:
+    """写建单冷却标记（冷却期内 process_alert 直接跳过，不重诊断/不建单）"""
+    try:
+        await redis_pool.set(f"alert:ticket_cooldown:{alert_id}", "1", ex=max(1, int(seconds)))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("写建单冷却标记失败 alert=%d: %s", alert_id, e)
+
+
 async def _find_open_ticket_for_alert(alert: Alert):
     """已开单抑制：找「同故障同服务」的在途工单（open/processing）。
 
@@ -296,6 +338,24 @@ async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -
                 await session.commit()
         logger.info("告警 %d 已并入在途工单 %s（已开单抑制）", alert.id, existing.ticket_no)
         return
+
+    # 建单冷却（2026-10-08）：同故障同服务刚关过单 → 暂不重复建单（覆盖 kubelet 压力滞回窗口）。
+    # 保持告警 pending（不落状态、不建单），并写 Redis 冷却标记让 process_alert 冷却期内跳过重诊断；
+    # 冷却结束若故障仍未恢复，会正常走建单流程；若期间故障恢复，会被恢复扫描关闭。
+    try:
+        recent = await _find_recently_closed_ticket_for_alert(alert, TICKET_COOLDOWN_MIN)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 建单冷却检查失败: %s", alert.id, e)
+        recent = None
+    if recent is not None:
+        closed_at = recent.resolved_at or recent.closed_at or recent.updated_at
+        age_s = (datetime.now() - closed_at).total_seconds() if closed_at else TICKET_COOLDOWN_MIN * 60
+        remain = int(TICKET_COOLDOWN_MIN * 60 - age_s)
+        if remain > 0:
+            await _set_ticket_cooldown(alert.id, remain)
+            logger.info("告警 %d 命中建单冷却（同故障工单 %s 刚关闭，剩 %ds），暂不重复建单",
+                        alert.id, recent.ticket_no, remain)
+            return
 
     ticket_no = ""
     ticket_ok = False
@@ -561,6 +621,11 @@ async def _repair_image_pull_alert(alert: Alert, trace_id: str) -> None:
 # ============ 循环抑制：同源告警反复自愈失败 → 转人工 ============
 SUPPRESS_WINDOW_SECONDS = 300   # 5 分钟窗口
 SUPPRESS_THRESHOLD = 5           # 5 次触发
+
+# 建单冷却（2026-10-08）：同故障同服务最近 N 分钟内已关单 → 暂不重复自动建单。
+# 覆盖 kubelet 磁盘/内存压力滞回（evictionPressureTransitionPeriod 默认 5m）等
+# 「关单时故障条件尚未转 False」导致的重复建单。冷却结束后若仍未恢复会正常建单。
+TICKET_COOLDOWN_MIN = 10
 
 
 def _suppress_key(alert: Alert) -> str:
@@ -1063,6 +1128,10 @@ async def _process_one(alert: Alert) -> bool:
 
 async def process_alert(alert_id: int) -> bool:
     """处理单条告警（告警写入即触发用）：加单条锁，避免与后台扫描重复处理"""
+    # 建单冷却期内直接跳过（同故障刚关单，避免 kubelet 滞回窗口内重复建单/重诊断）；
+    # 冷却结束后下一轮会自动恢复处理。
+    if await _in_ticket_cooldown(alert_id):
+        return False
     lock_key = f"lock:alert:{alert_id}"
     value = await acquire_lock(redis_pool, lock_key, PER_ALERT_LOCK_MS)
     if value is None:
