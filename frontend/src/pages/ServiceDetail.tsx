@@ -8,7 +8,7 @@ import TerminalModal from '../components/TerminalModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, getClusterPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 
 const KIND_LABEL: Record<string, string> = {
@@ -24,6 +24,7 @@ interface ServicePod {
   cpu_limit?: string | number
   memory_request?: string | number
   memory_limit?: string | number
+  pod_ip?: string
   containers?: string[]
   init_containers?: string[]
   [key: string]: unknown
@@ -79,20 +80,28 @@ export default function ServiceDetail() {
 
   useEffect(load, [id, kind, namespace, name])
 
-  // Pods 列表：从集群详情的 pod 数据里过滤出该服务（deployment_name 前缀匹配）
-  const loadPods = () => {
-    getClusterDetail(clusterId).then((nsList) => {
-      const matched: ServicePod[] = []
-      for (const ns of (nsList || []) as NsPods[]) {
-        if (ns.namespace !== namespace) continue
-        for (const p of ns.pods || []) {
-          if (p.name.startsWith(name + '-')) matched.push({ ...p, namespace: ns.namespace })
+  // Pods 列表：从集群详情的 pod 数据里过滤出该服务（deployment_name 前缀匹配），并合并实时 IP（快照无 IP）
+  const loadPods = async () => {
+    const [nsList, live] = await Promise.all([
+      getClusterDetail(clusterId),
+      getClusterPods(clusterId, namespace).catch(() => ({ pods: [] })),
+    ])
+    const ipMap: Record<string, string | undefined> = {}
+    for (const p of ((live as { pods?: Array<{ name: string; pod_ip?: string }> }).pods || [])) {
+      ipMap[p.name] = p.pod_ip
+    }
+    const matched: ServicePod[] = []
+    for (const ns of (nsList || []) as NsPods[]) {
+      if (ns.namespace !== namespace) continue
+      for (const p of ns.pods || []) {
+        if (p.name.startsWith(name + '-')) {
+          matched.push({ ...p, namespace: ns.namespace, pod_ip: ipMap[p.name] })
         }
       }
-      setPods(matched)
-    })
+    }
+    setPods(matched)
   }
-  useEffect(loadPods, [id, namespace, name])
+  useEffect(() => { void loadPods() }, [id, namespace, name])
 
   const handleScale = async () => {
     await scaleWorkload(clusterId, { kind, namespace, name, replicas })
@@ -217,6 +226,7 @@ export default function ServiceDetail() {
               columns={[
                 { title: '名称', dataIndex: 'name', render: (v, r) => <a onClick={() => setDetailPod({ clusterId, namespace: r.namespace, name: r.name })}>{v}</a> },
                 { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'Running' ? 'green' : 'red'}>{s}</Tag> },
+                { title: 'IP', dataIndex: 'pod_ip', width: 150, render: (v) => (v ? String(v) : '-') },
                 { title: '资源（最小~最大）', render: (_, r) => {
                   const parts: string[] = []
                   if (r.cpu_request || r.cpu_limit) parts.push(`CPU ${r.cpu_request || '-'}~${r.cpu_limit || '-'}`)

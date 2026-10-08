@@ -72,7 +72,7 @@ export default function ClusterDetail() {
   const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
-  const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; containers?: string[]; init_containers?: string[] }>>({})
+  const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
@@ -117,8 +117,8 @@ export default function ClusterDetail() {
     if (activeType !== 'pods') return
     getClusterPods(Number(id), activeNs === '_all_' ? '' : activeNs)
       .then((d) => {
-        const pods = (d as { pods?: Array<{ namespace: string; name: string; created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; containers?: string[]; init_containers?: string[] }> }).pods || []
-        const m: Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; containers?: string[]; init_containers?: string[] }> = {}
+        const pods = (d as { pods?: Array<{ namespace: string; name: string; created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> }).pods || []
+        const m: Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> = {}
         for (const p of pods) m[`${p.namespace}-${p.name}`] = p
         setLivePods(m)
       })
@@ -215,7 +215,7 @@ export default function ClusterDetail() {
   const podsRows = useMemo(
     () => (finalData.pods || []).map((p) => {
       const live = livePods[`${p.namespace}-${p.name}`]
-      return { ...p, created_at: live?.created_at, restart_count: live?.restart_count, node_name: live?.node_name, containers: live?.containers, init_containers: live?.init_containers }
+      return { ...p, created_at: live?.created_at, restart_count: live?.restart_count, node_name: live?.node_name, pod_ip: live?.pod_ip, containers: live?.containers, init_containers: live?.init_containers }
     }),
     [finalData.pods, livePods],
   )
@@ -303,6 +303,7 @@ export default function ClusterDetail() {
               <a onClick={() => setDetailPod({ clusterId: Number(id), namespace: r.namespace, name: r.name })}>{v}</a>
             ) },
             { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+            { title: 'IP', dataIndex: 'pod_ip', width: 150, render: (v: unknown) => (v ? String(v) : '-') },
             { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
             { title: '资源（最小~最大）', render: (_: unknown, r: ResourceItem) => renderResources(r) || '-' },
             { title: '操作', width: 290, render: (_: unknown, r: ResourceItem) => (
