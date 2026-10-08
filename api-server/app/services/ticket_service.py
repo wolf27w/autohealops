@@ -683,7 +683,7 @@ async def handle_im_callback(feishu_user_id: str, action: str, ticket_no: str, c
             | (User.feishu_open_id == feishu_user_id)
         ))).scalars().first()
         if not u:
-            return {"code": 404, "message": "未找到对应平台用户（请先在用户管理配置飞书 user_id/open_id）"}
+            return {"code": 404, "message": f"未找到对应平台用户（发送人标识={feishu_user_id}，请到用户管理填入飞书 user_id/open_id）"}
         t = (await session.execute(select(Ticket).where(Ticket.ticket_no == ticket_no))).scalars().first()
         if not t:
             return {"code": 404, "message": f"工单不存在：{ticket_no}"}
