@@ -145,14 +145,17 @@ func (w *NodeWatcher) handleNodeEvent(event watch.Event) {
 	}
 }
 
-// resolveNodeFaultAlerts 节点故障恢复 → 关闭该节点的活跃告警（pending/awaiting_approval）。
+// resolveNodeFaultAlerts 节点故障恢复 → 关闭该节点的活跃告警（pending/awaiting_approval/ticketed）。
 // 一律 resolved（老板口径：非 AI 处理的都算「已解决」，只有 AI 自动修复验证通过才标 self_healed）。
 // 告警关闭后，api-server 的审批检查循环（timeout_handler）会据 resolved/self_healed 状态自动解除关联审批单。
+//
+// 2026-10-08：状态列表补入 ticketed —— 节点类告警常被「自动转工单」置为 ticketed，
+// 若恢复时不关这条，工单会变成僵尸单（关联告警永远不 resolved，工单也就挂住不关）。
 func (w *NodeWatcher) resolveNodeFaultAlerts(nodeName, faultType string) {
 	db := database.GetDB()
 	now := time.Now()
 	var alerts []database.Alert
-	err := db.Where("cluster_id = ? AND resource_type = 'node' AND resource_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')",
+	err := db.Where("cluster_id = ? AND resource_type = 'node' AND resource_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval','ticketed')",
 		w.clusterID, nodeName, faultType).Find(&alerts).Error
 	if err != nil || len(alerts) == 0 {
 		return

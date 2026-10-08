@@ -448,7 +448,7 @@ async def _close_related_alerts(alert: Alert) -> int:
                 Alert.namespace == alert.namespace,
                 Alert.deployment_name == dep,
                 Alert.fault_type == alert.fault_type,
-                Alert.status.in_(["pending", "awaiting_approval"]),
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
             )
         )
         related = list(result.scalars())
@@ -1097,7 +1097,8 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
             select(Alert).where(
                 Alert.resource_type == "pod",
                 Alert.fault_type.notin_(skip_faults),
-                Alert.status.in_(["pending", "awaiting_approval"]),
+                # 2026-10-08：补入 ticketed——被自动转工单的 Pod 告警恢复后同样要关，避免僵尸单
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
             ).order_by(Alert.detected_at.asc()).limit(limit)
         )).scalars())
     for alert in rows:

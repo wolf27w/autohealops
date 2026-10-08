@@ -529,6 +529,54 @@ async def _close_alert_flow(session, source_alert, ticket_no: str, final_status:
     return closed_ids
 
 
+async def auto_close_tickets_for_resolved_alerts() -> int:
+    """反向闭环补全（2026-10-08）：关联告警被**系统恢复**关闭后，自动关闭其仍在途的工单。
+
+    背景：节点/资源类告警被自动转工单后，若故障自行恢复，告警侧会置 resolved（watcher 恢复扫描 /
+    api-server 恢复扫描），但原恢复逻辑只处理 pending/awaiting_approval、跳过 ticketed；而工单侧
+    原本只有「工单关→告警关」单向闭环 → 出现「故障已恢复、工单却仍挂在 open/processing」的僵尸单
+    （典型：k8s-node21 DiskPressure 恢复后工单 #14 不自动关）。
+
+    规则（与 2026-09-23 闭环口径对称）：关联告警已终态且由**系统**恢复（resolved_by 为空/system，
+    避免误关“人手动解决告警但工单仍想留痕”的情形）→ 把工单置 resolved。
+    由后台循环周期调用。返回本轮关闭的工单数。
+    """
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(Ticket.id, Ticket.ticket_no).join(Alert, Alert.id == Ticket.alert_id).where(
+                Ticket.status.in_(["open", "processing"]),
+                Alert.status.in_(["resolved", "self_healed"]),
+                or_(Alert.resolved_by.is_(None), Alert.resolved_by == "", Alert.resolved_by == "system"),
+            ).limit(200)
+        )).all()
+    closed: list[str] = []
+    for tid, tno in rows:
+        try:
+            async with async_session() as session:
+                t = await session.get(Ticket, tid)
+                if not t or t.status not in ("open", "processing"):
+                    continue
+                src = await session.get(Alert, t.alert_id) if t.alert_id else None
+                if not src or src.status not in ("resolved", "self_healed"):
+                    continue
+                if (src.resolved_by or "") not in ("", "system"):
+                    continue
+                err, _ids = await _transition_status(
+                    session, t, "resolved", None,
+                    f"关联告警 #{src.id} 已恢复，系统自动关闭工单",
+                )
+                if err:
+                    logger.warning("告警恢复自动关单失败 ticket=%s: %s", tno, err)
+                    continue
+                await session.commit()
+                closed.append(tno)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("告警恢复自动关单异常 ticket=%s: %s", tno, e)
+    if closed:
+        logger.info("告警恢复自动关单 %d 张: %s", len(closed), ",".join(closed))
+    return len(closed)
+
+
 async def _transition_status(session, ticket: Ticket, new_status: str, user, note: str = "") -> tuple[str | None, list[int]]:
     """校验并执行状态流转（写 action 留言 + 时间戳）。
 
