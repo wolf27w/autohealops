@@ -282,8 +282,10 @@ async def misc_resources(cluster_id: int, namespace: str = "", user=Depends(requ
     }}
 
 
-# 可编辑的配置类对象类型（ConfigMap/Secret）
-_CONFIG_OBJECT_KINDS = {"configmap", "secret"}
+# 可通过「对象」接口编辑的资源类型（YAML/元数据/删除）
+_CONFIG_OBJECT_KINDS = {"configmap", "secret", "service", "ingress"}
+# 其中带「数据键值」语义的（编辑设置 = data）
+_DATA_KINDS = {"configmap", "secret"}
 
 
 @router.get("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}/yaml")
@@ -365,6 +367,7 @@ async def object_detail(cluster_id: int, kind: str, namespace: str, name: str, u
     return {"code": 200, "message": "success", "data": {
         "name": md.get("name", name), "namespace": md.get("namespace", namespace), "kind": obj.get("kind", ""),
         "type": typ, "labels": md.get("labels") or {}, "annotations": md.get("annotations") or {}, "data": data,
+        "spec": (obj.get("spec") if kind in ("service", "ingress") else None),
     }}
 
 
@@ -414,8 +417,8 @@ async def object_update_data(cluster_id: int, kind: str, namespace: str, name: s
                              user=Depends(require_operator)):
     """编辑设置：更新数据键值（ConfigMap→data；Secret→明文 stringData），保留 type（需操作员权限）"""
     import yaml as _yaml
-    if kind not in _CONFIG_OBJECT_KINDS:
-        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if kind not in _DATA_KINDS:
+        return {"code": 400, "message": f"该类型不支持编辑数据 {kind}", "data": None}
     if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
         return denied
     obj, err = await _load_object_or_err(cluster_id, kind, namespace, name)
@@ -430,6 +433,31 @@ async def object_update_data(cluster_id: int, kind: str, namespace: str, name: s
     else:
         obj.pop("stringData", None)
         obj["data"] = data
+    y = _yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, y)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "保存失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": "已保存"}}
+
+
+@router.put("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}/spec")
+async def object_update_spec(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
+                             user=Depends(require_operator)):
+    """编辑设置（服务/路由）：合并更新 spec（浅合并，保留未提交字段如 clusterIP）（需操作员权限）"""
+    import yaml as _yaml
+    if kind not in ("service", "ingress"):
+        return {"code": 400, "message": f"该类型不支持编辑 spec {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    obj, err = await _load_object_or_err(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    spec_in = payload.get("spec") or {}
+    cur = obj.get("spec")
+    if not isinstance(cur, dict):
+        cur = {}
+    cur.update(spec_in)
+    obj["spec"] = cur
     y = _yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
     r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, y)
     if not r.get("success"):

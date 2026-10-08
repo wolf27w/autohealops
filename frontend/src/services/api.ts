@@ -318,6 +318,8 @@ export const updateObjectMetadata = (clusterId: number, kind: string, ns: string
   http.put(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/metadata`, { labels, annotations })
 export const updateObjectData = (clusterId: number, kind: string, ns: string, name: string, data: Record<string, string>, type?: string) =>
   http.put(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/data`, { data, type })
+export const updateObjectSpec = (clusterId: number, kind: string, ns: string, name: string, spec: Record<string, unknown>) =>
+  http.put(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/spec`, { spec })
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')

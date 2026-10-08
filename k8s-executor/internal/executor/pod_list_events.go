@@ -237,8 +237,12 @@ func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}, nil
 	case "secret":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}, nil
+	case "service":
+		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}, nil
+	case "ingress":
+		return schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}, nil
 	default:
-		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（仅 deployment/statefulset/daemonset/cronjob/configmap/secret）", kind)
+		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（仅 deployment/statefulset/daemonset/cronjob/configmap/secret/service/ingress）", kind)
 	}
 }
 
@@ -311,8 +315,10 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 
 // DeleteResource 删除配置类对象（ConfigMap/Secret）
 func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name string) error {
-	if kind != "configmap" && kind != "secret" {
-		return fmt.Errorf("仅支持删除 configmap/secret，当前 kind=%q", kind)
+	switch kind {
+	case "configmap", "secret", "service", "ingress":
+	default:
+		return fmt.Errorf("不支持删除的类型 %q（仅 configmap/secret/service/ingress）", kind)
 	}
 	if namespace == "" || name == "" {
 		return fmt.Errorf("namespace/name 不能为空")
@@ -374,6 +380,10 @@ func kindMatches(kind, internal string) bool {
 		return kind == "ConfigMap"
 	case "secret":
 		return kind == "Secret"
+	case "service":
+		return kind == "Service"
+	case "ingress":
+		return kind == "Ingress"
 	}
 	return false
 }

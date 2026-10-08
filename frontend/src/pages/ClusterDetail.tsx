@@ -13,6 +13,8 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../components/ConfigObjectYamlModal'
 import ConfigObjectInfoModal from '../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../components/ConfigObjectDataModal'
+import ServiceSettingsModal from '../components/ServiceSettingsModal'
+import IngressSettingsModal from '../components/IngressSettingsModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -93,6 +95,8 @@ export default function ClusterDetail() {
   const [configObj, setConfigObj] = useState<ConfigObjectTarget | null>(null)
   const [infoObj, setInfoObj] = useState<ConfigObjectTarget | null>(null)
   const [dataObj, setDataObj] = useState<ConfigObjectTarget | null>(null)
+  const [svcObj, setSvcObj] = useState<ConfigObjectTarget | null>(null)
+  const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
@@ -395,6 +399,23 @@ export default function ClusterDetail() {
             { title: 'ClusterIP', dataIndex: 'cluster_ip', width: 150 },
             { title: '端口', dataIndex: 'ports', render: (v: string) => v || '-' },
             { title: '外部 IP', dataIndex: 'external_ip', width: 150, render: (v: string) => v || '-' },
+            { title: '操作', width: 80, render: (_: unknown, r: MiscRow) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'info', label: '编辑信息' },
+                { key: 'settings', label: '编辑设置' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                const t = { clusterId: Number(id), kind: 'service', namespace: r.namespace, name: r.name }
+                if (key === 'info') setInfoObj(t)
+                else if (key === 'settings') setSvcObj(t)
+                else if (key === 'yaml') setConfigObj(t)
+                else if (key === 'delete') Modal.confirm({ title: `删除服务 ${r.name}？`, okButtonProps: { danger: true }, onOk: () => handleDeleteObject('service', r.namespace, r.name) })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
+            ) },
           ]}
           locale={{ emptyText: '无 Service' }} />
       ),
@@ -411,6 +432,23 @@ export default function ClusterDetail() {
             { title: 'Hosts', dataIndex: 'hosts', render: (v: string) => v || '-' },
             { title: 'Class', dataIndex: 'class', width: 130, render: (v: string) => v || '-' },
             { title: '地址', dataIndex: 'address', width: 150, render: (v: string) => v || '-' },
+            { title: '操作', width: 80, render: (_: unknown, r: MiscRow) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'info', label: '编辑信息' },
+                { key: 'settings', label: '编辑设置' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                const t = { clusterId: Number(id), kind: 'ingress', namespace: r.namespace, name: r.name }
+                if (key === 'info') setInfoObj(t)
+                else if (key === 'settings') setIngObj(t)
+                else if (key === 'yaml') setConfigObj(t)
+                else if (key === 'delete') Modal.confirm({ title: `删除路由 ${r.name}？`, okButtonProps: { danger: true }, onOk: () => handleDeleteObject('ingress', r.namespace, r.name) })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
+            ) },
           ]}
           locale={{ emptyText: '无 Ingress' }} />
       ),
@@ -553,6 +591,8 @@ export default function ClusterDetail() {
       <ConfigObjectYamlModal target={configObj} onClose={() => setConfigObj(null)} onSaved={reloadMisc} />
       <ConfigObjectInfoModal target={infoObj} onClose={() => setInfoObj(null)} onSaved={reloadMisc} />
       <ConfigObjectDataModal target={dataObj} onClose={() => setDataObj(null)} onSaved={reloadMisc} />
+      <ServiceSettingsModal target={svcObj} onClose={() => setSvcObj(null)} onSaved={reloadMisc} />
+      <IngressSettingsModal target={ingObj} onClose={() => setIngObj(null)} onSaved={reloadMisc} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>
