@@ -15,6 +15,7 @@ import ConfigObjectInfoModal from '../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../components/ConfigObjectDataModal'
 import ServiceSettingsModal from '../components/ServiceSettingsModal'
 import IngressSettingsModal from '../components/IngressSettingsModal'
+import PvcCreateModal from '../components/PvcCreateModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -97,6 +98,7 @@ export default function ClusterDetail() {
   const [dataObj, setDataObj] = useState<ConfigObjectTarget | null>(null)
   const [svcObj, setSvcObj] = useState<ConfigObjectTarget | null>(null)
   const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
+  const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
@@ -530,6 +532,21 @@ export default function ClusterDetail() {
             { title: 'StorageClass', dataIndex: 'storage_class', width: 160, render: (v: string) => v || '-' },
             { title: '绑定 PV', dataIndex: 'volume_name', ellipsis: true, render: (v: string) => v || '-' },
             { title: '访问模式', dataIndex: 'access_modes', width: 130, render: (v: string) => v || '-' },
+            { title: '操作', width: 80, render: (_: unknown, r: MiscRow) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'info', label: '编辑信息' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                const t = { clusterId: Number(id), kind: 'pvc', namespace: r.namespace, name: r.name }
+                if (key === 'info') setInfoObj(t)
+                else if (key === 'yaml') setConfigObj(t)
+                else if (key === 'delete') Modal.confirm({ title: `删除存储 ${r.name}？（会释放存储，数据可能丢失）`, okButtonProps: { danger: true }, onOk: () => handleDeleteObject('pvc', r.namespace, r.name) })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
+            ) },
           ]}
           locale={{ emptyText: '无 PVC' }} />
       ),
@@ -579,6 +596,7 @@ export default function ClusterDetail() {
               if (activeType === 'secrets') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'secret', namespace: ns, name: '', create: true })}>创建保密字典</Button>
               if (activeType === 'services') return <Button type="primary" size="small" onClick={() => setSvcObj({ clusterId: Number(id), kind: 'service', namespace: ns, name: '', create: true })}>创建服务</Button>
               if (activeType === 'ingresses') return <Button type="primary" size="small" onClick={() => setIngObj({ clusterId: Number(id), kind: 'ingress', namespace: ns, name: '', create: true })}>创建路由</Button>
+              if (activeType === 'pvcs') return <Button type="primary" size="small" onClick={() => setPvcObj({ clusterId: Number(id), kind: 'pvc', namespace: ns, name: '', create: true })}>创建存储</Button>
               return undefined
             })()} />
         )}
@@ -595,6 +613,7 @@ export default function ClusterDetail() {
       <ConfigObjectDataModal target={dataObj} onClose={() => setDataObj(null)} onSaved={reloadMisc} />
       <ServiceSettingsModal target={svcObj} onClose={() => setSvcObj(null)} onSaved={reloadMisc} />
       <IngressSettingsModal target={ingObj} onClose={() => setIngObj(null)} onSaved={reloadMisc} />
+      <PvcCreateModal target={pvcObj} onClose={() => setPvcObj(null)} onSaved={reloadMisc} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>

@@ -279,11 +279,12 @@ async def misc_resources(cluster_id: int, namespace: str = "", user=Depends(requ
         "configmaps": r.get("configmaps", []),
         "secrets": r.get("secrets", []),
         "pvcs": r.get("pvcs", []),
+        "storage_classes": r.get("storage_classes", []),
     }}
 
 
 # 可通过「对象」接口编辑的资源类型（YAML/元数据/删除）
-_CONFIG_OBJECT_KINDS = {"configmap", "secret", "service", "ingress"}
+_CONFIG_OBJECT_KINDS = {"configmap", "secret", "service", "ingress", "pvc"}
 # 其中带「数据键值」语义的（编辑设置 = data）
 _DATA_KINDS = {"configmap", "secret"}
 
@@ -367,7 +368,7 @@ async def object_detail(cluster_id: int, kind: str, namespace: str, name: str, u
     return {"code": 200, "message": "success", "data": {
         "name": md.get("name", name), "namespace": md.get("namespace", namespace), "kind": obj.get("kind", ""),
         "type": typ, "labels": md.get("labels") or {}, "annotations": md.get("annotations") or {}, "data": data,
-        "spec": (obj.get("spec") if kind in ("service", "ingress") else None),
+        "spec": (obj.get("spec") if kind in ("service", "ingress", "pvc") else None),
     }}
 
 

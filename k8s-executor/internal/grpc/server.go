@@ -459,6 +459,9 @@ func (s *Server) ListMiscResources(ctx context.Context, req *pb.ListMiscResource
 	for _, v := range r.PVCs {
 		resp.Pvcs = append(resp.Pvcs, &pb.PvcInfo{Namespace: v.Namespace, Name: v.Name, Status: v.Status, Capacity: v.Capacity, StorageClass: v.StorageClass, VolumeName: v.VolumeName, AccessModes: v.AccessModes})
 	}
+	for _, v := range r.StorageClasses {
+		resp.StorageClasses = append(resp.StorageClasses, &pb.StorageClassInfo{Name: v.Name, Provisioner: v.Provisioner, IsDefault: v.IsDefault})
+	}
 	return resp, nil
 }
 

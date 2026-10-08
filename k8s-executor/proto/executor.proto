@@ -455,6 +455,12 @@ message ListMiscResourcesResponse {
   repeated SecretInfo secrets = 5;
   repeated PvcInfo pvcs = 6;
   string error = 7;
+  repeated StorageClassInfo storage_classes = 8;
+}
+message StorageClassInfo {
+  string name = 1;
+  string provisioner = 2;
+  bool is_default = 3;
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------

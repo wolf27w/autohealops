@@ -136,7 +136,7 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
         )}
         {!isSecret && (
           <Form.Item label="数据（key → value）" style={{ marginBottom: 0 }}>
-            <KeyValueList name="data" addLabel="添加数据项" />
+            <KeyValueList name="data" addLabel="添加数据项" textarea />
           </Form.Item>
         )}
 
@@ -183,7 +183,7 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
 
         {isSecret && !['kubernetes.io/dockerconfigjson', 'kubernetes.io/tls', 'kubernetes.io/basic-auth', 'kubernetes.io/ssh-auth'].includes(secType) && (
           <Form.Item label="数据（key → value）" style={{ marginBottom: 0 }}>
-            <KeyValueList name="data" addLabel="添加数据项" />
+            <KeyValueList name="data" addLabel="添加数据项" textarea />
           </Form.Item>
         )}
       </Form>

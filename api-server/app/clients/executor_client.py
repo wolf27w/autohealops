@@ -448,7 +448,9 @@ class ExecutorClient:
                                   "data_count": x.data_count} for x in resp.secrets],
                     "pvcs": [{"namespace": x.namespace, "name": x.name, "status": x.status,
                                "capacity": x.capacity, "storage_class": x.storage_class,
-                               "volume_name": x.volume_name, "access_modes": x.access_modes} for x in resp.pvcs]}
+                               "volume_name": x.volume_name, "access_modes": x.access_modes} for x in resp.pvcs],
+                    "storage_classes": [{"name": x.name, "provisioner": x.provisioner,
+                                         "is_default": x.is_default} for x in resp.storage_classes]}
         except Exception as e:  # noqa: BLE001
             logger.error("list_misc_resources 失败: %s", e)
             return {"success": False, "error": str(e)}

@@ -1,8 +1,8 @@
 // 编辑设置（路由 Ingress）：IngressClass / 规则(host + path → service)
 import { useEffect, useState } from 'react'
-import { Modal, Form, Input, Select, Button, Space, Alert, message } from 'antd'
+import { Modal, Form, Input, Select, Button, Space, Alert, Checkbox, message } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec, applyObject } from '../services/api'
+import { getObjectDetail, updateObjectSpec, applyObject, getMiscResources } from '../services/api'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
 interface PathRow { host?: string; path?: string; pathType?: string; serviceName?: string; servicePort?: string }
@@ -14,12 +14,24 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [tlsSecrets, setTlsSecrets] = useState<string[]>([])
+  const [tlsEnabled, setTlsEnabled] = useState(false)
+  const [tlsSecret, setTlsSecret] = useState<string>('')
   const isCreate = !!target?.create
+
+  useEffect(() => {
+    if (!target) return
+    getMiscResources(target.clusterId, target.namespace || 'default')
+      .then((d) => setTlsSecrets((((d as { secrets?: Array<{ name: string; type?: string }> }).secrets) || [])
+        .filter((s) => s.type === 'kubernetes.io/tls').map((s) => s.name)))
+      .catch(() => setTlsSecrets([]))
+  }, [target])
 
   useEffect(() => {
     if (!target) return
     if (target.create) {
       form.resetFields()
+      setTlsEnabled(false); setTlsSecret('')
       form.setFieldsValue({ name: '', namespace: target.namespace || 'default', ingressClassName: '', rows: [{ pathType: 'Prefix', path: '/' }] })
       return
     }
@@ -42,6 +54,8 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
           }
         }
         form.setFieldsValue({ ingressClassName: (spec.ingressClassName as string) || '', rows })
+        const tls = (spec.tls as Array<Record<string, unknown>>) || []
+        if (tls.length > 0) { setTlsEnabled(true); setTlsSecret((tls[0].secretName as string) || '') } else { setTlsEnabled(false); setTlsSecret('') }
       })
       .catch(() => message.error('加载失败'))
       .finally(() => setLoading(false))
@@ -60,18 +74,20 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
       grouped[host].push({ path: r.path || '/', pathType: r.pathType || 'Prefix', backend })
     }
     const rules = Object.entries(grouped).map(([host, paths]) => ({ host, http: { paths } }))
+    const tlsHosts = Array.from(new Set(((v.rows as PathRow[]) || []).map((r) => r && r.host).filter((h): h is string => !!h)))
+    const tls = tlsEnabled ? [{ hosts: tlsHosts, secretName: tlsSecret || undefined }] : []
     setLoading(true)
     try {
       if (isCreate) {
         await applyObject(target.clusterId, 'ingress', {
           apiVersion: 'networking.k8s.io/v1', kind: 'Ingress',
           metadata: { name: (v.name || '').trim(), namespace: (v.namespace || '').trim() || 'default' },
-          spec: { ingressClassName: v.ingressClassName || undefined, rules },
+          spec: { ingressClassName: v.ingressClassName || undefined, rules, tls },
         })
         message.success('已创建')
       } else {
         await updateObjectSpec(target.clusterId, target.kind, target.namespace, target.name, {
-          ingressClassName: v.ingressClassName || undefined, rules,
+          ingressClassName: v.ingressClassName || undefined, rules, tls,
         })
         message.success('已保存')
       }
@@ -95,6 +111,16 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
         )}
         <Form.Item name="ingressClassName" label="IngressClass">
           <Input placeholder="如 nginx" style={{ width: 260 }} />
+        </Form.Item>
+        <Form.Item label="HTTPS 证书（TLS）">
+          <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+            <Checkbox checked={tlsEnabled} onChange={(e) => setTlsEnabled(e.target.checked)}>启用 HTTPS（配置 TLS 证书）</Checkbox>
+            {tlsEnabled && (
+              <Select value={tlsSecret || undefined} placeholder="选择证书 Secret（kubernetes.io/tls）" style={{ width: 360 }}
+                allowClear onChange={(v) => setTlsSecret(v || '')}
+                options={tlsSecrets.map((s) => ({ value: s, label: s }))} />
+            )}
+          </Space>
         </Form.Item>
         <Form.Item label="规则 Rules" style={{ marginBottom: 0 }}>
           <Form.List name="rows">

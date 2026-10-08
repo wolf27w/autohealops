@@ -55,13 +55,21 @@ type PvcInfo struct {
 	AccessModes  string
 }
 
+// StorageClassInfo 存储类简况（cluster-scoped）
+type StorageClassInfo struct {
+	Name        string
+	Provisioner string
+	IsDefault   bool
+}
+
 // MiscResources 集群管理其它资源聚合
 type MiscResources struct {
-	Services   []ServiceInfo
-	Ingresses  []IngressInfo
-	ConfigMaps []ConfigMapInfo
-	Secrets    []SecretInfo
-	PVCs       []PvcInfo
+	Services       []ServiceInfo
+	Ingresses      []IngressInfo
+	ConfigMaps     []ConfigMapInfo
+	Secrets        []SecretInfo
+	PVCs           []PvcInfo
+	StorageClasses []StorageClassInfo
 }
 
 // ListMiscResources 列出 namespace（空=全部）下的 服务/路由/ConfigMap/Secret/PVC
@@ -70,11 +78,12 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 		namespace = metav1.NamespaceAll
 	}
 	out := &MiscResources{
-		Services:   []ServiceInfo{},
-		Ingresses:  []IngressInfo{},
-		ConfigMaps: []ConfigMapInfo{},
-		Secrets:    []SecretInfo{},
-		PVCs:       []PvcInfo{},
+		Services:       []ServiceInfo{},
+		Ingresses:      []IngressInfo{},
+		ConfigMaps:     []ConfigMapInfo{},
+		Secrets:        []SecretInfo{},
+		PVCs:           []PvcInfo{},
+		StorageClasses: []StorageClassInfo{},
 	}
 
 	// 服务
@@ -217,6 +226,23 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 		return out.PVCs[i].Name < out.PVCs[j].Name
 	})
 
+	// 存储类 StorageClass（cluster-scoped）
+	scs, err := e.clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list storageclasses: %w", err)
+	}
+	for i := range scs.Items {
+		sc := &scs.Items[i]
+		isDefault := false
+		for _, k := range []string{"storageclass.kubernetes.io/is-default-class", "storageclass.beta.kubernetes.io/is-default-class"} {
+			if v, ok := sc.Annotations[k]; ok && v == "true" {
+				isDefault = true
+			}
+		}
+		out.StorageClasses = append(out.StorageClasses, StorageClassInfo{Name: sc.Name, Provisioner: sc.Provisioner, IsDefault: isDefault})
+	}
+	sort.Slice(out.StorageClasses, func(i, j int) bool { return out.StorageClasses[i].Name < out.StorageClasses[j].Name })
+
 	// 数量上限保护：超大集群避免一次拉爆
 	const capN = 5000
 	trim := func(n int) int {
@@ -230,5 +256,6 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 	out.ConfigMaps = out.ConfigMaps[:trim(len(out.ConfigMaps))]
 	out.Secrets = out.Secrets[:trim(len(out.Secrets))]
 	out.PVCs = out.PVCs[:trim(len(out.PVCs))]
+	out.StorageClasses = out.StorageClasses[:trim(len(out.StorageClasses))]
 	return out, nil
 }
