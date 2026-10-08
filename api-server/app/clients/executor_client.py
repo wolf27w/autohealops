@@ -378,7 +378,8 @@ class ExecutorClient:
             return {"success": resp.success, "pods": [
                 {"namespace": p.namespace, "name": p.name, "phase": p.phase, "ready": p.ready,
                  "restart_count": p.restart_count, "created_at": p.created_at,
-                 "node_name": p.node_name, "pod_ip": p.pod_ip} for p in resp.pods], "error": resp.error}
+                 "node_name": p.node_name, "pod_ip": p.pod_ip,
+                 "containers": list(p.containers), "init_containers": list(p.init_containers)} for p in resp.pods], "error": resp.error}
         except Exception as e:  # noqa: BLE001
             logger.error("list_pods 失败: %s", e)
             return {"success": False, "pods": [], "error": str(e)}

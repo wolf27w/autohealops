@@ -2816,17 +2816,19 @@ func (x *ListPodsRequest) GetNamespace() string {
 }
 
 type PodBriefInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Phase         string                 `protobuf:"bytes,3,opt,name=phase,proto3" json:"phase,omitempty"`                                    // Running/Pending/Failed/...
-	Ready         bool                   `protobuf:"varint,4,opt,name=ready,proto3" json:"ready,omitempty"`                                   // 所有容器 Ready 且 phase=Running
-	RestartCount  int32                  `protobuf:"varint,5,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"` // 全部容器重启次数之和
-	CreatedAt     string                 `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`           // RFC3339（Pod 创建时间）
-	NodeName      string                 `protobuf:"bytes,7,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	PodIp         string                 `protobuf:"bytes,8,opt,name=pod_ip,json=podIp,proto3" json:"pod_ip,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Namespace      string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name           string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Phase          string                 `protobuf:"bytes,3,opt,name=phase,proto3" json:"phase,omitempty"`                                    // Running/Pending/Failed/...
+	Ready          bool                   `protobuf:"varint,4,opt,name=ready,proto3" json:"ready,omitempty"`                                   // 所有容器 Ready 且 phase=Running
+	RestartCount   int32                  `protobuf:"varint,5,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"` // 全部容器重启次数之和
+	CreatedAt      string                 `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`           // RFC3339（Pod 创建时间）
+	NodeName       string                 `protobuf:"bytes,7,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	PodIp          string                 `protobuf:"bytes,8,opt,name=pod_ip,json=podIp,proto3" json:"pod_ip,omitempty"`
+	Containers     []string               `protobuf:"bytes,9,rep,name=containers,proto3" json:"containers,omitempty"`                                // 所有业务容器名（含 sidecar，按 spec 顺序）
+	InitContainers []string               `protobuf:"bytes,10,rep,name=init_containers,json=initContainers,proto3" json:"init_containers,omitempty"` // init 容器名
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PodBriefInfo) Reset() {
@@ -2913,6 +2915,20 @@ func (x *PodBriefInfo) GetPodIp() string {
 		return x.PodIp
 	}
 	return ""
+}
+
+func (x *PodBriefInfo) GetContainers() []string {
+	if x != nil {
+		return x.Containers
+	}
+	return nil
+}
+
+func (x *PodBriefInfo) GetInitContainers() []string {
+	if x != nil {
+		return x.InitContainers
+	}
+	return nil
 }
 
 type ListPodsResponse struct {
@@ -5125,7 +5141,7 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\x0fListPodsRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
-	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xe4\x01\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xad\x02\n" +
 	"\fPodBriefInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -5135,7 +5151,12 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\tR\tcreatedAt\x12\x1b\n" +
 	"\tnode_name\x18\a \x01(\tR\bnodeName\x12\x15\n" +
-	"\x06pod_ip\x18\b \x01(\tR\x05podIp\"n\n" +
+	"\x06pod_ip\x18\b \x01(\tR\x05podIp\x12\x1e\n" +
+	"\n" +
+	"containers\x18\t \x03(\tR\n" +
+	"containers\x12'\n" +
+	"\x0finit_containers\x18\n" +
+	" \x03(\tR\x0einitContainers\"n\n" +
 	"\x10ListPodsResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12*\n" +
 	"\x04pods\x18\x02 \x03(\v2\x16.executor.PodBriefInfoR\x04pods\x12\x14\n" +

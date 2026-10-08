@@ -18,14 +18,16 @@ import (
 
 // PodBriefInfo Pod 简况（含创建时间，集群管理「容器组」列表用）
 type PodBriefInfo struct {
-	Namespace    string
-	Name         string
-	Phase        string
-	Ready        bool
-	RestartCount int32
-	CreatedAt    string // RFC3339
-	NodeName     string
-	PodIP        string
+	Namespace      string
+	Name           string
+	Phase          string
+	Ready          bool
+	RestartCount   int32
+	CreatedAt      string // RFC3339
+	NodeName       string
+	PodIP          string
+	Containers     []string // 业务容器（含 sidecar）
+	InitContainers []string
 }
 
 // ListPods 列出 namespace（空=全部）下的 Pod，带创建时间/就绪/重启次数
@@ -53,15 +55,25 @@ func (e *Executor) ListPods(ctx context.Context, namespace string) ([]PodBriefIn
 		if !p.CreationTimestamp.IsZero() {
 			created = p.CreationTimestamp.Time.Format(time.RFC3339)
 		}
+		containers := make([]string, 0, len(p.Spec.Containers))
+		for _, c := range p.Spec.Containers {
+			containers = append(containers, c.Name)
+		}
+		inits := make([]string, 0, len(p.Spec.InitContainers))
+		for _, c := range p.Spec.InitContainers {
+			inits = append(inits, c.Name)
+		}
 		out = append(out, PodBriefInfo{
-			Namespace:    p.Namespace,
-			Name:         p.Name,
-			Phase:        string(p.Status.Phase),
-			Ready:        ready,
-			RestartCount: restarts,
-			CreatedAt:    created,
-			NodeName:     p.Spec.NodeName,
-			PodIP:        p.Status.PodIP,
+			Namespace:      p.Namespace,
+			Name:           p.Name,
+			Phase:          string(p.Status.Phase),
+			Ready:          ready,
+			RestartCount:   restarts,
+			CreatedAt:      created,
+			NodeName:       p.Spec.NodeName,
+			PodIP:          p.Status.PodIP,
+			Containers:     containers,
+			InitContainers: inits,
 		})
 	}
 	return out, nil

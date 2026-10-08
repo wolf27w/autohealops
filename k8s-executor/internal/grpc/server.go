@@ -378,6 +378,7 @@ func (s *Server) ListPods(ctx context.Context, req *pb.ListPodsRequest) (*pb.Lis
 		pods = append(pods, &pb.PodBriefInfo{
 			Namespace: p.Namespace, Name: p.Name, Phase: p.Phase, Ready: p.Ready,
 			RestartCount: p.RestartCount, CreatedAt: p.CreatedAt, NodeName: p.NodeName, PodIp: p.PodIP,
+			Containers: p.Containers, InitContainers: p.InitContainers,
 		})
 	}
 	return &pb.ListPodsResponse{Success: true, Pods: pods}, nil

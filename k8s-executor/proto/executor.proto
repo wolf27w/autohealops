@@ -359,6 +359,8 @@ message PodBriefInfo {
   string created_at = 6;    // RFC3339（Pod 创建时间）
   string node_name = 7;
   string pod_ip = 8;
+  repeated string containers = 9;       // 所有业务容器名（含 sidecar，按 spec 顺序）
+  repeated string init_containers = 10; // init 容器名
 }
 message ListPodsResponse {
   bool success = 1;
