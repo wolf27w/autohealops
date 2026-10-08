@@ -1,6 +1,6 @@
 // 服务详情页（专项 D）：工作负载概览 + 副本增减 + 探针编辑 + 回滚/重启/重建 + Pods 列表（监控/日志/进容器/YAML）
 import { useEffect, useRef, useState } from 'react'
-import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider } from 'antd'
+import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider, Collapse } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
@@ -233,12 +233,32 @@ export default function ServiceDetail() {
           { key: 'events', label: '事件', children: (
             <div>
               <Button size="small" style={{ marginBottom: 8 }} onClick={loadEvents} loading={eventsLoading}>刷新事件</Button>
-              {events.length === 0 ? <Empty description="暂无事件" /> : events.map((e) => (
-                <div key={e.pod} style={{ marginBottom: 12 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{e.pod} <span style={{ color: '#999', fontWeight: 400, fontSize: 12 }}>{e.summary}</span></div>
-                  <pre style={{ maxHeight: 220, overflow: 'auto', background: '#fafafa', padding: 8, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{e.events}</pre>
-                </div>
-              ))}
+              {events.length === 0 ? <Empty description="暂无事件" /> : (
+                <Collapse
+                  // 默认只展开有 Warning 的 Pod，其余收起，一眼分清哪个 Pod 有事
+                  defaultActiveKey={events.filter((e) => (e.events || '').includes('Warning')).map((e) => e.pod)}
+                  items={events.map((e) => {
+                    const ev = e.events || ''
+                    const hasWarn = ev.includes('Warning')
+                    const noEvents = !ev || ev.includes('（无事件）')
+                    return {
+                      key: e.pod,
+                      label: (
+                        <Space size={8} wrap>
+                          <span style={{ fontWeight: 600 }}>{e.pod}</span>
+                          <Tag color={hasWarn ? 'red' : noEvents ? 'default' : 'blue'}>
+                            {hasWarn ? 'Warning' : noEvents ? '无事件' : 'Normal'}
+                          </Tag>
+                          <span style={{ color: '#999', fontSize: 12 }}>{e.summary}</span>
+                        </Space>
+                      ),
+                      children: (
+                        <pre style={{ maxHeight: 260, overflow: 'auto', background: '#fafafa', padding: 8, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{ev}</pre>
+                      ),
+                    }
+                  })}
+                />
+              )}
             </div>
           ) },
         ]} />
