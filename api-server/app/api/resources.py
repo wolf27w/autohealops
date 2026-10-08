@@ -324,6 +324,19 @@ async def apply_object_yaml(cluster_id: int, kind: str, payload: dict, user=Depe
     return {"code": 200, "message": "success", "data": {"message": r.get("message", "已应用")}}
 
 
+@router.delete("/clusters/{cluster_id}/objects/{kind}/{namespace}/{name}")
+async def delete_object(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_operator)):
+    """删除配置类对象（ConfigMap/Secret）（需操作员权限）"""
+    if kind not in _CONFIG_OBJECT_KINDS:
+        return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.delete_resource, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "删除失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message", "已删除")}}
+
+
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/yaml")
 async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
     """获取工作负载（整个服务）YAML（只读）"""

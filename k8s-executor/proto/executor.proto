@@ -58,6 +58,8 @@ service ExecutorService {
   rpc GetWorkloadYaml(GetWorkloadYamlRequest) returns (GetWorkloadYamlResponse);
   // 应用工作负载（整个服务）YAML
   rpc ApplyWorkloadYaml(ApplyWorkloadYamlRequest) returns (ApplyWorkloadYamlResponse);
+  // 删除配置类对象（ConfigMap/Secret）
+  rpc DeleteResource(DeleteResourceRequest) returns (DeleteResourceResponse);
 
   // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
   rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
@@ -497,6 +499,20 @@ message ApplyWorkloadYamlRequest {
   string trace_id = 6;
 }
 message ApplyWorkloadYamlResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+// ---------- DeleteResource（删除配置类对象 ConfigMap/Secret） ----------
+message DeleteResourceRequest {
+  int64 cluster_id = 1;
+  string kind = 2;         // configmap/secret
+  string namespace = 3;
+  string name = 4;
+  string trace_id = 5;
+}
+message DeleteResourceResponse {
   bool success = 1;
   string message = 2;
   string error = 3;

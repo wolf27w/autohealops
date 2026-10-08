@@ -9,6 +9,7 @@ export interface ConfigObjectTarget {
   namespace: string
   name: string        // 空 = 新建
   create?: boolean
+  readOnly?: boolean
 }
 
 function template(kind: string, ns: string): string {
@@ -56,25 +57,29 @@ export default function ConfigObjectYamlModal({ target, onClose, onSaved }: {
   }
 
   const label = target?.kind === 'secret' ? '保密字典' : '配置字典'
+  const ro = !!target?.readOnly
   return (
     <Modal
-      title={`${target?.create ? '创建' : '编辑'}${label} YAML`}
+      title={`${ro ? '查看' : (target?.create ? '创建' : '编辑')}${label} YAML`}
       open={!!target}
       onCancel={onClose}
-      onOk={apply}
+      onOk={ro ? undefined : apply}
+      footer={ro ? null : undefined}
       okText={target?.create ? '创建' : '保存'}
       confirmLoading={loading}
       width={920}
     >
       <Alert
-        type="info"
+        type={ro ? 'info' : 'info'}
         showIcon
         style={{ marginBottom: 8 }}
-        message="改的是 k8s 原生 YAML（apiVersion/kind/metadata/data），应用后立即生效；Secret 建议用 stringData 写明文（k8s 自动 base64）。"
+        message={ro ? '只读查看（如需修改请用「编辑」）。Secret 内容以 base64 展示。'
+          : '改的是 k8s 原生 YAML（apiVersion/kind/metadata/data），应用后立即生效；Secret 建议用 stringData 写明文（k8s 自动 base64）。'}
       />
       <Input.TextArea
         value={yaml}
         onChange={(e) => setYaml(e.target.value)}
+        readOnly={ro}
         rows={22}
         style={{ fontFamily: 'monospace', fontSize: 12 }}
       />

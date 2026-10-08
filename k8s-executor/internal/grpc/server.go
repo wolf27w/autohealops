@@ -462,6 +462,18 @@ func (s *Server) ListMiscResources(ctx context.Context, req *pb.ListMiscResource
 	return resp, nil
 }
 
+// DeleteResource 删除配置类对象（ConfigMap/Secret）
+func (s *Server) DeleteResource(ctx context.Context, req *pb.DeleteResourceRequest) (*pb.DeleteResourceResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.DeleteResourceResponse{Success: false, Error: err.Error()}, nil
+	}
+	if err := ex.DeleteResource(ctx, req.Kind, req.Namespace, req.Name); err != nil {
+		return &pb.DeleteResourceResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.DeleteResourceResponse{Success: true, Message: "已删除"}, nil
+}
+
 // GetWorkloadYaml 获取工作负载（整个服务）YAML
 func (s *Server) GetWorkloadYaml(ctx context.Context, req *pb.GetWorkloadYamlRequest) (*pb.GetWorkloadYamlResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)

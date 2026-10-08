@@ -304,6 +304,28 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 	return nil
 }
 
+// DeleteResource 删除配置类对象（ConfigMap/Secret）
+func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name string) error {
+	if kind != "configmap" && kind != "secret" {
+		return fmt.Errorf("仅支持删除 configmap/secret，当前 kind=%q", kind)
+	}
+	if namespace == "" || name == "" {
+		return fmt.Errorf("namespace/name 不能为空")
+	}
+	gvr, err := workloadGVR(kind)
+	if err != nil {
+		return err
+	}
+	dc, err := dynamic.NewForConfig(e.restConfig)
+	if err != nil {
+		return fmt.Errorf("创建 dynamic client 失败: %w", err)
+	}
+	if err := dc.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		return fmt.Errorf("删除失败: %w", err)
+	}
+	return nil
+}
+
 // kindMatches kind 名与内部小写类型匹配
 func kindMatches(kind, internal string) bool {
 	switch internal {

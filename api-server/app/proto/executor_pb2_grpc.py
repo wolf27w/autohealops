@@ -160,6 +160,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.ApplyWorkloadYamlRequest.SerializeToString,
                 response_deserializer=executor__pb2.ApplyWorkloadYamlResponse.FromString,
                 _registered_method=True)
+        self.DeleteResource = channel.unary_unary(
+                '/executor.ExecutorService/DeleteResource',
+                request_serializer=executor__pb2.DeleteResourceRequest.SerializeToString,
+                response_deserializer=executor__pb2.DeleteResourceResponse.FromString,
+                _registered_method=True)
         self.SetupRBAC = channel.unary_unary(
                 '/executor.ExecutorService/SetupRBAC',
                 request_serializer=executor__pb2.SetupRBACRequest.SerializeToString,
@@ -385,6 +390,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DeleteResource(self, request, context):
+        """删除配置类对象（ConfigMap/Secret）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SetupRBAC(self, request, context):
         """云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
         """
@@ -570,6 +582,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.ApplyWorkloadYaml,
                     request_deserializer=executor__pb2.ApplyWorkloadYamlRequest.FromString,
                     response_serializer=executor__pb2.ApplyWorkloadYamlResponse.SerializeToString,
+            ),
+            'DeleteResource': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteResource,
+                    request_deserializer=executor__pb2.DeleteResourceRequest.FromString,
+                    response_serializer=executor__pb2.DeleteResourceResponse.SerializeToString,
             ),
             'SetupRBAC': grpc.unary_unary_rpc_method_handler(
                     servicer.SetupRBAC,
@@ -1293,6 +1310,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/ApplyWorkloadYaml',
             executor__pb2.ApplyWorkloadYamlRequest.SerializeToString,
             executor__pb2.ApplyWorkloadYamlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteResource(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/DeleteResource',
+            executor__pb2.DeleteResourceRequest.SerializeToString,
+            executor__pb2.DeleteResourceResponse.FromString,
             options,
             channel_credentials,
             insecure,

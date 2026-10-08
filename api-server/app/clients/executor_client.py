@@ -483,6 +483,21 @@ class ExecutorClient:
             logger.error("apply_workload_yaml 失败: %s", e)
             return {"success": False, "message": "", "error": str(e)}
 
+    def delete_resource(self, cluster_id: int, kind: str, namespace: str, name: str, trace_id: str = "") -> dict:
+        """删除配置类对象（ConfigMap/Secret）→ 返回 {success, message, error}"""
+        try:
+            resp = _get_stub().DeleteResource(
+                executor_pb2.DeleteResourceRequest(
+                    cluster_id=cluster_id, kind=kind, namespace=namespace, name=name, trace_id=trace_id,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("delete_resource 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
     def setup_rbac(self, cluster_id: int, trace_id: str = "") -> dict:
         """云原生 RBAC 接入：能力探测 + 下发 ClusterRole + 自举 automation SA
         → 返回 {success, rbac_capable, impersonate_capable, cluster_roles, sa_created, error}

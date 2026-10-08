@@ -2,11 +2,11 @@
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
 import { useEffect, useMemo, useState } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
-import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress } from 'antd'
+import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress, Popconfirm } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
@@ -157,6 +157,16 @@ export default function ClusterDetail() {
     getMiscResources(Number(id), activeNs === '_all_' ? '' : activeNs)
       .then((d) => setMisc(d as unknown as MiscData))
       .catch(() => { /* ignore */ })
+  }
+
+  const handleDeleteObject = async (kind: string, ns: string, name: string) => {
+    try {
+      await deleteObject(Number(id), kind, ns, name)
+      message.success('已删除')
+      reloadMisc()
+    } catch {
+      message.error('删除失败')
+    }
   }
 
   // URL 没有 ns 但本地记住了 → 同步进 URL，保证「返回」也停留在原命名空间
@@ -411,8 +421,14 @@ export default function ClusterDetail() {
             { title: '命名空间', dataIndex: 'namespace', width: 220 },
             { title: '名称', dataIndex: 'name' },
             { title: '数据项数', dataIndex: 'data_count', width: 120 },
-            { title: '操作', width: 90, render: (_: unknown, r: MiscRow) => (
-              <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name })}>编辑</Button>
+            { title: '操作', width: 200, render: (_: unknown, r: MiscRow) => (
+              <Space size="small">
+                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name, readOnly: true })}>查看</Button>
+                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'configmap', namespace: r.namespace, name: r.name })}>编辑</Button>
+                <Popconfirm title={`删除配置字典 ${r.name}？`} okButtonProps={{ danger: true }} onConfirm={() => handleDeleteObject('configmap', r.namespace, r.name)}>
+                  <Button size="small" type="link" danger>删除</Button>
+                </Popconfirm>
+              </Space>
             ) },
           ]}
           locale={{ emptyText: '无配置字典' }} />
@@ -429,8 +445,14 @@ export default function ClusterDetail() {
             { title: '名称', dataIndex: 'name' },
             { title: '类型', dataIndex: 'type', width: 200, render: (v: string) => v || '-' },
             { title: '数据项数', dataIndex: 'data_count', width: 120 },
-            { title: '操作', width: 90, render: (_: unknown, r: MiscRow) => (
-              <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name })}>编辑</Button>
+            { title: '操作', width: 200, render: (_: unknown, r: MiscRow) => (
+              <Space size="small">
+                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name, readOnly: true })}>查看</Button>
+                <Button size="small" type="link" onClick={() => setConfigObj({ clusterId: Number(id), kind: 'secret', namespace: r.namespace, name: r.name })}>编辑</Button>
+                <Popconfirm title={`删除保密字典 ${r.name}？`} okButtonProps={{ danger: true }} onConfirm={() => handleDeleteObject('secret', r.namespace, r.name)}>
+                  <Button size="small" type="link" danger>删除</Button>
+                </Popconfirm>
+              </Space>
             ) },
           ]}
           locale={{ emptyText: '无保密字典' }} />

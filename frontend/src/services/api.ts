@@ -310,6 +310,8 @@ export const getObjectYaml = (clusterId: number, kind: string, ns: string, name:
   http.get(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/yaml`)
 export const applyObjectYaml = (clusterId: number, kind: string, yaml: string) =>
   http.put(`/resources/clusters/${clusterId}/objects/${kind}/yaml`, { yaml })
+export const deleteObject = (clusterId: number, kind: string, ns: string, name: string) =>
+  http.delete(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}`)
 
 // ============ 告警策略 ============
 export const getAlertPolicies = () => http.get('/alert-policies')
