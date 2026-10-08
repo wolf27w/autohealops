@@ -9,7 +9,8 @@ from sqlalchemy import and_, exists, func, not_, or_, select, text
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.core.redis_client import acquire_lock, redis_pool, release_lock
+from app.core.redis_client import (acquire_lock, get_dashboard_generation, redis_pool,
+                                   release_lock)
 from app.middleware.permission import require_any_user
 from app.models import (AICallLog, AIModelConfig, Alert, Approval, Cluster, DBMetricSnapshot,
                         DBConnection, ExecutionLog, KnowledgeEntry, PodMetric, ProjectClusterNS,
@@ -135,14 +136,19 @@ _DASH_PREWARM_INTERVAL = 10   # 后台预热间隔（秒）
 _DASH_WAIT_TICKS = 15         # 抢不到锁时的等待轮次（每轮 0.2s → 最多 3s）
 
 
-def _dashboard_cache_key(range_: str, start: str, end: str,
-                         cluster_id: int | None, project_id: int | None, ai_range: str) -> str:
-    """仪表盘缓存键（默认实时视图走裸键，其余按筛选参数拼键）"""
+async def _dashboard_cache_key(range_: str, start: str, end: str,
+                               cluster_id: int | None, project_id: int | None, ai_range: str) -> str:
+    """仪表盘缓存键（默认实时视图走裸键，其余按筛选参数拼键）
+
+    键内嵌「缓存代次」gen：告警/工单/审批/任务任一变更 → gen+1（见 app/core/orm_hooks.py），
+    旧键立即不可达（无需 SCAN 删除，靠 TTL 自然回收）→ 下次取数即重算，解决后即时刷新。
+    """
+    gen = await get_dashboard_generation()
     if range_ != "24h" or cluster_id is not None or project_id is not None or start or end or ai_range:
-        return (f"cache:dashboard:v3:{range_}:{start}:{end}:"
+        return (f"cache:dashboard:v4:{gen}:{range_}:{start}:{end}:"
                 f"{cluster_id if cluster_id is not None else '-'}:"
                 f"{project_id if project_id is not None else '-'}:{ai_range or '-'}")
-    return "cache:dashboard:v3"
+    return f"cache:dashboard:v4:{gen}"
 
 
 async def _cache_get(key: str):
@@ -170,7 +176,7 @@ async def _compute_dashboard(
     db_health/action_stat/action_timeline/cluster_waterline 区块。
     range/cluster_id/project_id 仅作用于新增区块与趋势，不影响原有 core/ai_runtime/trend_* 兜底统计。
     """
-    cache_key = _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range)
+    cache_key = await _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range)
     if not _force:
         cached = await _cache_get(cache_key)
         if cached is not None:
@@ -1028,7 +1034,7 @@ async def _compute_dashboard(
 async def dashboard_cached(range_: str, start: str, end: str, cluster_id: int | None,
                            project_id: int | None, ai_range: str) -> dict:
     """带缓存 + 单飞锁的仪表盘取数（路由与后台预热共用；返回 payload，不含 code/message 包装）"""
-    cache_key = _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range)
+    cache_key = await _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range)
     payload = await _cache_get(cache_key)
     if payload is not None:
         return payload

@@ -76,10 +76,10 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const { data: platformHealth } = useQuery({
     queryKey: ['platform-health'],
     queryFn: () => getPlatformHealth(),
-    refetchInterval: 15000,
+    refetchInterval: 5000,
   })
 
-  // 仪表盘主数据（15s 轮询：后端已 10s 预热缓存；筛选变化自动重查）
+  // 仪表盘主数据（5s 轮询：后端缓存键内嵌代次，告警/工单/审批变更即时失效 → 解决后 ≤5s 反映）
   // placeholderData: keepPreviousData → 切筛选/回页面时先展示上一次数据，不再短暂空白
   const { data, isFetching, refetch } = useQuery<DashboardData>({
     queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
@@ -91,7 +91,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         })
       : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, ai_range: '24h' })),
     placeholderData: keepPreviousData,
-    refetchInterval: 15000,
+    refetchInterval: 5000,
   })
 
   const hs: HealthScore = data?.health_score ?? { total: 0, cluster_score: 0, alert_score: 0, db_score: 0 }

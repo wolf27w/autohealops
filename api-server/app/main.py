@@ -16,6 +16,7 @@ from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
+from app.core import orm_hooks  # noqa: F401  注册仪表盘缓存即时失效钩子（导入即生效）
 from app.core.security import generate_trace_id, hash_password
 from app.models import User
 
