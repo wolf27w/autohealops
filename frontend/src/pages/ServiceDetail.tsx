@@ -8,7 +8,7 @@ import TerminalModal from '../components/TerminalModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, getClusterPods } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 
 const KIND_LABEL: Record<string, string> = {
@@ -79,28 +79,20 @@ export default function ServiceDetail() {
 
   useEffect(load, [id, kind, namespace, name])
 
-  // Pods 列表：从集群详情的 pod 数据里过滤出该服务（deployment_name 前缀匹配），并合并实时容器列表（含 sidecar）
-  const loadPods = async () => {
-    const [nsList, live] = await Promise.all([
-      getClusterDetail(clusterId),
-      getClusterPods(clusterId, namespace).catch(() => ({ pods: [] })),
-    ])
-    const liveMap: Record<string, { containers?: string[]; init_containers?: string[] }> = {}
-    for (const p of ((live as { pods?: Array<{ name: string; containers?: string[]; init_containers?: string[] }> }).pods || [])) {
-      liveMap[p.name] = p
-    }
-    const matched: ServicePod[] = []
-    for (const ns of (nsList || []) as NsPods[]) {
-      if (ns.namespace !== namespace) continue
-      for (const p of ns.pods || []) {
-        if (p.name.startsWith(name + '-')) {
-          matched.push({ ...p, namespace: ns.namespace, containers: liveMap[p.name]?.containers, init_containers: liveMap[p.name]?.init_containers })
+  // Pods 列表：从集群详情的 pod 数据里过滤出该服务（deployment_name 前缀匹配）
+  const loadPods = () => {
+    getClusterDetail(clusterId).then((nsList) => {
+      const matched: ServicePod[] = []
+      for (const ns of (nsList || []) as NsPods[]) {
+        if (ns.namespace !== namespace) continue
+        for (const p of ns.pods || []) {
+          if (p.name.startsWith(name + '-')) matched.push({ ...p, namespace: ns.namespace })
         }
       }
-    }
-    setPods(matched)
+      setPods(matched)
+    })
   }
-  useEffect(() => { void loadPods() }, [id, namespace, name])
+  useEffect(loadPods, [id, namespace, name])
 
   const handleScale = async () => {
     await scaleWorkload(clusterId, { kind, namespace, name, replicas })
@@ -225,12 +217,6 @@ export default function ServiceDetail() {
               columns={[
                 { title: '名称', dataIndex: 'name', render: (v, r) => <a onClick={() => setDetailPod({ clusterId, namespace: r.namespace, name: r.name })}>{v}</a> },
                 { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'Running' ? 'green' : 'red'}>{s}</Tag> },
-                { title: '容器', dataIndex: 'containers', width: 240, render: (v, r) => {
-                  const cs = Array.isArray(v) ? (v as string[]) : []
-                  const inits = Array.isArray(r.init_containers) ? (r.init_containers as string[]) : []
-                  if (cs.length + inits.length === 0) return '-'
-                  return <Space size={4} wrap>{inits.map((c) => <Tag key={`i-${c}`} color="purple">init: {c}</Tag>)}{cs.map((c) => <Tag key={c}>{c}</Tag>)}</Space>
-                } },
                 { title: '资源（最小~最大）', render: (_, r) => {
                   const parts: string[] = []
                   if (r.cpu_request || r.cpu_limit) parts.push(`CPU ${r.cpu_request || '-'}~${r.cpu_limit || '-'}`)

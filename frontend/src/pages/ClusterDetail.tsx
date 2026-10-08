@@ -303,12 +303,6 @@ export default function ClusterDetail() {
               <a onClick={() => setDetailPod({ clusterId: Number(id), namespace: r.namespace, name: r.name })}>{v}</a>
             ) },
             { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
-            { title: '容器', dataIndex: 'containers', width: 240, render: (v: unknown, r: ResourceItem) => {
-              const cs = Array.isArray(v) ? (v as string[]) : []
-              const inits = Array.isArray(r.init_containers) ? (r.init_containers as string[]) : []
-              if (cs.length + inits.length === 0) return '-'
-              return <Space size={4} wrap>{inits.map((c) => <Tag key={`i-${c}`} color="purple">init: {c}</Tag>)}{cs.map((c) => <Tag key={c}>{c}</Tag>)}</Space>
-            } },
             { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
             { title: '资源（最小~最大）', render: (_: unknown, r: ResourceItem) => renderResources(r) || '-' },
             { title: '操作', width: 290, render: (_: unknown, r: ResourceItem) => (
