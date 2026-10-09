@@ -234,7 +234,12 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
       <Sider width={236} theme="dark" collapsible collapsed={collapsed} onCollapse={handleCollapse}>
         <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#34d399,#059669)', display: 'grid', placeItems: 'center', color: '#04231a', fontWeight: 800, fontSize: 15, boxShadow: '0 6px 16px rgba(16,185,129,0.35)', flex: 'none' }}>吴</div>
+          <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#34d399,#059669)', display: 'grid', placeItems: 'center', boxShadow: '0 6px 16px rgba(16,185,129,0.35)', flex: 'none' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#04231a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="5" r="2.2" /><circle cx="5" cy="19" r="2.2" /><circle cx="19" cy="19" r="2.2" />
+              <path d="M12 7.2v4M12 11.2 6.6 16.9M12 11.2l5.4 5.7" />
+            </svg>
+          </div>
           {!collapsed && (
             <div style={{ lineHeight: 1.15 }}>
               <b style={{ color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>API-OPS</b>
