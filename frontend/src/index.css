@@ -69,13 +69,34 @@ body {
 .ant-menu-dark .ant-menu-inline {
   background: transparent !important;
 }
-/* 分组标题 */
-.ant-menu-dark .ant-menu-item-group-title {
-  color: #5f8172 !important;
-  font-size: 10.5px;
-  letter-spacing: 1.4px;
-  text-transform: uppercase;
-  padding-inline: 22px;
+/* 可折叠分组标题（手风琴）：更明显、可点击 */
+.ant-menu-dark .ant-menu-submenu-title {
+  color: #cfe3d7 !important;
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.3px;
+  margin-inline: 8px;
+  border-radius: 8px;
+}
+.ant-menu-dark .ant-menu-submenu-title:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #ffffff !important;
+}
+.ant-menu-dark .ant-menu-submenu-open > .ant-menu-submenu-title,
+.ant-menu-dark .ant-menu-submenu-selected > .ant-menu-submenu-title {
+  color: #34d399 !important;
+}
+/* 展开箭头（更醒目） */
+.ant-menu-dark .ant-menu-submenu-arrow {
+  color: #7ba695;
+}
+.ant-menu-dark .ant-menu-submenu-arrow::before,
+.ant-menu-dark .ant-menu-submenu-arrow::after {
+  background: currentColor;
+}
+.ant-menu-dark .ant-menu-submenu-open > .ant-menu-submenu-title .ant-menu-submenu-arrow,
+.ant-menu-dark .ant-menu-submenu-title:hover .ant-menu-submenu-arrow {
+  color: #34d399;
 }
 /* 选中项：浅绿底 + 左侧强调条 */
 .ant-menu-dark .ant-menu-item-selected {
