@@ -33,7 +33,7 @@
   - **指标阈值型告警 → Netdata**（内置 health 检查更全、秒级、开箱即用）
   - **事件型告警 → 平台自研 watcher**（K8s 事件，Netdata 不做）
   - 两者都经字段映射汇入平台闭环（§十一）
-- **方案 A**：平台 `resource_alert`（容器 CPU/内存/网络阈值告警）**退役**，指标阈值告警整体交给 Netdata。
+- **方案 A**：平台 `resource_alert` 的 4 类规则（容器 CPU/内存/网络阈值）**迁移到 Netdata**（`fault_type` 不变），指标阈值告警整体交给 Netdata。
 - **保留**：事件型 watcher（`pod_watcher`/`node_watcher`）、DB 告警（`db_alert`）**不变**。
 - **parent 使用 PVC**（持久化，重启不丢历史；使用**集群默认 StorageClass**）。
 - **Netdata 版本**：开源 **stable**（镜像 `netdata/netdata:stable`）。
@@ -57,7 +57,7 @@
 - ❌ **不做数据融合**（不把 Netdata 指标拉回平台自己的库 / 图 / 告警引擎）。
 - ❌ **不替换 DB 监控**（`db_collector` 慢SQL/锁/表空间为业务诊断数据，保留）。
 - ❌ **不替换配额/工作负载快照**（`quota/collector`，为"业务视角"，保留）。
-- ♻️ **例外（方案 A）**：`resource_alert` **退役**——容器 CPU/内存/网络阈值告警改由 Netdata 提供。
+- ♻️ **例外（方案 A）**：`resource_alert` 的 4 类规则**迁移到 Netdata**（`fault_type` 不变）；平台侧规则界面/数据处置见 §七。
 - ❌ **`pod_metrics` 自研采集暂不删除**（见 §七 评估项 1）。
 
 ---
@@ -262,7 +262,7 @@ spec:
 | **P1** | manifest + executor RPC + 自动下发 + 展示入口（核心闭环） |
 | **P2** | 存量集群补装 + 卸载 + 升级 |
 | **P3** | 独立 DB 实例 Netdata 总览（可选补充） |
-| **P4** | Netdata 告警 webhook 入站 + 字段映射 + health 裁剪（指标阈值告警接入平台闭环）；ECS/主机接入；`resource_alert` 退役（详见 §十、§十一） |
+| **P4** | Netdata 告警 webhook 入站 + 字段映射 + health 裁剪（指标阈值告警接入平台闭环）；ECS/主机接入；`resource_alert` 规则迁移（详见 §十、§十一） |
 | **P5** | 主机/Docker 诊断 + 修复能力（补齐闭环后两环） |
 
 ---
@@ -317,7 +317,9 @@ spec:
 
 - 二者互补 = **全覆盖**：Netdata 补指标广度，平台补事件 + 业务逻辑。
 - **去重边界**：Netdata 只报**指标阈值类**；平台只报**事件类**，重叠最小。
-- **方案 A**：`resource_alert` 退役（其指标阈值告警由 Netdata 接管）。
+- **方案 A**：`resource_alert` 规则**迁移到 Netdata**（`fault_type` 不变）。
+- **接入方式：webhook**（Netdata → 平台入站接口）。
+- 具体 **Netdata alarm → `fault_type` 映射清单**见 **`docs/NETDATA-ALARM-MAPPING.md`**（草稿）。
 
 ### 11.2 闭环链路
 
@@ -347,6 +349,8 @@ Netdata 告警 CLEAR → webhook → 平台告警自动 resolved（闭环关闭�
 | status：CLEAR | `status=resolved`（自动关闭） |
 | info / value / units | `message` |
 
+> 具体逐项映射（Netdata alarm → `fault_type`/`resource_type`/`severity`）见 **`docs/NETDATA-ALARM-MAPPING.md`**（草稿）。
+
 ### 11.4 复用 vs 需扩展
 
 | 环节 | 复用平台现有 | 需扩展 |
@@ -366,7 +370,7 @@ Netdata 告警 CLEAR → webhook → 平台告警自动 resolved（闭环关闭�
 
 ### 11.6 分期
 
-- **P4**：Netdata 告警 webhook 入站 + 字段映射 + health 裁剪（指标阈值告警接入平台闭环）；ECS/主机接入；`resource_alert` 退役。
+- **P4**：Netdata 告警 webhook 入站 + 字段映射 + health 裁剪（指标阈值告警接入平台闭环）；ECS/主机接入；`resource_alert` 规则迁移到 Netdata。
 - **P5**：主机/Docker 诊断 + 修复能力（补齐闭环后两环）。
 
 ---
