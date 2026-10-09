@@ -175,6 +175,8 @@ func (w *NodeWatcher) resolveNodeFaultAlerts(nodeName, faultType string) {
 		w.logger.Info("节点故障恢复，关闭告警",
 			zap.Uint("cluster", w.clusterID), zap.String("node", nodeName),
 			zap.String("fault", faultType), zap.String("status", newStatus), zap.Uint("alert", a.ID))
+		// 恢复通知：回调 api-server 发「已恢复」，让值班人知道故障已恢复（闭环）
+		triggerRecoveryNotify(a.ID)
 	}
 }
 

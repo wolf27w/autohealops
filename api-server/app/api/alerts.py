@@ -322,6 +322,24 @@ async def auto_process_alert(alert_id: int, request: Request):
     return {"code": 200, "message": "success", "data": {"alert_id": alert_id, "triggered": True}}
 
 
+@router.post("/{alert_id}/recovery-notify")
+async def recovery_notify_alert(alert_id: int, request: Request):
+    """内部触发：告警恢复后发送「已恢复」通知（由 k8s-executor watcher 在节点故障恢复关闭告警后回调）。
+
+    保护：X-Internal-Token 必须等于内部令牌（与 auto-process 一致）。异步执行不阻塞回调。
+    """
+    token = request.headers.get("X-Internal-Token", "")
+    if not token or token != settings.JWT_SECRET_KEY:
+        return {"code": 401, "message": "未认证", "data": None}
+    from app.services.notification_service import send_recovery_notification
+    async with async_session() as session:
+        a = await session.get(Alert, alert_id)
+        if not a:
+            return {"code": 404, "message": "告警不存在", "data": None}
+        asyncio.create_task(send_recovery_notification(a))
+    return {"code": 200, "message": "success", "data": {"alert_id": alert_id, "triggered": True}}
+
+
 @router.get("/{alert_id}/diagnosis")
 async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
     async with async_session() as session:

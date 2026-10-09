@@ -496,6 +496,16 @@ def _mark_alert_recovered(a: Alert, now: str) -> None:
         a.resolved_by = "system"
 
 
+async def _notify_recovered(alerts: list[Alert]) -> None:
+    """批量发送恢复通知（闭环：让值班人知道故障已恢复，不再一直以为没解决）"""
+    from app.services.notification_service import send_recovery_notification
+    for a in alerts:
+        try:
+            await send_recovery_notification(a)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("告警 %d 恢复通知失败: %s", a.id, e)
+
+
 async def _close_related_alerts(alert: Alert) -> int:
     """服务恢复后，关闭同源（deployment）的所有未关闭告警，返回关闭数量"""
     dep = alert.deployment_name or infer_deployment_name(alert.resource_name)
@@ -518,6 +528,8 @@ async def _close_related_alerts(alert: Alert) -> int:
         await s.commit()
         for a in related:
             await _cancel_related_approvals(a.id)
+        # 恢复通知：每条被关闭的告警各自发一次「已恢复」，闭环
+        await _notify_recovered(related)
         return len(related)
 
 
@@ -838,13 +850,17 @@ async def _process_one(alert: Alert) -> bool:
             closed = await _close_related_alerts(alert)
             if closed == 0:
                 # 无同源匹配（旧数据 deployment_name 为空）→ 至少关闭当前这条
+                recovered_alert = None
                 async with async_session() as session:
                     a = await session.get(Alert, alert.id)
                     if a:
                         _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                         await session.commit()
+                        recovered_alert = a
                 # 兜底关当前告警时也解除其关联 pending 审批（避免残留审批最终被判「审核超时」）
                 await _cancel_related_approvals(alert.id)
+                if recovered_alert:
+                    await _notify_recovered([recovered_alert])
             logger.info("告警 %d 恢复，关闭同源未关闭告警 %d 条", alert.id, closed)
             return True
 
@@ -1178,12 +1194,16 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
                 continue
             n = await _close_related_alerts(alert)
             if n == 0:
+                recovered_alert = None
                 async with async_session() as session:
                     a = await session.get(Alert, alert.id)
                     if a:
                         _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                         await session.commit()
+                        recovered_alert = a
                 await _cancel_related_approvals(alert.id)
+                if recovered_alert:
+                    await _notify_recovered([recovered_alert])
                 n = 1
             closed += n
             logger.info("恢复收敛：告警 %d（%s/%s）资源已恢复，关闭 %d 条", alert.id, alert.namespace, alert.resource_name, n)

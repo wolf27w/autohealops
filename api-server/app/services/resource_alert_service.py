@@ -246,6 +246,7 @@ async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则�
 async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -> None:
     """资源恢复 → 关闭 pending 告警（含历史 cluster_id=0 的脏数据）+ 清防抖键"""
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
+    resolved_alerts: list[Alert] = []
     async with async_session() as session:
         result = await session.execute(
             select(Alert).where(
@@ -260,7 +261,14 @@ async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -
             a.status = "resolved"
             a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
             a.message = (a.message or "") + "（指标已回落，系统自动关闭）"
+            resolved_alerts.append(a)
         await session.commit()
+    # 恢复通知：让值班人知道「已恢复」，不再一直以为没解决（闭环）
+    for a in resolved_alerts:
+        try:
+            await notification_service.send_recovery_notification(a)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("资源告警 %d 恢复通知失败: %s", a.id, e)
     # 清理该容器对应的防抖键：避免指标回落关闭后再超阈值时被旧时间戳误判立即重建（通知风暴）
     try:
         await redis_pool.delete(
