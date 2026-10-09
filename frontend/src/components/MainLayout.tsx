@@ -25,24 +25,24 @@ interface InAppMessage {
   is_read: boolean
 }
 
-// 菜单：扁平一级结构（用不可折叠的分区标题分组，去掉展开/收起层级）
+// 菜单：可折叠分组（配合手风琴逻辑：同时只展开一个）
 const menuItems: MenuProps['items'] = [
   {
-    type: 'group', label: '监控',
+    label: '监控', key: 'g-monitor',
     children: [
       { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
       { key: '/clusters', icon: <ClusterOutlined />, label: '集群管理' },
     ],
   },
   {
-    type: 'group', label: '告警处理',
+    label: '告警处理', key: 'g-alert',
     children: [
       { key: '/alert-handling', icon: <AlertOutlined />, label: '告警处理' },
       { key: '/tickets', icon: <FileTextOutlined />, label: '工单' },
     ],
   },
   {
-    type: 'group', label: '策略配置',
+    label: '策略配置', key: 'g-policy',
     children: [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/log-sources', icon: <DatabaseOutlined />, label: '日志源' },
@@ -51,7 +51,7 @@ const menuItems: MenuProps['items'] = [
     ],
   },
   {
-    type: 'group', label: '诊断',
+    label: '诊断', key: 'g-diag',
     children: [
       { key: '/fault-diagnosis/cluster', icon: <ApartmentOutlined />, label: '集群故障诊断' },
       { key: '/fault-diagnosis/app', icon: <ExperimentOutlined />, label: '应用故障诊断' },
@@ -60,7 +60,7 @@ const menuItems: MenuProps['items'] = [
     ],
   },
   {
-    type: 'group', label: '系统',
+    label: '系统', key: 'g-system',
     children: [
       { key: '/notify-center', icon: <NotificationOutlined />, label: '通知配置' },
       { key: '/user-permission', icon: <UserOutlined />, label: '用户与权限' },
@@ -111,10 +111,34 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
     setCollapsed(v)
     localStorage.setItem('sider_collapsed', v ? '1' : '0')
   }
-// 菜单扁平化：不再有分组展开/收起状态（无需 openKeys）
-
+  // 分组折叠（手风琴）：同一时刻只展开一个分组；按当前路由自动展开所属分组
+  const groupOfPath = (p: string) => {
+    for (const g of (menuItems || [])) {
+      const ch = (g as { children?: { key?: string }[] })?.children || []
+      for (const c of ch) {
+        const k = String(c.key || '')
+        if (k && (p === k || p.startsWith(k + '/'))) return String((g as { key?: string })?.key || '')
+      }
+    }
+    return ''
+  }
   // 站内消息中心（铃铛 + 未读 + 列表 + 已读）
   const [unread, setUnread] = useState(0)
+  const [openKeys, setOpenKeys] = useState<string[]>(() => {
+    const g = groupOfPath(location.pathname)
+    return g ? [g] : []
+  })
+  const handleOpenChange = (keys: string[]) => {
+    // 手风琴：只保留最新展开的那个分组
+    const latest = keys.find((k) => !openKeys.includes(k))
+    setOpenKeys(latest ? [latest] : [])
+  }
+  useEffect(() => {
+    if (collapsed) return
+    const g = groupOfPath(location.pathname)
+    if (g) setOpenKeys([g])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, collapsed])
   const [messages, setMessages] = useState<InAppMessage[]>([])
   const [msgTab, setMsgTab] = useState<'unread' | 'all'>('unread')
 
@@ -226,6 +250,7 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
             items={filteredMenuItems}
             inlineIndent={18}
             onClick={({ key }) => navigate(key)}
+            {...(collapsed ? {} : { openKeys, onOpenChange: handleOpenChange })}
             style={{ borderRight: 'none', paddingTop: 6 }}
           />
         </div>
