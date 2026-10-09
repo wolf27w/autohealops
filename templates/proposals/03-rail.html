@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>运维后台 · 方案三 图标窄栏</title>
+<style>
+:root{
+  --bg:#e8f2eb; --bg2:#f2f8f3; --card:#fff; --card-2:#f6fbf7;
+  --ink:#0f2018; --muted:#5a7368; --faint:#8aa196;
+  --line:#d9e6de; --line-2:#e9f1eb;
+  --brand:#12b981; --brand-d:#048c63; --brand-l:#d5f5e5; --brand-xl:#ecfdf5;
+  --warn:#f59e0b; --danger:#ef4444; --info:#0ea5e9; --vio:#8b5cf6;
+  --font:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:13px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);color:var(--ink);font-size:12.5px;-webkit-font-smoothing:antialiased;
+  background:radial-gradient(1000px 500px at 0% -5%,#dcf5e8,transparent 55%),
+    linear-gradient(180deg,var(--bg2),var(--bg));}
+svg{display:block}a{color:inherit;text-decoration:none}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.app{display:grid;grid-template-columns:66px 1fr;min-height:100vh}
+
+/* rail */
+.rail{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,#0f2a20,#0a1f18);display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 0;border-right:1px solid #0a1d16}
+.rail .lg{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,#34d399,#059669);display:grid;place-items:center;color:#04231a;font-weight:800;margin-bottom:8px;box-shadow:0 6px 16px rgba(16,185,129,.4)}
+.ri{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;color:#7ba695;position:relative;cursor:pointer;transition:.15s}
+.ri svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.7;fill:none}
+.ri:hover{background:#173328;color:#eafff4}
+.ri.on{background:linear-gradient(135deg,#12b981,#048c63);color:#fff;box-shadow:0 8px 18px rgba(4,140,99,.4)}
+.ri .bdg{position:absolute;top:4px;right:4px;background:#f43f5e;color:#fff;font-size:9px;padding:0 4px;border-radius:10px;font-family:var(--mono);line-height:14px}
+.rail .sp{flex:1}
+.rail .me{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#34d399,#0d9488);display:grid;place-items:center;color:#062018;font-weight:700}
+
+.main{min-width:0}
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;padding:11px 20px;background:rgba(247,252,249,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.crumb{color:var(--faint);font-size:11.5px}.h1{font-size:16px;font-weight:800}
+.search{margin-left:auto;display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);border-radius:9px;padding:6px 10px;width:240px;color:var(--faint)}
+.search input{border:0;outline:0;background:transparent;font:inherit;width:100%;color:var(--ink)}
+.tb{width:34px;height:34px;border:1px solid var(--line);background:#fff;border-radius:9px;display:grid;place-items:center;cursor:pointer;color:var(--muted);position:relative}
+.tb svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.7;fill:none}
+.tb .d{position:absolute;top:7px;right:8px;width:7px;height:7px;border-radius:50%;background:#f43f5e;border:1.5px solid #fff}
+.btn{border:0;border-radius:9px;padding:8px 13px;font:inherit;font-weight:600;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn-p{background:linear-gradient(135deg,#12b981,#048c63);color:#fff;box-shadow:0 6px 14px rgba(4,140,99,.28)}
+.content{padding:15px 20px 26px;display:grid;grid-template-columns:repeat(12,1fr);gap:13px}
+.card{background:linear-gradient(180deg,var(--card),var(--card-2));border:1px solid var(--line);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column}
+.col-8{grid-column:span 8}.col-4{grid-column:span 4}.col-12{grid-column:span 12}.col-3{grid-column:span 3}
+.card-h{display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--line-2)}
+.card-h h3{font-size:13px;font-weight:700}.card-h .sub{color:var(--faint);font-size:11px}
+.card-h .r{margin-left:auto;display:flex;gap:6px;align-items:center}
+.ic{width:25px;height:25px;border-radius:8px;background:var(--brand-l);color:var(--brand-d);display:grid;place-items:center}
+.ic svg{width:14px;height:14px;stroke:currentColor;stroke-width:1.8;fill:none}
+.card-b{padding:12px 13px;flex:1}
+.seg{display:flex;background:#f4faf6;border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg span{padding:3px 9px;border-radius:6px;font-size:11px;color:var(--muted);cursor:pointer}
+.seg span.on{background:#fff;color:var(--brand-d);font-weight:700;box-shadow:0 1px 3px rgba(15,32,24,.07)}
+
+/* minikpi row */
+.mk{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.mk .k{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px 11px;position:relative;overflow:hidden}
+.mk .k::after{content:"";position:absolute;right:-24px;top:-24px;width:70px;height:70px;border-radius:50%;background:radial-gradient(circle,rgba(18,185,129,.10),transparent 70%)}
+.mk .k .l{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.mk .k .l svg{width:13px;height:13px;stroke:var(--faint);stroke-width:1.8;fill:none}
+.mk .k .v{font-size:22px;font-weight:800;margin-top:6px;line-height:1}
+.mk .k .v small{font-size:11px;color:var(--faint);font-weight:500}
+.mk .k .t{font-size:10.5px;margin-top:4px}
+.up{color:#059669}.dn{color:#dc2626}.wn{color:#b45309}
+
+/* table */
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;padding:8px 11px;background:#f4faf6;border-bottom:1px solid var(--line);position:sticky;top:0}
+tbody td{padding:8px 11px;border-bottom:1px solid var(--line-2);font-size:12px}
+tbody tr:hover{background:var(--brand-xl)}tbody tr:last-child td{border-bottom:0}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:20px}
+.t-red{background:#fee2e2;color:#b91c1c}.t-org{background:#ffedd5;color:#b45309}.t-grn{background:var(--brand-l);color:#047857}
+.t-blu{background:#dbeafe;color:#1d4ed8}.t-gry{background:#eef2f0;color:#5a7368}.t-vio{background:#ede9fe;color:#6d28d9}
+.act{width:25px;height:25px;border:1px solid var(--line);background:#fff;border-radius:7px;display:grid;place-items:center;cursor:pointer;color:var(--muted)}
+.act svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.7;fill:none}
+.act:hover{border-color:var(--brand);color:var(--brand-d);background:var(--brand-xl)}
+.acts{display:flex;gap:5px}
+
+/* feed */
+.feed{display:flex;flex-direction:column;gap:0;position:relative}
+.fitem{display:flex;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line-2)}
+.fitem:last-child{border-bottom:0}
+.fd{width:9px;height:9px;border-radius:50%;margin-top:4px;flex:none;box-shadow:0 0 0 3px rgba(18,185,129,.14)}
+.fitem .tx{min-width:0}.fitem .tx b{font-size:12px;font-weight:600}.fitem .tx p{color:var(--muted);font-size:11px;margin-top:2px}
+.fitem .tm{margin-left:auto;color:var(--faint);font-size:10.5px;font-family:var(--mono);white-space:nowrap}
+
+/* system status */
+.sys{display:flex;flex-direction:column;gap:9px}
+.srow{display:flex;align-items:center;gap:9px;font-size:12px}
+.srow .n{flex:1}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--brand);position:relative}
+.pulse::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--brand);opacity:.4;animation:p 1.6s infinite}
+@keyframes p{0%{transform:scale(.6);opacity:.6}100%{transform:scale(1.1);opacity:0}}
+.gauge{height:7px;border-radius:6px;background:var(--line-2);overflow:hidden;width:90px}
+.gauge i{display:block;height:100%;background:linear-gradient(90deg,#34d399,#059669)}
+.gauge i.w{background:linear-gradient(90deg,#fbbf24,#d97706)}
+.gauge i.d{background:linear-gradient(90deg,#f87171,#dc2626)}
+
+/* quick */
+.quick{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.q{display:flex;align-items:center;gap:9px;padding:10px;border:1px solid var(--line);border-radius:11px;background:#fff;cursor:pointer;transition:.15s}
+.q:hover{border-color:var(--brand);background:var(--brand-xl)}
+.q .qi{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--brand-l);color:var(--brand-d)}
+.q .qi svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.8;fill:none}
+.q b{font-size:12px}.q small{display:block;color:var(--faint);font-size:10.5px}
+@media(max-width:1100px){.mk{grid-template-columns:repeat(2,1fr)}.col-8,.col-4,.col-3{grid-column:span 12}}
+@media(max-width:820px){.app{grid-template-columns:1fr}.rail{display:none}}
+</style>
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></symbol>
+  <symbol id="i-cluster" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 16.8M12 11.5l5.5 5.3"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V7z"/></symbol>
+  <symbol id="i-policy" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3z"/><path d="M9.5 12l1.8 1.8L15 10"/></symbol>
+  <symbol id="i-diag" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.3-1-2 3.4L4 12a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 4 14h6l-1 7 9-11h-6l1-7z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4z"/><path d="M5 17h14"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5v14l11-7-11-7z"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="rail">
+    <div class="lg">吴</div>
+    <div class="ri"><svg><use href="#i-dash"/></svg></div>
+    <div class="ri on"><svg><use href="#i-cluster"/></svg></div>
+    <div class="ri"><svg><use href="#i-alert"/></svg><span class="bdg">17</span></div>
+    <div class="ri"><svg><use href="#i-ticket"/></svg><span class="bdg">9</span></div>
+    <div class="ri"><svg><use href="#i-policy"/></svg></div>
+    <div class="ri"><svg><use href="#i-book"/></svg></div>
+    <div class="ri"><svg><use href="#i-diag"/></svg></div>
+    <div class="sp"></div>
+    <div class="ri"><svg><use href="#i-set"/></svg></div>
+    <div class="me">吴</div>
+  </aside>
+
+  <div class="main">
+    <header class="top">
+      <div><div class="crumb">监控 / 集群管理</div><div class="h1">集群总览</div></div>
+      <div class="search"><svg style="width:15px;height:15px;stroke:currentColor;stroke-width:1.8;fill:none"><use href="#i-search"/></svg><input placeholder="搜索集群 / 服务…" /></div>
+      <button class="tb"><svg><use href="#i-bell"/></svg><span class="d"></span></button>
+      <button class="btn btn-p"><svg style="width:14px;height:14px;stroke:#fff;stroke-width:2.2;fill:none"><use href="#i-plus"/></svg>添加集群</button>
+    </header>
+
+    <div class="content">
+      <!-- mini kpis -->
+      <div class="mk col-12">
+        <div class="k"><div class="l"><svg><use href="#i-cluster"/></svg>在线集群</div><div class="v num">24<small> 个</small></div><div class="t up">↑ 2 本周</div></div>
+        <div class="k"><div class="l"><svg><use href="#i-alert"/></svg>活跃告警</div><div class="v num">17<small> 条</small></div><div class="t wn">↑ 5 昨日</div></div>
+        <div class="k"><div class="l"><svg><use href="#i-ticket"/></svg>待办工单</div><div class="v num">9<small> 张</small></div><div class="t up">↓ 3 处理中</div></div>
+        <div class="k"><div class="l"><svg><use href="#i-bolt"/></svg>自动处理率</div><div class="v num">78<small> %</small></div><div class="t up">↑ 4% 环比</div></div>
+      </div>
+
+      <!-- chart -->
+      <section class="card col-8">
+        <div class="card-h"><div class="ic"><svg><use href="#i-alert"/></svg></div><h3>告警趋势</h3><span class="sub">近 7 天</span>
+          <div class="r"><div class="seg"><span>24h</span><span class="on">7d</span><span>30d</span></div></div></div>
+        <div class="card-b">
+          <svg viewBox="0 0 700 176" width="100%" height="176" preserveAspectRatio="none">
+            <defs><linearGradient id="gc" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12b981" stop-opacity=".3"/><stop offset="1" stop-color="#12b981" stop-opacity="0"/></linearGradient></defs>
+            <g stroke="#e7efe9"><line x1="0" y1="44" x2="700" y2="44"/><line x1="0" y1="88" x2="700" y2="88"/><line x1="0" y1="132" x2="700" y2="132"/></g>
+            <path d="M0,130 L78,112 L156,120 L234,82 L312,96 L390,58 L468,74 L546,44 L624,60 L700,34 L700,176 L0,176 Z" fill="url(#gc)"/>
+            <polyline fill="none" stroke="#048c63" stroke-width="2.6" points="0,130 78,112 156,120 234,82 312,96 390,58 468,74 546,44 624,60 700,34"/>
+            <g fill="#048c63"><circle cx="546" cy="44" r="3.5"/></g>
+          </svg>
+        </div>
+      </section>
+
+      <!-- system -->
+      <section class="card col-4">
+        <div class="card-h"><div class="ic"><svg><use href="#i-cpu"/></svg></div><h3>系统状态</h3><span class="sub">实时</span></div>
+        <div class="card-b">
+          <div class="sys">
+            <div class="srow"><span class="pulse"></span><span class="n">API 服务</span><span class="gauge"><i style="width:62%"></i></span><b class="num" style="color:var(--muted);width:34px;text-align:right">62%</b></div>
+            <div class="srow"><span class="pulse" style="background:var(--info)"></span><span class="n">执行器</span><span class="gauge"><i style="width:38%"></i></span><b class="num" style="color:var(--muted);width:34px;text-align:right">38%</b></div>
+            <div class="srow"><span class="pulse" style="background:var(--warn)"></span><span class="n">MySQL</span><span class="gauge"><i class="w" style="width:81%"></i></span><b class="num" style="color:var(--muted);width:34px;text-align:right">81%</b></div>
+            <div class="srow"><span class="pulse" style="background:var(--brand)"></span><span class="n">Redis</span><span class="gauge"><i style="width:24%"></i></span><b class="num" style="color:var(--muted);width:34px;text-align:right">24%</b></div>
+            <div class="srow"><span class="pulse" style="background:var(--danger)"></span><span class="n">磁盘 /data</span><span class="gauge"><i class="d" style="width:92%"></i></span><b class="num" style="width:34px;text-align:right;color:#dc2626">92%</b></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- table -->
+      <section class="card col-8">
+        <div class="card-h"><div class="ic"><svg><use href="#i-alert"/></svg></div><h3>最新告警</h3><span class="sub">合并同类</span>
+          <div class="r"><button class="btn btn-g" style="background:#fff;border:1px solid var(--line);color:var(--muted);padding:5px 10px">筛选</button></div></div>
+        <div style="overflow:auto">
+          <table>
+            <thead><tr><th>级别</th><th>时间</th><th>服务</th><th>集群 / 命名空间</th><th>摘要</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td><span class="tag t-red">严重</span></td><td style="font-family:var(--mono)">09:41</td><td><b>efreight-prm</b></td><td style="font-family:var(--mono);color:var(--muted)">prod-01 / efreight</td><td>Pod CrashLoopBackOff ×3</td><td><span class="tag t-org">处理中</span></td><td><div class="acts"><button class="act"><svg><use href="#i-eye"/></svg></button><button class="act"><svg><use href="#i-more"/></svg></button></div></td></tr>
+              <tr><td><span class="tag t-org">警告</span></td><td style="font-family:var(--mono)">09:33</td><td><b>order-api</b></td><td style="font-family:var(--mono);color:var(--muted)">prod-02 / order</td><td>内存使用率 87% 持续 10min</td><td><span class="tag t-blu">已诊断</span></td><td><div class="acts"><button class="act"><svg><use href="#i-eye"/></svg></button><button class="act"><svg><use href="#i-more"/></svg></button></div></td></tr>
+              <tr><td><span class="tag t-org">警告</span></td><td style="font-family:var(--mono)">09:12</td><td><b>node-db-03</b></td><td style="font-family:var(--mono);color:var(--muted)">prod-01 / —</td><td>节点磁盘压力 DiskPressure</td><td><span class="tag t-grn">已恢复</span></td><td><div class="acts"><button class="act"><svg><use href="#i-eye"/></svg></button><button class="act"><svg><use href="#i-more"/></svg></button></div></td></tr>
+              <tr><td><span class="tag t-grn">提示</span></td><td style="font-family:var(--mono)">08:58</td><td><b>pay-gateway</b></td><td style="font-family:var(--mono);color:var(--muted)">prod-03 / pay</td><td>HPA 触发扩容 3 → 5</td><td><span class="tag t-grn">已恢复</span></td><td><div class="acts"><button class="act"><svg><use href="#i-eye"/></svg></button><button class="act"><svg><use href="#i-more"/></svg></button></div></td></tr>
+              <tr><td><span class="tag t-vio">建议</span></td><td style="font-family:var(--mono)">08:40</td><td><b>user-center</b></td><td style="font-family:var(--mono);color:var(--muted)">prod-02 / uc</td><td>镜像可升级，存在 CVE-2026-*</td><td><span class="tag t-gry">已忽略</span></td><td><div class="acts"><button class="act"><svg><use href="#i-eye"/></svg></button><button class="act"><svg><use href="#i-more"/></svg></button></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- feed + quick -->
+      <section class="card col-4">
+        <div class="card-h"><div class="ic"><svg><use href="#i-clock"/></svg></div><h3>动态</h3><span class="sub">最近</span></div>
+        <div class="card-b">
+          <div class="feed">
+            <div class="fitem"><span class="fd" style="background:#ef4444"></span><div class="tx"><b>efreight-prm 已重建 2/3 Pod</b><p>自愈规则 CR-07 自动执行</p></div><span class="tm">2m</span></div>
+            <div class="fitem"><span class="fd" style="background:#0ea5e9"></span><div class="tx"><b>告警 #8812 已生成诊断报告</b><p>根因：JVM 堆未归还，HPA 阈值贴合</p></div><span class="tm">9m</span></div>
+            <div class="fitem"><span class="fd" style="background:#12b981"></span><div class="tx"><b>node-db-03 磁盘已清理</b><p>释放 42GB，条件转正常</p></div><span class="tm">24m</span></div>
+            <div class="fitem"><span class="fd" style="background:#8b5cf6"></span><div class="tx"><b>工单 #1042 已指派</b><p>张伟 · 预计 30m 内响应</p></div><span class="tm">36m</span></div>
+            <div class="fitem"><span class="fd" style="background:#f59e0b"></span><div class="tx"><b>order-api 内存持续走高</b><p>建议关注 GC 与缓存增长</p></div><span class="tm">1h</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- quick actions -->
+      <section class="card col-12">
+        <div class="card-h"><div class="ic"><svg><use href="#i-bolt"/></svg></div><h3>快捷操作</h3></div>
+        <div class="card-b">
+          <div class="quick">
+            <div class="q"><div class="qi"><svg><use href="#i-plus"/></svg></div><div><b>添加集群</b><small>上传 kubeconfig 接入</small></div></div>
+            <div class="q"><div class="qi"><svg><use href="#i-play"/></svg></div><div><b>发起巡检</b><small>集群健康体检</small></div></div>
+            <div class="q"><div class="qi"><svg><use href="#i-diag"/></svg></div><div><b>故障诊断</b><small>集群 / 应用 / 数据库</small></div></div>
+            <div class="q"><div class="qi"><svg><use href="#i-policy"/></svg></div><div><b>自愈规则</b><small>自动处理策略</small></div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+</body>
+</html>

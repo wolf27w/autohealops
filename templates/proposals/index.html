@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>运维后台模板 · 预览</title>
+<style>
+:root{
+  --brand:#12b981;--brand-d:#048c63;--brand-l:#d5f5e5;--brand-xl:#ecfdf5;
+  --ink:#0f2018;--muted:#5a7368;--faint:#8aa196;--line:#d9e6de;
+  --font:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);color:var(--ink);font-size:14px;-webkit-font-smoothing:antialiased;
+  background:radial-gradient(1000px 500px at 90% -10%,#dcf5e8,transparent 55%),linear-gradient(180deg,#f3f8f4,#e8f1ea);min-height:100vh}
+.wrap{max-width:1320px;margin:0 auto;padding:30px 22px 60px}
+.hd{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#34d399,#059669);display:grid;place-items:center;color:#04231a;font-weight:800;font-size:18px;box-shadow:0 8px 18px rgba(5,150,105,.3)}
+h1{font-size:22px;font-weight:800}
+.hd p{color:var(--muted);font-size:13px;margin-top:3px}
+.pal{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sw{width:26px;height:26px;border-radius:8px;border:1px solid rgba(0,0,0,.06)}
+.pal code{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.hint{margin:16px 0 22px;padding:12px 15px;background:#fff;border:1px solid var(--line);border-radius:12px;color:var(--muted);font-size:12.5px;line-height:1.7}
+.hint b{color:var(--ink)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(15,32,24,.06)}
+.card .pv{position:relative;height:290px;overflow:hidden;background:#eef4ef;border-bottom:1px solid var(--line)}
+.card iframe{position:absolute;top:0;left:0;width:1360px;height:880px;border:0;transform:scale(.45);transform-origin:top left;pointer-events:none}
+.card .pv::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 70%,rgba(255,255,255,.65))}
+.card .mt{padding:15px 17px;display:flex;align-items:center;gap:12px}
+.card .n{width:30px;height:30px;border-radius:9px;background:var(--brand-xl);color:var(--brand-d);display:grid;place-items:center;font-weight:800;font-family:var(--mono);font-size:13px}
+.card h3{font-size:15px;font-weight:700}
+.card .mt small{display:block;color:var(--faint);font-size:11.5px;margin-top:2px}
+.card .go{margin-left:auto}
+.go a{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#12b981,#048c63);color:#fff;font-weight:600;font-size:12.5px;padding:8px 14px;border-radius:10px;text-decoration:none}
+.tagline{display:flex;gap:6px;flex-wrap:wrap;padding:0 17px 15px}
+.tg{font-size:11px;color:var(--brand-d);background:var(--brand-xl);border:1px solid var(--brand-l);padding:2px 9px;border-radius:20px}
+@media(max-width:920px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <div class="logo">吴</div>
+    <div>
+      <h1>运维后台模板 · 4 套方案</h1>
+      <p>浅绿色主色 · 高信息密度 · 纯 HTML/CSS（无图片）· 内联 SVG 图标</p>
+    </div>
+    <div class="pal">
+      <span class="sw" style="background:#12b981"></span><code>#12b981</code>
+      <span class="sw" style="background:#048c63"></span><code>#048c63</code>
+      <span class="sw" style="background:#d5f5e5"></span><code>#d5f5e5</code>
+      <span class="sw" style="background:#ecfdf5"></span><code>#ecfdf5</code>
+      <span class="sw" style="background:#e8f1ea"></span><code>背景 #e8f1ea</code>
+    </div>
+  </div>
+
+  <div class="hint"><b>说明：</b>点「打开预览」在新标签查看完整可交互页面（含 hover / 折叠 / 悬停效果）。所有模板自包含、无外部依赖、无图片，可直接复制改色改字用于替换后台。</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="pv"><iframe src="01-classic.html" loading="lazy"></iframe></div>
+      <div class="mt"><div class="n">01</div><div><h3>经典侧栏</h3><small>深绿侧栏 + 顶栏 · KPI 卡 + 折线/环图 + 密集表</small></div><div class="go"><a href="01-classic.html" target="_blank">打开预览</a></div></div>
+      <div class="tagline"><span class="tg">侧栏导航</span><span class="tg">KPI 5 联</span><span class="tg">面积图</span><span class="tg">环形图</span><span class="tg">告警表</span></div>
+    </div>
+    <div class="card">
+      <div class="pv"><iframe src="02-topnav.html" loading="lazy"></iframe></div>
+      <div class="mt"><div class="n">02</div><div><h3>顶部横向导航</h3><small>无侧栏 · 6 联统计条 + 三栏网格 + 全宽表</small></div><div class="go"><a href="02-topnav.html" target="_blank">打开预览</a></div></div>
+      <div class="tagline"><span class="tg">顶栏导航</span><span class="tg">信息最满</span><span class="tg">进度条</span><span class="tg">待办流</span><span class="tg">影响面</span></div>
+    </div>
+    <div class="card">
+      <div class="pv"><iframe src="03-rail.html" loading="lazy"></iframe></div>
+      <div class="mt"><div class="n">03</div><div><h3>图标窄栏</h3><small>64px 图标导航 · 左主区 + 右状态/动态流</small></div><div class="go"><a href="03-rail.html" target="_blank">打开预览</a></div></div>
+      <div class="tagline"><span class="tg">图标栏</span><span class="tg">系统状态</span><span class="tg">活动流</span><span class="tg">快捷操作</span></div>
+    </div>
+    <div class="card">
+      <div class="pv"><iframe src="04-workbench.html" loading="lazy"></iframe></div>
+      <div class="mt"><div class="n">04</div><div><h3>主从工作台</h3><small>左列表 + 右详情 · 告警处理/诊断场景</small></div><div class="go"><a href="04-workbench.html" target="_blank">打开预览</a></div></div>
+      <div class="tagline"><span class="tg">列表-详情</span><span class="tg">诊断报告</span><span class="tg">时间线</span><span class="tg">日志</span></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
