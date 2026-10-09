@@ -25,23 +25,24 @@ interface InAppMessage {
   is_read: boolean
 }
 
+// 菜单：扁平一级结构（用不可折叠的分区标题分组，去掉展开/收起层级）
 const menuItems: MenuProps['items'] = [
   {
-    label: '监控', key: 'g-monitor',
+    type: 'group', label: '监控',
     children: [
       { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
       { key: '/clusters', icon: <ClusterOutlined />, label: '集群管理' },
     ],
   },
   {
-    label: '告警处理', key: 'g-alert',
+    type: 'group', label: '告警处理',
     children: [
       { key: '/alert-handling', icon: <AlertOutlined />, label: '告警处理' },
       { key: '/tickets', icon: <FileTextOutlined />, label: '工单' },
     ],
   },
   {
-    label: '策略配置', key: 'g-policy',
+    type: 'group', label: '策略配置',
     children: [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/log-sources', icon: <DatabaseOutlined />, label: '日志源' },
@@ -50,7 +51,7 @@ const menuItems: MenuProps['items'] = [
     ],
   },
   {
-    label: '诊断', key: 'g-diag',
+    type: 'group', label: '诊断',
     children: [
       { key: '/fault-diagnosis/cluster', icon: <ApartmentOutlined />, label: '集群故障诊断' },
       { key: '/fault-diagnosis/app', icon: <ExperimentOutlined />, label: '应用故障诊断' },
@@ -59,7 +60,7 @@ const menuItems: MenuProps['items'] = [
     ],
   },
   {
-    label: '系统', key: 'g-system',
+    type: 'group', label: '系统',
     children: [
       { key: '/notify-center', icon: <NotificationOutlined />, label: '通知配置' },
       { key: '/user-permission', icon: <UserOutlined />, label: '用户与权限' },
@@ -110,16 +111,7 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
     setCollapsed(v)
     localStorage.setItem('sider_collapsed', v ? '1' : '0')
   }
-  // 分组展开状态（菜单伸缩：整栏折叠 + 分组展开/收起，记忆状态）
-  const ALL_GROUP_KEYS = ['g-monitor', 'g-alert', 'g-policy', 'g-diag', 'g-system']
-  const [openKeys, setOpenKeys] = useState<string[]>(() => {
-    const saved = localStorage.getItem('sider_open_keys')
-    return saved ? (JSON.parse(saved) as string[]) : ALL_GROUP_KEYS
-  })
-  const handleOpenChange = (keys: string[]) => {
-    setOpenKeys(keys)
-    localStorage.setItem('sider_open_keys', JSON.stringify(keys))
-  }
+// 菜单扁平化：不再有分组展开/收起状态（无需 openKeys）
 
   // 站内消息中心（铃铛 + 未读 + 列表 + 已读）
   const [unread, setUnread] = useState(0)
@@ -234,7 +226,6 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
             items={filteredMenuItems}
             inlineIndent={18}
             onClick={({ key }) => navigate(key)}
-            {...(collapsed ? {} : { openKeys, onOpenChange: handleOpenChange })}
             style={{ borderRight: 'none', paddingTop: 6 }}
           />
         </div>
