@@ -256,6 +256,106 @@ spec:
 | **P1** | manifest + executor RPC + 自动下发 + 展示入口（核心闭环） |
 | **P2** | 存量集群补装 + 卸载 + 升级 |
 | **P3** | 独立 DB 实例 Netdata 总览（可选补充） |
+| **P4** | 集群外主机（ECS）+ Docker 接入；Netdata 告警 webhook 入站（详见 §十、§十一） |
+| **P5** | 主机/Docker 诊断 + 修复能力（补齐闭环后两环） |
+
+---
+
+## 十、扩展：集群外主机（ECS）接入监控
+
+### 10.1 背景
+
+- 平台现有监控面向 K8s 集群；ECS 等**集群外主机**（VM/裸机）**无覆盖**。
+- Netdata agent 可安装在**任意 Linux 主机**，天生支持主机级监控，并**自动发现该主机上的 Docker 容器**。
+
+### 10.2 与「集群接入」的区别（关键）
+
+| | K8s 集群 | 集群外 ECS |
+|---|---|---|
+| 接入凭据 | kubeconfig | **无**（裸主机） |
+| AIOps 自动下发 | 可（走 k8s API） | **不可**（无 k8s API） |
+| Netdata 装法 | DaemonSet（编排下发） | **脚本安装 / SSH 远程装 / 标准镜像** |
+| 数据模型 | `clusters` 表 | **新增 `hosts` 表**（主机/资产） |
+
+> 结论：ECS 接入**不能复用**集群接入流程，需**另立一类「主机监控」**。
+
+### 10.3 需求
+
+| # | 需求 | 说明 |
+|---|---|---|
+| **H1** | 主机接入 | 登记主机（名称/地址/环境标签/上报 parent）；主机 agent 上报到指定 parent |
+| **H2** | 部署方式（三选一） | ① 手动脚本安装（**起步推荐**）② SSH 自动安装（需引入主机凭据管理）③ 标准镜像预置 netdata |
+| **H3** | **Docker 容器监控** | **同一 agent 自动覆盖**（读 `docker.sock`/`containerd.sock` + cgroup），**无需额外组件**；每容器 CPU/内存/网络/磁盘IO/状态；支持按容器 / compose 项目 / 镜像分组过滤 |
+| **H4** | 展示 | AIOps 新增「主机监控」入口，与「集群监控」**并列**；主机构 → 下钻到其上 Docker 容器 |
+| **H5** | parent 方案 | 外部主机**专用 parent**（网络隔离时，推荐）；或复用某集群 parent（同网段时） |
+
+### 10.4 边界
+
+- 主机/Docker 的**告警**见 §十一（走 Netdata）。
+- ECS 只需开放 **agent → parent 的出站**（主机侧**无需入站端口**）。
+- DB 监控照旧走平台 `db_collector`（Netdata 可在同一主机顺带监控数据库实例作为补充）。
+
+---
+
+## 十一、扩展：Netdata 告警 ↔ AIOps 闭环
+
+### 11.1 口径：谁的地盘谁管告警
+
+| 场景 | 告警来源 |
+|---|---|
+| **集群内（K8s）** | **平台自研**（watcher + Prometheus 指标 + DB 告警）——Netdata **只展示、不接告警** |
+| **集群外（ECS/主机/Docker）** | **Netdata**（平台无此覆盖）→ 走 **webhook** 接入平台闭环 |
+
+> 这样划分可**避免双头告警重复**（同一故障不会被两边同时报）。
+
+### 11.2 闭环链路
+
+```
+Netdata 告警触发（WARNING/CRITICAL）
+   ↓ webhook（带 token，Netdata → AIOps）
+AIOps 入站接口 POST /api/v1/webhooks/netdata（复用 webhooks.py + 鉴权）
+   ↓ 字段映射
+写 alerts 表（复用：去重 / 聚合 / 维护窗口 / 限频）
+   ↓ triggerAlertProcess
+【诊断】知识库优先 → AI 诊断（★ 主机/Docker 场景需扩展诊断工具）
+   ↓
+【通知】notification_service（复用，零改造）
+   ↓
+【修复/处置】自动修复 / 转审批 / 转工单（★ 主机/Docker 修复需扩展执行器）
+   ↓
+Netdata 告警 CLEAR → webhook → 平台告警自动 resolved（闭环关闭）
+```
+
+### 11.3 字段映射（Netdata → 平台 Alert）
+
+| Netdata | 平台 Alert |
+|---|---|
+| alarm 名（如 `disk_space_usage` / `docker_container_oom`） | `fault_type`（映射表定义，如 `HostDiskHigh` / `DockerContainerOom`） |
+| host / chart / container | `resource_type`(host/container) + `resource_name` |
+| status：CRITICAL / WARNING | `severity`：high / medium；`status=pending` |
+| status：CLEAR | `status=resolved`（自动关闭） |
+| info / value / units | `message` |
+
+### 11.4 复用 vs 需扩展
+
+| 环节 | 复用平台现有 | 需扩展 |
+|---|---|---|
+| 告警接入 / 去重 / 聚合 / 生命周期 | ✅ | — |
+| 通知 | ✅ `notification_service` | — |
+| 工单 | ✅ 自动转工单 | — |
+| **诊断** | 知识库优先 ✅ | ★ **主机/Docker 诊断工具**（现有为 K8s 语义：`exec_in_pod`/`describe_pod` 等） |
+| **修复** | 审批 / 工单流 ✅ | ★ **主机/Docker 执行能力**（SSH 到主机 / docker API：重启容器 / 清磁盘等） |
+
+### 11.5 关键限制（务必知悉）
+
+- **闭环的「诊断 + 修复」两环，对主机/Docker 场景是新能力**，不是现成复用——**这是主要工作量**。
+- Netdata 会按指标**自行 CLEAR**；平台侧「已解决」**不回写** Netdata（无需）。但若指标未恢复，Netdata 会**重申**，需靠平台去重 / 冷却抑制（复用现有逻辑）。
+- 告警接入用 **webhook（实时）**；建议同时留一个**轮询 `/api/v1/alarms` 兑底**（webhook 丢失时对账）。
+
+### 11.6 分期
+
+- **P4**：ECS/主机接入 + Netdata 告警 webhook 入站 + 字段映射（打通 接入 → 通知 → 工单）。
+- **P5**：主机/Docker 诊断 + 修复能力（补齐闭环后两环）。
 
 ---
 

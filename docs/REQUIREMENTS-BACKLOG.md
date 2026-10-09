@@ -504,6 +504,8 @@
 | 3 | **按集群展示**：集群管理页各集群独立监控入口，iframe 内嵌（后端反代走 apiserver Service Proxy） | 📝 草案 |
 | 4 | **parent 用 PVC**；parent+child 同集群一起部署（一份多文档 manifest） | 📝 草案 |
 | 5 | **幂等/升级/卸载**：executor server-side apply；卸载随集群删除 | 📝 草案 |
+| 6 | **集群外主机（ECS）+ Docker 接入**：新增「主机监控」，同一 agent 覆盖主机+Docker（另立 `hosts` 模型，不走集群接入流程） | 📝 草案 |
+| 7 | **Netdata 告警 ↔ AIOps 闭环**：webhook 入站 + 字段映射；k8s 告警仍走自研，主机/Docker 告警走 Netdata（避免双头）；诊断/修复两环需新增主机/Docker 能力 | 📝 草案 |
 
 关键澄清：
 - Netdata **不依赖**平台 Prometheus（自采集自存储）；K8s 场景读 kubelet cadvisor 端点。
