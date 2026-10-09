@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>简化布局样板 · 统一密度 + 扁平层级</title>
+<style>
+:root{
+  --bg:#f3f8f4; --card:#fff; --ink:#0f2018; --muted:#5a7368; --faint:#8aa196;
+  --line:#e2ece6; --line-2:#eef4f0; --brand:#12b981; --brand-d:#048c63; --brand-l:#d5f5e5; --brand-xl:#ecfdf5;
+  --warn:#f59e0b; --danger:#ef4444; --info:#0ea5e9;
+  --font:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --gap:16px;      /* 统一区块间距 */
+  --pad:16px;      /* 统一卡片内边距 */
+  --r:12px;        /* 统一圆角 */
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);color:var(--ink);font-size:13px;-webkit-font-smoothing:antialiased;
+  background:radial-gradient(900px 460px at 100% -10%,#e2f6ea,transparent 55%),var(--bg)}
+svg{display:block}a{color:inherit;text-decoration:none;cursor:pointer}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.app{display:grid;grid-template-columns:210px 1fr;min-height:100vh}
+
+/* 侧栏：扁平一级（无折叠分组，仅细分隔标签） */
+.side{position:sticky;top:0;height:100vh;background:#0f2a20;color:#c9ded2;display:flex;flex-direction:column;padding:14px 10px}
+.brand{display:flex;align-items:center;gap:10px;padding:2px 6px 14px}
+.logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#34d399,#059669);display:grid;place-items:center;color:#04231a;font-weight:800}
+.brand b{color:#fff;font-size:14.5px}.brand small{display:block;color:#6f8f80;font-size:9.5px;letter-spacing:2px}
+.slbl{color:#5f8172;font-size:10px;letter-spacing:1.6px;padding:12px 10px 4px}
+.nav{flex:1}
+.nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:#b6cdc0;font-size:13px;margin-bottom:1px}
+.nav a svg{width:16px;height:16px;stroke:#7ba695;stroke-width:1.7;fill:none}
+.nav a:hover{background:#173328;color:#eafff4}
+.nav a.on{background:linear-gradient(90deg,rgba(18,185,129,.9),rgba(4,140,99,.85));color:#fff;font-weight:600}
+.nav a.on svg{stroke:#fff}
+
+/* 主区 */
+.main{min-width:0;display:flex;flex-direction:column}
+.top{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:12px;padding:12px 22px;background:rgba(255,255,255,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.top h1{font-size:17px;font-weight:800}
+.top .crumb{color:var(--faint);font-size:11.5px}
+.top .sp{flex:1}
+.sel,.seg,.btn{font:inherit}
+.sel{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 11px;color:var(--muted)}
+.seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:9px;padding:3px}
+.seg span{padding:4px 11px;border-radius:7px;font-size:12px;color:var(--muted)}
+.seg span.on{background:var(--brand-xl);color:var(--brand-d);font-weight:700}
+.btn{border:0;border-radius:9px;padding:8px 14px;font-weight:600;font-size:12.5px;display:inline-flex;align-items:center;gap:6px}
+.btn-p{background:linear-gradient(135deg,#12b981,#048c63);color:#fff}
+.btn-g{background:#fff;border:1px solid var(--line);color:var(--muted)}
+
+/* 内容：统一间距；只有一层容器 */
+.content{padding:var(--gap) 22px 28px;display:flex;flex-direction:column;gap:var(--gap)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r)}
+.panel-h{display:flex;align-items:center;gap:9px;padding:12px var(--pad);border-bottom:1px solid var(--line-2)}
+.panel-h h3{font-size:13.5px;font-weight:700}
+.panel-h .sub{color:var(--faint);font-size:11.5px}
+.panel-h .r{margin-left:auto;color:var(--faint);font-size:11.5px}
+.panel-b{padding:var(--pad)}
+
+/* 统一统计条：一个容器内均分，不再是一排独立卡片 */
+.stats{display:grid;grid-template-columns:repeat(6,1fr)}
+.stats .s{padding:4px 14px;border-left:1px solid var(--line-2)}
+.stats .s:first-child{border-left:0}
+.stats .s .l{color:var(--muted);font-size:11.5px}
+.stats .s .v{font-size:24px;font-weight:800;margin-top:6px;line-height:1}
+.stats .s .v small{font-size:11px;color:var(--faint);font-weight:500}
+.stats .s .t{font-size:11px;margin-top:5px;color:var(--faint)}
+
+/* 统一网格 */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:var(--gap)}
+.c8{grid-column:span 8}.c4{grid-column:span 4}.c6{grid-column:span 6}.c12{grid-column:span 12}
+
+/* 表格（统一行高） */
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;font-weight:600;color:var(--muted);font-size:11.5px;padding:9px 12px;background:#f7fbf8;border-bottom:1px solid var(--line-2)}
+tbody td{padding:9px 12px;border-bottom:1px solid var(--line-2);font-size:12.5px}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--brand-xl)}
+.tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+.t-red{background:#fee2e2;color:#b91c1c}.t-org{background:#ffedd5;color:#b45309}.t-grn{background:var(--brand-l);color:#047857}.t-gry{background:#eef2f0;color:#5a7368}
+.mono{font-family:var(--mono);color:var(--muted)}
+
+/* 列表流（统一行高，无卡片套卡片） */
+.rows{display:flex;flex-direction:column}
+.row{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line-2);font-size:12.5px}
+.row:last-child{border-bottom:0}
+.row .rt{margin-left:auto;color:var(--faint);font-family:var(--mono);font-size:11px}
+
+/* 环形/条形 */
+.donut{width:118px;height:118px;border-radius:50%;flex:none;
+  background:conic-gradient(#ef4444 0 18%,#f59e0b 18% 47%,#12b981 47% 88%,#0ea5e9 88% 100%);
+  mask:radial-gradient(circle,transparent 52%,#000 53%)}
+.legend{flex:1;display:flex;flex-direction:column;gap:8px;font-size:12px}
+.legend div{display:flex;align-items:center}
+.legend .n{margin-left:auto;font-family:var(--mono);font-weight:600}
+.flex{display:flex;align-items:center;gap:18px}
+.bars{display:flex;align-items:flex-end;gap:12px;height:120px;padding-top:6px}
+.bars .b{flex:1;background:linear-gradient(180deg,#34d399,#059669);border-radius:6px 6px 3px 3px;position:relative}
+.bars .b span{position:absolute;bottom:-18px;left:0;right:0;text-align:center;font-size:10.5px;color:var(--faint)}
+.note{color:var(--faint);font-size:11.5px;margin-top:22px;text-align:center}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap)}
+@media(max-width:1080px){.grid>*{grid-column:span 12}.stats{grid-template-columns:repeat(3,1fr)}.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></symbol>
+  <symbol id="i-cluster" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 16.8M12 11.5l5.5 5.3"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V7z"/></symbol>
+  <symbol id="i-policy" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3z"/><path d="M9.5 12l1.8 1.8L15 10"/></symbol>
+  <symbol id="i-diag" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.3-1-2 3.4L4 12a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="logo">吴</div><div><b>API-OPS</b><small>自愈运维平台</small></div></div>
+    <div class="nav">
+      <div class="slbl">监控</div>
+      <a class="on"><svg><use href="#i-dash"/></svg>仪表盘</a>
+      <a><svg><use href="#i-cluster"/></svg>集群管理</a>
+      <div class="slbl">告警</div>
+      <a><svg><use href="#i-alert"/></svg>告警处理</a>
+      <a><svg><use href="#i-ticket"/></svg>工单</a>
+      <div class="slbl">配置与诊断</div>
+      <a><svg><use href="#i-policy"/></svg>策略配置</a>
+      <a><svg><use href="#i-diag"/></svg>故障诊断</a>
+      <div class="slbl">系统</div>
+      <a><svg><use href="#i-set"/></svg>系统设置</a>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- 统一页头：标题 + 筛选 + 操作，一行，无边框卡片 -->
+    <header class="top">
+      <div><div class="crumb">监控 / 仪表盘</div><h1>仪表盘</h1></div>
+      <div class="sp"></div>
+      <select class="sel"><option>全部集群</option></select>
+      <div class="seg"><span class="on">实时</span><span>10m</span><span>3h</span><span>24h</span></div>
+      <button class="btn btn-g"><svg style="width:14px;height:14px;stroke:currentColor;stroke-width:1.8;fill:none"><use href="#i-refresh"/></svg>刷新</button>
+    </header>
+
+    <div class="content">
+      <!-- 统一统计条（一个容器，均分 6 项） -->
+      <section class="panel">
+        <div class="panel-b" style="padding:10px 6px">
+          <div class="stats">
+            <div class="s"><div class="l">集群数</div><div class="v num">24</div><div class="t up">↑ 2</div></div>
+            <div class="s"><div class="l">活跃告警</div><div class="v num">17</div><div class="t">5 较昨日</div></div>
+            <div class="s"><div class="l">自动处理(24h)</div><div class="v num">132</div><div class="t">成功率 78%</div></div>
+            <div class="s"><div class="l">待人工</div><div class="v num">9</div><div class="t">↓ 3</div></div>
+            <div class="s"><div class="l">DB 异常</div><div class="v num">1</div><div class="t">prod-db-02</div></div>
+            <div class="s"><div class="l">MTTR(分钟)</div><div class="v num">4.2</div><div class="t">24 小时均值</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 统一网格：每块一层容器，标题统一，内边距统一 -->
+      <div class="grid">
+        <section class="panel c8">
+          <div class="panel-h"><h3>告警趋势</h3><span class="sub">新增 / 已解决 / 自愈</span><span class="r">近 24 小时</span></div>
+          <div class="panel-b">
+            <svg viewBox="0 0 700 200" width="100%" height="200" preserveAspectRatio="none">
+              <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12b981" stop-opacity=".3"/><stop offset="1" stop-color="#12b981" stop-opacity="0"/></linearGradient></defs>
+              <g stroke="#eef4f0"><line x1="0" y1="50" x2="700" y2="50"/><line x1="0" y1="100" x2="700" y2="100"/><line x1="0" y1="150" x2="700" y2="150"/></g>
+              <path d="M0,140 L78,120 L156,130 L234,92 L312,104 L390,62 L468,80 L546,46 L624,64 L700,36 L700,200 L0,200 Z" fill="url(#g)"/>
+              <polyline fill="none" stroke="#048c63" stroke-width="2.5" points="0,140 78,120 156,130 234,92 312,104 390,62 468,80 546,46 624,64 700,36"/>
+            </svg>
+          </div>
+        </section>
+
+        <section class="panel c4">
+          <div class="panel-h"><h3>AI 诊断结果分布</h3><span class="r">24h</span></div>
+          <div class="panel-b">
+            <div class="flex">
+              <div class="donut"></div>
+              <div class="legend">
+                <div><span class="tag t-grn">自愈成功</span><span class="n">58%</span></div>
+                <div><span class="tag t-gry">审批后修复</span><span class="n">19%</span></div>
+                <div><span class="tag t-gry">人工处理</span><span class="n">14%</span></div>
+                <div><span class="tag t-gry">自动恢复</span><span class="n">9%</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel c8">
+          <div class="panel-h"><h3>实时告警</h3><span class="sub">未处理</span><span class="r">合并同类 · 仅显最新</span></div>
+          <div style="overflow:auto">
+            <table>
+              <thead><tr><th>级别</th><th>时间</th><th>集群</th><th>服务</th><th>故障</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td><span class="tag t-red">严重</span></td><td class="mono">09:41</td><td>prod-01</td><td>efreight-prm</td><td>Pod CrashLoopBackOff ×3</td><td><span class="tag t-org">处理中</span></td></tr>
+                <tr><td><span class="tag t-org">警告</span></td><td class="mono">09:33</td><td>prod-02</td><td>order-api</td><td>内存使用率 87%</td><td><span class="tag t-gry">已诊断</span></td></tr>
+                <tr><td><span class="tag t-org">警告</span></td><td class="mono">09:12</td><td>prod-01</td><td>node-db-03</td><td>节点磁盘压力</td><td><span class="tag t-grn">已恢复</span></td></tr>
+                <tr><td><span class="tag t-grn">提示</span></td><td class="mono">08:58</td><td>prod-03</td><td>pay-gateway</td><td>HPA 扩容 3→5</td><td><span class="tag t-grn">已恢复</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel c4">
+          <div class="panel-h"><h3>Top 告警类型</h3><span class="r">近 24h</span></div>
+          <div class="panel-b">
+            <div class="bars">
+              <div class="b" style="height:70%"><span>Crash</span></div>
+              <div class="b" style="height:52%"><span>Mem</span></div>
+              <div class="b" style="height:88%"><span>Disk</span></div>
+              <div class="b" style="height:34%"><span>Net</span></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 两个等宽块，行高统一，不会有卡片套卡片 -->
+        <section class="panel c6">
+          <div class="panel-h"><h3>异常 Pod Top</h3><span class="r">按历史告警</span></div>
+          <div class="panel-b" style="padding-top:4px">
+            <div class="rows">
+              <div class="row"><span class="tag t-red">严重</span><span>prod-01 / efreight / prm-6f9c</span><span class="rt">18 次</span></div>
+              <div class="row"><span class="tag t-org">警告</span><span>prod-02 / order / api-7d2</span><span class="rt">12 次</span></div>
+              <div class="row"><span class="tag t-org">警告</span><span>prod-03 / pay / gw-3a1</span><span class="rt">9 次</span></div>
+              <div class="row"><span class="tag t-gry">提示</span><span>prod-02 / uc / uc-1b8</span><span class="rt">6 次</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel c6">
+          <div class="panel-h"><h3>自动处理（24小时）</h3><span class="r">自愈 / 重启 / 伸缩 / 回滚</span></div>
+          <div class="panel-b">
+            <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+              <div class="s" style="border-left:0"><div class="l">自愈</div><div class="v num" style="font-size:22px">96</div></div>
+              <div class="s"><div class="l">重启</div><div class="v num" style="font-size:22px">21</div></div>
+              <div class="s"><div class="l">伸缩</div><div class="v num" style="font-size:22px">9</div></div>
+              <div class="s"><div class="l">回滚</div><div class="v num" style="font-size:22px">6</div></div>
+            </div>
+            <div class="rows" style="margin-top:12px">
+              <div class="row"><span class="tag t-grn">自愈</span><span>efreight-prm</span><span class="rt">09:41</span></div>
+              <div class="row"><span class="tag t-grn">重启</span><span>order-api</span><span class="rt">09:22</span></div>
+              <div class="row"><span class="tag t-gry">伸缩</span><span>pay-gateway</span><span class="rt">08:58</span></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="note">样板示意：统一页头 + 统一统计条 + 每块仅一层容器（不再卡片套卡片）+ 统一间距/内边距/字号</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
