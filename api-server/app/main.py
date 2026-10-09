@@ -213,6 +213,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("恢复收敛扫描启动失败: %s", e)
 
+    # 告警爆发汇总（每 60 秒：未解决告警 ≥ 10 条时推汇总到全局告警群，无告警不发）
+    try:
+        from app.services.notification_service import alert_digest_sweep_loop
+        _alert_digest_task = asyncio.create_task(alert_digest_sweep_loop())
+        logger.info("告警爆发汇总扫描已启动（每 60 秒：未解决 ≥ 10 条时推送汇总）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警爆发汇总扫描启动失败: %s", e)
+
     # 数据库连接故障告警扫描（每 60 秒：连接失败/认证失败 → 告警 → 统一告警策略）
     try:
         from app.services.db_alert_service import background_loop as db_alert_loop

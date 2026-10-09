@@ -14,9 +14,9 @@ import asyncio
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -811,3 +811,126 @@ async def send_recovery_notification(alert: Alert, title: str = "已恢复") -> 
         if not _ns_match(c, alert.namespace) or not _source_match(c, alert.resource_type):
             continue
         await _send_webhook_with_retry(c, _render_recovery_content(alert, project_name, cluster_name, title), alert.id)
+
+
+# ============ 告警爆发汇总通知（未解决告警堆积时自动推送） ============
+
+# 未解决告警达到此数量时触发汇总；每再涨一个阈值倍数（20/30...）再发一次，降到阈值以下重置
+ALERT_DIGEST_THRESHOLD = 10
+ALERT_DIGEST_SWEEP_INTERVAL = 60  # 扫描间隔（秒）
+_ACTIVE_ALERT_STATUSES = ("pending", "awaiting_approval", "ticketed")
+
+
+async def count_unresolved_alerts() -> int:
+    """未解决告警数（pending / awaiting_approval / ticketed）"""
+    async with async_session() as session:
+        return (await session.execute(
+            select(func.count()).select_from(Alert).where(Alert.status.in_(_ACTIVE_ALERT_STATUSES))
+        )).scalar() or 0
+
+
+async def build_alert_digest() -> tuple[int, str]:
+    """统计未解决告警，返回 (未解决数, 汇总文本)；未解决数 < 阈值时文本为空"""
+    async with async_session() as session:
+        total = (await session.execute(
+            select(func.count()).select_from(Alert).where(Alert.status.in_(_ACTIVE_ALERT_STATUSES))
+        )).scalar() or 0
+        if total < ALERT_DIGEST_THRESHOLD:
+            return total, ""
+
+        # 按严重级别
+        sev_rows = (await session.execute(
+            select(Alert.severity, func.count()).where(Alert.status.in_(_ACTIVE_ALERT_STATUSES))
+            .group_by(Alert.severity)
+        )).all()
+        sev_map = {s: c for s, c in sev_rows}
+
+        # 状态细分
+        pending = (await session.execute(
+            select(func.count()).select_from(Alert).where(Alert.status == "pending")
+        )).scalar() or 0
+        approval = (await session.execute(
+            select(func.count()).select_from(Alert).where(Alert.status == "awaiting_approval")
+        )).scalar() or 0
+        ticketed = (await session.execute(
+            select(func.count()).select_from(Alert).where(Alert.status == "ticketed")
+        )).scalar() or 0
+        manual = (await session.execute(
+            select(func.count()).select_from(Alert).where(
+                Alert.manual_required.is_(True), Alert.status.in_(_ACTIVE_ALERT_STATUSES)
+            )
+        )).scalar() or 0
+
+        # 故障类型 Top（最多 6 个）
+        fault_rows = (await session.execute(
+            select(Alert.fault_type, func.count()).where(Alert.status.in_(_ACTIVE_ALERT_STATUSES))
+            .group_by(Alert.fault_type).order_by(func.count().desc()).limit(6)
+        )).all()
+
+        # 近 1 小时新增 / 已恢复
+        since = datetime.now() - timedelta(hours=1)
+        new_1h = (await session.execute(
+            select(func.count()).select_from(Alert).where(Alert.detected_at >= since)
+        )).scalar() or 0
+        recovered_1h = (await session.execute(
+            select(func.count()).select_from(Alert).where(
+                Alert.resolved_at.isnot(None), Alert.resolved_at >= since
+            )
+        )).scalar() or 0
+
+    sev_order = ["critical", "high", "medium", "low"]
+    sev_parts = [f"{s} {sev_map[s]}" for s in sev_order if sev_map.get(s)]
+    lines = [
+        "【API-OPS 告警汇总】",
+        f"⚠️ 未解决告警 {total} 条",
+    ]
+    if sev_parts:
+        lines.append("严重级别：" + " ｜ ".join(sev_parts))
+    lines.append(f"状态：待处理 {pending} ｜ 待审批 {approval} ｜ 已转工单 {ticketed} ｜ 需人工 {manual}")
+    if fault_rows:
+        lines.append("故障类型：" + "、".join(f"{f}×{c}" for f, c in fault_rows))
+    if new_1h or recovered_1h:
+        lines.append(f"近 1 小时：新增 {new_1h} ｜ 已恢复 {recovered_1h}")
+    lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    return total, "\n".join(lines)
+
+
+async def send_alert_digest_notification(text: str) -> int:
+    """把告警汇总推送到全局告警渠道（scene 含 alert 且 namespaces 为空 = 兜底群），返回发送数"""
+    configs = await _get_configs(SCENE_ALERT)
+    sent = 0
+    for c in configs:
+        if _parse_namespaces(c):  # 有 namespace 范围的项目群，不发全局汇总
+            continue
+        await _send_webhook_with_retry(c, text, receiver="告警汇总")
+        sent += 1
+    return sent
+
+
+async def alert_digest_sweep_loop() -> None:
+    """告警爆发汇总后台循环：未解决告警 ≥ 阈值时发汇总，每再涨一个阈值倍数再发，降到阈值以下重置
+
+    规则（老板 2026-10-09）：出现 10 个没解决就触发；没有告警不发；持续堆积每 +10 再发一次。
+    防重复：Redis 记录「上次已通知的档位」（total // 阈值），只在新档位 > 旧档位时发。
+    """
+    bucket_key = "alert_digest:last_bucket"
+    while True:
+        try:
+            total = await count_unresolved_alerts()
+            if total < ALERT_DIGEST_THRESHOLD:
+                await redis_pool.delete(bucket_key)
+            else:
+                bucket = total // ALERT_DIGEST_THRESHOLD
+                raw = await redis_pool.get(bucket_key)
+                last_bucket = int(raw) if raw else 0
+                if bucket > last_bucket:
+                    _, text = await build_alert_digest()
+                    if text:
+                        sent = await send_alert_digest_notification(text)
+                        await redis_pool.set(bucket_key, bucket, ex=86400)
+                        logger.info("告警汇总已推送：未解决 %d 条，发送 %d 个渠道", total, sent)
+                    else:
+                        await redis_pool.set(bucket_key, bucket, ex=86400)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("告警汇总扫描异常: %s", e)
+        await asyncio.sleep(ALERT_DIGEST_SWEEP_INTERVAL)
