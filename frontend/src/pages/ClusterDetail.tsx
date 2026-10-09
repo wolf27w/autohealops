@@ -646,12 +646,13 @@ export default function ClusterDetail() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/clusters')}>返回</Button>
-        <span style={{ fontSize: 16, fontWeight: 'bold' }}>{clusterName || `集群 ${id}`}</span>
-        <Button onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
-        <Button type="primary" onClick={() => setInspectOpen(true)}>巡检</Button>
-      </Space>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate('/clusters')}>返回</Button>
+        <span style={{ fontSize: 16, fontWeight: 700 }}>{clusterName || `集群 ${id}`}</span>
+        <span style={{ flex: 1 }} />
+        <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
+        <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>巡检</Button>
+      </div>
 
       <Card size="small">
         <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>

@@ -95,9 +95,10 @@ export default function ClusterList() {
         dataSource={clusters}
         columns={[
           { title: '名称', dataIndex: 'name', render: (name, record) => (
-            <a onClick={() => navigate(`/clusters/${record.id}`)}>{name}</a>
+            <Tooltip title={record.description || undefined}>
+              <a onClick={() => navigate(`/clusters/${record.id}`)}>{name}</a>
+            </Tooltip>
           ) },
-          { title: '描述', dataIndex: 'description' },
           { title: '环境', dataIndex: 'env_tag', render: (t) => <Tag color={ENV_TAG_COLOR[t] || 'default'}>{t}</Tag> },
           { title: 'RBAC', dataIndex: 'rbac_mode', render: (m, record) => (
             <span title={record.rbac_status}>
