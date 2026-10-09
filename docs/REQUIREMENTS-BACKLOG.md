@@ -499,13 +499,13 @@
 
 | # | 需求 | 状态 |
 |---|---|---|
-| 1 | **监控/告警分离**：引入开源 Netdata 做「实时监控展示」，告警继续走平台自研（watcher + Prometheus 指标 + DB 告警，全不动） | 📝 草案 |
+| 1 | **监控/告警分层+分工（方案 A）**：Netdata 做实时监控展示 + **指标阈值告警**；平台做**事件型告警 + 闭环**；`resource_alert` 退役 | 📝 草案 |
 | 2 | **接入即自动下发**：集群接入 AIOps 后自动向该集群下发 Netdata（parent+child），mirror `rbac_service` 自举模式 | 📝 草案 |
 | 3 | **按集群展示**：集群管理页各集群独立监控入口，iframe 内嵌（后端反代走 apiserver Service Proxy） | 📝 草案 |
 | 4 | **parent 用 PVC**；parent+child 同集群一起部署（一份多文档 manifest） | 📝 草案 |
 | 5 | **幂等/升级/卸载**：executor server-side apply；卸载随集群删除 | 📝 草案 |
 | 6 | **集群外主机（ECS）+ Docker 接入**：新增「主机监控」，同一 agent 覆盖主机+Docker（另立 `hosts` 模型，不走集群接入流程） | 📝 草案 |
-| 7 | **Netdata 告警 ↔ AIOps 闭环**：webhook 入站 + 字段映射；k8s 告警仍走自研，主机/Docker 告警走 Netdata（避免双头）；诊断/修复两环需新增主机/Docker 能力 | 📝 草案 |
+| 7 | **Netdata 告警 ↔ AIOps 闭环**：webhook 入站 + 字段映射；**指标阈值告警→Netdata，事件型告警→自研**，统一汇入闭环；诊断/修复两环需新增主机/Docker 能力 | 📝 草案 |
 
 关键澄清：
 - Netdata **不依赖**平台 Prometheus（自采集自存储）；K8s 场景读 kubelet cadvisor 端点。
