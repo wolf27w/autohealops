@@ -1,4 +1,16 @@
-/* 全局样式重置：消除 body 默认 margin 白边，铺满全屏 */
+/* 全局样式：浅绿主题 + 高密度 + 有层次的底色（换肤 A：全局地基） */
+:root {
+  --brand: #12b981;
+  --brand-d: #048c63;
+  --brand-l: #d5f5e5;
+  --brand-xl: #ecfdf5;
+  --ink: #0f2018;
+  --muted: #5a7368;
+  --faint: #8aa196;
+  --line: #d9e6de;
+  --line-2: #eaf2ec;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -13,10 +25,15 @@ body,
 }
 
 body {
-  background: #f5f6fa;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  color: var(--ink);
+  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, -apple-system,
+    'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* 淡绿渐变底色（不用纯白，增加层次） */
+  background:
+    radial-gradient(1100px 520px at 0% -8%, #dcf5e8 0%, transparent 55%),
+    radial-gradient(900px 480px at 108% 0%, #e6f7ee 0%, transparent 50%),
+    linear-gradient(180deg, #f3f8f4, #e8f1ea);
 }
 
 /* 滚动条美化 */
@@ -25,24 +42,94 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d0d5dd;
-  border-radius: 4px;
+  background: #cfe0d6;
+  border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b8bec9;
+  background: #b3ccbe;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* 侧栏菜单颜色统一（深蓝底，避免默认白边/色差） */
-.ant-layout-sider,
+/* ---------- 侧栏（深绿渐变 + 透明菜单） ---------- */
+.ant-layout-sider {
+  background: linear-gradient(180deg, #0f2a20 0%, #0b211a 100%) !important;
+  border-right: 1px solid #0a1d16;
+}
+.ant-layout-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+}
 .ant-menu.ant-menu-dark {
-  background: #0f1a2e !important;
+  background: transparent !important;
+  border-inline-end: none !important;
 }
-.ant-menu-dark .ant-menu-sub {
-  background: #0a1220 !important;
+.ant-menu-dark .ant-menu-sub,
+.ant-menu-dark .ant-menu-inline {
+  background: transparent !important;
 }
+/* 分组标题 */
+.ant-menu-dark .ant-menu-item-group-title {
+  color: #5f8172 !important;
+  font-size: 10.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  padding-inline: 22px;
+}
+/* 选中项：浅绿底 + 左侧强调条 */
 .ant-menu-dark .ant-menu-item-selected {
-  background: #1677ff !important;
+  background: linear-gradient(90deg, rgba(18, 185, 129, 0.9), rgba(4, 140, 99, 0.85)) !important;
+  color: #fff !important;
+  font-weight: 600;
+  box-shadow: 0 6px 14px rgba(5, 150, 105, 0.3);
+}
+.ant-menu-dark .ant-menu-item-selected::after {
+  display: none;
+}
+.ant-menu-dark .ant-menu-item:hover {
+  color: #eafff4 !important;
+}
+
+/* ---------- 顶栏（浅色玻璃） ---------- */
+.ant-layout-header {
+  background: rgba(255, 255, 255, 0.82) !important;
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+  box-shadow: none !important;
+}
+
+/* ---------- 卡片 ---------- */
+.ant-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff, #f7fbf8);
+  box-shadow: 0 6px 18px rgba(15, 32, 24, 0.04);
+}
+.ant-card-bordered {
+  border-color: var(--line);
+}
+.ant-card-head {
+  border-bottom: 1px solid var(--line-2);
+  min-height: 44px;
+}
+
+/* ---------- 表格 ---------- */
+.ant-table-wrapper .ant-table {
+  font-size: 12.5px;
+}
+.ant-table-thead > tr > th {
+  font-weight: 600 !important;
+}
+
+/* ---------- 其它 ---------- */
+.ant-tag {
+  border-radius: 20px;
+}
+.ant-btn-primary {
+  box-shadow: 0 6px 14px rgba(4, 140, 99, 0.24);
+}
+.ant-modal-content,
+.ant-drawer-content {
+  border-radius: 14px;
 }

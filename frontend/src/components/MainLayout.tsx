@@ -216,29 +216,36 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
-      <Sider width={220} theme="dark" collapsible collapsed={collapsed} onCollapse={handleCollapse}
-        style={{ background: '#0f1a2e' }}>
-        <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 17, fontWeight: 600, letterSpacing: 1, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          API-OPS 平台
+      <Sider width={236} theme="dark" collapsible collapsed={collapsed} onCollapse={handleCollapse}>
+        <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#34d399,#059669)', display: 'grid', placeItems: 'center', color: '#04231a', fontWeight: 800, fontSize: 15, boxShadow: '0 6px 16px rgba(16,185,129,0.35)', flex: 'none' }}>吴</div>
+          {!collapsed && (
+            <div style={{ lineHeight: 1.15 }}>
+              <b style={{ color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>API-OPS</b>
+              <small style={{ display: 'block', color: '#6f8f80', fontSize: 9.5, letterSpacing: 2 }}>自愈运维平台</small>
+            </div>
+          )}
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          items={filteredMenuItems}
-          inlineIndent={18}
-          onClick={({ key }) => navigate(key)}
-          {...(collapsed ? {} : { openKeys, onOpenChange: handleOpenChange })}
-          style={{ background: 'transparent', borderRight: 'none', paddingTop: 4 }}
-        />
+        <div style={{ flex: 1, overflow: 'auto', paddingBottom: 8 }}>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            items={filteredMenuItems}
+            inlineIndent={18}
+            onClick={({ key }) => navigate(key)}
+            {...(collapsed ? {} : { openKeys, onOpenChange: handleOpenChange })}
+            style={{ borderRight: 'none', paddingTop: 6 }}
+          />
+        </div>
       </Sider>
       <Layout style={{ background: '#f5f6fa' }}>
-        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,21,41,0.06)', zIndex: 1, height: 56, lineHeight: '56px' }}>
+        <Header style={{ padding: '0 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 1, height: 56, lineHeight: '56px' }}>
           <Space size={12}>
             <Button type="text" onClick={() => handleCollapse(!collapsed)}
-              icon={collapsed ? <MenuUnfoldOutlined style={{ color: '#1f2d3d', fontSize: 16 }} /> : <MenuFoldOutlined style={{ color: '#1f2d3d', fontSize: 16 }} />} />
-            <div style={{ fontSize: 16, fontWeight: 500, color: '#1f2d3d' }}>API-OPS 自愈平台</div>
-            <span style={{ fontSize: 11, color: '#bbb' }} title="前端构建/启动时间戳">build {__BUILD_TS__.slice(5, 16).replace('T', ' ')}</span>
+              icon={collapsed ? <MenuUnfoldOutlined style={{ color: '#0f2018', fontSize: 16 }} /> : <MenuFoldOutlined style={{ color: '#0f2018', fontSize: 16 }} />} />
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#0f2018' }}>API-OPS 自愈平台</div>
+            <span style={{ fontSize: 11, color: '#8aa196' }} title="前端构建/启动时间戳">build {__BUILD_TS__.slice(5, 16).replace('T', ' ')}</span>
           </Space>
           <Space size={16}>
             <Button type="text" icon={<BarChartOutlined />} onClick={() => window.open('/screen', '_blank')}>大屏</Button>
@@ -250,14 +257,14 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
             </Popover>
             <Dropdown menu={userMenu}>
               <Space style={{ cursor: 'pointer' }}>
-                <Avatar size="small" style={{ background: '#1677ff' }} icon={<UserOutlined />} />
-                <span style={{ color: '#333' }}>{user.username}（{user.role}）</span>
+                <Avatar size="small" style={{ background: 'linear-gradient(135deg,#34d399,#0d9488)' }} icon={<UserOutlined />} />
+                <span style={{ color: '#0f2018' }}>{user.username}（{user.role}）</span>
                 <DownOutlined style={{ color: '#999', fontSize: 12 }} />
               </Space>
             </Dropdown>
           </Space>
         </Header>
-        <Content style={{ padding: 12, overflow: 'auto', minHeight: 0 }}>
+        <Content style={{ padding: 14, overflow: 'auto', minHeight: 0 }}>
           <Outlet />
         </Content>
       </Layout>
