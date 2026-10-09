@@ -75,7 +75,7 @@ export default function ClusterDetail() {
       return '_all_'
     }
   })
-  const VALID_TYPES = ['deployments', 'statefulsets', 'daemonsets', 'pods', 'cronjobs', 'services', 'ingresses', 'configmaps', 'secrets', 'pvcs']
+  const VALID_TYPES = ['deployments', 'statefulsets', 'daemonsets', 'cronjobs', 'services', 'ingresses', 'configmaps', 'secrets', 'pvcs']
   const [activeType, setActiveType] = useState<string>(() => {
     const fromUrl = searchParams.get('type')
     if (fromUrl && VALID_TYPES.includes(fromUrl)) return fromUrl
@@ -618,7 +618,6 @@ export default function ClusterDetail() {
   // 标签页分组：10 个类型 → 6 个标签（工作负载/容器组/定时任务/网络/配置/存储），降低密集度
   const GROUPS = [
     { key: 'workloads', label: '工作负载', types: ['deployments', 'statefulsets', 'daemonsets'], names: { deployments: '无状态', statefulsets: '有状态', daemonsets: '守护集' } as Record<string, string> },
-    { key: 'pods', label: '容器组', types: ['pods'] },
     { key: 'cronjobs', label: '定时任务', types: ['cronjobs'] },
     { key: 'network', label: '网络', types: ['services', 'ingresses'], names: { services: '服务', ingresses: '路由' } as Record<string, string> },
     { key: 'config', label: '配置', types: ['configmaps', 'secrets'], names: { configmaps: '配置字典', secrets: '保密字典' } as Record<string, string> },
