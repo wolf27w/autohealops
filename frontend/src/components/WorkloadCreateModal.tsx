@@ -1,6 +1,6 @@
-// 创建工作负载（无状态/有状态/守护集/定时任务）：预置 YAML 模板 → server-side apply 创建
+// 创建工作负载（无状态/有状态/守护集/定时任务）：KubeSphere 风格结构化表单 → 拼 YAML 创建
 import { useEffect, useState } from 'react'
-import { Modal, Input, Alert, message } from 'antd'
+import { Modal, Form, Input, InputNumber, Select, Alert, message } from 'antd'
 import { applyWorkload } from '../services/api'
 
 export interface WorkloadCreateTarget {
@@ -16,14 +16,18 @@ const KIND_LABEL: Record<string, string> = {
   cronjob: '定时任务（CronJob）',
 }
 
-function template(kind: string, namespace: string, name: string): string {
-  const ns = namespace || 'default'
-  const nm = name || 'example'
-  const podSpec = `      containers:
-        - name: ${nm}
-          image: nginx:latest
-          ports:
-            - containerPort: 80`
+// 各 kind 是否有「副本数」字段（Deployment/StatefulSet 有；DaemonSet/CronJob 无）
+const HAS_REPLICAS = (kind: string) => kind === 'deployment' || kind === 'statefulset'
+
+function buildYaml(kind: string, v: {
+  name: string; namespace: string; replicas?: number; image: string; containerPort?: number;
+  schedule?: string; command?: string;
+}): string {
+  const ns = v.namespace || 'default'
+  const nm = v.name
+  const ports = v.containerPort ? `          ports:\n            - containerPort: ${v.containerPort}\n` : ''
+  const containerLines = `        - name: ${nm}\n          image: ${v.image}${ports}`
+
   if (kind === 'statefulset') {
     return `apiVersion: apps/v1
 kind: StatefulSet
@@ -32,7 +36,7 @@ metadata:
   namespace: ${ns}
 spec:
   serviceName: ${nm}
-  replicas: 1
+  replicas: ${v.replicas ?? 1}
   selector:
     matchLabels:
       app: ${nm}
@@ -41,7 +45,8 @@ spec:
       labels:
         app: ${nm}
     spec:
-${podSpec}
+      containers:
+${containerLines}
 `
   }
   if (kind === 'daemonset') {
@@ -59,7 +64,8 @@ spec:
       labels:
         app: ${nm}
     spec:
-${podSpec}
+      containers:
+${containerLines}
 `
   }
   if (kind === 'cronjob') {
@@ -69,7 +75,7 @@ metadata:
   name: ${nm}
   namespace: ${ns}
 spec:
-  schedule: "*/5 * * * *"
+  schedule: "${v.schedule || '*/5 * * * *'}"
   jobTemplate:
     spec:
       template:
@@ -77,8 +83,8 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: ${nm}
-              image: busybox:latest
-              command: ["/bin/sh", "-c", "echo hello"]
+              image: ${v.image}
+              command: ["/bin/sh", "-c", "${(v.command || 'echo hello').replace(/"/g, '\\"')}"]
 `
   }
   return `apiVersion: apps/v1
@@ -89,7 +95,7 @@ metadata:
   labels:
     app: ${nm}
 spec:
-  replicas: 1
+  replicas: ${v.replicas ?? 1}
   selector:
     matchLabels:
       app: ${nm}
@@ -98,7 +104,8 @@ spec:
       labels:
         app: ${nm}
     spec:
-${podSpec}
+      containers:
+${containerLines}
 `
 }
 
@@ -107,20 +114,34 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
   onClose: () => void
   onSaved?: () => void
 }) {
-  const [yaml, setYaml] = useState('')
+  const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const kind = target?.kind || ''
 
   useEffect(() => {
     if (!target) return
-    setYaml(template(target.kind, target.namespace, ''))
-  }, [target])
+    form.resetFields()
+    form.setFieldsValue({
+      name: '',
+      namespace: target.namespace || 'default',
+      replicas: 1,
+      image: kind === 'cronjob' ? 'busybox:latest' : 'nginx:latest',
+      schedule: '*/5 * * * *',
+      command: 'echo hello',
+    })
+  }, [target, kind, form])
 
   const submit = async () => {
     if (!target) return
-    if (!yaml.trim()) { message.warning('YAML 不能为空'); return }
+    const v = await form.validateFields()
     setLoading(true)
     try {
-      await applyWorkload(target.clusterId, { kind: target.kind, namespace: target.namespace, name: '', yaml })
+      await applyWorkload(target.clusterId, {
+        kind: target.kind,
+        namespace: (v.namespace || '').trim(),
+        name: '',
+        yaml: buildYaml(target.kind, v),
+      })
       message.success('已创建')
       onSaved?.()
       onClose()
@@ -134,26 +155,44 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
 
   return (
     <Modal
-      title={`创建工作负载：${KIND_LABEL[target?.kind || ''] || target?.kind || ''}`}
+      title={`创建工作负载：${KIND_LABEL[kind] || kind}`}
       open={!!target}
       onCancel={onClose}
       onOk={submit}
       okText="创建"
       confirmLoading={loading}
-      width={920}
+      width={560}
     >
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 8 }}
-        message="编辑下方 YAML 后点击「创建」。metadata.name 不能为空；命名空间默认取当前选择。"
-      />
-      <Input.TextArea
-        value={yaml}
-        onChange={(e) => setYaml(e.target.value)}
-        rows={24}
-        style={{ fontFamily: 'monospace', fontSize: 12 }}
-      />
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}>
+          <Input placeholder="如 nginx-demo" />
+        </Form.Item>
+        <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '命名空间必填' }]}>
+          <Input />
+        </Form.Item>
+        {HAS_REPLICAS(kind) && (
+          <Form.Item name="replicas" label="副本数" rules={[{ required: true }]}>
+            <InputNumber min={0} style={{ width: 160 }} />
+          </Form.Item>
+        )}
+        {kind === 'cronjob' && (
+          <Form.Item name="schedule" label="定时表达式（Cron）" rules={[{ required: true }]} tooltip="分 时 日 月 周；如 */5 * * * * = 每 5 分钟">
+            <Input placeholder="*/5 * * * *" />
+          </Form.Item>
+        )}
+        <Form.Item name="image" label="镜像" rules={[{ required: true, message: '镜像必填' }]}>
+          <Input placeholder="nginx:latest" />
+        </Form.Item>
+        <Form.Item name="containerPort" label="容器端口">
+          <InputNumber min={1} max={65535} placeholder="80" style={{ width: 160 }} />
+        </Form.Item>
+        {kind === 'cronjob' && (
+          <Form.Item name="command" label="执行命令" tooltip="以 /bin/sh -c 执行">
+            <Input placeholder="echo hello" />
+          </Form.Item>
+        )}
+      </Form>
+      <Alert type="info" showIcon message="创建后按名称自动打 app 标签作为 selector；副本数为 0 表示创建后不启动任何 Pod。" />
     </Modal>
   )
 }
