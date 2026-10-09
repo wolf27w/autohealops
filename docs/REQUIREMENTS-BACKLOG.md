@@ -514,3 +514,19 @@
 - **不做数据融合**、**不替换 DB 监控/配额快照**；`pod_metrics` **暂不删除**（仍被 AI 诊断工具 `get_pod_metrics` + 仪表盘消费）。
 
 详见：**`docs/NETDATA-MONITORING-REQUIREMENTS.md`**
+
+---
+
+## 2026-10-09 新增需求：项目级审批（审核机制补项目维度）
+
+**背景**：告警**通知路由**已有项目/namespace 维度（`notify_alert` → 项目 `notify_config_id`）；**审核机制没有**（`approval_flows` 全局选默认流程）。老板：告警路由是有的，只是审核机制没有。
+
+| # | 需求 | 状态 |
+|---|---|---|
+| 1 | **项目绑审批流程**：`projects` 加 `approval_flow_id`，对称通知的 `notify_config_id` | 📝 草案 |
+| 2 | `_load_default_flow()` 改为按 `(cluster,ns)→项目→flow`，无则回退默认 | 📝 草案 |
+| 3 | 前端项目编辑加「审批流程」下拉 | 📝 草案 |
+
+边界：通知路由/决策引擎不动；只改「审核走哪套流程」，不改「是否要审核」。
+
+详见：**`docs/PROJECT-LEVEL-APPROVAL-REQUIREMENT.md`**
