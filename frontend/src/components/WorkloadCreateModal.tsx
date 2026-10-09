@@ -1,7 +1,9 @@
 // 创建工作负载（无状态/有状态/守护集/定时任务）：KubeSphere 风格结构化表单 → 拼 YAML 创建
 import { useEffect, useState } from 'react'
-import { Modal, Form, Input, InputNumber, Select, Alert, message } from 'antd'
+import { Modal, Form, Input, InputNumber, Switch, Collapse, Divider, message } from 'antd'
 import { applyWorkload } from '../services/api'
+import { KeyValueList, type KvItem } from './KeyValueEditor'
+import { buildYaml } from './workloadYaml'
 
 export interface WorkloadCreateTarget {
   clusterId: number
@@ -16,98 +18,7 @@ const KIND_LABEL: Record<string, string> = {
   cronjob: '定时任务（CronJob）',
 }
 
-// 各 kind 是否有「副本数」字段（Deployment/StatefulSet 有；DaemonSet/CronJob 无）
 const HAS_REPLICAS = (kind: string) => kind === 'deployment' || kind === 'statefulset'
-
-function buildYaml(kind: string, v: {
-  name: string; namespace: string; replicas?: number; image: string; containerPort?: number;
-  schedule?: string; command?: string;
-}): string {
-  const ns = v.namespace || 'default'
-  const nm = v.name
-  const ports = v.containerPort ? `          ports:\n            - containerPort: ${v.containerPort}\n` : ''
-  const containerLines = `        - name: ${nm}\n          image: ${v.image}${ports}`
-
-  if (kind === 'statefulset') {
-    return `apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: ${nm}
-  namespace: ${ns}
-spec:
-  serviceName: ${nm}
-  replicas: ${v.replicas ?? 1}
-  selector:
-    matchLabels:
-      app: ${nm}
-  template:
-    metadata:
-      labels:
-        app: ${nm}
-    spec:
-      containers:
-${containerLines}
-`
-  }
-  if (kind === 'daemonset') {
-    return `apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: ${nm}
-  namespace: ${ns}
-spec:
-  selector:
-    matchLabels:
-      app: ${nm}
-  template:
-    metadata:
-      labels:
-        app: ${nm}
-    spec:
-      containers:
-${containerLines}
-`
-  }
-  if (kind === 'cronjob') {
-    return `apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: ${nm}
-  namespace: ${ns}
-spec:
-  schedule: "${v.schedule || '*/5 * * * *'}"
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: ${nm}
-              image: ${v.image}
-              command: ["/bin/sh", "-c", "${(v.command || 'echo hello').replace(/"/g, '\\"')}"]
-`
-  }
-  return `apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${nm}
-  namespace: ${ns}
-  labels:
-    app: ${nm}
-spec:
-  replicas: ${v.replicas ?? 1}
-  selector:
-    matchLabels:
-      app: ${nm}
-  template:
-    metadata:
-      labels:
-        app: ${nm}
-    spec:
-      containers:
-${containerLines}
-`
-}
 
 export default function WorkloadCreateModal({ target, onClose, onSaved }: {
   target: WorkloadCreateTarget | null
@@ -117,6 +28,8 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const kind = target?.kind || ''
+  const livenessEnabled = Form.useWatch('livenessEnabled', form)
+  const readinessEnabled = Form.useWatch('readinessEnabled', form)
 
   useEffect(() => {
     if (!target) return
@@ -128,6 +41,12 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
       image: kind === 'cronjob' ? 'busybox:latest' : 'nginx:latest',
       schedule: '*/5 * * * *',
       command: 'echo hello',
+      env: [] as KvItem[],
+      labels: [] as KvItem[],
+      livenessEnabled: false,
+      livenessPath: '/healthz',
+      readinessEnabled: false,
+      readinessPath: '/healthz',
     })
   }, [target, kind, form])
 
@@ -153,6 +72,8 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
     }
   }
 
+  const isCron = kind === 'cronjob'
+
   return (
     <Modal
       title={`创建工作负载：${KIND_LABEL[kind] || kind}`}
@@ -161,7 +82,7 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
       onOk={submit}
       okText="创建"
       confirmLoading={loading}
-      width={560}
+      width={640}
     >
       <Form form={form} layout="vertical">
         <Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}>
@@ -175,7 +96,7 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
             <InputNumber min={0} style={{ width: 160 }} />
           </Form.Item>
         )}
-        {kind === 'cronjob' && (
+        {isCron && (
           <Form.Item name="schedule" label="定时表达式（Cron）" rules={[{ required: true }]} tooltip="分 时 日 月 周；如 */5 * * * * = 每 5 分钟">
             <Input placeholder="*/5 * * * *" />
           </Form.Item>
@@ -183,16 +104,79 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
         <Form.Item name="image" label="镜像" rules={[{ required: true, message: '镜像必填' }]}>
           <Input placeholder="nginx:latest" />
         </Form.Item>
-        <Form.Item name="containerPort" label="容器端口">
-          <InputNumber min={1} max={65535} placeholder="80" style={{ width: 160 }} />
-        </Form.Item>
-        {kind === 'cronjob' && (
+        {!isCron && (
+          <Form.Item name="containerPort" label="容器端口">
+            <InputNumber min={1} max={65535} placeholder="80" style={{ width: 160 }} />
+          </Form.Item>
+        )}
+        {isCron && (
           <Form.Item name="command" label="执行命令" tooltip="以 /bin/sh -c 执行">
             <Input placeholder="echo hello" />
           </Form.Item>
         )}
+
+        {!isCron && (
+          <Collapse
+            ghost
+            size="small"
+            items={[
+              {
+                key: 'res',
+                label: '资源配额',
+                forceRender: true,
+                children: (
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <Form.Item name="cpuRequest" label="CPU 请求" style={{ flex: 1, minWidth: 120 }}><Input placeholder="如 100m" /></Form.Item>
+                    <Form.Item name="cpuLimit" label="CPU 上限" style={{ flex: 1, minWidth: 120 }}><Input placeholder="如 500m" /></Form.Item>
+                    <Form.Item name="memoryRequest" label="内存请求" style={{ flex: 1, minWidth: 120 }}><Input placeholder="如 256Mi" /></Form.Item>
+                    <Form.Item name="memoryLimit" label="内存上限" style={{ flex: 1, minWidth: 120 }}><Input placeholder="如 512Mi" /></Form.Item>
+                  </div>
+                ),
+              },
+              {
+                key: 'env',
+                label: '环境变量',
+                forceRender: true,
+                children: <KeyValueList name="env" addLabel="添加环境变量" keyPlaceholder="变量名" valuePlaceholder="变量值" />,
+              },
+              {
+                key: 'labels',
+                label: '标签',
+                forceRender: true,
+                children: (
+                  <>
+                    <KeyValueList name="labels" addLabel="添加标签" keyPlaceholder="标签 key" valuePlaceholder="标签 value" />
+                    <Divider style={{ margin: '8px 0' }} />
+                  </>
+                ),
+              },
+              {
+                key: 'probe',
+                label: '健康检查',
+                forceRender: true,
+                children: (
+                  <div>
+                    <Form.Item name="livenessEnabled" label="存活探针 livenessProbe" valuePropName="checked"><Switch /></Form.Item>
+                    {livenessEnabled && (
+                      <div style={{ display: 'flex', gap: 12 }}>
+                        <Form.Item name="livenessPath" label="路径" style={{ flex: 2 }}><Input placeholder="/healthz" /></Form.Item>
+                        <Form.Item name="livenessPort" label="端口" style={{ flex: 1 }}><InputNumber min={1} max={65535} placeholder="80" style={{ width: '100%' }} /></Form.Item>
+                      </div>
+                    )}
+                    <Form.Item name="readinessEnabled" label="就绪探针 readinessProbe" valuePropName="checked"><Switch /></Form.Item>
+                    {readinessEnabled && (
+                      <div style={{ display: 'flex', gap: 12 }}>
+                        <Form.Item name="readinessPath" label="路径" style={{ flex: 2 }}><Input placeholder="/healthz" /></Form.Item>
+                        <Form.Item name="readinessPort" label="端口" style={{ flex: 1 }}><InputNumber min={1} max={65535} placeholder="80" style={{ width: '100%' }} /></Form.Item>
+                      </div>
+                    )}
+                  </div>
+                ),
+              },
+            ]}
+          />
+        )}
       </Form>
-      <Alert type="info" showIcon message="创建后按名称自动打 app 标签作为 selector；副本数为 0 表示创建后不启动任何 Pod。" />
     </Modal>
   )
 }
