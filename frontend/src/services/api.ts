@@ -295,6 +295,12 @@ export const getWorkloadServiceInfo = (clusterId: number, kind: string, ns: stri
   http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/service-info`)
 export const applyWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string, yaml: string) =>
   http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`, { yaml })
+// 创建/编辑工作负载（name 留空=按 YAML 内 metadata.name 创建）
+export const applyWorkload = (clusterId: number, data: Payload) =>
+  http.post(`/resources/clusters/${clusterId}/workloads/apply`, data)
+// 删除工作负载（deployment/statefulset/daemonset/cronjob/pod）
+export const deleteWorkload = (clusterId: number, kind: string, ns: string, name: string) =>
+  http.delete(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}`)
 // 集群 Pod 实时列表（含创建时间）：namespace 空=全部
 export const getClusterPods = (clusterId: number, namespace = '') =>
   http.get(`/resources/clusters/${clusterId}/pods`, { params: { namespace } })

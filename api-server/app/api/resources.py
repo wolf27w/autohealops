@@ -548,6 +548,45 @@ async def apply_workload_yaml(cluster_id: int, kind: str, namespace: str, name: 
     return {"code": 200, "message": "success", "data": {"message": r.get("message", "已应用")}}
 
 
+# 可通过「对象/工作负载」接口操作的工作负载类型
+_WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset", "cronjob", "pod"}
+
+
+@router.post("/clusters/{cluster_id}/workloads/apply")
+async def apply_workload(cluster_id: int, payload: dict, user=Depends(require_operator)):
+    """创建/编辑工作负载（deployment/statefulset/daemonset/cronjob/pod）YAML（需操作员权限）
+
+    name 留空 = 以 YAML 内 metadata.name 为准（创建）；传 name = 校验并更新指定对象。
+    """
+    kind = (payload.get("kind") or "").strip()
+    namespace = (payload.get("namespace") or "").strip()
+    name = (payload.get("name") or "").strip()
+    if kind not in _WORKLOAD_KINDS:
+        return {"code": 400, "message": f"不支持的工作负载类型 {kind}", "data": None}
+    yaml_content = (payload.get("yaml") or "").strip()
+    if not yaml_content:
+        return {"code": 400, "message": "yaml 必填", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, yaml_content)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "YAML 应用失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message", "已应用")}}
+
+
+@router.delete("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}")
+async def delete_workload(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_operator)):
+    """删除工作负载（deployment/statefulset/daemonset/cronjob/pod）（需操作员权限）"""
+    if kind not in _WORKLOAD_KINDS:
+        return {"code": 400, "message": f"不支持删除的类型 {kind}", "data": None}
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.delete_resource, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "删除失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message", "已删除")}}
+
+
 @router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/exec")
 async def exec_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict, user=Depends(require_operator)):
     """进入容器执行命令（只读白名单，需操作员权限）"""

@@ -1,7 +1,7 @@
 // 集群管理页：列表 + 添加（kubeconfig 上传落库）+ 健康检查 + 删除 + env_tag
 import { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, Upload, Space, Popconfirm, message, Select, Tag, Switch, Tooltip } from 'antd'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown } from 'antd'
+import { PlusOutlined, ReloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster } from '../services/api'
 import StatusTag from '../components/StatusTag'
@@ -112,14 +112,29 @@ export default function ClusterList() {
           { title: '版本', dataIndex: 'version' },
           { title: '创建时间', dataIndex: 'created_at' },
           {
-            title: '操作', render: (_, record) => (
-              <Space>
-                <Button size="small" onClick={() => handleHealthCheck(record.id)}>健康检查</Button>
-                <Button size="small" onClick={() => openEdit(record)}>编辑</Button>
-                <Popconfirm title="确认删除该集群？" onConfirm={async () => { await deleteCluster(record.id); load() }}>
-                  <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-                </Popconfirm>
-              </Space>
+            title: '操作', width: 70, render: (_, record) => (
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: [
+                    { key: 'health', label: '健康检查' },
+                    { key: 'edit', label: '编辑' },
+                    { type: 'divider' as const },
+                    { key: 'delete', label: '删除', danger: true },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === 'health') handleHealthCheck(record.id)
+                    else if (key === 'edit') openEdit(record)
+                    else if (key === 'delete') Modal.confirm({
+                      title: `确认删除集群「${record.name}」？`,
+                      okButtonProps: { danger: true },
+                      onOk: async () => { await deleteCluster(record.id); load() },
+                    })
+                  },
+                }}
+              >
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
             ),
           },
         ]}

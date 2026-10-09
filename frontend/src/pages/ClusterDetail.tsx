@@ -6,7 +6,7 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
@@ -16,6 +16,7 @@ import ConfigObjectDataModal from '../components/ConfigObjectDataModal'
 import ServiceSettingsModal from '../components/ServiceSettingsModal'
 import IngressSettingsModal from '../components/IngressSettingsModal'
 import PvcCreateModal from '../components/PvcCreateModal'
+import WorkloadCreateModal, { type WorkloadCreateTarget } from '../components/WorkloadCreateModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -99,6 +100,7 @@ export default function ClusterDetail() {
   const [svcObj, setSvcObj] = useState<ConfigObjectTarget | null>(null)
   const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
   const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)
+  const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
@@ -174,6 +176,16 @@ export default function ClusterDetail() {
       await deleteObject(Number(id), kind, ns, name)
       message.success('已删除')
       reloadMisc()
+    } catch {
+      message.error('删除失败')
+    }
+  }
+
+  const handleDeleteWorkload = async (kind: string, ns: string, name: string) => {
+    try {
+      await deleteWorkload(Number(id), kind, ns, name)
+      message.success('已删除')
+      load()
     } catch {
       message.error('删除失败')
     }
@@ -310,9 +322,22 @@ export default function ClusterDetail() {
     },
     { title: '更新时间', key: 'update_time', dataIndex: 'update_time', width: 180,
       render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
-    { title: '操作', key: 'actions', width: 90, render: (_: unknown, r: ResourceItem) => (
-      <Button size="small" type="link"
-        onClick={() => setWlYaml({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })}>YAML</Button>
+    { title: '操作', key: 'actions', width: 70, render: (_: unknown, r: ResourceItem) => (
+      <Dropdown trigger={['click']} menu={{ items: [
+        { key: 'yaml', label: '编辑 YAML' },
+        { type: 'divider' as const },
+        { key: 'delete', label: '删除', danger: true },
+      ], onClick: ({ key }) => {
+        if (key === 'yaml') setWlYaml({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })
+        else if (key === 'delete') Modal.confirm({
+          title: `删除 ${tabKind(r)} ${r.namespace}/${r.name}？`,
+          content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
+          okButtonProps: { danger: true },
+          onOk: () => handleDeleteWorkload(tabKind(r), r.namespace, r.name),
+        })
+      } }}>
+        <Button size="small" type="link"><MoreOutlined /></Button>
+      </Dropdown>
     ) },
   ]
 
@@ -358,14 +383,30 @@ export default function ClusterDetail() {
             { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
             { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
             { title: '资源（最小~最大）', render: (_: unknown, r: ResourceItem) => renderResources(r) || '-' },
-            { title: '操作', width: 290, render: (_: unknown, r: ResourceItem) => (
-              <Space size="small">
-                <Button size="small" type="link" onClick={() => setMetricsPod({ ...r, clusterId: Number(id) })}>监控</Button>
-                <Button size="small" type="link" onClick={() => setLogPod({ ...r, clusterId: Number(id) })}>日志</Button>
-                <Button size="small" type="link" onClick={() => setExecTarget({ ...r, clusterId: Number(id) })}>进容器</Button>
-                <Button size="small" type="link" onClick={() => setEventsPod({ ...r, clusterId: Number(id) })}>事件</Button>
-                <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId: Number(id) })}>YAML</Button>
-              </Space>
+            { title: '操作', width: 70, render: (_: unknown, r: ResourceItem) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'metrics', label: '监控' },
+                { key: 'logs', label: '日志' },
+                { key: 'exec', label: '进容器' },
+                { key: 'events', label: '事件' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                if (key === 'metrics') setMetricsPod({ ...r, clusterId: Number(id) })
+                else if (key === 'logs') setLogPod({ ...r, clusterId: Number(id) })
+                else if (key === 'exec') setExecTarget({ ...r, clusterId: Number(id) })
+                else if (key === 'events') setEventsPod({ ...r, clusterId: Number(id) })
+                else if (key === 'yaml') setYamlPod({ ...r, clusterId: Number(id) })
+                else if (key === 'delete') Modal.confirm({
+                  title: `删除容器组 ${r.namespace}/${r.name}？`,
+                  content: 'Pod 被控制器托管时会自动重建；裸 Pod 删除后不再恢复。',
+                  okButtonProps: { danger: true },
+                  onOk: () => handleDeleteWorkload('pod', r.namespace, r.name),
+                })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
             ) },
           ]}
           locale={{ emptyText: '无 Pod' }} />
@@ -384,6 +425,22 @@ export default function ClusterDetail() {
             ) },
             { title: '更新时间', dataIndex: 'update_time', width: 180,
               render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
+            { title: '操作', width: 70, render: (_: unknown, r: ResourceItem) => (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'yaml', label: '编辑 YAML' },
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ], onClick: ({ key }) => {
+                if (key === 'yaml') setWlYaml({ clusterId: Number(id), kind: 'cronjob', namespace: r.namespace, name: r.name })
+                else if (key === 'delete') Modal.confirm({
+                  title: `删除 cronjob ${r.namespace}/${r.name}？`,
+                  okButtonProps: { danger: true },
+                  onOk: () => handleDeleteWorkload('cronjob', r.namespace, r.name),
+                })
+              } }}>
+                <Button size="small" type="link"><MoreOutlined /></Button>
+              </Dropdown>
+            ) },
           ]}
           locale={{ emptyText: '无 CronJob' }} />
       ),
@@ -592,6 +649,10 @@ export default function ClusterDetail() {
           <Tabs activeKey={activeType} onChange={changeType} items={tabItems}
             tabBarExtraContent={(() => {
               const ns = activeNs === '_all_' ? 'default' : activeNs
+              if (activeType === 'deployments') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'deployment', namespace: ns })}>创建无状态</Button>
+              if (activeType === 'statefulsets') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'statefulset', namespace: ns })}>创建有状态</Button>
+              if (activeType === 'daemonsets') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'daemonset', namespace: ns })}>创建守护集</Button>
+              if (activeType === 'cronjobs') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'cronjob', namespace: ns })}>创建定时任务</Button>
               if (activeType === 'configmaps') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'configmap', namespace: ns, name: '', create: true })}>创建配置字典</Button>
               if (activeType === 'secrets') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'secret', namespace: ns, name: '', create: true })}>创建保密字典</Button>
               if (activeType === 'services') return <Button type="primary" size="small" onClick={() => setSvcObj({ clusterId: Number(id), kind: 'service', namespace: ns, name: '', create: true })}>创建服务</Button>
@@ -615,6 +676,7 @@ export default function ClusterDetail() {
       <IngressSettingsModal target={ingObj} onClose={() => setIngObj(null)} onSaved={reloadMisc} />
       <PvcCreateModal target={pvcObj} onClose={() => setPvcObj(null)} onSaved={reloadMisc} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
+      <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
     </div>
   )
