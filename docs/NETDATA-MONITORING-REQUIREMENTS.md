@@ -1,0 +1,268 @@
+# 集群监控接入 Netdata —— 需求文档
+
+> 状态：**草案（待老板评审）**
+> 日期：2026-10-09
+> 关联：`ARCHITECTURE.md`（监控复用原则）、`CLUSTER-MGMT-REQUIREMENTS.md`、`MIDDLEWARE-MONITORING.md`、`REQUIREMENTS-BACKLOG.md`
+> 决策人：老板
+
+---
+
+## 一、需求背景
+
+### 1.1 现状与痛点
+
+- **展示层弱**：集群管理页「监控」能力有限——Pod 指标曲线为自研采集（`k8s-executor/internal/metrics/collector.go`），**每分钟全量、仅 CPU/内存/网络三项、保留 3 天**；展示仅有单 Pod 抽屉曲线，**无节点级 / 集群级实时全景**。
+- **采集层重复造轮子**：`ARCHITECTURE.md` 已定原则「**监控指标复用现有 Prometheus，平台不自行采集存储监控数据**」，但实际自研了 `metrics/collector.go`（Pod 指标）+ `quota/collector.go`（配额快照）。
+- **根因**：**展示层弱 + 采集层重复**，是老板判断「自研监控做得不好」的核心。
+
+### 1.2 关键事实（澄清）
+
+| 问题 | 结论 |
+|---|---|
+| Netdata 的秒级监控是否基于平台 Prometheus？ | **否**。Netdata 自采集自存储（原生 collector + dbengine），与 Prometheus **无依赖**，可并存 |
+| Netdata 与平台 Prometheus 的关系 | 各自独立；K8s 场景 Netdata 读 **kubelet** 的 cadvisor 端点（kubelet 自带），**非**平台 Prometheus 服务器 |
+| 部署位置 | **装在被管的每个集群**（指标须在被监控机器上采）；AIOps 中心管控面自动下发 |
+| parent / child | 同一集群内**一起部署**（一份多文档 manifest）：child = DaemonSet(每节点) + parent = Deployment + PVC + Service |
+
+---
+
+## 二、老板拍板口径（2026-10-09）
+
+- **引入开源 Netdata 做「实时监控展示」**，把"监控"与"业务（告警/诊断/修复）"分层。
+- **告警不改**：告警继续走平台自己的（K8s 事件 watcher + Prometheus 指标告警 + DB 告警）；Netdata 只做"看"。
+- **Netdata 定位为纯监控面板**（采集 + 展示），**不参与告警**。
+- **parent 使用 PVC**（持久化，重启不丢历史；使用**集群默认 StorageClass**）。
+- **Netdata 版本**：开源 **stable**（镜像 `netdata/netdata:stable`）。
+- **镜像来源**：**Docker Hub**（`netdata/netdata`）。
+- **stream key**：每集群随机生成，**平台加密留档**（同 kubeconfig，AES-256-GCM）+ 写入目标集群 ConfigMap。
+
+---
+
+## 三、目标与范围
+
+### 3.1 目标
+
+1. **接入即自动部署**：集群接入 AIOps 后，**自动**向该集群下发 Netdata（parent + child），无需手动操作。
+2. **按集群展示**：集群管理页提供**各集群独立**的监控入口，iframe 内嵌该集群实时监控；用户无需跳出平台、无需多套登录。
+3. **监控与告警分离**：Netdata 只展示；告警 100% 保留平台自研。
+
+### 3.2 范围（明确不做）
+
+- ❌ **不改告警链路**（watcher / resource_alert / db_alert 全部不动）。
+- ❌ **不做数据融合**（不把 Netdata 指标拉回平台自己的库 / 图 / 告警引擎）。
+- ❌ **不替换 DB 监控**（`db_collector` 慢SQL/锁/表空间为业务诊断数据，保留）。
+- ❌ **不替换配额/工作负载快照**（`quota/collector`，为"业务视角"，保留）。
+- ❌ **`pod_metrics` 自研采集暂不删除**（见 §七 评估项 1）。
+
+---
+
+## 四、需求详细
+
+### R1 集群接入自动下发 Netdata
+
+- **触发点**：`POST /api/v1/clusters` 成功（health-check 通过）后，**异步**下发（不阻塞接入流程）。
+- **复用现有模式**：mirror `rbac_service.setup_cluster_rbac()` 的「接入即自举」。
+- **下发内容**（目标集群，命名空间 `apiops-monitoring`）：
+
+| 组件 | 说明 |
+|---|---|
+| parent | Deployment(1 副本) + **PVC(持久化 dbengine)** + Service(**ClusterIP**) |
+| child | DaemonSet(每节点；hostNetwork/hostPID + 宿主机挂载) |
+| RBAC | ServiceAccount + ClusterRole + ClusterRoleBinding |
+| ConfigMap | stream 配置（parent 接收 key + child 目标） |
+
+- **失败处理**：不阻塞集群接入；结果写入 `clusters.monitoring_status`，前端可见，支持手动重试。
+
+### R2 存量集群补装
+
+- `POST /clusters/{id}/health-check` 成功且未部署监控 → **自动补装**。
+- 新增手动端点 `POST /clusters/{id}/setup-monitoring`（mirror `setup-rbac`）。
+
+### R3 集群管理页监控入口
+
+- 集群列表/详情：`monitoring_enabled = true` 时显示「监控」按钮；部署中/失败显示状态。
+- 点击 → iframe 打开该集群监控（**平台内**，不跳出）。
+
+### R4 监控展示（平台内）
+
+- 后端反代：新增路由 `GET /api/v1/clusters/{id}/monitoring/*`。
+- 链路：**AIOps 后端 → apiserver Service Proxy（复用 `prometheus/proxy.go` 手法）→ 目标集群 `netdata-parent:19999`**。
+- 好处：parent 仅 ClusterIP，**不出网、无需 Ingress、无需打通跨环境网络**；鉴权统一在 AIOps。
+
+### R5 幂等 / 升级 / 卸载
+
+- **幂等**：executor 用 **server-side apply**，重复下发不报错。
+- **升级**：改镜像 tag / 留存天数 → 重跑 setup-monitoring。
+- **卸载**：`delete_cluster` 时删除 Netdata 命名空间（mirror `stop_watch`）。
+
+---
+
+## 五、技术方案
+
+### 5.1 数据模型（1 条 alembic 迁移）
+
+`clusters` 表新增：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| monitoring_enabled | bool (default false) | 是否已部署 |
+| monitoring_status | varchar(255) | 部署结果/错误（mirror `rbac_status`） |
+| monitoring_url | varchar(255) | 平台侧反代逻辑路径 |
+| monitoring_ns | varchar(64) | 部署命名空间（默认 `apiops-monitoring`） |
+| parent_storage_size | varchar(16) | parent PVC 容量（默认 `20Gi`，集群默认 SC） |
+| monitoring_retention_days | int | parent 留存天数（默认 7） |
+| stream_key_encrypted | text | stream API key 密文（AES-256-GCM；**平台留档**，同 kubeconfig） |
+
+### 5.2 平台服务（api-server）
+
+| 文件 | 改动 |
+|---|---|
+| **新增** `services/monitoring_service.py` | mirror `rbac_service.py`：`setup_cluster_monitoring()` / `teardown_cluster_monitoring()` |
+| `clients/executor_client.py` | 加 `setup_monitoring` / `teardown_monitoring` |
+| `api/clusters.py` | create_cluster 末尾异步触发；health-check 自动补；新增 `setup-monitoring` 端点 |
+| **新增** `api/monitoring.py` | 反代路由（也可并入 clusters 路由） |
+
+### 5.3 executor 新增 RPC
+
+```proto
+rpc SetupMonitoring(SetupMonitoringRequest) returns (SetupMonitoringResponse);
+rpc TeardownMonitoring(TeardownMonitoringRequest) returns (TeardownMonitoringResponse);
+
+message SetupMonitoringRequest {
+  int64  cluster_id     = 1;
+  string namespace      = 2;   // 默认 apiops-monitoring
+  int32  retention_days = 3;   // 默认 7
+  string storage_size   = 4;   // 默认 20Gi
+  string trace_id       = 5;
+}
+message SetupMonitoringResponse {
+  bool   success         = 1;
+  string parent_endpoint = 2;  // netdata-parent.apiops-monitoring.svc:19999
+  string error           = 3;
+}
+```
+
+- **Go 实现**：`dynamic.Interface` + `unstructured` + `types.ApplyPatchType`（**server-side apply**）下发多文档 manifest，天然幂等。
+
+### 5.4 Netdata manifest（骨架，参数化）
+
+> ⚠️ 落地前须对照所用 `netdata/netdata` 版本核验：stream 配置机制（env vs `stream.conf`）、容器运行时 socket 路径（docker vs containerd）。
+
+组件清单（全部落入命名空间 `apiops-monitoring`）：
+
+1. **Namespace** `apiops-monitoring`
+2. **ServiceAccount** `netdata`
+3. **ClusterRole** `apiops-netdata`（nodes/pods/services/... get·list·watch；nonResourceURL `/metrics`）
+4. **ClusterRoleBinding** `apiops-netdata`
+5. **ConfigMap** `netdata-stream`（`parent-stream.conf` 接收 key / `child-stream.conf` 目标+key）
+6. **PVC** `netdata-parent-data`（20Gi，集群默认 SC）
+7. **Deployment** `netdata-parent`（replicas=1；挂 PVC + `stream.conf`；`NETDATA_DISABLE_TELEMETRY=1`）
+8. **Service** `netdata-parent`（ClusterIP:19999）
+9. **DaemonSet** `netdata-child`（hostNetwork/hostPID；挂 `/proc` `/sys` `/sys/fs/cgroup` `/etc/os-release` `/var/run/docker.sock`；流式发 parent）
+
+关键片段（示意）：
+
+```yaml
+# parent（聚合 + 存储 + UI）
+kind: Deployment
+metadata: {name: netdata-parent, namespace: apiops-monitoring}
+spec:
+  replicas: 1
+  template:
+    spec:
+      serviceAccountName: netdata
+      containers:
+      - name: netdata
+        image: netdata/netdata:stable
+        args: ["-D"]
+        env: [{name: NETDATA_DISABLE_TELEMETRY, value: "1"}]
+        volumeMounts:
+        - {name: data,   mountPath: /var/lib/netdata}
+        - {name: stream, mountPath: /etc/netdata/stream.conf, subPath: parent-stream.conf}
+      volumes:
+      - {name: data,   persistentVolumeClaim: {claimName: netdata-parent-data}}
+      - {name: stream, configMap: {name: netdata-stream}}
+---
+# child（每节点，采宿主机级）
+kind: DaemonSet
+metadata: {name: netdata-child, namespace: apiops-monitoring}
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      hostPID: true
+      tolerations: [{operator: Exists}]
+      containers:
+      - name: netdata
+        image: netdata/netdata:stable
+        args: ["-D"]
+        securityContext: {capabilities: {add: ["SYS_PTRACE","SYS_ADMIN"]}}
+        volumeMounts:
+        - {name: proc,   mountPath: /host/proc, readOnly: true}
+        - {name: sys,    mountPath: /host/sys,  readOnly: true}
+        - {name: cgroup, mountPath: /host/sys/fs/cgroup, readOnly: true}
+        - {name: stream, mountPath: /etc/netdata/stream.conf, subPath: child-stream.conf}
+```
+
+### 5.5 前端
+
+- 集群管理页（`ClusterDetail` / 集群列表）：监控入口按钮 + 部署状态 + iframe 容器。
+- `services/api.ts`：新增监控相关调用。
+
+---
+
+## 六、访问与安全
+
+- parent **只开 ClusterIP**；仅经 AIOps 后端反代访问。
+- 鉴权走平台现有登录/权限（复用集群读权限）。
+- 关闭 Netdata 自带告警与云端遥测（`NETDATA_DISABLE_TELEMETRY=1`，不 claim 云，纯自建）。
+- **stream API key** 每集群随机生成，**平台加密留档**（`clusters.stream_key_encrypted`，AES-256-GCM，同 kubeconfig）+ 写入目标集群 ConfigMap。
+
+---
+
+## 七、评估项 / 开放问题
+
+### 已拍板（2026-10-09 老板确认）
+
+| 项 | 决定 |
+|---|---|
+| parent PVC 存储类 | **集群默认 StorageClass** |
+| Netdata 版本 | **开源 stable**（`netdata/netdata:stable`） |
+| 镜像来源 | **Docker Hub**（`netdata/netdata`） |
+| stream key 留档 | **平台加密留档**（`clusters.stream_key_encrypted`，AES-256-GCM）+ 写目标集群 ConfigMap |
+
+### 待评估（实现期确认，非老板决策）
+
+1. **`pod_metrics` 是否随展示切换下线？ → 暂不。**
+   核实：它仍被 ① **AI 诊断工具** `get_pod_metrics`（`services/tool_registry.py`）；② **仪表盘** CPU/内存汇总（`api/stats.py`）消费。故**保留**；待展示全面切 Netdata 后再评估收敛。
+2. **多容器运行时**：DaemonSet hostPath socket（`docker.sock` vs `containerd.sock`）按环境适配——实现期按目标集群运行时探测。
+
+---
+
+## 八、验收标准
+
+1. 新接入一个集群 → **无需手动操作**，目标集群出现 `apiops-monitoring` 命名空间，parent/child 就绪。
+2. 集群管理页该集群出现「监控」入口，点开可见该集群**秒级实时监控**（节点/容器全景）。
+3. 卸载集群 → Netdata 资源一并清理。
+4. **告警链路零变化**：接入 Netdata 前后，平台告警行为完全一致（回归验证）。
+5. **幂等**：重复下发不产生重复资源/报错。
+
+---
+
+## 九、分期建议
+
+| 期 | 内容 |
+|---|---|
+| **P1** | manifest + executor RPC + 自动下发 + 展示入口（核心闭环） |
+| **P2** | 存量集群补装 + 卸载 + 升级 |
+| **P3** | 独立 DB 实例 Netdata 总览（可选补充） |
+
+---
+
+## 附：部署要点（勿踩坑）
+
+1. **parent 必须 PVC**：否则 pod 重启历史数据全丢。
+2. **child 必须挂宿主机路径**（`/proc` `/sys` `/cgroup` socket）：不挂看不到宿主机级细节，等于白装。
+3. **每集群一套**：parent + child 同集群内一起部署（一份 manifest，一次 apply）。
+4. **别把 Netdata manifest 塞进平台自己的 `k8s/`**：`k8s/` 是部署 AIOps 自己的；Netdata 是"下发到被管集群的模板"，应独立（内嵌 executor 或用 `k8s/templates/`）。
+5. **UI 必须加鉴权**：Netdata UI 默认无认证，切勿裸奔到集群外。

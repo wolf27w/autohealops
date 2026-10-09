@@ -492,3 +492,22 @@
 - 待办账本核对：RAG 向量索引 / CI-CD+日志归档 早在 09-12 已完成（本文件历史条目过期）。
 - 数据回填：2 条孤儿 ticketed 告警（#603/#604）→ resolved。
 - CI 全绿；四服务已重启。提交 ee58a5f / 031dc2f / 4823f3c / 3ae4eaa。
+
+---
+
+## 2026-10-09 新增需求：集群监控接入 Netdata（草案，待老板评审）
+
+| # | 需求 | 状态 |
+|---|---|---|
+| 1 | **监控/告警分离**：引入开源 Netdata 做「实时监控展示」，告警继续走平台自研（watcher + Prometheus 指标 + DB 告警，全不动） | 📝 草案 |
+| 2 | **接入即自动下发**：集群接入 AIOps 后自动向该集群下发 Netdata（parent+child），mirror `rbac_service` 自举模式 | 📝 草案 |
+| 3 | **按集群展示**：集群管理页各集群独立监控入口，iframe 内嵌（后端反代走 apiserver Service Proxy） | 📝 草案 |
+| 4 | **parent 用 PVC**；parent+child 同集群一起部署（一份多文档 manifest） | 📝 草案 |
+| 5 | **幂等/升级/卸载**：executor server-side apply；卸载随集群删除 | 📝 草案 |
+
+关键澄清：
+- Netdata **不依赖**平台 Prometheus（自采集自存储）；K8s 场景读 kubelet cadvisor 端点。
+- 部署位置：**装在每个被管集群**（物理分开），**动作由 AIOps 自动下发**（体验一起）。
+- **不做数据融合**、**不替换 DB 监控/配额快照**；`pod_metrics` **暂不删除**（仍被 AI 诊断工具 `get_pod_metrics` + 仪表盘消费）。
+
+详见：**`docs/NETDATA-MONITORING-REQUIREMENTS.md`**
