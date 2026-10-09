@@ -655,46 +655,48 @@ export default function ClusterDetail() {
       </div>
 
       <Card size="small">
-        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span>命名空间：</span>
-          <Select
-            style={{ width: 260 }}
-            value={activeNs}
-            onChange={(v) => {
-              const val = (v as string) || '_all_'
-              setActiveNs(val)
-              try { localStorage.setItem(`cluster_ns:${id}`, val) } catch { /* ignore */ }
-              const next = new URLSearchParams(searchParams)
-              if (val && val !== '_all_') next.set('ns', val)
-              else next.delete('ns')
-              setSearchParams(next, { replace: true })
-            }}
-            showSearch
-            optionFilterProp="label"
-            options={[
-              { value: '_all_', label: '全部命名空间' },
-              ...namespaces.map((n) => ({ value: n.namespace, label: n.namespace })),
-            ]}
-          />
-        </div>
-
         {namespaces.length === 0 ? (
           <Empty description="暂无数据，请先触发采集或添加集群" />
         ) : (
           <Tabs activeKey={groupOfType(activeType)} onChange={(k) => changeType(GROUPS.find((g) => g.key === k)!.types[0])} items={tabItems}
-            tabBarExtraContent={(() => {
-              const ns = activeNs === '_all_' ? 'default' : activeNs
-              if (activeType === 'deployments') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'deployment', namespace: ns })}>创建无状态</Button>
-              if (activeType === 'statefulsets') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'statefulset', namespace: ns })}>创建有状态</Button>
-              if (activeType === 'daemonsets') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'daemonset', namespace: ns })}>创建守护集</Button>
-              if (activeType === 'cronjobs') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'cronjob', namespace: ns })}>创建定时任务</Button>
-              if (activeType === 'configmaps') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'configmap', namespace: ns, name: '', create: true })}>创建配置字典</Button>
-              if (activeType === 'secrets') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'secret', namespace: ns, name: '', create: true })}>创建保密字典</Button>
-              if (activeType === 'services') return <Button type="primary" size="small" onClick={() => setSvcObj({ clusterId: Number(id), kind: 'service', namespace: ns, name: '', create: true })}>创建服务</Button>
-              if (activeType === 'ingresses') return <Button type="primary" size="small" onClick={() => setIngObj({ clusterId: Number(id), kind: 'ingress', namespace: ns, name: '', create: true })}>创建路由</Button>
-              if (activeType === 'pvcs') return <Button type="primary" size="small" onClick={() => setPvcObj({ clusterId: Number(id), kind: 'pvc', namespace: ns, name: '', create: true })}>创建存储</Button>
-              return undefined
-            })()} />
+            tabBarExtraContent={(
+              <Space size={8}>
+                <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
+                <Select
+                  size="small"
+                  style={{ width: 190 }}
+                  value={activeNs}
+                  onChange={(v) => {
+                    const val = (v as string) || '_all_'
+                    setActiveNs(val)
+                    try { localStorage.setItem(`cluster_ns:${id}`, val) } catch { /* ignore */ }
+                    const next = new URLSearchParams(searchParams)
+                    if (val && val !== '_all_') next.set('ns', val)
+                    else next.delete('ns')
+                    setSearchParams(next, { replace: true })
+                  }}
+                  showSearch
+                  optionFilterProp="label"
+                  options={[
+                    { value: '_all_', label: '全部命名空间' },
+                    ...namespaces.map((n) => ({ value: n.namespace, label: n.namespace })),
+                  ]}
+                />
+                {(() => {
+                  const ns = activeNs === '_all_' ? 'default' : activeNs
+                  if (activeType === 'deployments') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'deployment', namespace: ns })}>创建无状态</Button>
+                  if (activeType === 'statefulsets') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'statefulset', namespace: ns })}>创建有状态</Button>
+                  if (activeType === 'daemonsets') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'daemonset', namespace: ns })}>创建守护集</Button>
+                  if (activeType === 'cronjobs') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'cronjob', namespace: ns })}>创建定时任务</Button>
+                  if (activeType === 'configmaps') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'configmap', namespace: ns, name: '', create: true })}>创建配置字典</Button>
+                  if (activeType === 'secrets') return <Button type="primary" size="small" onClick={() => setDataObj({ clusterId: Number(id), kind: 'secret', namespace: ns, name: '', create: true })}>创建保密字典</Button>
+                  if (activeType === 'services') return <Button type="primary" size="small" onClick={() => setSvcObj({ clusterId: Number(id), kind: 'service', namespace: ns, name: '', create: true })}>创建服务</Button>
+                  if (activeType === 'ingresses') return <Button type="primary" size="small" onClick={() => setIngObj({ clusterId: Number(id), kind: 'ingress', namespace: ns, name: '', create: true })}>创建路由</Button>
+                  if (activeType === 'pvcs') return <Button type="primary" size="small" onClick={() => setPvcObj({ clusterId: Number(id), kind: 'pvc', namespace: ns, name: '', create: true })}>创建存储</Button>
+                  return undefined
+                })()}
+              </Space>
+            )} />
         )}
       </Card>
 
