@@ -1,6 +1,6 @@
 // 集群详情页：命名空间下拉 + 工作负载类型 Tab 左右切换（无状态/有状态/守护集/定时任务/容器组）
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
 import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
@@ -341,7 +341,7 @@ export default function ClusterDetail() {
     ) },
   ]
 
-  const tabItems = [
+  const typeTabItems = [
     {
       key: 'deployments',
       label: '无状态',
@@ -610,6 +610,40 @@ export default function ClusterDetail() {
     },
   ]
 
+  // 表格按类型索引（用于分组标签页内切换）
+  const tableByType: Record<string, ReactNode> = {}
+  for (const t of typeTabItems) tableByType[String(t.key)] = t.children
+  const keyOfType = (t: string) => (t === 'pods' ? 'pods-group' : t)
+
+  // 标签页分组：10 个类型 → 6 个标签（工作负载/容器组/定时任务/网络/配置/存储），降低密集度
+  const GROUPS = [
+    { key: 'workloads', label: '工作负载', types: ['deployments', 'statefulsets', 'daemonsets'], names: { deployments: '无状态', statefulsets: '有状态', daemonsets: '守护集' } as Record<string, string> },
+    { key: 'pods', label: '容器组', types: ['pods'] },
+    { key: 'cronjobs', label: '定时任务', types: ['cronjobs'] },
+    { key: 'network', label: '网络', types: ['services', 'ingresses'], names: { services: '服务', ingresses: '路由' } as Record<string, string> },
+    { key: 'config', label: '配置', types: ['configmaps', 'secrets'], names: { configmaps: '配置字典', secrets: '保密字典' } as Record<string, string> },
+    { key: 'storage', label: '存储', types: ['pvcs'] },
+  ]
+  const groupOfType = (t: string) => GROUPS.find((g) => g.types.includes(t))?.key || 'workloads'
+  const tabItems = GROUPS.map((g) => ({
+    key: g.key,
+    label: g.label,
+    children: (
+      <div>
+        {g.types.length > 1 && (
+          <Segmented
+            size="small"
+            value={activeType}
+            onChange={(v) => changeType(String(v))}
+            options={g.types.map((t) => ({ value: t, label: g.names?.[t] ?? t }))}
+            style={{ marginBottom: 14 }}
+          />
+        )}
+        {tableByType[keyOfType(g.types.includes(activeType) ? activeType : g.types[0])]}
+      </div>
+    ),
+  }))
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
@@ -646,7 +680,7 @@ export default function ClusterDetail() {
         {namespaces.length === 0 ? (
           <Empty description="暂无数据，请先触发采集或添加集群" />
         ) : (
-          <Tabs activeKey={activeType} onChange={changeType} items={tabItems}
+          <Tabs activeKey={groupOfType(activeType)} onChange={(k) => changeType(GROUPS.find((g) => g.key === k)!.types[0])} items={tabItems}
             tabBarExtraContent={(() => {
               const ns = activeNs === '_all_' ? 'default' : activeNs
               if (activeType === 'deployments') return <Button type="primary" size="small" onClick={() => setWlCreate({ clusterId: Number(id), kind: 'deployment', namespace: ns })}>创建无状态</Button>
