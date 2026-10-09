@@ -150,6 +150,12 @@ async def resolve_alert(alert_id: int, user=Depends(require_operator)):
         a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         a.resolved_by = user.username if user else ""
         await session.commit()
+    # 人工确认解决 → 发「已解决」通知（闭环，失败不影响解决结果）
+    from app.services.notification_service import send_recovery_notification
+    try:
+        await send_recovery_notification(a, title="已解决")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("人工解决告警 %d 通知失败: %s", alert_id, e)
     return {"code": 200, "message": "success", "data": None}
 
 
@@ -172,6 +178,13 @@ async def manual_resolve(alert_id: int, payload: dict, user=Depends(require_oper
         a.message = a.message + f"（人工解决：{resolution[:100]}）"
         await session.commit()
         fault_type = a.fault_type
+
+    # 人工解决 → 发「已解决」通知（闭环，失败不影响解决结果）
+    from app.services.notification_service import send_recovery_notification
+    try:
+        await send_recovery_notification(a, title="已解决")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("人工解决告警 %d 通知失败: %s", alert_id, e)
 
     # 沉淀知识库（人工解决方法）
     from app.services import knowledge_service
@@ -204,6 +217,14 @@ async def batch_resolve(payload: dict, user=Depends(require_operator)):
         await session.commit()
         # 去重故障类型，避免同类型多条告警重复沉淀
         fault_types = sorted({a.fault_type for a in alerts})
+
+    # 批量人工解决 → 逐条发「已解决」通知（闭环，失败不影响解决结果）
+    from app.services.notification_service import send_recovery_notification
+    for a in alerts:
+        try:
+            await send_recovery_notification(a, title="已解决")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("批量解决告警 %d 通知失败: %s", a.id, e)
 
     # 沉淀知识库（处理方式落到知识库，按故障类型各沉淀一条）
     from app.services import knowledge_service

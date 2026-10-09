@@ -761,13 +761,13 @@ async def send_repair_complete_notification(alert: Alert | None, verdict: str) -
         await _send_webhook_with_retry(c, content, alert.id if alert else None)
 
 
-def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str) -> str:
-    """渲染「已恢复」通知内容（与告警通知同风格，形成「告警→恢复」闭环）"""
+def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str, title: str = "已恢复") -> str:
+    """渲染「已恢复/已解决」通知内容（与告警通知同风格，形成「告警→恢复/解决」闭环）"""
     proj = f"项目: {project_name}\n" if project_name else ""
     cluster = cluster_name or str(alert.cluster_id or "-")
     resolved = alert.resolved_at or "-"
     return (
-        f"【API-OPS 已恢复】\n"
+        f"【API-OPS {title}】\n"
         f"{proj}"
         f"集群: {cluster}\n"
         f"资源: {alert.resource_type}/{alert.resource_name}\n"
@@ -779,12 +779,13 @@ def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str)
     )
 
 
-async def send_recovery_notification(alert: Alert) -> None:
-    """告警恢复通知：故障恢复/解决后，通知原告警接收方，形成「告警→恢复」闭环。
+async def send_recovery_notification(alert: Alert, title: str = "已恢复") -> None:
+    """告警恢复/解决通知：故障恢复或人工解决后，通知原告警接收方，形成闭环。
 
+    title：自动恢复用「已恢复」（默认），人工解决用「已解决」。
     路由与告警通知一致（项目组群 → scene 兜底），但**不经过**分级 / 限频 / 风暴抑制
     （恢复是收敛信号，只发一次，不能像告警那样被抑制）；仍尊重静默 / 维护窗口。
-    由「非 AI 自动恢复」路径调用（资源指标回落、恢复收敛扫描、节点恢复等）；
+    由「非 AI 自动恢复」路径（资源指标回落、恢复收敛扫描、节点恢复）与「人工解决」路径调用；
     AI 自动修复成功的场景走 send_repair_complete_notification，与本函数互补。
     """
     if not alert or not alert.id:
@@ -801,7 +802,7 @@ async def send_recovery_notification(alert: Alert) -> None:
     project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
     if project_cfg and _source_match(project_cfg, alert.resource_type):
         await _send_webhook_with_retry(
-            project_cfg, _render_recovery_content(alert, project_name, cluster_name),
+            project_cfg, _render_recovery_content(alert, project_name, cluster_name, title),
             alert.id, receiver=f"项目:{project_name}",
         )
         return
@@ -809,4 +810,4 @@ async def send_recovery_notification(alert: Alert) -> None:
     for c in configs:
         if not _ns_match(c, alert.namespace) or not _source_match(c, alert.resource_type):
             continue
-        await _send_webhook_with_retry(c, _render_recovery_content(alert, project_name, cluster_name), alert.id)
+        await _send_webhook_with_retry(c, _render_recovery_content(alert, project_name, cluster_name, title), alert.id)
