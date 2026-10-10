@@ -8,7 +8,7 @@ import {
   getProjectDBs, addProjectDB, deleteProjectDB,
   getProjectUsers, addProjectUsers, deleteProjectUser,
   getClusters, getClusterNamespaces, getDBConnections, getUsers,
-  getNotificationConfigs,
+  getNotificationConfigs, getApprovalFlows,
 } from '../services/api'
 import type { Cluster, DBConnection, NotificationConfig, User } from '../types'
 
@@ -20,6 +20,7 @@ interface Project {
   db_count?: number
   user_count?: number
   notify_config_id?: number | null
+  approval_flow_id?: number | null
   [key: string]: unknown
 }
 
@@ -44,6 +45,7 @@ interface ProjectUser {
 export default function ProjectManagement() {
   const [projects, setProjects] = useState<Project[]>([])
   const [alertConfigs, setAlertConfigs] = useState<NotificationConfig[]>([])  // 告警机器人配置（项目组群候选）
+  const [approvalFlows, setApprovalFlows] = useState<{ id: number; name: string; is_active?: boolean }[]>([])  // 审批流程候选
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
   const [detail, setDetail] = useState<Project | null>(null)
@@ -53,6 +55,7 @@ export default function ProjectManagement() {
     getProjects().then((d) => setProjects((d || []) as Project[]))
     getNotificationConfigs().then((d) =>
       setAlertConfigs((d || []).filter((c) => c.scene === 'alert' || c.scene === 'both')))
+    getApprovalFlows().then((d) => setApprovalFlows((d || []) as { id: number; name: string; is_active?: boolean }[]))
   }
   useEffect(() => { load() }, [])
 
@@ -90,6 +93,11 @@ export default function ProjectManagement() {
                 const cfg = alertConfigs.find((c) => c.id === v)
                 return v ? <Tag color="blue">{cfg?.name || `配置#${v}`}</Tag> : <span style={{ color: '#999' }}>未配置</span>
               } },
+            { title: '审批流程', dataIndex: 'approval_flow_id', width: 150,
+              render: (v) => {
+                const f = approvalFlows.find((x) => x.id === v)
+                return v ? <Tag color="green">{f?.name || `流程#${v}`}</Tag> : <span style={{ color: '#999' }}>默认流程</span>
+              } },
             { title: '操作', width: 250, render: (_, r) => (
               <Space>
                 <Button size="small" type="primary" icon={<ClusterOutlined />} onClick={() => setDetail(r)}>资源与授权</Button>
@@ -110,6 +118,11 @@ export default function ProjectManagement() {
             tooltip="该项目 namespace 下的告警发送到此群。需先在「通知配置」添加用途为「告警机器人」的渠道。">
             <Select allowClear placeholder="选择项目组群（不选=告警走默认群）"
               options={alertConfigs.map((c) => ({ value: c.id, label: `${c.name}（${c.channel_type}）` }))} />
+          </Form.Item>
+          <Form.Item name="approval_flow_id" label="审批流程"
+            tooltip="该项目 namespace 下的告警审批走此流程；不选=走全局默认流程。">
+            <Select allowClear placeholder="选择审批流程（不选=默认流程）"
+              options={approvalFlows.filter((f) => f.is_active !== false).map((f) => ({ value: f.id, label: f.name }))} />
           </Form.Item>
         </Form>
       </Modal>
@@ -175,7 +188,7 @@ export function ClusterNSTab({ projectId }: { projectId: number }) {
 }
 
 // ============ 数据库实例 Tab ============
-function DBTab({ projectId }: { projectId: number }) {
+export function DBTab({ projectId }: { projectId: number }) {
   const [items, setItems] = useState<ProjectDB[]>([])
   const [conns, setConns] = useState<DBConnection[]>([])
   const [connId, setConnId] = useState<number>()

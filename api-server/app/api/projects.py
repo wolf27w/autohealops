@@ -26,6 +26,7 @@ def _project_dict(p: Project, cluster_ns_count: int = 0, db_count: int = 0, user
     return {
         "id": p.id, "name": p.name, "description": p.description,
         "notify_config_id": p.notify_config_id,
+        "approval_flow_id": p.approval_flow_id,
         "cluster_ns_count": cluster_ns_count, "db_count": db_count, "user_count": user_count,
         "created_at": str(p.created_at),
     }
@@ -78,7 +79,8 @@ async def create_project(payload: dict, user=Depends(require_admin)):
         if exists:
             return {"code": 400, "message": "项目已存在", "data": None}
         p = Project(name=name, description=payload.get("description", ""), created_by=user.id,
-                    notify_config_id=payload.get("notify_config_id"))
+                    notify_config_id=payload.get("notify_config_id"),
+                    approval_flow_id=payload.get("approval_flow_id"))
         session.add(p)
         await session.commit()
         await session.refresh(p)
@@ -97,6 +99,8 @@ async def update_project(project_id: int, payload: dict, user=Depends(require_ad
             p.description = payload["description"]
         if "notify_config_id" in payload:
             p.notify_config_id = payload["notify_config_id"] or None
+        if "approval_flow_id" in payload:
+            p.approval_flow_id = payload["approval_flow_id"] or None
         await session.commit()
         await session.refresh(p)
     return {"code": 200, "message": "success", "data": _project_dict(p)}

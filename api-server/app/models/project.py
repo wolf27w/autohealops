@@ -23,6 +23,8 @@ class Project(Base):
     description: Mapped[str] = mapped_column(String(500), default="")
     # 项目组群通知配置（指向 notification_configs，告警按项目路由到项目组群）
     notify_config_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 项目绑定的审批流程（指向 approval_flows；告警审批按项目走各自流程，对称 notify_config_id）
+    approval_flow_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_by: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

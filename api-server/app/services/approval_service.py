@@ -16,7 +16,7 @@ from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import redis_pool
 from app.core.security import generate_trace_id
-from app.models import AIDiagnosisResult, Alert, Approval, ApprovalFlow, RepairPlan, User
+from app.models import AIDiagnosisResult, Alert, Approval, ApprovalFlow, Project, ProjectClusterNS, RepairPlan, User
 from app.services import audit_service, knowledge_service, notification_service
 
 logger = get_logger("api-server.approval")
@@ -25,8 +25,46 @@ logger = get_logger("api-server.approval")
 
 # ============ 流程加载与展开 ============
 
-async def _load_default_flow() -> ApprovalFlow | None:
-    """加载启用中的默认流程；无则回退到首个启用流程；再没有则用内置节点构造临时流程"""
+async def _resolve_project_approval_flow(cluster_id: int | None, namespace: str | None) -> ApprovalFlow | None:
+    """按 (cluster_id, namespace) 反查项目 → 项目绑定的审批流程（对称通知路由）。
+
+    返回启用的流程；无归属项目 / 项目未绑定 / 流程未启用 → None（回退默认流程）。
+    """
+    if not cluster_id or not namespace:
+        return None
+    async with async_session() as session:
+        result = await session.execute(
+            select(Project)
+            .join(ProjectClusterNS, ProjectClusterNS.project_id == Project.id)
+            .where(
+                ProjectClusterNS.cluster_id == cluster_id,
+                ProjectClusterNS.namespace == namespace,
+                Project.approval_flow_id.is_not(None),
+            )
+        )
+        project = result.scalars().first()
+        if not project or not project.approval_flow_id:
+            return None
+        flow = (await session.execute(
+            select(ApprovalFlow).where(
+                ApprovalFlow.id == project.approval_flow_id,
+                ApprovalFlow.is_active.is_(True),
+            )
+        )).scalars().first()
+    return flow
+
+
+async def _load_default_flow(cluster_id: int | None = None, namespace: str | None = None) -> ApprovalFlow | None:
+    """加载审批流程：优先按项目绑定（cluster+namespace 反查项目）；否则全局默认。
+
+    项目级优先——对称通知路由（项目挂 approval_flow_id）。
+    回退：启用中的默认流程 → 首个启用流程 → 内置节点临时流程。
+    """
+    # 1) 项目级审批流程
+    project_flow = await _resolve_project_approval_flow(cluster_id, namespace)
+    if project_flow:
+        return project_flow
+    # 2) 全局默认流程
     async with async_session() as session:
         result = await session.execute(
             select(ApprovalFlow).where(ApprovalFlow.is_active.is_(True)).order_by(ApprovalFlow.is_default.desc(), ApprovalFlow.id)
@@ -319,7 +357,14 @@ async def create_approval(plan_id: int, decision_level: int, current_user=None, 
         flow_id = None
         flow_name = "dual_approval"
     else:
-        flow = await _load_default_flow()
+        # 项目级审批：按告警的 cluster+namespace 反查项目绑定的流程（对称通知路由）
+        _cluster_id = _namespace = None
+        if alert_id:
+            async with async_session() as session:
+                _alert = await session.get(Alert, alert_id)
+                if _alert:
+                    _cluster_id, _namespace = _alert.cluster_id, _alert.namespace
+        flow = await _load_default_flow(_cluster_id, _namespace)
         flow_nodes, approvers, duty_users = await _expand_flow(flow, decision_level, current_user)
         flow_id = flow.id if flow.id else None
         flow_name = flow.name
