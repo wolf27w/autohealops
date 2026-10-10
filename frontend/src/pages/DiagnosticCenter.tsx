@@ -155,6 +155,7 @@ function DBConnections() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [form] = Form.useForm()
 
   const load = () => getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
@@ -169,6 +170,7 @@ function DBConnections() {
   const openModal = (c?: DBConnection) => {
     setEditing(c || null)
     setModalOpen(true)
+    setShowAdvanced(!!(c?.readonly_username))
     if (c) {
       form.setFieldsValue({ ...c, password: '' })
     } else {
@@ -283,11 +285,18 @@ function DBConnections() {
           <Form.Item name="password" label={editing ? '密码（留空=不修改）' : '密码'} rules={editing ? [] : [{ required: true }]}>
             <Input.Password />
           </Form.Item>
-          <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>独立只读诊断账号（最小权限：查系统视图/performance_schema，诊断与采集统一用它）：</div>
-          <Form.Item name="readonly_username" label="只读账号"><Input placeholder="如 readonly_user" /></Form.Item>
-          <Form.Item name="readonly_password" label={editing ? '只读账号密码（留空=不修改）' : '只读账号密码'}>
-            <Input.Password placeholder="用于诊断采集（连接数/锁/表空间/慢SQL）" />
-          </Form.Item>
+          <Button type="link" size="small" style={{ padding: 0, marginBottom: 8, height: 'auto' }} onClick={() => setShowAdvanced(!showAdvanced)}>
+            {showAdvanced ? '收起高级选项 ▴' : '高级选项：独立只读诊断账号（可选）▾'}
+          </Button>
+          {showAdvanced && (
+            <>
+              <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>最小权限只读账号：查系统视图 / performance_schema，诊断与采集统一用它；不填则回退主账号。</div>
+              <Form.Item name="readonly_username" label="只读账号"><Input placeholder="如 readonly_user" /></Form.Item>
+              <Form.Item name="readonly_password" label={editing ? '只读账号密码（留空=不修改）' : '只读账号密码'}>
+                <Input.Password placeholder="用于诊断采集（连接数/锁/表空间/慢SQL）" />
+              </Form.Item>
+            </>
+          )}
           <Space>
             <Form.Item name="slow_sql_threshold" label="慢SQL阈值(s)"><InputNumber min={0.001} step={0.1} /></Form.Item>
             <Form.Item name="collect_interval" label="采集间隔(分钟)"><InputNumber min={1} /></Form.Item>
