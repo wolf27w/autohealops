@@ -155,7 +155,6 @@ function DBConnections() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
   const [form] = Form.useForm()
 
   const load = () => getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
@@ -170,7 +169,6 @@ function DBConnections() {
   const openModal = (c?: DBConnection) => {
     setEditing(c || null)
     setModalOpen(true)
-    setShowAdvanced(!!(c?.readonly_username))
     if (c) {
       form.setFieldsValue({ ...c, password: '' })
     } else {
@@ -184,7 +182,6 @@ function DBConnections() {
     if (editing) {
       const payload: Record<string, unknown> = { ...values }
       if (!payload.password) delete payload.password
-      if (!payload.readonly_password) delete payload.readonly_password
       await updateDBConnection(editing.id, payload)
     } else {
       await createDBConnection(values)
@@ -281,22 +278,10 @@ function DBConnections() {
             <Form.Item name="port" label="端口" rules={[{ required: true }]}><InputNumber min={1} max={65535} /></Form.Item>
           </Space>
           <Form.Item name="database" label="数据库" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="username" label="用户名" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="username" label="用户名" rules={[{ required: true }]} extra="建议用只读权限账号（诊断采集只需查系统视图 / performance_schema）"><Input /></Form.Item>
           <Form.Item name="password" label={editing ? '密码（留空=不修改）' : '密码'} rules={editing ? [] : [{ required: true }]}>
             <Input.Password />
           </Form.Item>
-          <Button type="link" size="small" style={{ padding: 0, marginBottom: 8, height: 'auto' }} onClick={() => setShowAdvanced(!showAdvanced)}>
-            {showAdvanced ? '收起高级选项 ▴' : '高级选项：独立只读诊断账号（可选）▾'}
-          </Button>
-          {showAdvanced && (
-            <>
-              <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>最小权限只读账号：查系统视图 / performance_schema，诊断与采集统一用它；不填则回退主账号。</div>
-              <Form.Item name="readonly_username" label="只读账号"><Input placeholder="如 readonly_user" /></Form.Item>
-              <Form.Item name="readonly_password" label={editing ? '只读账号密码（留空=不修改）' : '只读账号密码'}>
-                <Input.Password placeholder="用于诊断采集（连接数/锁/表空间/慢SQL）" />
-              </Form.Item>
-            </>
-          )}
           <Space>
             <Form.Item name="slow_sql_threshold" label="慢SQL阈值(s)"><InputNumber min={0.001} step={0.1} /></Form.Item>
             <Form.Item name="collect_interval" label="采集间隔(分钟)"><InputNumber min={1} /></Form.Item>
