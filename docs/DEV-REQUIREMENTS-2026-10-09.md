@@ -11,7 +11,7 @@
 
 | 模块 | 任务数 | 说明 |
 |---|---|---|
-| **A. Netdata 监控接入** | 9 | 接入即自动下发 + 按集群展示（P1~P3） |
+| **A. Netdata 监控接入** | 9 | **开关驱动下发**（默认不装，手动开启）+ 按集群展示（P1~P3） |
 | **B. 集群外主机（ECS）+ Docker 接入** | 5 | 另立「主机监控」 |
 | **C. Netdata 告警 ↔ AIOps 闭环** | 6 | webhook 入站 + 映射 + `resource_alert` 迁移 |
 | **D. 主机/Docker 诊断 + 修复能力** | 4 | 闭环后两环（主机语义） |
@@ -24,14 +24,14 @@
 | # | 任务 | 落点 | 规模 | 备注 |
 |---|---|---|---|---|
 | A1 | `clusters` 表加字段 + alembic 迁移 | `models/cluster.py` + `alembic/versions/` | S | `monitoring_enabled`/`monitoring_status`/`monitoring_url`/`monitoring_ns`/`parent_storage_size`/`monitoring_retention_days`/`stream_key_encrypted` |
-| A2 | executor 新增 RPC `SetupMonitoring` / `TeardownMonitoring` | `k8s-executor/proto/executor.proto` + `internal/grpc/server.go` + pb 重新生成 | M | `dynamic.Interface` + server-side apply |
+| A2 | executor 新增 RPC `SetupMonitoring` / `StopMonitoring` / `TeardownMonitoring` | `k8s-executor/proto/executor.proto` + `internal/grpc/server.go` + pb 重新生成 | M | `dynamic.Interface` + server-side apply；停服务/卸载保留 PVC |
 | A3 | Netdata manifest 模板（多文档，参数化） | executor 内嵌模板 / `k8s/templates/netdata.yaml` | M | Namespace/SA/ClusterRole/Binding/ConfigMap/PVC/Deployment(parent)/Service/DaemonSet(child) |
 | A4 | `monitoring_service.py` | `api-server/app/services/monitoring_service.py`（新） | M | mirror `rbac_service`；生成+加密 stream key；回写状态 |
 | A5 | executor_client 加方法 | `api-server/app/clients/executor_client.py` | S | `setup_monitoring` / `teardown_monitoring` |
-| A6 | 接入流程挂载 | `api-server/app/api/clusters.py` | S | create 异步触发 + health-check 自动补 + `setup-monitoring` 端点 + delete 卸载 |
+| A6 | 接入流程挂载 | `api-server/app/api/clusters.py` | S | **开关驱动**：新增 `monitoring/enable` + `monitoring/disable` 端点；delete 卸载；不自动触发 |
 | A7 | 反代路由（parent UI） | `api-server/app/api/monitoring.py`（新，或并入 clusters） | M | apiserver Service Proxy → `netdata-parent:19999`（复用 `prometheus/proxy.go`） |
 | A8 | 前端监控入口 + iframe + 状态 | `frontend/src/pages/ClusterDetail.tsx` + `services/api.ts` | M | `monitoring_enabled` 显示按钮 |
-| A9 | 存量集群补装 | 随 A6 | S | health-check 成功后自动补 |
+| A9 | 存量集群补装 | 随 A6 | S | 存量集群默认关，手动开开关即下发（无自动补） |
 
 **分期**：P1 = A1~A6,A8（核心闭环）｜ P2 = A9 + 升级/卸载 ｜ P3 = DB 实例 Netdata 总览（可选）
 

@@ -21,7 +21,7 @@
 |---|---|
 | Netdata 的秒级监控是否基于平台 Prometheus？ | **否**。Netdata 自采集自存储（原生 collector + dbengine），与 Prometheus **无依赖**，可并存 |
 | Netdata 与平台 Prometheus 的关系 | 各自独立；K8s 场景 Netdata 读 **kubelet** 的 cadvisor 端点（kubelet 自带），**非**平台 Prometheus 服务器 |
-| 部署位置 | **装在被管的每个集群**（指标须在被监控机器上采）；AIOps 中心管控面自动下发 |
+| 部署位置 | **装在被管的每个集群**（指标须在被监控机器上采）；AIOps 中心管控面按**开关**下发 |
 | parent / child | 同一集群内**一起部署**（一份多文档 manifest）：child = DaemonSet(每节点) + parent = Deployment + PVC + Service |
 
 ---
@@ -46,7 +46,7 @@
 
 ### 3.1 目标
 
-1. **接入即自动部署**：集群接入 AIOps 后，**自动**向该集群下发 Netdata（parent + child），无需手动操作。
+1. **开关驱动部署**：集群接入 AIOps 后**默认不装**；用户打开「Netdata 监控」开关后，才向该集群下发 Netdata（parent + child）。
 2. **按集群展示**：集群管理页提供**各集群独立**的监控入口，iframe 内嵌该集群实时监控；用户无需跳出平台、无需多套登录。
 3. **监控/告警分层 + 分工**：Netdata 提供实时展示 + **指标阈值告警**；平台提供**事件型告警 + 闭环**（诊断/通知/修复/工单）。两者告警统一汇入平台闭环。
 
@@ -64,10 +64,12 @@
 
 ## 四、需求详细
 
-### R1 集群接入自动下发 Netdata
+### R1 集群开关驱动（默认关；开=安装/启动，关=停服务不卸载）
 
-- **触发点**：`POST /api/v1/clusters` 成功（health-check 通过）后，**异步**下发（不阻塞接入流程）。
-- **复用现有模式**：mirror `rbac_service.setup_cluster_rbac()` 的「接入即自举」。
+- **触发点**：集群接入**默认不装** Netdata（开关默认关）；用户打开「Netdata 监控」开关 → `POST /clusters/{id}/monitoring/enable` **异步**下发安装/启动（不阻塞接入流程）。
+- **关闭开关** → `POST /clusters/{id}/monitoring/disable` **仅停服务**（停 parent/child 工作负载），**保留 PVC 及全部资源**，不卸载。
+- **重开**：复用已有 PVC 恢复运行（历史数据延续）。
+- **复用现有模式**：mirror `rbac_service.setup_cluster_rbac()` 的「自举」。
 - **下发内容**（目标集群，命名空间 `apiops-monitoring`）：
 
 | 组件 | 说明 |
@@ -79,14 +81,14 @@
 
 - **失败处理**：不阻塞集群接入；结果写入 `clusters.monitoring_status`，前端可见，支持手动重试。
 
-### R2 存量集群补装
+### R2 存量集群手动开启
 
-- `POST /clusters/{id}/health-check` 成功且未部署监控 → **自动补装**。
-- 新增手动端点 `POST /clusters/{id}/setup-monitoring`（mirror `setup-rbac`）。
+- 存量集群默认 `monitoring_enabled=false`；管理员在集群详情/列表**手动打开开关**即触发下发（同一 `monitoring/enable` 端点）。
+- **不自动补装**（无 health-check 自动触发）。
 
 ### R3 集群管理页监控入口
 
-- 集群列表/详情：`monitoring_enabled = true` 时显示「监控」按钮；部署中/失败显示状态。
+- 集群列表/详情：加「Netdata 监控」**开关（Switch）**（开=启用服务/关=停服务）；另设「卸载」入口（删除资源但**默认保留 PVC**）。开启后显示部署状态（部署中/成功/失败），成功后显示「监控」按钮。
 - 点击 → iframe 打开该集群监控（**平台内**，不跳出）。
 
 ### R4 监控展示（平台内）
@@ -95,11 +97,13 @@
 - 链路：**AIOps 后端 → apiserver Service Proxy（复用 `prometheus/proxy.go` 手法）→ 目标集群 `netdata-parent:19999`**。
 - 好处：parent 仅 ClusterIP，**不出网、无需 Ingress、无需打通跨环境网络**；鉴权统一在 AIOps。
 
-### R5 幂等 / 升级 / 卸载
+### R5 幂等 / 升级 / 停用 / 卸载
 
 - **幂等**：executor 用 **server-side apply**，重复下发不报错。
-- **升级**：改镜像 tag / 留存天数 → 重跑 setup-monitoring。
-- **卸载**：`delete_cluster` 时删除 Netdata 命名空间（mirror `stop_watch`）。
+- **升级**：改镜像 tag / 留存天数 → 重跑 enable。
+- **停用（关开关）**：停 parent/child 工作负载（scale 0），**保留** PVC / ConfigMap / SA / RBAC / stream key；重开即恢复，数据延续。
+- **卸载（单独操作，非关开关）**：删除 Netdata 资源；**PVC 默认保留**（历史数据不丢），重开复用；如需彻底删数据须显式确认。
+- （`delete_cluster` 时随集群删除 Netdata 资源，同 `stop_watch`。）
 
 ---
 
@@ -111,8 +115,8 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| monitoring_enabled | bool (default false) | 是否已部署 |
-| monitoring_status | varchar(255) | 部署结果/错误（mirror `rbac_status`） |
+| monitoring_enabled | bool (default false) | 是否启用 Netdata 监控（**用户开关**，默认关；开=安装/启动，关=停服务不卸载） |
+| monitoring_status | varchar(255) | 实际状态（none/deploying/running/stopping/stopped/failed/uninstalled；mirror `rbac_status`） |
 | monitoring_url | varchar(255) | 平台侧反代逻辑路径 |
 | monitoring_ns | varchar(64) | 部署命名空间（默认 `apiops-monitoring`） |
 | parent_storage_size | varchar(16) | parent PVC 容量（默认 `20Gi`，集群默认 SC） |
@@ -125,14 +129,15 @@
 |---|---|
 | **新增** `services/monitoring_service.py` | mirror `rbac_service.py`：`setup_cluster_monitoring()` / `teardown_cluster_monitoring()` |
 | `clients/executor_client.py` | 加 `setup_monitoring` / `teardown_monitoring` |
-| `api/clusters.py` | create_cluster 末尾异步触发；health-check 自动补；新增 `setup-monitoring` 端点 |
+| `api/clusters.py` | 新增 `monitoring/enable`（开=安装/启动）、`monitoring/disable`（关=停服务）、`monitoring/uninstall`（删资源保留 PVC）端点；不自动触发 |
 | **新增** `api/monitoring.py` | 反代路由（也可并入 clusters 路由） |
 
 ### 5.3 executor 新增 RPC
 
 ```proto
-rpc SetupMonitoring(SetupMonitoringRequest) returns (SetupMonitoringResponse);
-rpc TeardownMonitoring(TeardownMonitoringRequest) returns (TeardownMonitoringResponse);
+rpc SetupMonitoring(SetupMonitoringRequest) returns (SetupMonitoringResponse);    // 安装（首次）/启动（已装但停）
+rpc StopMonitoring(StopMonitoringRequest) returns (StopMonitoringResponse);       // 停服务（保留资源与 PVC）
+rpc TeardownMonitoring(TeardownMonitoringRequest) returns (TeardownMonitoringResponse);  // 删资源（默认保留 PVC）
 
 message SetupMonitoringRequest {
   int64  cluster_id     = 1;
