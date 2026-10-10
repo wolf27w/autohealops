@@ -12,6 +12,7 @@ import {
 } from '../services/api'
 import type { Cluster, LogSource, NotificationConfig, User } from '../types'
 import type { Dayjs } from 'dayjs'
+import LogAlertRulesPanel from '../components/LogAlertRulesPanel'
 
 const dayTypeLabel: Record<string, string> = { weekday: '工作日', weekend: '周末' }
 
@@ -146,75 +147,7 @@ function DutyTab() {
 
 // ============ 日志告警规则 ============
 function LogRuleTab() {
-  const navigate = useNavigate()
-  const [data, setData] = useState<LogAlertRule[]>([])
-  const [sources, setSources] = useState<LogSource[]>([])
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<LogAlertRule | null>(null)
-  const [form] = Form.useForm()
-
-  const load = () => getLogAlertRules().then((d) => setData(d as LogAlertRule[]))
-  useEffect(() => { load(); getLogSources().then((d) => setSources(d || [])) }, [])
-
-  const sourceOptions = sources.map((s) => ({ value: s.id, label: `${s.name}（${s.es_url}）` }))
-  const sourceName = (id: number | null | undefined) => {
-    if (!id) return '默认源'
-    const s = sources.find((x) => x.id === id)
-    return s ? s.name : `#${id}`
-  }
-
-  const save = async () => {
-    const v = await form.validateFields()
-    if (editing) await updateLogAlertRule(editing.id, v)
-    else await createLogAlertRule(v)
-    message.success('已保存'); setOpen(false); form.resetFields(); load()
-  }
-
-  return (
-    <Card>
-      <div style={{ marginBottom: 12, color: '#8c8c8c', fontSize: 12 }}>
-        ES 日志源在「<a onClick={() => navigate('/log-sources')}>日志源</a>」页维护（支持多实例；可分别配置时间字段 / 搜索字段等）——
-        这里每条规则可以<strong>指定使用哪个源</strong>；不指定则用默认源。后台每 30 秒扫描一次。
-      </div>
-      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }} onClick={() => { setEditing(null); form.resetFields(); setOpen(true) }}>新增规则</Button>
-      <Table rowKey="id" dataSource={data} columns={[
-        { title: '规则名', dataIndex: 'name' },
-        { title: '索引', dataIndex: 'index_pattern' },
-        { title: '日志源', dataIndex: 'log_source_id', render: (v) => sourceName(v) },
-        { title: '关键词', dataIndex: 'keywords', ellipsis: true },
-        { title: '窗口(分)', dataIndex: 'time_window' },
-        { title: '阈值', dataIndex: 'threshold' },
-        { title: '级别', dataIndex: 'severity' },
-        { title: '启用', dataIndex: 'enabled', render: (v) => (v ? '是' : '否') },
-        { title: '操作', render: (_, r) => (
-          <Space>
-            <Button size="small" onClick={() => { setEditing(r); form.setFieldsValue({ ...r, keywords: typeof r.keywords === 'string' ? r.keywords : JSON.stringify(r.keywords) }); setOpen(true) }}>编辑</Button>
-            <Popconfirm title="确认删除？" onConfirm={async () => { await deleteLogAlertRule(r.id); load() }}>
-              <Button size="small" danger>删除</Button>
-            </Popconfirm>
-          </Space>
-        ) },
-      ]} />
-      <Modal title={editing ? '编辑规则' : '新增规则'} open={open} onOk={save} onCancel={() => setOpen(false)}>
-        <Form form={form} layout="vertical" initialValues={{ cluster_id: 0, time_window: 5, threshold: 3, severity: 'medium', enabled: true }}>
-          <Form.Item name="name" label="规则名" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="index_pattern" label="ES 索引（如 app-*）" rules={[{ required: true }]}
-            tooltip="不选日志源时用这里的索引；选了日志源则以该源的索引为准（此处会被忽略）"><Input /></Form.Item>
-          <Form.Item name="log_source_id" label="日志源（不选=默认源）"
-            tooltip="选择后使用该日志源（地址/账号/索引都取该源）">
-            <Select allowClear placeholder="默认源（不指定）" options={sourceOptions} />
-          </Form.Item>
-          <Form.Item name="keywords" label="关键词（JSON 数组，如 [&apos;error&apos;,&apos;exception&apos;]）" rules={[{ required: true }]}><Input placeholder='["error","exception"]' /></Form.Item>
-          <Form.Item name="cluster_id" label="绑定集群（0=全局）"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="namespace_filter" label="命名空间过滤（可选）"><Input /></Form.Item>
-          <Form.Item name="time_window" label="统计窗口（分钟）"><InputNumber min={1} style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="threshold" label="阈值（命中次数）"><InputNumber min={1} style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="severity" label="告警级别"><Select options={['critical', 'high', 'medium', 'low'].map((s) => ({ value: s, label: s }))} /></Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
-        </Form>
-      </Modal>
-    </Card>
-  )
+  return <LogAlertRulesPanel />
 }
 
 // ============ 容器资源阈值规则（Prometheus） ============

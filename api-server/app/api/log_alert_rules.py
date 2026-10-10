@@ -17,6 +17,7 @@ def _to_dict(r: LogAlertRule) -> dict:
         "cluster_id": r.cluster_id,
         "index_pattern": r.index_pattern,
         "log_source_id": r.log_source_id,
+        "notify_config_id": r.notify_config_id,
         "keywords": r.keywords,
         "namespace_filter": r.namespace_filter,
         "time_window": r.time_window,
@@ -43,6 +44,7 @@ async def create_rule(payload: dict, user=Depends(require_admin)):
             cluster_id=payload.get("cluster_id", 0),
             index_pattern=payload.get("index_pattern", ""),
             log_source_id=payload.get("log_source_id") or None,
+            notify_config_id=payload.get("notify_config_id") or None,
             keywords=payload.get("keywords", "[]"),
             namespace_filter=payload.get("namespace_filter", ""),
             time_window=payload.get("time_window", 5),
@@ -68,6 +70,8 @@ async def update_rule(rule_id: int, payload: dict, user=Depends(require_admin)):
                 setattr(r, field, payload[field])
         if "log_source_id" in payload:
             r.log_source_id = payload.get("log_source_id") or None
+        if "notify_config_id" in payload:
+            r.notify_config_id = payload.get("notify_config_id") or None
         await session.commit()
         await session.refresh(r)
     return {"code": 200, "message": "success", "data": _to_dict(r)}

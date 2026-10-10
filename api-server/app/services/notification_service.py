@@ -462,7 +462,8 @@ async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str
         logger.warning("告警邮件发送失败: %s", e)
 
 
-async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False) -> dict:
+async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False,
+                       override_config_id: int | None = None) -> dict:
     """统一告警通知入口（全平台一份策略）——所有告警来源共用。
 
     流程：策略开关 → 严重级别分级 → 静默/维护窗口 → 限频 → 风暴抑制
@@ -477,6 +478,27 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
     policy = await get_alert_notify_policy()
     if not policy.get("enabled", True):
         return {"sent": 0, "reason": "policy_disabled"}
+
+    # 规则级指定通知渠道（日志告警规则「套用通知源」）——优先于分级/项目/场景路由
+    if override_config_id:
+        async with async_session() as session:
+            rcfg = await session.get(NotificationConfig, override_config_id)
+        if rcfg and rcfg.is_active:
+            if await _alert_in_silence(alert, policy):
+                return {"sent": 0, "reason": "silenced"}
+            if await _notify_limited(alert.id):
+                return {"sent": 0, "reason": "rate_limited"}
+            if await _storm_suppressed(alert):
+                return {"sent": 0, "reason": "storm_suppressed"}
+            _pcfg, _pname = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
+            _cname = await _cluster_name(alert.cluster_id)
+            _content = _render_alert_content(rcfg, alert, _pname, _cname)
+            if dry_run:
+                return {"sent": 1, "reason": "rule_route"}
+            await _send_webhook_with_retry(rcfg, _content, alert.id, at_all=at_all, receiver="规则指定渠道")
+            return {"sent": 1, "reason": "rule_route"}
+        # 指定渠道不存在/停用 → 回退统一策略（继续往下）
+
     allowed = policy.get("severity_routes", {}).get(severity, [])
     if not allowed:
         return {"sent": 0, "reason": f"severity_{severity or 'unknown'}"}

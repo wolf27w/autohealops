@@ -91,7 +91,7 @@ async def scan_log_alerts() -> int:
                 await session.refresh(alert)
             # 通知：与集群/DB/Pod 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
             try:
-                await notification_service.notify_alert(alert)
+                await notification_service.notify_alert(alert, override_config_id=rule.notify_config_id)
             except Exception as e:  # noqa: BLE001
                 logger.warning("日志告警 %d 通知失败: %s", alert.id, e)
             triggered += 1

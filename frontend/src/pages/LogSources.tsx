@@ -1,10 +1,11 @@
 // 日志源管理：自定义 ES 多实例（列表 + 新增/编辑弹窗 + 测试连通性 + 删除）
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, Popconfirm, message } from 'antd'
+import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, Popconfirm, message, Drawer } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { getLogSources, createLogSource, updateLogSource, deleteLogSource, testLogSource, testLogSourceById } from '../services/api'
 import type { LogSource } from '../types'
+import LogAlertRulesPanel from '../components/LogAlertRulesPanel'
 
 export default function LogSources() {
   const navigate = useNavigate()
@@ -13,6 +14,7 @@ export default function LogSources() {
   const [editing, setEditing] = useState<LogSource | null>(null)
   const [testing, setTesting] = useState(false)
   const [rowTesting, setRowTesting] = useState<number | null>(null)
+  const [ruleDrawerFor, setRuleDrawerFor] = useState<LogSource | null>(null)
   const [form] = Form.useForm()
 
   const load = () => getLogSources().then((d) => setData(d || []))
@@ -66,7 +68,7 @@ export default function LogSources() {
         密码加密存储，仅回显「是否已配置」，留空表示不修改。
       </div>
       <div style={{ marginBottom: 12, color: '#8c8c8c', fontSize: 12 }}>
-        配好源后，到「<a onClick={() => navigate('/strategy')}>策略配置 → 日志告警规则</a>」里<strong>选这个源</strong> + 关键词 / 阈值 / 时间窗，后台每 30 秒扫描一次，命中即建告警并通知（同一规则 5 分钟内只聚合，不刷屏）。
+        配好源后，点该行「<b>告警规则</b>」即可在本地配关键词 / 阈值 / 通知渠道（套用通知源）——不同源可发不同群；也可到「策略配置 → 日志告警规则」总览。
         非 k8s 结构的 ES：按实际索引填「时间字段 / 搜索字段」（Pod、命名空间字段可留空）。
       </div>
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }}
@@ -81,8 +83,9 @@ export default function LogSources() {
         { title: '密码', dataIndex: 'has_password', width: 80, render: (v) => (v ? <Tag color="green">已配置</Tag> : <Tag>未配置</Tag>) },
         { title: '默认', dataIndex: 'is_default', width: 70, render: (v) => (v ? <Tag color="blue">默认</Tag> : '-') },
         { title: '启用', dataIndex: 'enabled', width: 70, render: (v) => (v ? '是' : '否') },
-        { title: '操作', width: 200, render: (_, r) => (
+        { title: '操作', width: 290, render: (_, r) => (
           <Space>
+            <Button size="small" type="primary" ghost onClick={() => setRuleDrawerFor(r)}>告警规则</Button>
             <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
             <Button size="small" loading={rowTesting === r.id} onClick={() => handleRowTest(r.id)}>测试</Button>
             <Popconfirm title="确认删除？" onConfirm={async () => { await deleteLogSource(r.id); load() }}>
@@ -115,6 +118,9 @@ export default function LogSources() {
           <Button loading={testing} onClick={handleTest}>测试连通性</Button>
         </Form>
       </Modal>
+      <Drawer title={`日志告警规则：${ruleDrawerFor?.name || ''}`} open={!!ruleDrawerFor} onClose={() => setRuleDrawerFor(null)} width={840} destroyOnClose>
+        {ruleDrawerFor && <LogAlertRulesPanel logSourceId={ruleDrawerFor.id} />}
+      </Drawer>
     </Card>
   )
 }
