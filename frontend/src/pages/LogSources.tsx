@@ -1,6 +1,5 @@
 // 日志源管理：自定义 ES 多实例（列表 + 新增/编辑弹窗 + 测试连通性 + 删除）
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, Popconfirm, message, Drawer } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { getLogSources, createLogSource, updateLogSource, deleteLogSource, testLogSource, testLogSourceById } from '../services/api'
@@ -8,7 +7,6 @@ import type { LogSource } from '../types'
 import LogAlertRulesPanel from '../components/LogAlertRulesPanel'
 
 export default function LogSources() {
-  const navigate = useNavigate()
   const [data, setData] = useState<LogSource[]>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<LogSource | null>(null)
