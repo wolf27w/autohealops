@@ -28,7 +28,7 @@ ALERT_NOTIFY_POLICY_DEFAULT = {
 }
 
 # 敏感密钥字段：写入时加密存储，读取回显时脱敏
-SENSITIVE_KEYS = {"es_password", "ldap_bind_password", "feishu_app_secret", "embedding_api_key"}
+SENSITIVE_KEYS = {"es_password", "ldap_bind_password", "feishu_app_secret", "embedding_api_key", "smtp_password"}
 
 # 已迁移到「日志源」（log_sources 表）的字段：只读兜底，不再接受写入（N7 统一由日志源管理）
 DEPRECATED_KEYS = {"es_url", "es_index_pattern", "es_username", "es_password"}
@@ -67,6 +67,13 @@ DEFAULT_SETTINGS = {
     "alert_notify_policy": (json.dumps(ALERT_NOTIFY_POLICY_DEFAULT, ensure_ascii=False), "统一告警通知策略 JSON（分级渠道/静默窗口）"),
     # 外部系统接入 token（供外部监控/运维系统调 /api/v1/external 查询/创建工单）
     "external_ticket_token": ("", "外部工单接入 token（外部系统调 /api/v1/external 用）"),
+    # SMTP 邮件（告警邮件渠道；配好即用，未配则邮件渠道静默跳过）
+    "smtp_host": ("", "SMTP 服务器地址（如 smtp.qq.com）"),
+    "smtp_port": ("465", "SMTP 端口（465=SSL，587=STARTTLS）"),
+    "smtp_username": ("", "SMTP 用户名（通常=发件邮箱）"),
+    "smtp_password": ("", "SMTP 密码/授权码"),
+    "smtp_from": ("", "发件人地址（如 noreply@example.com）"),
+    "smtp_ssl": ("true", "是否 SSL（true=465 SSL；false=587 STARTTLS）"),
 }
 
 

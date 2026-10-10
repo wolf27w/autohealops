@@ -21,6 +21,8 @@ export default function PlatformSettings() {
         ...d,
         ldap_enabled: s.ldap_enabled === 'true',
         ldap_port: Number(s.ldap_port),
+        smtp_ssl: d.smtp_ssl !== 'false',
+        smtp_port: Number(d.smtp_port),
       })
     })
   }, [])
@@ -36,6 +38,12 @@ export default function PlatformSettings() {
       ldap_port: values.ldap_port === undefined
         ? String(settings.ldap_port ?? '389')
         : String(values.ldap_port),
+      smtp_ssl: values.smtp_ssl === undefined
+        ? String(settings.smtp_ssl ?? 'true')
+        : (values.smtp_ssl ? 'true' : 'false'),
+      smtp_port: values.smtp_port === undefined
+        ? String(settings.smtp_port ?? '465')
+        : String(values.smtp_port),
     }
     await updateSettings(payload)
     message.success('设置已保存')
@@ -73,6 +81,36 @@ export default function PlatformSettings() {
                     <Input.Password placeholder="飞书应用凭证" />
                   </Form.Item>
                   <Button type="primary" onClick={handleSave}>保存配置</Button>
+                </Form>
+              </Card>
+            ),
+          },
+          {
+            key: 'smtp',
+            label: 'SMTP 邮件',
+            children: (
+              <Card>
+                <Divider orientation="left">SMTP 邮件（告警邮件渠道，配好即可用；未配则邮件渠道静默跳过）</Divider>
+                <Form form={form} layout="vertical">
+                  <Form.Item name="smtp_host" label="SMTP 服务器地址">
+                    <Input placeholder="smtp.qq.com / smtp.exmail.qq.com" />
+                  </Form.Item>
+                  <Form.Item name="smtp_port" label="SMTP 端口">
+                    <InputNumber min={1} max={65535} style={{ width: 180 }} />
+                  </Form.Item>
+                  <Form.Item name="smtp_username" label="SMTP 用户名（通常=发件邮箱）">
+                    <Input placeholder="noreply@example.com" />
+                  </Form.Item>
+                  <Form.Item name="smtp_password" label="SMTP 密码 / 授权码">
+                    <Input.Password placeholder="QQ 邮箱用授权码" />
+                  </Form.Item>
+                  <Form.Item name="smtp_from" label="发件人地址">
+                    <Input placeholder="noreply@example.com（留空=用户名）" />
+                  </Form.Item>
+                  <Form.Item name="smtp_ssl" label="SSL（465 端口选是；587 选否用 STARTTLS）" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Button type="primary" onClick={handleSave}>保存 SMTP 配置</Button>
                 </Form>
               </Card>
             ),

@@ -402,6 +402,66 @@ async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: st
         await write_in_app_message(a.id, title, content, kind="alert", link="/alert-handling")
 
 
+def _send_email_sync(host: str, port: int, username: str, password: str, sender: str,
+                     recipients: list[str], subject: str, body: str, use_ssl: bool) -> None:
+    """同步发邮件（标准库 smtplib，由 asyncio.to_thread 调用避免阻塞事件循环）"""
+    import smtplib
+    from email.header import Header
+    from email.mime.text import MIMEText
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    if use_ssl:
+        server = smtplib.SMTP_SSL(host, port, timeout=10)
+    else:
+        server = smtplib.SMTP(host, port, timeout=10)
+        server.starttls()
+    try:
+        if username:
+            server.login(username, password)
+        server.sendmail(sender, recipients, msg.as_string())
+    finally:
+        try:
+            server.quit()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str) -> None:
+    """邮件渠道：告警邮件发给所有启用中的管理员（配好 SMTP 才发；未配静默跳过）"""
+    from app.models import User
+    from app.services.system_setting_service import get_setting
+    host = (await get_setting("smtp_host", "")).strip()
+    if not host:
+        return
+    try:
+        port = int((await get_setting("smtp_port", "465")).strip() or "465")
+    except ValueError:
+        port = 465
+    username = (await get_setting("smtp_username", "")).strip()
+    password = await get_setting("smtp_password", "")
+    sender = (await get_setting("smtp_from", "")).strip() or username or "noreply@localhost"
+    use_ssl = (await get_setting("smtp_ssl", "true")).strip().lower() != "false"
+
+    async with async_session() as session:
+        admins = (await session.execute(
+            select(User).where(User.role == "admin", User.is_active.is_(True))
+        )).scalars().all()
+    recipients = [a.email for a in admins if a.email]
+    if not recipients:
+        logger.info("无管理员邮箱，跳过邮件渠道")
+        return
+
+    subject = f"[API-OPS 告警] {alert.fault_type or '未知类型'} - {alert.resource_name or ''}"
+    body = format_alert_message(alert, project_name, cluster_name)
+    try:
+        await asyncio.to_thread(_send_email_sync, host, port, username, password,
+                                sender, recipients, subject, body, use_ssl)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警邮件发送失败: %s", e)
+
+
 async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False) -> dict:
     """统一告警通知入口（全平台一份策略）——所有告警来源共用。
 
@@ -436,6 +496,12 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
     if "in_app" in allowed:
         if not dry_run:
             await _notify_alert_in_app(alert, project_name, cluster_name)
+        sent += 1
+
+    # 邮件渠道：告警邮件发给所有管理员（配好 SMTP 才发；未配静默跳过）
+    if "email" in allowed:
+        if not dry_run:
+            await _notify_alert_email(alert, project_name, cluster_name)
         sent += 1
 
     async def _dispatch(cfg: NotificationConfig, receiver: str) -> None:

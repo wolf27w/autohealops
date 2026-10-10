@@ -15,10 +15,11 @@ const CHANNEL_OPTIONS = [
   { value: 'feishu', label: '飞书' },
 ]
 
-// 分级渠道候选 = IM 渠道 + 站内消息（站内消息是平台内置渠道，不参与「添加通知渠道」下拉）
+// 分级渠道候选 = IM 渠道 + 站内消息 + 邮件（站内消息/邮件是平台内置渠道，不参与「添加通知渠道」下拉）
 const ROUTE_CHANNEL_OPTIONS = [
   ...CHANNEL_OPTIONS,
   { value: 'in_app', label: '站内消息' },
+  { value: 'email', label: '邮件' },
 ]
 
 const TRANSPORT_OPTIONS = [
