@@ -389,6 +389,19 @@ def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: s
     return format_alert_message(alert, project_name, cluster_name)
 
 
+async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: str) -> None:
+    """站内消息渠道（平台内置）：告警写入站内消息中心，给所有启用中的管理员。"""
+    from app.models import User
+    async with async_session() as session:
+        admins = (await session.execute(
+            select(User).where(User.role == "admin", User.is_active.is_(True))
+        )).scalars().all()
+    content = format_alert_message(alert, project_name, cluster_name)
+    title = f"告警：{alert.fault_type or '未知类型'}"
+    for a in admins:
+        await write_in_app_message(a.id, title, content, kind="alert", link="/alert-handling")
+
+
 async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False) -> dict:
     """统一告警通知入口（全平台一份策略）——所有告警来源共用。
 
@@ -418,6 +431,12 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
     project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
     cluster_name = await _cluster_name(alert.cluster_id)
     sent = 0
+
+    # 站内消息渠道（平台内置，非 IM webhook）：告警同时写入站内消息中心（给所有管理员）
+    if "in_app" in allowed:
+        if not dry_run:
+            await _notify_alert_in_app(alert, project_name, cluster_name)
+        sent += 1
 
     async def _dispatch(cfg: NotificationConfig, receiver: str) -> None:
         nonlocal sent

@@ -15,6 +15,12 @@ const CHANNEL_OPTIONS = [
   { value: 'feishu', label: '飞书' },
 ]
 
+// 分级渠道候选 = IM 渠道 + 站内消息（站内消息是平台内置渠道，不参与「添加通知渠道」下拉）
+const ROUTE_CHANNEL_OPTIONS = [
+  ...CHANNEL_OPTIONS,
+  { value: 'in_app', label: '站内消息' },
+]
+
 const TRANSPORT_OPTIONS = [
   { value: 'webhook', label: 'Webhook 回调（有公网）' },
   { value: 'long_conn', label: '长连接（无公网，待 SDK）' },
@@ -255,7 +261,7 @@ export default function NotificationConfig() {
           <div key={s.value} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             <span style={{ width: 140 }}>{s.label}</span>
             <Select mode="multiple" style={{ flex: 1 }} value={policy.severity_routes[s.value] || []}
-              options={CHANNEL_OPTIONS} placeholder="留空 = 不通知"
+              options={ROUTE_CHANNEL_OPTIONS} placeholder="留空 = 不通知"
               onChange={(v) => setSeverityChannels(s.value, v)} />
           </div>
         ))}
