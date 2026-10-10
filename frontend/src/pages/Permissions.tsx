@@ -7,22 +7,13 @@ import {
 import { PlusOutlined, BellOutlined, DeleteOutlined } from '@ant-design/icons'
 import {
   getUsers, getClusters, getDBConnections,
-  getUserClusterPerms, addUserClusterPerm, deleteUserClusterPerm,
   getUserDBPerms, addUserDBPerm, deleteUserDBPerm,
+  getProjects,
   getSubscriptions, addSubscription, deleteSubscription,
 } from '../services/api'
 import type { Cluster, DBConnection, User } from '../types'
-import ProjectManagement from './ProjectManagement'
+import ProjectManagement, { ClusterNSTab } from './ProjectManagement'
 import { getCurrentUser } from '../utils/auth'
-
-type ClusterWithEnv = Cluster & { env_tag?: string }
-
-interface ClusterPerm {
-  id: number
-  cluster_id?: number
-  namespace?: string
-  permission?: string
-}
 
 interface DBPerm {
   id: number
@@ -51,78 +42,30 @@ export default function Permissions() {
   return <Tabs defaultActiveKey="project" items={items} />
 }
 
-// ============ 集群授权（admin）============
+// ============ 集群授权（admin）：按项目授权，项目内成员自动继承 ============
 function ClusterPerms() {
-  const [users, setUsers] = useState<User[]>([])
-  const [clusters, setClusters] = useState<ClusterWithEnv[]>([])
-  const [selectedUser, setSelectedUser] = useState<number | null>(null)
-  const [perms, setPerms] = useState<ClusterPerm[]>([])
-  const [modalOpen, setModalOpen] = useState(false)
-  const [form] = Form.useForm()
+  const [projects, setProjects] = useState<{ id: number; name: string }[]>([])
+  const [projectId, setProjectId] = useState<number>()
 
   useEffect(() => {
-    getUsers().then((d) => setUsers(d || []))
-    getClusters().then((d) => setClusters(d || []))
+    getProjects().then((d) => setProjects((d || []) as { id: number; name: string }[]))
   }, [])
-
-  const loadPerms = (uid: number) => getUserClusterPerms(uid).then((d) => setPerms((d || []) as ClusterPerm[]))
-
-  const handleSelectUser = (uid: number) => {
-    setSelectedUser(uid)
-    loadPerms(uid)
-  }
-
-  const openModal = () => {
-    form.resetFields()
-    form.setFieldsValue({ permission: 'read', namespace: '' })
-    setModalOpen(true)
-  }
-
-  const handleAdd = async () => {
-    const values = await form.validateFields()
-    await addUserClusterPerm(selectedUser!, values)
-    message.success('已授权')
-    setModalOpen(false)
-    loadPerms(selectedUser!)
-  }
 
   return (
     <div>
+      <div style={{ marginBottom: 12, color: '#666' }}>
+        按项目授权集群：选择一个项目，为其关联集群 / namespace；项目内成员（只读/可操作/管理员）自动获得对应 namespace 的访问与操作权限。
+      </div>
       <Space style={{ marginBottom: 16 }}>
-        <span>选择用户：</span>
-        <Select
-          style={{ width: 220 }} placeholder="选择用户" onChange={handleSelectUser}
-          options={users.map((u) => ({ label: `${u.username}（${u.role}）`, value: u.id }))}
-        />
-        {selectedUser && <Button type="primary" icon={<PlusOutlined />} onClick={openModal}>添加授权</Button>}
+        <span>选择项目：</span>
+        <Select style={{ width: 240 }} placeholder="选择项目" value={projectId} onChange={setProjectId} showSearch optionFilterProp="label"
+          options={projects.map((p) => ({ label: p.name, value: p.id }))} />
       </Space>
-      {!selectedUser ? (
-        <Empty description="请先选择一个用户查看其集群授权" />
+      {!projectId ? (
+        <Empty description="请先选择一个项目，为其授权集群 / namespace" />
       ) : (
-        <Table rowKey="id" dataSource={perms} pagination={false}
-          columns={[
-            { title: '集群', dataIndex: 'cluster_id', render: (id) => clusters.find((c) => c.id === id)?.name || id },
-            { title: '命名空间', dataIndex: 'namespace', render: (n) => n || '全部' },
-            { title: '权限', dataIndex: 'permission', render: (p) => <Tag color={p === 'operate' ? 'green' : 'blue'}>{p}</Tag> },
-            { title: '操作', render: (_, r) => (
-              <Popconfirm title="撤销授权？" onConfirm={async () => { await deleteUserClusterPerm(r.id); loadPerms(selectedUser!) }}>
-                <Button size="small" danger icon={<DeleteOutlined />}>撤销</Button>
-              </Popconfirm>
-            ) },
-          ]} />
+        <ClusterNSTab projectId={projectId} />
       )}
-
-      <Modal title="添加集群授权" open={modalOpen} onOk={handleAdd} onCancel={() => setModalOpen(false)}>
-        <Form form={form} layout="vertical">
-          <Form.Item name="cluster_id" label="集群" rules={[{ required: true }]}>
-            <Select options={clusters.map((c) => ({ label: `${c.name}（${c.env_tag}）`, value: c.id }))} />
-          </Form.Item>
-          <Form.Item name="namespace" label="命名空间（留空=全集群）"><Input /></Form.Item>
-          <Form.Item name="permission" label="权限" rules={[{ required: true }]}>
-            <Select options={[{ value: 'read', label: 'read（只读）' }, { value: 'operate', label: 'operate（可操作）' }]} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }

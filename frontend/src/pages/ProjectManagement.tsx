@@ -130,7 +130,7 @@ export default function ProjectManagement() {
 }
 
 // ============ 集群/namespace Tab ============
-function ClusterNSTab({ projectId }: { projectId: number }) {
+export function ClusterNSTab({ projectId }: { projectId: number }) {
   const [items, setItems] = useState<ProjectClusterNS[]>([])
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [namespaces, setNamespaces] = useState<string[]>([])

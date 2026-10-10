@@ -23,7 +23,7 @@ await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceSca
 await send('Page.navigate',{url},sessionId)
 await sleep(3500)
 for (const t of clicks) {
-  const expr = `(()=>{const el=[...document.querySelectorAll('button,a,.ant-tabs-tab,.ant-menu-item')].find(x=>x.textContent.replace(/\\s+/g,' ').includes(${JSON.stringify(t)}));if(!el)return 'NOT_FOUND';el.click();return 'CLICKED:'+${JSON.stringify(t)}})()`
+  const expr = `(()=>{const el=[...document.querySelectorAll('button,a,.ant-tabs-tab,.ant-menu-item,.ant-select-selector,.ant-select-item-option')].find(x=>x.textContent.replace(/\\s+/g,' ').includes(${JSON.stringify(t)}));if(!el)return 'NOT_FOUND';el.click();return 'CLICKED:'+${JSON.stringify(t)}})()`
   const r = await send('Runtime.evaluate',{expression:expr,returnByValue:true},sessionId)
   console.log('click', r.result?.result?.value)
   await sleep(900)
