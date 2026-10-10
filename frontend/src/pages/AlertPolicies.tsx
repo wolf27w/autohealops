@@ -1,18 +1,16 @@
 // 告警策略页：审核人值班 + 日志告警规则
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Card, Tabs, Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Tag, Popconfirm, message, Calendar } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   getOnDuty, createOnDuty, updateOnDuty, deleteOnDuty,
-  getLogAlertRules, createLogAlertRule, updateLogAlertRule, deleteLogAlertRule, getUsers, getLogSources,
+  getUsers,
   getResourceAlertRules, createResourceAlertRule, updateResourceAlertRule, deleteResourceAlertRule, getClusters,
   getAlertPolicies, updateAlertPolicy, getNotificationConfigs,
   getDutyCalendar, createDutyOverride, deleteDutyOverride,
 } from '../services/api'
-import type { Cluster, LogSource, NotificationConfig, User } from '../types'
+import type { Cluster, NotificationConfig, User } from '../types'
 import type { Dayjs } from 'dayjs'
-import LogAlertRulesPanel from '../components/LogAlertRulesPanel'
 
 const dayTypeLabel: Record<string, string> = { weekday: '工作日', weekend: '周末' }
 
@@ -24,19 +22,6 @@ interface DutyItem {
   start_time?: string
   end_time?: string
   user_ids?: string
-  enabled?: boolean
-  [key: string]: unknown
-}
-
-interface LogAlertRule {
-  id: number
-  name?: string
-  index_pattern?: string
-  log_source_id?: number | null
-  keywords?: string | string[]
-  time_window?: number
-  threshold?: number
-  severity?: string
   enabled?: boolean
   [key: string]: unknown
 }
@@ -143,11 +128,6 @@ function DutyTab() {
       </Modal>
     </Card>
   )
-}
-
-// ============ 日志告警规则 ============
-function LogRuleTab() {
-  return <LogAlertRulesPanel />
 }
 
 // ============ 容器资源阈值规则（Prometheus） ============
@@ -386,7 +366,6 @@ export default function AlertPolicies() {
       { key: 'policy', label: '故障分类策略', children: <PolicyTab /> },
       { key: 'duty', label: '审核人值班', children: <DutyTab /> },
       { key: 'duty-calendar', label: '值班日历', children: <DutyCalendarTab /> },
-      { key: 'log', label: '日志告警规则', children: <LogRuleTab /> },
       { key: 'resource', label: '容器资源阈值', children: <ResourceRuleTab /> },
     ]} />
   )
