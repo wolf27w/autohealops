@@ -1,15 +1,17 @@
 // 主布局：Sider 菜单 + Header + Content（全屏 + 现代配色）
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs } from 'antd'
 import type { MenuProps } from 'antd'
 import {
-  DashboardOutlined, ClusterOutlined, AlertOutlined, UnorderedListOutlined,
+  DashboardOutlined, ClusterOutlined, AlertOutlined, WarningOutlined,
   NotificationOutlined, RobotOutlined, FileTextOutlined, SafetyOutlined,
-  AppstoreOutlined, ClockCircleOutlined, CheckCircleOutlined,
+  AppstoreOutlined, ClockCircleOutlined, FundOutlined,
   BookOutlined, AuditOutlined, BarChartOutlined, UserOutlined,
-  SettingOutlined, LogoutOutlined, DownOutlined, ExperimentOutlined, MedicineBoxOutlined, KeyOutlined,
+  SettingOutlined, LogoutOutlined, DownOutlined, MedicineBoxOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
+  ThunderboltOutlined, ControlOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -25,46 +27,64 @@ interface InAppMessage {
   is_read: boolean
 }
 
-// 菜单：可折叠分组（配合手风琴逻辑：同时只展开一个）
-const menuItems: MenuProps['items'] = [
+// 导航项：一级分组 / 二级菜单 / 三级子项（层级 ≤3）
+interface NavItem {
+  key: string
+  label?: string
+  icon?: ReactNode
+  children?: NavItem[]
+}
+
+// 菜单：6 大模块，层级 ≤3（仅「诊断 → 故障诊断」用到第三级）
+const menuItems: NavItem[] = [
   {
-    label: '监控', key: 'g-monitor',
+    key: 'g-monitor', label: '监控中心', icon: <FundOutlined />,
     children: [
       { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
       { key: '/clusters', icon: <ClusterOutlined />, label: '集群管理' },
     ],
   },
   {
-    label: '告警处理', key: 'g-alert',
+    key: 'g-alert', label: '告警与工单', icon: <WarningOutlined />,
     children: [
       { key: '/alert-handling', icon: <AlertOutlined />, label: '告警处理' },
       { key: '/tickets', icon: <FileTextOutlined />, label: '工单' },
     ],
   },
   {
-    label: '策略配置', key: 'g-policy',
+    key: 'g-diag', label: '智能诊断', icon: <MedicineBoxOutlined />,
     children: [
-      { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
-      { key: '/log-sources', icon: <DatabaseOutlined />, label: '日志源' },
-      { key: '/ai-models', icon: <RobotOutlined />, label: 'AI配置' },
-      { key: '/knowledge', icon: <BookOutlined />, label: '知识库' },
-    ],
-  },
-  {
-    label: '诊断', key: 'g-diag',
-    children: [
-      { key: '/fault-diagnosis/cluster', icon: <ApartmentOutlined />, label: '集群故障诊断' },
-      { key: '/fault-diagnosis/app', icon: <ExperimentOutlined />, label: '应用故障诊断' },
-      { key: '/diagnostic', icon: <MedicineBoxOutlined />, label: '数据库故障诊断' },
+      {
+        key: 'g-diag-fault', label: '故障诊断', icon: <ApartmentOutlined />,
+        children: [
+          { key: '/fault-diagnosis/cluster', label: '集群故障' },
+          { key: '/fault-diagnosis/app', label: '应用故障' },
+          { key: '/diagnostic', label: '数据库故障' },
+        ],
+      },
       { key: '/agent', icon: <MessageOutlined />, label: '应用诊断助手' },
     ],
   },
   {
-    label: '系统', key: 'g-system',
+    key: 'g-auto', label: '自动化运维', icon: <ThunderboltOutlined />,
     children: [
-      { key: '/notify-center', icon: <NotificationOutlined />, label: '通知配置' },
-      { key: '/user-permission', icon: <UserOutlined />, label: '用户与权限' },
+      { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
+    ],
+  },
+  {
+    key: 'g-config', label: '知识配置', icon: <AppstoreOutlined />,
+    children: [
+      { key: '/ai-models', icon: <RobotOutlined />, label: 'AI 配置' },
+      { key: '/knowledge', icon: <BookOutlined />, label: '知识库' },
+      { key: '/log-sources', icon: <DatabaseOutlined />, label: '日志源' },
+      { key: '/notify-center', icon: <NotificationOutlined />, label: '通知配置' },
+    ],
+  },
+  {
+    key: 'g-system', label: '系统管理', icon: <ControlOutlined />,
+    children: [
+      { key: '/user-permission', icon: <UserOutlined />, label: '用户与权限' },
       { key: '/reports', icon: <BarChartOutlined />, label: '报表' },
       { key: '/audit', icon: <AuditOutlined />, label: '审计追溯' },
       { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
@@ -78,24 +98,27 @@ const ADMIN_ONLY_KEYS = new Set([
   '/ai-models', '/custom-tasks', '/settings',
 ])
 
-// 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（空分组一并移除）
-function filterMenuItems(items: MenuProps['items'], admin: boolean): MenuProps['items'] {
-  if (admin) return items
-  return (items || [])
-    .map((item) => {
-      if (!item || !('children' in item) || !item.children) return item
-      const children = (item.children as NonNullable<MenuProps['items']>).filter(
-        (c) => c && !ADMIN_ONLY_KEYS.has(String(c.key)),
-      )
-      if (children.length === 0) return null
-      return { ...item, children }
-    })
-    .filter(Boolean) as MenuProps['items']
+// 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（递归处理三级；空分组一并移除）
+function filterMenuItems(items: NavItem[], admin: boolean): MenuProps['items'] {
+  if (admin) return items as MenuProps['items']
+  const filter = (nodes: NavItem[]): NavItem[] =>
+    (nodes || [])
+      .map((item) => {
+        if (!item) return null
+        if (item.children && item.children.length) {
+          const children = filter(item.children)
+          if (!children.length) return null
+          return { ...item, children }
+        }
+        return ADMIN_ONLY_KEYS.has(String(item.key)) ? null : item
+      })
+      .filter(Boolean) as NavItem[]
+  return filter(items) as MenuProps['items']
 }
 
 export default function MainLayout() {
   // 版本标记：方便确认浏览器加载的是哪一版
-document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
+  document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
   // eslint-disable-next-line no-console
   console.info('[API-OPS] frontend build:', __BUILD_TS__)
   const navigate = useNavigate()
@@ -111,32 +134,49 @@ document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).repl
     setCollapsed(v)
     localStorage.setItem('sider_collapsed', v ? '1' : '0')
   }
-  // 分组折叠（手风琴）：同一时刻只展开一个分组；按当前路由自动展开所属分组
-  const groupOfPath = (p: string) => {
-    for (const g of (menuItems || [])) {
-      const ch = (g as { children?: { key?: string }[] })?.children || []
-      for (const c of ch) {
-        const k = String(c.key || '')
-        if (k && (p === k || p.startsWith(k + '/'))) return String((g as { key?: string })?.key || '')
+
+  // 顶级分组 key（手风琴互斥单位）
+  const TOP_KEYS = menuItems.map((g) => g.key)
+  // 每个顶级分组下、需要与顶级一起展开的二级子菜单 key
+  const SUB_KEYS: Record<string, string[]> = { 'g-diag': ['g-diag-fault'] }
+  // 按当前路由计算应展开的 submenu keys（顶级分组 + 祖先二级），支持三级
+  const openKeysForPath = (p: string): string[] => {
+    for (const g of menuItems) {
+      const walk = (nodes: NavItem[], trail: string[]): string[] | null => {
+        for (const n of nodes || []) {
+          if (n.children && n.children.length) {
+            const r = walk(n.children, [...trail, n.key])
+            if (r) return r
+          } else {
+            const k = n.key
+            if (k && (p === k || p.startsWith(k + '/'))) return [...trail, g.key]
+          }
+        }
+        return null
       }
+      const r = walk(g.children || [], [])
+      if (r) return r
     }
-    return ''
+    return []
   }
+
   // 站内消息中心（铃铛 + 未读 + 列表 + 已读）
   const [unread, setUnread] = useState(0)
-  const [openKeys, setOpenKeys] = useState<string[]>(() => {
-    const g = groupOfPath(location.pathname)
-    return g ? [g] : []
-  })
+  const [openKeys, setOpenKeys] = useState<string[]>(() => openKeysForPath(location.pathname))
   const handleOpenChange = (keys: string[]) => {
-    // 手风琴：只保留最新展开的那个分组
+    // 手风琴只在「顶级分组」间互斥；二级子菜单自由展开
     const latest = keys.find((k) => !openKeys.includes(k))
-    setOpenKeys(latest ? [latest] : [])
+    if (latest && TOP_KEYS.includes(latest)) {
+      const subs = SUB_KEYS[latest] || []
+      setOpenKeys([latest, ...keys.filter((k) => subs.includes(k))])
+    } else {
+      setOpenKeys(keys)
+    }
   }
   useEffect(() => {
     if (collapsed) return
-    const g = groupOfPath(location.pathname)
-    if (g) setOpenKeys([g])
+    const keys = openKeysForPath(location.pathname)
+    if (keys.length) setOpenKeys(keys)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, collapsed])
   const [messages, setMessages] = useState<InAppMessage[]>([])

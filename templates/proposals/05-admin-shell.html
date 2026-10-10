@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>API-OPS 后台布局 · 优化稿</title>
+<style>
+:root{
+  --brand:#12b981;--brand-d:#048c63;--brand-l:#d5f5e5;--brand-xl:#ecfdf5;
+  --ink:#0f2018;--muted:#5a7368;--faint:#8aa196;--line:#d9e6de;--line-2:#eaf2ec;
+  --font:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);color:var(--ink);font-size:13px;-webkit-font-smoothing:antialiased;overflow:hidden}
+.app{display:flex;height:100vh}
+
+/* ================= 侧栏 ================= */
+.sider{width:236px;flex:none;background:linear-gradient(180deg,#0f2a20 0%,#0b211a 100%);
+  border-right:1px solid #0a1d16;display:flex;flex-direction:column;color:#cfe3d7}
+.brand{height:56px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.06);flex:none}
+.brand .logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#34d399,#059669);display:grid;place-items:center;
+  box-shadow:0 6px 16px rgba(16,185,129,.35);flex:none}
+.brand b{color:#fff;font-size:15px;letter-spacing:.4px}
+.brand small{display:block;color:#6f8f80;font-size:9.5px;letter-spacing:2px}
+
+.nav{flex:1;overflow:auto;padding:4px 0 8px}
+.nav::-webkit-scrollbar{width:6px}
+.nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:6px}
+
+/* 一级：分组标题 */
+.grp{display:flex;align-items:center;gap:8px;margin:3px 8px;padding:5px 10px;border-radius:8px;
+  color:#cfe3d7;font-weight:700;font-size:12px;letter-spacing:.4px;cursor:pointer}
+.grp .ic{width:16px;height:16px;display:grid;place-items:center;opacity:.9}
+.grp .ar{margin-left:auto;font-size:10px;opacity:.65;transition:transform .15s}
+.grp.open .ar{transform:rotate(90deg)}
+
+/* 二级：菜单项 */
+.item{display:flex;align-items:center;gap:9px;margin:1px 8px;padding:5px 10px 5px 26px;border-radius:8px;
+  color:#b6cdc0;font-size:12.5px;cursor:pointer}
+.item .ic{width:16px;height:16px;display:grid;place-items:center;opacity:.85}
+.item:hover{background:rgba(255,255,255,.06);color:#fff}
+.item.active{background:var(--brand);color:#fff;box-shadow:0 4px 12px rgba(18,185,129,.35)}
+.item.active .ic{opacity:1}
+
+/* 三级：子项 */
+.sub{display:flex;align-items:center;gap:9px;margin:1px 8px 1px 20px;padding:4px 10px 4px 26px;border-radius:7px;
+  color:#9fb8ab;font-size:12px;cursor:pointer}
+.sub .dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.7;flex:none}
+.sub:hover{background:rgba(255,255,255,.05);color:#fff}
+.sub.active{color:#5eead4;font-weight:600}
+.sub.active .dot{background:#5eead4;opacity:1;box-shadow:0 0 0 3px rgba(94,234,212,.15)}
+
+/* 分组底提示线 */
+.divider{height:1px;margin:6px 16px;background:rgba(255,255,255,.05)}
+
+/* ================= 主区 ================= */
+.main{flex:1;display:flex;flex-direction:column;background:
+  radial-gradient(1100px 520px at 0% -8%,#dcf5e8 0%,transparent 55%),
+  radial-gradient(900px 480px at 108% 0%,#e6f7ee 0%,transparent 50%),
+  linear-gradient(180deg,#f3f8f4,#e8f1ea);min-width:0}
+.hd{height:56px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:#fff;border-bottom:1px solid var(--line-2)}
+.hd .l{display:flex;align-items:center;gap:12px}
+.hd .t{font-size:16px;font-weight:700}
+.crumb{color:var(--faint);font-size:12px}
+.crumb b{color:var(--muted);font-weight:600}
+.hd .r{display:flex;align-items:center;gap:14px}
+.hbtn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink);font-size:12.5px;cursor:pointer}
+.hbtn.p{background:linear-gradient(135deg,#12b981,#048c63);color:#fff;border:0;box-shadow:0 6px 14px rgba(18,185,129,.3)}
+.bell{position:relative;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;border:1px solid var(--line);background:#fff}
+.bell i{position:absolute;top:-5px;right:-5px;background:#ef4444;color:#fff;font-size:10px;font-style:normal;line-height:1;padding:3px 5px;border-radius:20px;font-weight:700}
+.ava{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.ava .c{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#34d399,#0d9488);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700}
+
+.body{flex:1;overflow:auto;padding:14px}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 14px}
+.kpi .k{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}
+.kpi .v{font-size:24px;font-weight:800;margin:6px 0 2px;font-family:var(--mono)}
+.kpi .d{font-size:11px;color:var(--faint)}
+.kpi .d.up{color:#059669}.kpi .d.dn{color:#ef4444}
+.dotc{width:8px;height:8px;border-radius:3px;display:inline-block}
+
+.row2{display:grid;grid-template-columns:1.6fr 1fr;gap:12px;margin-top:12px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}
+.panel h3{font-size:13.5px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+.panel h3 .more{font-size:11.5px;color:var(--brand-d);font-weight:600}
+.legend{display:flex;gap:12px;font-size:11px;color:var(--muted);margin-top:8px}
+.legend span{display:flex;align-items:center;gap:5px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--muted);font-weight:600;padding:9px 12px;background:#f4faf6}
+td{padding:10px 12px;border-top:1px solid var(--line-2)}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.pill.err{background:#fef2f2;color:#ef4444;border:1px solid #fecaca}
+.pill.warn{background:#fffbeb;color:#d97706;border:1px solid #fde68a}
+.pill.ok{background:#ecfdf5;color:#059669;border:1px solid #a7f3d0}
+.pill.info{background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ============ 侧栏：三级导航 ============ -->
+  <aside class="sider">
+    <div class="brand">
+      <div class="logo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#04231a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/>
+          <path d="M12 7.2v4M12 11.2 6.6 16.9M12 11.2l5.4 5.7"/>
+        </svg>
+      </div>
+      <div><b>API-OPS</b><small>自愈运维平台</small></div>
+    </div>
+
+    <nav class="nav">
+      <!-- 监控中心 -->
+      <div class="grp open"><span class="ic">📊</span>监控中心<span class="ar">›</span></div>
+      <div class="item"><span class="ic">◱</span>仪表盘</div>
+      <div class="item"><span class="ic">🖥</span>实时大屏</div>
+      <div class="item"><span class="ic">☷</span>集群管理</div>
+
+      <!-- 告警工单 -->
+      <div class="grp open"><span class="ic">🔔</span>告警与工单<span class="ar">›</span></div>
+      <div class="item active"><span class="ic">⚠</span>告警处理</div>
+      <div class="item"><span class="ic">📄</span>工单</div>
+
+      <!-- 智能诊断（三级演示） -->
+      <div class="grp open"><span class="ic">🩺</span>智能诊断<span class="ar">›</span></div>
+      <div class="item open"><span class="ic">🧩</span>故障诊断</div>
+      <div class="sub"><span class="dot"></span>集群故障</div>
+      <div class="sub active"><span class="dot"></span>应用故障</div>
+      <div class="sub"><span class="dot"></span>数据库故障</div>
+      <div class="item"><span class="ic">💬</span>应用诊断助手</div>
+
+      <!-- 自动化运维 -->
+      <div class="grp open"><span class="ic">⚙</span>自动化运维<span class="ar">›</span></div>
+      <div class="item"><span class="ic">🛡</span>自愈策略</div>
+      <div class="item"><span class="ic">⏱</span>定时任务</div>
+      <div class="item"><span class="ic">⧉</span>批量操作</div>
+
+      <!-- 知识配置 -->
+      <div class="grp open"><span class="ic">📚</span>知识配置<span class="ar">›</span></div>
+      <div class="item"><span class="ic">🤖</span>AI 配置</div>
+      <div class="item"><span class="ic">📖</span>知识库</div>
+      <div class="item"><span class="ic">🗄</span>日志源</div>
+      <div class="item"><span class="ic">📢</span>通知配置</div>
+
+      <!-- 系统管理 -->
+      <div class="grp open"><span class="ic">🧰</span>系统管理<span class="ar">›</span></div>
+      <div class="item"><span class="ic">👤</span>用户与权限</div>
+      <div class="item"><span class="ic">📈</span>报表</div>
+      <div class="item"><span class="ic">🔍</span>审计追溯</div>
+      <div class="item"><span class="ic">🔧</span>系统设置</div>
+    </nav>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <div class="main">
+    <header class="hd">
+      <div class="l">
+        <span class="t">告警处理</span>
+        <span class="crumb">告警与工单 / <b>告警处理</b></span>
+      </div>
+      <div class="r">
+        <button class="hbtn p">＋ 新建工单</button>
+        <button class="hbtn">⎋ 全屏</button>
+        <div class="bell">🔔<i>7</i></div>
+        <div class="ava"><span class="c">吴</span>admin · 管理员</div>
+      </div>
+    </header>
+
+    <div class="body">
+      <!-- KPI -->
+      <div class="kpis">
+        <div class="kpi"><div class="k"><span class="dotc" style="background:#12b981"></span>集群</div><div class="v">4</div><div class="d up">全部健康</div></div>
+        <div class="kpi"><div class="k"><span class="dotc" style="background:#0ea5e9"></span>节点</div><div class="v">128</div><div class="d up">就绪 128</div></div>
+        <div class="kpi"><div class="k"><span class="dotc" style="background:#6366f1"></span>运行负载</div><div class="v">342</div><div class="d">Pod 实例</div></div>
+        <div class="kpi"><div class="k"><span class="dotc" style="background:#ef4444"></span>活跃告警</div><div class="v" style="color:#ef4444">7</div><div class="d dn">↑ 环比 +2</div></div>
+        <div class="kpi"><div class="k"><span class="dotc" style="background:#f59e0b"></span>待处理工单</div><div class="v" style="color:#d97706">3</div><div class="d">2 已指派</div></div>
+      </div>
+
+      <!-- 图表区 -->
+      <div class="row2">
+        <div class="panel">
+          <h3>告警趋势（近 7 天）<span class="more">查看全部 ›</span></h3>
+          <svg viewBox="0 0 620 170" width="100%" height="170">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#12b981" stop-opacity=".35"/>
+                <stop offset="1" stop-color="#12b981" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <g stroke="#eaf2ec">
+              <line x1="0" y1="34" x2="620" y2="34"/><line x1="0" y1="74" x2="620" y2="74"/>
+              <line x1="0" y1="114" x2="620" y2="114"/><line x1="0" y1="154" x2="620" y2="154"/>
+            </g>
+            <path d="M0 140 L88 118 L177 126 L265 82 L354 96 L442 54 L531 66 L620 30 L620 154 L0 154 Z" fill="url(#g)"/>
+            <path d="M0 140 L88 118 L177 126 L265 82 L354 96 L442 54 L531 66 L620 30" fill="none" stroke="#12b981" stroke-width="2.4" stroke-linejoin="round"/>
+            <path d="M0 152 L88 146 L177 150 L265 138 L354 144 L442 128 L531 134 L620 118" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 4"/>
+            <g fill="#12b981"><circle cx="442" cy="54" r="3.5"/><circle cx="620" cy="30" r="3.5"/></g>
+          </svg>
+          <div class="legend">
+            <span><span class="dotc" style="background:#12b981"></span>新增告警</span>
+            <span><span class="dotc" style="background:#f59e0b"></span>已解决</span>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>告警等级分布</h3>
+          <div style="display:flex;align-items:center;gap:16px">
+            <svg width="130" height="130" viewBox="0 0 42 42">
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="#eaf2ec" stroke-width="6"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="#ef4444" stroke-width="6" stroke-dasharray="40 60" stroke-dashoffset="25"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="#f59e0b" stroke-width="6" stroke-dasharray="30 70" stroke-dashoffset="85"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="#0ea5e9" stroke-width="6" stroke-dasharray="30 70" stroke-dashoffset="55"/>
+              <text x="21" y="21" text-anchor="middle" font-size="7" font-weight="700" fill="#0f2018">7</text>
+              <text x="21" y="26" text-anchor="middle" font-size="3.4" fill="#8aa196">活跃</text>
+            </svg>
+            <div style="font-size:12px;line-height:2;color:var(--muted)">
+              <div><span class="dotc" style="background:#ef4444"></span> 严重 <b style="color:var(--ink)">2</b></div>
+              <div><span class="dotc" style="background:#f59e0b"></span> 警告 <b style="color:var(--ink)">3</b></div>
+              <div><span class="dotc" style="background:#0ea5e9"></span> 提示 <b style="color:var(--ink)">2</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 表格 -->
+      <div class="panel" style="margin-top:12px">
+        <h3>最新告警<span class="more">进入告警处理 ›</span></h3>
+        <table>
+          <thead><tr><th>等级</th><th>告警</th><th>集群 / 命名空间</th><th>对象</th><th>时间</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill err">● 严重</span></td><td>Pod 反复重启</td><td>prod / efreight-prm</td><td>order-svc-7f9c</td><td>09:11</td><td><span class="pill info">处理中</span></td></tr>
+            <tr><td><span class="pill warn">● 警告</span></td><td>节点磁盘压力</td><td>prod / k8s-node-12</td><td>Node</td><td>09:04</td><td><span class="pill warn">待确认</span></td></tr>
+            <tr><td><span class="pill warn">● 警告</span></td><td>HPA 命中内存阈值</td><td>prod / efreight-afbase</td><td>Deployment/hpa</td><td>08:52</td><td><span class="pill ok">已自愈</span></td></tr>
+            <tr><td><span class="pill err">● 严重</span></td><td>数据库连接数超限</td><td>db / api_ops</td><td>MySQL 192.168.6.99</td><td>08:47</td><td><span class="pill info">已建工单</span></td></tr>
+            <tr><td><span class="pill err">● 提示</span></td><td>日志源响应变慢</td><td>observability</td><td>ES-cluster</td><td>08:31</td><td><span class="pill ok">已恢复</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
