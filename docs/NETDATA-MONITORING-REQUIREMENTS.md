@@ -67,7 +67,7 @@
 ### R1 集群开关驱动（默认关；开=安装/启动，关=停服务不卸载）
 
 - **触发点**：集群接入**默认不装** Netdata（开关默认关）；用户打开「Netdata 监控」开关 → `POST /clusters/{id}/monitoring/enable` **异步**下发安装/启动（不阻塞接入流程）。
-- **关闭开关** → `POST /clusters/{id}/monitoring/disable` **仅停服务**（停 parent/child 工作负载），**保留 PVC 及全部资源**，不卸载。
+- **关闭开关** → `POST /clusters/{id}/monitoring/disable` **仅停服务**（parent/child 工作负载 **scale 到 0**），**保留 PVC 及全部资源**，不卸载；重开秒级恢复。
 - **重开**：复用已有 PVC 恢复运行（历史数据延续）。
 - **复用现有模式**：mirror `rbac_service.setup_cluster_rbac()` 的「自举」。
 - **下发内容**（目标集群，命名空间 `apiops-monitoring`）：
