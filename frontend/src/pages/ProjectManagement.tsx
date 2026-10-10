@@ -6,7 +6,7 @@ import {
   getProjects, createProject, updateProject, deleteProject,
   getProjectClusterNS, addProjectClusterNS, deleteProjectClusterNS,
   getProjectDBs, addProjectDB, deleteProjectDB,
-  getProjectUsers, addProjectUser, deleteProjectUser,
+  getProjectUsers, addProjectUsers, deleteProjectUser,
   getClusters, getClusterNamespaces, getDBConnections, getUsers,
   getNotificationConfigs,
 } from '../services/api'
@@ -36,6 +36,7 @@ interface ProjectDB {
 
 interface ProjectUser {
   id: number
+  user_id?: number
   username?: string
   permission?: string
 }
@@ -212,30 +213,34 @@ function DBTab({ projectId }: { projectId: number }) {
 function UsersTab({ projectId }: { projectId: number }) {
   const [items, setItems] = useState<ProjectUser[]>([])
   const [users, setUsers] = useState<User[]>([])
-  const [userId, setUserId] = useState<number>()
+  const [userIds, setUserIds] = useState<number[]>([])
   const [permission, setPermission] = useState('read')
 
   const load = () => getProjectUsers(projectId).then((d) => setItems((d || []) as ProjectUser[]))
   useEffect(() => { load(); getUsers().then((d) => setUsers(d || [])) }, [])
 
+  // 待选用户 = 未授权的用户（已授权的不再出现在下拉里）
+  const unassigned = users.filter((u) => !items.some((i) => i.user_id === u.id))
+
   const add = async () => {
-    if (!userId) { message.warning('请选择用户'); return }
-    await addProjectUser(projectId, { user_id: userId, permission })
-    message.success('已授权'); setUserId(undefined); load()
+    if (!userIds.length) { message.warning('请选择用户'); return }
+    await addProjectUsers(projectId, { user_ids: userIds, permission })
+    message.success(`已批量授权 ${userIds.length} 位用户`); setUserIds([]); load()
   }
 
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
-        <Select placeholder="选择用户" style={{ width: 180 }} value={userId} onChange={setUserId} showSearch optionFilterProp="label"
-          options={users.map((u) => ({ value: u.id, label: u.username }))} />
+        <Select mode="multiple" placeholder="选择用户（可多选）" style={{ minWidth: 280 }} value={userIds} onChange={setUserIds}
+          showSearch optionFilterProp="label" maxTagCount="responsive"
+          options={unassigned.map((u) => ({ value: u.id, label: u.username }))} />
         <Select style={{ width: 150 }} value={permission} onChange={setPermission}
           options={[
             { value: 'read', label: '只读' },
             { value: 'operate', label: '可操作' },
             { value: 'manager', label: '管理员' },
           ]} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={add}>授权</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={add} disabled={!userIds.length}>批量授权</Button>
       </Space>
       <Table rowKey="id" dataSource={items} size="small" pagination={false}
         columns={[

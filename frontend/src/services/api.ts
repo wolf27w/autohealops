@@ -432,6 +432,7 @@ export const addProjectDB = (id: number, data: Payload) => http.post(`/projects/
 export const deleteProjectDB = (id: number, itemId: number) => http.delete(`/projects/${id}/db/${itemId}`)
 export const getProjectUsers = (id: number) => http.get(`/projects/${id}/users`)
 export const addProjectUser = (id: number, data: Payload) => http.post(`/projects/${id}/users`, data)
+export const addProjectUsers = (id: number, data: Payload) => http.post(`/projects/${id}/users/batch`, data)
 export const deleteProjectUser = (id: number, permId: number) => http.delete(`/projects/${id}/users/${permId}`)
 
 // ============ 告警订阅（用户自配）============

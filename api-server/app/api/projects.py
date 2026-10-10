@@ -268,6 +268,50 @@ async def add_project_user(project_id: int, payload: dict, user=Depends(require_
     return {"code": 200, "message": "success", "data": None}
 
 
+@router.post("/projects/{project_id}/users/batch")
+async def add_project_users_batch(project_id: int, payload: dict, user=Depends(require_admin)):
+    """批量授权：一次把多个用户授权到项目（幂等：已授权则更新权限）"""
+    user_ids = payload.get("user_ids")
+    permission = payload.get("permission", "read")
+    if not isinstance(user_ids, list) or not user_ids:
+        return {"code": 400, "message": "user_ids 必填（数组）", "data": None}
+    if permission not in ("read", "operate", "manager"):
+        return {"code": 400, "message": "参数错误（permission 需为 read/operate/manager）", "data": None}
+    # 去重 + 过滤非法值
+    ids = []
+    for uid in user_ids:
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            continue
+        if uid not in ids:
+            ids.append(uid)
+    if not ids:
+        return {"code": 400, "message": "user_ids 无效", "data": None}
+    added = updated = 0
+    async with async_session() as session:
+        for uid in ids:
+            exists = (await session.execute(
+                select(UserProjectPermission).where(
+                    UserProjectPermission.project_id == project_id,
+                    UserProjectPermission.user_id == uid,
+                )
+            )).scalar_one_or_none()
+            if exists:
+                if exists.permission != permission:
+                    exists.permission = permission
+                    updated += 1
+            else:
+                session.add(UserProjectPermission(project_id=project_id, user_id=uid, permission=permission))
+                added += 1
+        await session.commit()
+    # 云原生 RBAC：成员变更 → reconcile 项目关联的所有集群
+    import asyncio
+    from app.services import rbac_service
+    asyncio.create_task(rbac_service.reconcile_project_clusters(project_id))
+    return {"code": 200, "message": "success", "data": {"added": added, "updated": updated}}
+
+
 @router.delete("/projects/{project_id}/users/{perm_id}")
 async def delete_project_user(project_id: int, perm_id: int, user=Depends(require_admin)):
     async with async_session() as session:
