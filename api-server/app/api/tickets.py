@@ -29,9 +29,9 @@ async def list_tickets(status: str | None = None, priority: str | None = None,
 
 
 @router.get("/stats")
-async def get_ticket_stats(user=Depends(require_any_user)):
-    """当前用户处理工单的统计（处理人=当前用户 按状态分布 + 我创建数）"""
-    data = await ticket_service.ticket_stats(user)
+async def get_ticket_stats(year: int | None = None, user=Depends(require_any_user)):
+    """工单统计（按自然年，默认今年）：该年工单按状态分布"""
+    data = await ticket_service.ticket_stats(user, year)
     return {"code": 200, "message": "success", "data": data}
 
 

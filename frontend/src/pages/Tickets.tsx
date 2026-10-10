@@ -59,8 +59,9 @@ export default function Tickets() {
   const [clusters, setClusters] = useState<Cluster[]>([])
   // N1 补充：DB 类工单可关联数据库连接
   const [dbOptions, setDbOptions] = useState<{ value: number; label: string }[]>([])
-  // 当前用户处理工单统计（处理人=当前用户 按状态分布）
+  // 工单统计（按自然年，默认今年）
   const [stats, setStats] = useState<TicketStats | null>(null)
+  const [statYear, setStatYear] = useState<number>(new Date().getFullYear())
 
   const loadList = () => {
     setLoading(true)
@@ -79,7 +80,7 @@ export default function Tickets() {
   }
 
   const loadStats = () => {
-    getTicketStats().then((d) => setStats(d ?? null)).catch(() => {})
+    getTicketStats(statYear).then((d) => setStats(d ?? null)).catch(() => {})
   }
 
   const loadDetail = (id: number) => {
@@ -89,7 +90,7 @@ export default function Tickets() {
   }
 
   useEffect(() => { loadList() }, [page, status, priority, source, clusterId, keyword, dateRange]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { loadStats() }, [])
+  useEffect(() => { loadStats() }, [statYear]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     getUsers().then((d) => setUsers(d ?? [])).catch(() => {})
     getClusters().then((d) => setClusters(d ?? [])).catch(() => {})
@@ -186,7 +187,10 @@ export default function Tickets() {
 
   return (
     <div>
-      <Card size="small" style={{ marginBottom: 12 }} title={stats?.scope === 'all' ? '全部工单' : '我参与的工单'}>
+      <Card size="small" style={{ marginBottom: 12 }}
+        title={`${stats?.scope === 'all' ? '全部工单' : '我参与的工单'} · ${statYear} 年`}
+        extra={<Select size="small" style={{ width: 110 }} value={statYear} onChange={setStatYear}
+          options={(stats?.years?.length ? stats.years : [statYear]).map((y) => ({ value: y, label: `${y} 年` }))} />}>
         <Row gutter={[12, 12]}>
           <Col xs={12} sm={8} md={4}>
             <Statistic title="待受理" value={stats?.mine?.open ?? 0} prefix={<ClockCircleOutlined style={{ color: '#8c8c8c' }} />} />

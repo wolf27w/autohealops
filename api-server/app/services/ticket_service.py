@@ -15,7 +15,7 @@ import secrets
 import time
 from datetime import datetime
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -886,13 +886,19 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-async def ticket_stats(user) -> dict:
-    """工单统计（老板 2026-09-23 口径）：
-    - admin：全部工单按状态分布（全局处理进度）
-    - 其他用户：自己参与的工单（创建 ∪ 指派）按状态分布 + 我创建数
+async def ticket_stats(user, year: int | None = None) -> dict:
+    """工单统计（按自然年，默认今年）：
+    - admin：该年全部工单按状态分布（全局处理进度）
+    - 其他用户：该年自己参与的工单（创建 ∪ 指派）按状态分布 + 我创建数
     """
     uid = getattr(user, "id", None)
     is_admin = getattr(user, "role", "") == "admin"
+    now_year = datetime.now().year
+    if not year:
+        year = now_year
+    ystart = datetime(year, 1, 1)
+    yend = datetime(year + 1, 1, 1)
+    year_cond = and_(Ticket.created_at >= ystart, Ticket.created_at < yend)
 
     def _dist(rows) -> dict:
         m = {s: c for s, c in rows}
@@ -905,25 +911,31 @@ async def ticket_stats(user) -> dict:
         }
 
     async with async_session() as session:
+        # 可选年份（有工单的年份 ∪ 今年），降序
+        yrows = (await session.execute(
+            select(func.year(Ticket.created_at)).distinct()
+        )).all()
+        years = sorted({int(r[0]) for r in yrows if r[0] is not None} | {now_year, now_year - 1}, reverse=True)
+
         if is_admin:
             rows = (await session.execute(
-                select(Ticket.status, func.count()).group_by(Ticket.status)
+                select(Ticket.status, func.count()).where(year_cond).group_by(Ticket.status)
             )).all()
-            return {"scope": "all", "mine": _dist(rows), "created": 0}
+            return {"scope": "all", "year": year, "years": years, "mine": _dist(rows), "created": 0}
 
         mine_rows = []
         if uid is not None:
             mine_rows = (await session.execute(
                 select(Ticket.status, func.count())
-                .where(or_(Ticket.created_by == uid, Ticket.assignee_id == uid))
+                .where(and_(or_(Ticket.created_by == uid, Ticket.assignee_id == uid), year_cond))
                 .group_by(Ticket.status)
             )).all()
         created = 0
         if uid is not None:
             created = (await session.execute(
-                select(func.count()).select_from(Ticket).where(Ticket.created_by == uid)
+                select(func.count()).select_from(Ticket).where(and_(Ticket.created_by == uid, year_cond))
             )).scalar() or 0
-        return {"scope": "mine", "mine": _dist(mine_rows), "created": created}
+        return {"scope": "mine", "year": year, "years": years, "mine": _dist(mine_rows), "created": created}
 
 
 async def get_ticket(ticket_id: int, user) -> dict | None:
