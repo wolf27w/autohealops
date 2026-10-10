@@ -65,6 +65,8 @@ DEFAULT_SETTINGS = {
     "snapshot_retention_days": ("7", "快照/指标/慢SQL 历史保留天数（默认 7，超期每日清理）"),
     # 统一告警通知策略（N8）：分级渠道 + 全局静默窗口，全平台一份
     "alert_notify_policy": (json.dumps(ALERT_NOTIFY_POLICY_DEFAULT, ensure_ascii=False), "统一告警通知策略 JSON（分级渠道/静默窗口）"),
+    # 外部系统接入 token（供外部监控/运维系统调 /api/v1/external 查询/创建工单）
+    "external_ticket_token": ("", "外部工单接入 token（外部系统调 /api/v1/external 用）"),
 }
 
 

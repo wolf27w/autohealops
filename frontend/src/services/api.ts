@@ -379,6 +379,8 @@ export const updateSettings = (data: Payload) => http.put('/settings', data)
 // Embedding 配置连通性测试（可传未保存配置做「先测再存」）
 export const testEmbedding = (data?: Payload) => http.post('/settings/embedding/test', data ?? {})
 export const changePassword = (data: Payload) => http.post('/auth/change-password', data)
+export const getExternalToken = () => http.get('/external/tickets/token')
+export const regenerateExternalToken = () => http.post('/external/tickets/token/regenerate')
 
 // ============ AI 诊断助手（会话式 Agent）============
 export const createAgentSession = (data: Payload) => http.post('/agent/sessions', data)

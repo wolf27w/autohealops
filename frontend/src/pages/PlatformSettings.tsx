@@ -1,7 +1,7 @@
 // 系统设置页：平台级配置（Prometheus/ES/LDAP）+ 密码修改
 import { useEffect, useState } from 'react'
 import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider, Select, Space } from 'antd'
-import { getSettings, updateSettings, changePassword, testEmbedding } from '../services/api'
+import { getSettings, updateSettings, changePassword, testEmbedding, getExternalToken, regenerateExternalToken } from '../services/api'
 import RiskPolicy from './RiskPolicy'
 
 export default function PlatformSettings() {
@@ -9,6 +9,7 @@ export default function PlatformSettings() {
   // Embedding 连通性测试状态（N: 配置就绪后可直接验证）
   const [embTest, setEmbTest] = useState<{ ok: boolean; msg: string } | null>(null)
   const [embTesting, setEmbTesting] = useState(false)
+  const [extToken, setExtToken] = useState('')
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
 
@@ -175,6 +176,40 @@ export default function PlatformSettings() {
                   </Form.Item>
                   <Button type="primary" onClick={handleSave}>保存配置</Button>
                 </Form>
+              </Card>
+            ),
+          },
+          {
+            key: 'external',
+            label: '外部接入',
+            children: (
+              <Card>
+                <Divider orientation="left">外部工单接入（供外部监控/运维系统对接）</Divider>
+                <div style={{ marginBottom: 12, fontSize: 13, color: '#666' }}>
+                  外部系统携带此 token 调用 API 查询/创建工单（请求头 <code>X-External-Token</code>）。外部建单 source 记为「external」，平台内可见。
+                </div>
+                <Space>
+                  <Button onClick={async () => {
+                    const d = await getExternalToken() as { token?: string }
+                    setExtToken(d?.token || '')
+                  }}>查看 / 生成 Token</Button>
+                  <Button danger onClick={async () => {
+                    await regenerateExternalToken()
+                    const d = await getExternalToken() as { token?: string }
+                    setExtToken(d?.token || '')
+                    message.success('Token 已重置')
+                  }}>重置 Token</Button>
+                </Space>
+                {extToken && (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}>Token：</div>
+                    <Input.TextArea readOnly value={extToken} autoSize={{ minRows: 1, maxRows: 3 }} style={{ fontFamily: 'monospace' }} />
+                    <div style={{ marginTop: 10, fontSize: 12, color: '#999', lineHeight: 1.9 }}>
+                      创建工单：<br />
+                      <code>curl -X POST https://&lt;平台地址&gt;/api/v1/external/tickets -H "X-External-Token: {extToken}" -H "Content-Type: application/json" -d {'{"title":"磁盘告警","priority":"high","description":"..."}'}</code>
+                    </div>
+                  </div>
+                )}
               </Card>
             ),
           },
