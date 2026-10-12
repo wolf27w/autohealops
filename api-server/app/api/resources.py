@@ -814,3 +814,25 @@ async def isolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: d
     if not r2.get("success"):
         return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
     return {"code": 200, "message": "success", "data": {"pod": pod_name, "app": str(app) + "-ALERT"}}
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/logs")
+async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, name: str,
+                                   container: str = "", tail: int = 200, previous: bool = False,
+                                   user=Depends(require_any_user)):
+    """聚合日志（R5）：拉取 Deployment 下所有 Pod 的日志（最多 60 个，tail 截断）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    tail = max(1, min(int(tail or 200), 2000))
+    pods_r = await executor_client.acall(executor_client.list_deployment_pods, cluster_id, namespace, name)
+    if not pods_r.get("success"):
+        return {"code": 500, "message": pods_r.get("message") or "列 Pod 失败", "data": None}
+    pods = pods_r.get("pods", [])[:60]
+    results = []
+    for p in pods:
+        r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, p.get("name"),
+                                        container, tail, previous)
+        results.append({"pod": p.get("name"), "phase": p.get("phase"),
+                        "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
+    return {"code": 200, "message": "success",
+            "data": {"kind": kind, "name": name, "tail": tail, "previous": previous, "pods": results}}

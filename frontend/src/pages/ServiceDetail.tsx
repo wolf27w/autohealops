@@ -1,6 +1,6 @@
 // 服务详情页（专项 D）：工作负载概览 + 副本增减 + 探针编辑 + 回滚/重启/重建 + Pods 列表（监控/日志/进容器/YAML）
 import { useEffect, useRef, useState } from 'react'
-import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider, Collapse } from 'antd'
+import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider, Collapse, Spin } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
@@ -9,8 +9,9 @@ import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYa
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
+import type { AggLogPod } from '../services/api'
 
 const KIND_LABEL: Record<string, string> = {
   deployment: '无状态 Deployment', statefulset: '有状态 StatefulSet',
@@ -53,6 +54,9 @@ export default function ServiceDetail() {
   const [probeForm] = Form.useForm()
   const [imageModal, setImageModal] = useState(false)
   const [imageForm] = Form.useForm()
+  const [aggLogsOpen, setAggLogsOpen] = useState(false)
+  const [aggLogs, setAggLogs] = useState<AggLogPod[]>([])
+  const [aggLogsLoading, setAggLogsLoading] = useState(false)
   const [metricsPod, setMetricsPod] = useState<PodTarget | null>(null)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
@@ -146,6 +150,14 @@ export default function ServiceDetail() {
     load()
   }
 
+  const loadAggLogs = async () => {
+    setAggLogsOpen(true); setAggLogsLoading(true); setAggLogs([])
+    getWorkloadLogs(clusterId, namespace, kind, name, { tail: 500 })
+      .then((d) => setAggLogs(d.pods || []))
+      .catch(() => {})
+      .finally(() => setAggLogsLoading(false))
+  }
+
   const handleProbeSubmit = async () => {
     const v = await probeForm.validateFields()
     await updateWorkloadProbe(clusterId, {
@@ -201,6 +213,7 @@ export default function ServiceDetail() {
                 { key: 'restart', label: '滚动重启' },
                 { key: 'yaml', label: '编辑 YAML（整个服务）' },
                 { key: 'image', label: '更新镜像' },
+                { key: 'logs', label: '聚合日志' },
                 ...(kind === 'deployment' ? [
                   { key: 'undo', label: '回滚上一版本' },
                   { key: 'probe', label: '编辑探针' },
@@ -212,6 +225,7 @@ export default function ServiceDetail() {
                 if (key === 'restart') handleRollout('restart')
                 else if (key === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
                 else if (key === 'image') openImageModal()
+                else if (key === 'logs') loadAggLogs()
                 else if (key === 'undo') { Modal.confirm({ title: '回滚到上一版本？', onOk: () => handleRollout('undo') }) }
                 else if (key === 'probe') openProbe()
                 else if (key === 'recreate') { Modal.confirm({ title: '确认重新创建该服务？', okButtonProps: { danger: true }, onOk: () => handleRecreate() }) }
@@ -301,6 +315,17 @@ export default function ServiceDetail() {
           <Form.Item name="container" label="容器名（空=第一个容器）"><Input placeholder="如 app" /></Form.Item>
           <Form.Item name="image" label="镜像" rules={[{ required: true, message: '请输入镜像' }]}><Input placeholder="harbor.efreight.cn/xinnuo/xxx:tag" /></Form.Item>
         </Form>
+      </Modal>
+      <Modal open={aggLogsOpen} title={`聚合日志：${name}（${aggLogs.length} Pod）`} footer={null} onCancel={() => setAggLogsOpen(false)} width={900}>
+        <Spin spinning={aggLogsLoading}>
+          <Collapse size="small" items={aggLogs.map((p) => ({
+            key: p.pod,
+            label: <Space><b>{p.pod}</b><Tag color={p.phase === 'Running' ? 'green' : 'red'}>{p.phase}</Tag></Space>,
+            children: p.success
+              ? <pre style={{ maxHeight: 320, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{p.logs || '(无日志)'}</pre>
+              : <div style={{ color: '#cf1322' }}>{p.error}</div>,
+          }))} />
+        </Spin>
       </Modal>
       <Modal title={`编辑探针：${name}`} open={probeModal} onOk={handleProbeSubmit} onCancel={() => setProbeModal(false)} width={560}>
         <Form form={probeForm} layout="vertical">

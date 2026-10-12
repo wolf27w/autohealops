@@ -502,4 +502,9 @@ export const updateWorkloadImage = (clusterId: number, kind: string, namespace: 
 export const isolatePod = (clusterId: number, ns: string, pod: string, data: Payload = {}) =>
   http.post<{ pod: string; app: string }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/isolate`, data)
 
+export interface AggLogPod { pod: string; phase: string; success: boolean; logs: string; error: string }
+export const getWorkloadLogs = (clusterId: number, namespace: string, kind: string, name: string, params?: { container?: string; tail?: number; previous?: boolean }) =>
+  http.get<{ kind: string; name: string; tail: number; previous: boolean; pods: AggLogPod[] }>(
+    `/resources/clusters/${clusterId}/namespaces/${namespace}/workloads/${kind}/${name}/logs`, { params })
+
 export default api
