@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/api-ops-platform/k8s-executor/internal/admission"
 	"github.com/api-ops-platform/k8s-executor/internal/config"
 	"github.com/api-ops-platform/k8s-executor/internal/database"
 	execgrpc "github.com/api-ops-platform/k8s-executor/internal/grpc"
@@ -79,6 +80,15 @@ func main() {
 	pb.RegisterExecutorServiceServer(grpcServer, server)
 	reflection.Register(grpcServer)
 
+	// 9.5 资源治理·准入 webhook（可选，默认关）
+	var admissionSrv *admission.Server
+	if cfg.AdmissionEnabled && cfg.AdmissionAddr != "" {
+		admissionSrv = admission.NewServer(cfg.AdmissionClusterID, cfg.AdmissionAddr, cfg.AdmissionCertFile, cfg.AdmissionKeyFile, logger)
+		if err := admissionSrv.Start(ctx); err != nil {
+			logger.Warn("准入 webhook 启动失败", zap.Error(err))
+		}
+	}
+
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
 		logger.Fatal("gRPC 监听失败", zap.String("port", cfg.GRPCPort), zap.Error(err))
@@ -98,6 +108,9 @@ func main() {
 	<-sigCh
 	logger.Info("收到退出信号，优雅关闭...")
 	grpcServer.GracefulStop()
+	if admissionSrv != nil {
+		admissionSrv.Stop()
+	}
 	cancel()
 }
 
