@@ -4,22 +4,14 @@ import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Modal, Form, Input, Select, Space, Tag, message, Popconfirm, Switch, Empty,
 } from 'antd'
-import { PlusOutlined, BellOutlined, DeleteOutlined } from '@ant-design/icons'
+import { BellOutlined } from '@ant-design/icons'
 import {
-  getUsers, getClusters, getDBConnections,
-  getUserDBPerms, addUserDBPerm, deleteUserDBPerm,
-  getProjects,
+  getClusters, getProjects,
   getSubscriptions, addSubscription, deleteSubscription,
 } from '../services/api'
-import type { Cluster, DBConnection, User } from '../types'
-import ProjectManagement, { ClusterNSTab } from './ProjectManagement'
+import type { Cluster } from '../types'
+import ProjectManagement, { ClusterNSTab, DBTab } from './ProjectManagement'
 import { getCurrentUser } from '../utils/auth'
-
-interface DBPerm {
-  id: number
-  db_connection_id?: number
-  permission?: string
-}
 
 interface Subscription {
   id: number
@@ -70,68 +62,30 @@ function ClusterPerms() {
   )
 }
 
-// ============ 数据库授权（admin）============
+// ============ 数据库授权（admin）：按项目授权，项目内成员自动继承 ============
 function DBPerms() {
-  const [users, setUsers] = useState<User[]>([])
-  const [conns, setConns] = useState<DBConnection[]>([])
-  const [selectedUser, setSelectedUser] = useState<number | null>(null)
-  const [perms, setPerms] = useState<DBPerm[]>([])
-  const [modalOpen, setModalOpen] = useState(false)
-  const [form] = Form.useForm()
+  const [projects, setProjects] = useState<{ id: number; name: string }[]>([])
+  const [projectId, setProjectId] = useState<number>()
 
   useEffect(() => {
-    getUsers().then((d) => setUsers(d || []))
-    getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
+    getProjects().then((d) => setProjects((d || []) as { id: number; name: string }[]))
   }, [])
-
-  const loadPerms = (uid: number) => getUserDBPerms(uid).then((d) => setPerms((d || []) as DBPerm[]))
-
-  const handleSelectUser = (uid: number) => {
-    setSelectedUser(uid)
-    loadPerms(uid)
-  }
-
-  const handleAdd = async () => {
-    const values = await form.validateFields()
-    await addUserDBPerm(selectedUser!, values)
-    message.success('已授权')
-    setModalOpen(false)
-    loadPerms(selectedUser!)
-  }
 
   return (
     <div>
+      <div style={{ marginBottom: 12, color: '#666' }}>
+        按项目授权数据库：选择一个项目，为其关联数据库实例；项目内成员自动获得对应数据库的访问与诊断权限。
+      </div>
       <Space style={{ marginBottom: 16 }}>
-        <span>选择用户：</span>
-        <Select style={{ width: 220 }} placeholder="选择用户" onChange={handleSelectUser}
-          options={users.map((u) => ({ label: `${u.username}（${u.role}）`, value: u.id }))} />
-        {selectedUser && <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); form.setFieldsValue({ permission: 'read' }); setModalOpen(true) }}>添加授权</Button>}
+        <span>选择项目：</span>
+        <Select style={{ width: 240 }} placeholder="选择项目" value={projectId} onChange={setProjectId} showSearch optionFilterProp="label"
+          options={projects.map((p) => ({ label: p.name, value: p.id }))} />
       </Space>
-      {!selectedUser ? (
-        <Empty description="请先选择一个用户查看其数据库授权" />
+      {!projectId ? (
+        <Empty description="请先选择一个项目，为其授权数据库实例" />
       ) : (
-        <Table rowKey="id" dataSource={perms} pagination={false}
-          columns={[
-            { title: '数据库连接', dataIndex: 'db_connection_id', render: (id) => conns.find((c) => c.id === id)?.name || id },
-            { title: '权限', dataIndex: 'permission', render: (p) => <Tag color={p === 'manage' ? 'green' : 'blue'}>{p}</Tag> },
-            { title: '操作', render: (_, r) => (
-              <Popconfirm title="撤销授权？" onConfirm={async () => { await deleteUserDBPerm(r.id); loadPerms(selectedUser!) }}>
-                <Button size="small" danger icon={<DeleteOutlined />}>撤销</Button>
-              </Popconfirm>
-            ) },
-          ]} />
+        <DBTab projectId={projectId} />
       )}
-
-      <Modal title="添加数据库授权" open={modalOpen} onOk={handleAdd} onCancel={() => setModalOpen(false)}>
-        <Form form={form} layout="vertical">
-          <Form.Item name="db_connection_id" label="数据库连接" rules={[{ required: true }]}>
-            <Select options={conns.map((c) => ({ label: c.name, value: c.id }))} />
-          </Form.Item>
-          <Form.Item name="permission" label="权限" rules={[{ required: true }]}>
-            <Select options={[{ value: 'read', label: 'read（只读）' }, { value: 'manage', label: 'manage（可管理）' }]} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }

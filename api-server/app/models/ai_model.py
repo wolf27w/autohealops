@@ -22,6 +22,7 @@ class AIModelConfig(Base):
     temperature: Mapped[float] = mapped_column(Float, default=0.7)
     priority: Mapped[int] = mapped_column(Integer, default=100)  # 越小越优先（降级链顺序）
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # 默认模型（全局唯一，功能优先使用）
     cost_per_1k_tokens: Mapped[float] = mapped_column(Float, default=0.0)
     # 该模型可服务的最低告警级别（critical/high/medium/low）：critical 告警用贵模型，medium/low 用便宜模型
     min_severity: Mapped[str] = mapped_column(String(10), default="low")

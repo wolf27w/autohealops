@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 服务辅助 API：模型管理、嵌入、RAG、日志"""
 from fastapi import APIRouter
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 
 from app.core.database import async_session
 from app.core.security import encrypt_aes256_gcm
@@ -21,7 +21,7 @@ async def list_models():
         models = result.scalars().all()
     return {"code": 200, "message": "success", "data": [
         {"id": m.id, "provider": m.provider, "model_name": m.model_name,
-         "priority": m.priority, "is_active": m.is_active, "min_severity": m.min_severity,
+         "priority": m.priority, "is_active": m.is_active, "is_default": m.is_default, "min_severity": m.min_severity,
          "cost_per_1k_tokens": m.cost_per_1k_tokens} for m in models
     ]}
 
@@ -66,6 +66,21 @@ async def delete_model(model_id: int):
         if m:
             await session.delete(m)
             await session.commit()
+    return {"code": 200, "message": "success", "data": None}
+
+
+@router.post("/models/{model_id}/default")
+async def set_default_model(model_id: int):
+    """设为默认模型（全局唯一：自动取消其他模型的默认标记）"""
+    async with async_session() as session:
+        m = await session.get(AIModelConfig, model_id)
+        if not m:
+            return {"code": 404, "message": "模型不存在", "data": None}
+        await session.execute(
+            update(AIModelConfig).where(AIModelConfig.id != model_id).values(is_default=False)
+        )
+        m.is_default = True
+        await session.commit()
     return {"code": 200, "message": "success", "data": None}
 
 

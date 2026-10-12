@@ -1,9 +1,9 @@
 // AI 模型配置页：模型列表（增删改）+ AI 调用日志（分页/统计分类/筛选）
 import { useEffect, useState } from 'react'
 import type { AICallLog } from '../types'
-import { Card, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Table, Tag, message, Popconfirm, Row, Col, Empty } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
-import { getAIModels, createAIModel, updateAIModel, deleteAIModel, getAICallLogs, getAICallLogStats } from '../services/api'
+import { Card, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Table, Tag, message, Popconfirm, Row, Col, Empty, Tooltip } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, StarOutlined } from '@ant-design/icons'
+import { getAIModels, createAIModel, updateAIModel, deleteAIModel, setDefaultModel, getAICallLogs, getAICallLogStats } from '../services/api'
 
 const MODEL_FIELDS = {
   provider: { label: 'Provider' },
@@ -25,6 +25,7 @@ interface AIModel {
   min_severity?: string
   cost_per_1k_tokens?: number
   is_active?: boolean
+  is_default?: boolean
   api_key_encrypted?: string
   [key: string]: unknown
 }
@@ -81,6 +82,8 @@ export default function AIModelConfig() {
 
   const handleDelete = async (id: number) => { await deleteAIModel(id); message.success('已删除'); loadModels() }
 
+  const handleSetDefault = async (id: number) => { await setDefaultModel(id); message.success('已设为默认模型'); loadModels() }
+
   const clickType = (rt: string) => { setReqType(rt); setPage(1); loadLogs(1, rt) }
 
   return (
@@ -89,15 +92,27 @@ export default function AIModelConfig() {
         <Space wrap>
           {models.map((m) => (
             <Card key={m.id} size="small" style={{ width: 300 }}>
-              <div style={{ fontWeight: 'bold' }}>{m.provider} / {m.model_name}</div>
+              <div style={{ fontWeight: 'bold' }}>
+                {m.provider} / {m.model_name}
+                {m.is_default && <Tag color="gold" style={{ marginLeft: 6 }}>默认</Tag>}
+              </div>
               <div style={{ color: '#888' }}>优先级：{m.priority} ｜ 最低severity：{m.min_severity}</div>
               <div style={{ color: '#888' }}>成本：{m.cost_per_1k_tokens} /1k tokens</div>
               <Space style={{ marginTop: 8 }}>
                 <Tag color={m.is_active ? 'green' : 'gray'}>{m.is_active ? '启用' : '停用'}</Tag>
+                {!m.is_default && (
+                  <Button size="small" icon={<StarOutlined />} onClick={() => handleSetDefault(m.id)}>设为默认</Button>
+                )}
                 <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(m)}>编辑</Button>
-                <Popconfirm title="确认删除该模型？" onConfirm={() => handleDelete(m.id)}>
-                  <Button size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
+                {m.is_default ? (
+                  <Tooltip title="默认模型不可删除，请先设置其他模型为默认">
+                    <Button size="small" danger icon={<DeleteOutlined />} disabled />
+                  </Tooltip>
+                ) : (
+                  <Popconfirm title="确认删除该模型？" onConfirm={() => handleDelete(m.id)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                )}
               </Space>
             </Card>
           ))}

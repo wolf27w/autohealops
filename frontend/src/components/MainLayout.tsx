@@ -1,7 +1,7 @@
 // 主布局：Sider 菜单 + Header + Content（全屏 + 现代配色）
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs } from 'antd'
+import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs, theme } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   DashboardOutlined, ClusterOutlined, AlertOutlined, WarningOutlined,
@@ -11,11 +11,12 @@ import {
   SettingOutlined, LogoutOutlined, DownOutlined, MedicineBoxOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
-  ThunderboltOutlined, ControlOutlined,
+  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
 import { getCurrentUser, isAdmin } from '../utils/auth'
+import { useThemeMode } from '../utils/theme'
 
 const { Sider, Header, Content } = Layout
 
@@ -117,6 +118,8 @@ function filterMenuItems(items: NavItem[], admin: boolean): MenuProps['items'] {
 }
 
 export default function MainLayout() {
+  const { token } = theme.useToken()
+  const { mode, toggle } = useThemeMode()
   // 版本标记：方便确认浏览器加载的是哪一版
   document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
   // eslint-disable-next-line no-console
@@ -300,16 +303,22 @@ export default function MainLayout() {
           />
         </div>
       </Sider>
-      <Layout style={{ background: '#f5f6fa' }}>
+      <Layout style={{ background: token.colorBgLayout }}>
         <Header style={{ padding: '0 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 1, height: 56, lineHeight: '56px' }}>
           <Space size={12}>
             <Button type="text" onClick={() => handleCollapse(!collapsed)}
-              icon={collapsed ? <MenuUnfoldOutlined style={{ color: '#0f2018', fontSize: 16 }} /> : <MenuFoldOutlined style={{ color: '#0f2018', fontSize: 16 }} />} />
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#0f2018' }}>API-OPS 自愈平台</div>
-            <span style={{ fontSize: 11, color: '#8aa196' }} title="前端构建/启动时间戳">build {__BUILD_TS__.slice(5, 16).replace('T', ' ')}</span>
+              icon={collapsed ? <MenuUnfoldOutlined style={{ color: token.colorText, fontSize: 16 }} /> : <MenuFoldOutlined style={{ color: token.colorText, fontSize: 16 }} />} />
+            <div style={{ fontSize: 16, fontWeight: 700, color: token.colorText }}>API-OPS 自愈平台</div>
+            <span style={{ fontSize: 11, color: token.colorTextSecondary }} title="前端构建/启动时间戳">build {__BUILD_TS__.slice(5, 16).replace('T', ' ')}</span>
           </Space>
           <Space size={16}>
             <Button type="text" icon={<BarChartOutlined />} onClick={() => window.open('/screen', '_blank')}>大屏</Button>
+            <Button
+              type="text"
+              icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggle}
+              title={mode === 'dark' ? '切换浅色主题' : '切换深色主题'}
+            />
             <Button type="text" icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={toggleFullscreen} />
             <Popover content={messagePopover} trigger="click" placement="bottomRight" onOpenChange={handleOpenMsg}>
               <Badge count={unread} size="small" offset={[2, -2]}>
@@ -319,8 +328,8 @@ export default function MainLayout() {
             <Dropdown menu={userMenu}>
               <Space style={{ cursor: 'pointer' }}>
                 <Avatar size="small" style={{ background: 'linear-gradient(135deg,#34d399,#0d9488)' }} icon={<UserOutlined />} />
-                <span style={{ color: '#0f2018' }}>{user.username}（{user.role}）</span>
-                <DownOutlined style={{ color: '#999', fontSize: 12 }} />
+                <span style={{ color: token.colorText }}>{user.username}（{user.role}）</span>
+                <DownOutlined style={{ color: token.colorTextSecondary, fontSize: 12 }} />
               </Space>
             </Dropdown>
           </Space>

@@ -4,13 +4,14 @@
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch,
+  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch, theme,
 } from 'antd'
 import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { Line, Pie, Bar } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
 import dayjs, { type Dayjs } from 'dayjs'
 import { getDashboard, getPlatformHealth } from '../services/api'
+import { useThemeMode } from '../utils/theme'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 import { ALERT_STATUS_LABEL } from '../constants'
@@ -42,10 +43,19 @@ const fmtTime = (t: string | null | undefined) => (t ? String(t).slice(5, 16) : 
 
 export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
+  const { token } = theme.useToken()
+  const { mode } = useThemeMode()
+  const isDark = screen || mode === 'dark'
+  const ink = token.colorText
+  const muted = token.colorTextSecondary
+  const chartTheme = isDark ? ({ theme: 'classicDark' } as const) : {}
   // 时间范围：默认【实时】（跟随最新，滚动窗口），也可自定义起止时间段
   const [live, setLive] = useState(true)
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null)
-  const LIVE_RANGE = '24h'  // 实时模式滚动窗口（统一为最近 24 小时，15s 刷新）
+  // 实时模式滚动窗口：普通仪表盘=最近 24 小时；大屏（/screen）总览=最近 7 天
+  // （24h 内无新告警时，趋势图/AI 分布会全 0，大屏显得「没数据」，放宽到 7 天更贴合总览定位）
+  const LIVE_RANGE = screen ? '7d' : '24h'
+  const AI_RANGE = screen ? '7d' : '24h'
   const presetValue = (key: string): [Dayjs, Dayjs] => {
     const span: Record<string, [number, string]> = { '10m': [10, 'minute'], '3h': [3, 'hour'], '8h': [8, 'hour'], '24h': [24, 'hour'] }
     const [n, unit] = span[key] || span['10m']
@@ -57,7 +67,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     setLive(false)  // 选了具体时间段 → 退出实时模式
   }
   const rangeLabel = live
-    ? '实时（最近 24 小时，自动刷新）'
+    ? (screen ? '实时（最近 7 天，自动刷新）' : '实时（最近 24 小时，自动刷新）')
     : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
@@ -100,9 +110,9 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       ? getDashboard({
           start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
           end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
-          cluster_id: clusterId, ai_range: '24h',
+          cluster_id: clusterId, ai_range: AI_RANGE,
         })
-      : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, ai_range: '24h' })),
+      : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, ai_range: AI_RANGE })),
     placeholderData: keepPreviousData,
     refetchInterval: 5000,
   })
@@ -168,7 +178,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     <div style={{
       display: 'flex', flexDirection: 'column', gap: 12,
       // 大屏（/screen）：无侧栏/顶栏框架，自行补边距与底色，内容与仪表盘完全一致
-      ...(screen ? { padding: 12, minHeight: '100vh', background: '#f5f6fa', boxSizing: 'border-box' as const } : {}),
+      ...(screen ? { padding: 12, minHeight: '100vh', background: token.colorBgLayout, boxSizing: 'border-box' as const } : {}),
     }}>
       {/* ===== 第 1 段 · 顶部栏 ===== */}
       <Card bodyStyle={{ padding: '10px 16px' }} style={{ marginBottom: 0 }}>
@@ -201,7 +211,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               ]}
               style={{ width: 250 }}
             />
-            <span style={{ fontSize: 12, color: '#8c8c8c' }}>{rangeLabel}</span>
+            <span style={{ fontSize: 12, color: muted }}>{rangeLabel}</span>
           </Space>
 
           <div style={{ flex: 1 }} />
@@ -218,17 +228,17 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                   </span>
                 )}
               />
-              <span style={{ fontSize: 12, color: '#888', lineHeight: 1.2 }}>全局<br />健康分</span>
+              <span style={{ fontSize: 12, color: muted, lineHeight: 1.2 }}>全局<br />健康分</span>
             </div>
           </Tooltip>
 
           {/* 平台健康（右上角） */}
-          <Space size={6} style={{ padding: '0 8px', borderLeft: '1px solid #f0f0f0' }}>
-            <span style={{ fontSize: 12, color: '#888' }}>平台</span>
+          <Space size={6} style={{ padding: '0 8px', borderLeft: `1px solid ${token.colorBorderSecondary}` }}>
+            <span style={{ fontSize: 12, color: muted }}>平台</span>
             <Badge color={platformOk(platformHealth?.api_server)} />
-            <span style={{ fontSize: 12, color: '#888' }}>DB</span>
+            <span style={{ fontSize: 12, color: muted }}>DB</span>
             <Badge color={platformOk(platformHealth?.database)} />
-            <span style={{ fontSize: 12, color: '#888' }}>Redis</span>
+            <span style={{ fontSize: 12, color: muted }}>Redis</span>
             <Badge color={platformOk(platformHealth?.redis)} />
           </Space>
 
@@ -262,7 +272,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             {trendData.length ? (
               <Line
                 data={trendData} xField="bucket" yField="value" colorField="type"
-                height={320} smooth
+                height={320} smooth {...chartTheme}
                 legend={{ color: { position: 'top' } }}
                 scale={{ color: { range: ['#1677ff', '#52c41a', '#13c2c2'] } }}
               />
@@ -276,13 +286,13 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 <div style={{ position: 'relative' }}>
                   <Pie
                     data={aiDistDraw} angleField="value" colorField="key"
-                    height={250} radius={0.72} innerRadius={0.56}
+                    height={250} radius={0.72} innerRadius={0.56} {...chartTheme}
                     legend={false}
                     label={{
                       // 环外标签用 spider 布局（带引导线自动避让），小扇区也不会叠字
                       text: (d: { key: string; pct: number }) => `${d.key} ${d.pct}%`,
                       position: 'spider',
-                      style: { fontSize: 13, fontWeight: 600, fill: '#1f2d3d' },
+                      style: { fontSize: 13, fontWeight: 600, fill: ink },
                     }}
                     tooltip={{ items: [{ channel: 'y', name: '告警数', valueFormatter: (v: number) => `${v} 条（${aiTotal ? Math.round((v / aiTotal) * 1000) / 10 : 0}%）` }] }}
                     scale={{ color: { domain: aiDistDraw.map((d) => d.key), range: aiDistDraw.map((d) => d.color) } }}
@@ -292,18 +302,18 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                     position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
                     textAlign: 'center', pointerEvents: 'none', lineHeight: 1.25,
                   }}>
-                    <div style={{ fontSize: 13, color: '#8c8c8c' }}>总计</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: '#1f2d3d' }}>{aiTotal}</div>
+                    <div style={{ fontSize: 13, color: muted }}>总计</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: ink }}>{aiTotal}</div>
                   </div>
                 </div>
                 {/* 分列表格图例：名称 / 百分比 / 条数（不再用环外标签，避免小扇区标签重叠） */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 16px', marginTop: 6 }}>
                   {aiDistPct.map((d) => (
-                    <div key={d.key} style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: '#1f2d3d' }}>
+                    <div key={d.key} style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: ink }}>
                       <span style={{ width: 10, height: 10, borderRadius: 2, background: d.color, marginRight: 6, flex: '0 0 auto', display: 'inline-block' }} />
                       <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.key}</span>
                       <span style={{ marginLeft: 6, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{d.pct}%</span>
-                      <span style={{ marginLeft: 4, color: '#8c8c8c' }}>（{d.value}）</span>
+                      <span style={{ marginLeft: 4, color: muted }}>（{d.value}）</span>
                     </div>
                   ))}
                 </div>
@@ -339,7 +349,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             {faultTopData.length ? (
               <Bar
                 data={faultTopData} xField="count" yField="fault_type"
-                height={240} colorField="fault_type"
+                height={240} colorField="fault_type" {...chartTheme}
                 legend={false}
               />
             ) : <Empty description="暂无数据" />}
@@ -410,7 +420,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 </Col>
               ))}
             </Row>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: '#888', fontSize: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: muted, fontSize: 12 }}>
               <ThunderboltOutlined /> 最近动作时间线（倒序）
             </div>
             {timeline.length ? (
@@ -418,7 +428,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 {timeline.map((t, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                     <Tag color={ACTION_META[t.action]?.color} style={{ marginInlineEnd: 0 }}>{ACTION_META[t.action]?.label ?? t.action}</Tag>
-                    <span style={{ color: '#999', width: 120, flexShrink: 0 }}>{fmtTime(t.time)}</span>
+                    <span style={{ color: muted, width: 120, flexShrink: 0 }}>{fmtTime(t.time)}</span>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.target || '-'}</span>
                     <Tag color={t.status === 'success' ? 'green' : t.status === 'failed' ? 'red' : 'default'} style={{ marginInlineEnd: 0 }}>
                       {t.status === 'success' ? '成功' : t.status === 'failed' ? '失败' : t.status}
@@ -449,7 +459,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 { title: '负载均衡', dataIndex: 'lb_count', width: 100, render: (v: number, r: ClusterWaterline) => (
                   <Tooltip title={`服务总数 ${r.service_total ?? 0}（其中 type=LoadBalancer ${v ?? 0}）`}>
                     <span style={{ fontWeight: 600 }}>{v ?? 0}</span>
-                    <span style={{ color: '#8c8c8c', marginLeft: 4, fontSize: 12 }}>/ {r.service_total ?? 0}</span>
+                    <span style={{ color: muted, marginLeft: 4, fontSize: 12 }}>/ {r.service_total ?? 0}</span>
                   </Tooltip>
                 ) },
                 { title: '待处理', dataIndex: 'alert_pending', width: 80, render: (v: number) => <b style={{ color: v > 0 ? '#ff4d4f' : '#52c41a' }}>{v}</b> },

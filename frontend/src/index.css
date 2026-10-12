@@ -154,3 +154,45 @@ body {
 .ant-drawer-content {
   border-radius: 14px;
 }
+
+/* ================================================================
+   深色主题（html[data-theme='dark']）：覆盖浅色硬编码底色，配合
+   ConfigProvider 的 darkAlgorithm（antd 组件内部自动深色）
+   ================================================================ */
+html[data-theme='dark'] body {
+  color: #e2e8f0;
+  background:
+    radial-gradient(1100px 520px at 0% -8%, rgba(16, 185, 129, 0.10) 0%, transparent 55%),
+    radial-gradient(900px 480px at 108% 0%, rgba(56, 189, 248, 0.08) 0%, transparent 50%),
+    linear-gradient(180deg, #0b1220, #0a101c);
+}
+
+html[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: #273449;
+}
+html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* 侧栏：深蓝黑渐变 */
+html[data-theme='dark'] .ant-layout-sider {
+  background: linear-gradient(180deg, #0d1b2e 0%, #0a1424 100%) !important;
+  border-right: 1px solid #16253a;
+}
+
+/* 顶栏：深色玻璃 */
+html[data-theme='dark'] .ant-layout-header {
+  background: rgba(13, 23, 38, 0.82) !important;
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid #1e293b;
+}
+
+/* 卡片：深色渐变 + 深色边框 */
+html[data-theme='dark'] .ant-card {
+  border: 1px solid #1e293b;
+  background: linear-gradient(180deg, #111a2c, #0f1826);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+html[data-theme='dark'] .ant-card-head {
+  border-bottom: 1px solid #1e293b;
+}

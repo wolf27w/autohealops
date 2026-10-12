@@ -42,6 +42,7 @@ class AIModelConfig(Base):
     temperature: Mapped[float] = mapped_column(Float, default=0.7)
     priority: Mapped[int] = mapped_column(Integer, default=100)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # 默认模型（全局唯一，功能优先使用）
     cost_per_1k_tokens: Mapped[float] = mapped_column(Float, default=0.0)
     min_severity: Mapped[str] = mapped_column(String(10), default="low")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

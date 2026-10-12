@@ -150,6 +150,9 @@ async def call_with_fallback(
     if not filtered:
         filtered = configs  # 无匹配时回退全部
 
+    # 默认模型优先：is_default 排最前，不可用再降级到 priority 链其他模型（老板 2026-09-23）
+    filtered = sorted(filtered, key=lambda c: (not c.is_default, c.priority))
+
     # 成本上限：超限降级到最便宜（priority 最大 = 最便宜）
     today_cost = await _today_cost()
     if settings.DAILY_COST_LIMIT > 0 and today_cost >= settings.DAILY_COST_LIMIT:

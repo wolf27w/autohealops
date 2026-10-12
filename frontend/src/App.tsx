@@ -1,5 +1,7 @@
 // 路由配置
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { ConfigProvider } from 'antd'
+import { buildTheme } from './utils/theme'
 import MainLayout from './components/MainLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -52,8 +54,17 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      {/* 大屏：独立路由（无侧栏/顶栏框架），内容与仪表盘完全一致 */}
-      <Route path="/screen" element={<RequireAuth><Dashboard screen /></RequireAuth>} />
+      {/* 大屏：独立路由（无侧栏/顶栏框架），强制深色主题，内容与仪表盘一致 */}
+      <Route
+        path="/screen"
+        element={
+          <RequireAuth>
+            <ConfigProvider theme={buildTheme('dark')}>
+              <Dashboard screen />
+            </ConfigProvider>
+          </RequireAuth>
+        }
+      />
       <Route
         path="/"
         element={
