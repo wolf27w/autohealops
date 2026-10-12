@@ -32,6 +32,7 @@ from app.models.pod_metric import PodMetric
 from app.models.prompt import PromptTemplate, PromptVersion
 from app.models.repair_plan import RepairPlan
 from app.models.resource import QuotaSnapshot, ResourceSnapshot
+from app.models.resource_governance import ResourceGovernance
 from app.models.report_schedule import ReportSchedule
 from app.models.self_heal_rule import SelfHealRule
 from app.models.slow_sql import SlowSQLRecord
@@ -81,6 +82,7 @@ __all__ = [
     "CustomTaskLog",
     "ResourceSnapshot",
     "QuotaSnapshot",
+    "ResourceGovernance",
     "ReportSchedule",
     "SelfHealRule",
     "SlowSQLRecord",
