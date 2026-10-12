@@ -459,4 +459,18 @@ export const addTicketComment = (id: number, content: string) => http.post<Ticke
 export const deleteTicket = (id: number) => http.delete<{ id: number }>(`/tickets/${id}`)
 export const getTicketComments = (id: number) => http.get<TicketComment[]>(`/tickets/${id}/comments`)
 
+// ============ JVM 诊断（P0-R2） ============
+export interface JvmAction { action: string; label: string; desc: string; file: boolean }
+export interface JvmProcess { pid: number; target: string; is_jcmd: boolean }
+export interface JvmDiagResult {
+  action: string; command: string; pid: string | null; output: string
+  file: boolean; file_path?: string; hint?: string
+}
+
+export const getJvmActions = () => http.get<JvmAction[]>('/jvm/actions')
+export const getJvmProcesses = (clusterId: number, ns: string, pod: string, container = '') =>
+  http.get<{ raw: string; processes: JvmProcess[] }>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/processes`, { params: { container } })
+export const jvmDiagnose = (clusterId: number, ns: string, pod: string, payload: Payload) =>
+  http.post<JvmDiagResult>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/diagnose`, payload)
+
 export default api

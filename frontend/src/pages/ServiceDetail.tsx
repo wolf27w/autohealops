@@ -7,6 +7,7 @@ import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
+import JvmDiagModal from '../components/JvmDiagModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
@@ -53,6 +54,7 @@ export default function ServiceDetail() {
   const [metricsPod, setMetricsPod] = useState<PodTarget | null>(null)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
+  const [jvmPod, setJvmPod] = useState<PodTarget | null>(null)
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
@@ -229,6 +231,7 @@ export default function ServiceDetail() {
                     <Button size="small" type="link" onClick={() => setMetricsPod({ ...r, clusterId })}>监控</Button>
                     <Button size="small" type="link" onClick={() => setLogPod({ ...r, clusterId })}>日志</Button>
                     <Button size="small" type="link" onClick={() => setExecTarget({ ...r, clusterId })}>进容器</Button>
+                    <Button size="small" type="link" onClick={() => setJvmPod({ ...r, clusterId })}>JVM诊断</Button>
                     <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId })}>YAML</Button>
                   </Space>
                 ) },
@@ -272,6 +275,7 @@ export default function ServiceDetail() {
       <PodMetricsDrawer pod={metricsPod} onClose={() => setMetricsPod(null)} />
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
+      <JvmDiagModal pod={jvmPod} onClose={() => setJvmPod(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
