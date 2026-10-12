@@ -496,4 +496,7 @@ export interface PeakResult { namespace: string; deployment: string; pod_count: 
 export const getResourceGovernancePeak = (params: { cluster_id: number; namespace?: string; days?: number; start_hour?: number; end_hour?: number }) =>
   http.get<PeakResult[]>('/resource-governance/peak', { params })
 
+export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
+  http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
+
 export default api

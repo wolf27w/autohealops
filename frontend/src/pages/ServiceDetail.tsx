@@ -8,7 +8,7 @@ import TerminalModal from '../components/TerminalModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
-import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload,
+import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 
@@ -51,6 +51,8 @@ export default function ServiceDetail() {
   const [history, setHistory] = useState<number[]>([])
   const [probeModal, setProbeModal] = useState(false)
   const [probeForm] = Form.useForm()
+  const [imageModal, setImageModal] = useState(false)
+  const [imageForm] = Form.useForm()
   const [metricsPod, setMetricsPod] = useState<PodTarget | null>(null)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
@@ -135,6 +137,15 @@ export default function ServiceDetail() {
     load()
   }
 
+  const openImageModal = () => { imageForm.resetFields(); setImageModal(true) }
+  const handleImageUpdate = async () => {
+    const v = await imageForm.validateFields()
+    await updateWorkloadImage(clusterId, kind, namespace, name, { container: v.container, image: v.image })
+    message.success('镜像已更新（滚动生效）')
+    setImageModal(false)
+    load()
+  }
+
   const handleProbeSubmit = async () => {
     const v = await probeForm.validateFields()
     await updateWorkloadProbe(clusterId, {
@@ -189,6 +200,7 @@ export default function ServiceDetail() {
               items: [
                 { key: 'restart', label: '滚动重启' },
                 { key: 'yaml', label: '编辑 YAML（整个服务）' },
+                { key: 'image', label: '更新镜像' },
                 ...(kind === 'deployment' ? [
                   { key: 'undo', label: '回滚上一版本' },
                   { key: 'probe', label: '编辑探针' },
@@ -199,6 +211,7 @@ export default function ServiceDetail() {
               onClick: ({ key }) => {
                 if (key === 'restart') handleRollout('restart')
                 else if (key === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
+                else if (key === 'image') openImageModal()
                 else if (key === 'undo') { Modal.confirm({ title: '回滚到上一版本？', onOk: () => handleRollout('undo') }) }
                 else if (key === 'probe') openProbe()
                 else if (key === 'recreate') { Modal.confirm({ title: '确认重新创建该服务？', okButtonProps: { danger: true }, onOk: () => handleRecreate() }) }
@@ -280,6 +293,12 @@ export default function ServiceDetail() {
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
 
+      <Modal title={`更新镜像：${name}`} open={imageModal} onOk={handleImageUpdate} onCancel={() => setImageModal(false)} width={520}>
+        <Form form={imageForm} layout="vertical">
+          <Form.Item name="container" label="容器名（空=第一个容器）"><Input placeholder="如 app" /></Form.Item>
+          <Form.Item name="image" label="镜像" rules={[{ required: true, message: '请输入镜像' }]}><Input placeholder="harbor.efreight.cn/xinnuo/xxx:tag" /></Form.Item>
+        </Form>
+      </Modal>
       <Modal title={`编辑探针：${name}`} open={probeModal} onOk={handleProbeSubmit} onCancel={() => setProbeModal(false)} width={560}>
         <Form form={probeForm} layout="vertical">
           <Form.Item name="container" label="容器名（空=第一个）"><Input placeholder="如 app" /></Form.Item>

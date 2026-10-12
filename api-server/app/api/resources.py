@@ -2,6 +2,7 @@
 """资源配额 API"""
 import json
 import re
+import yaml
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -753,17 +754,36 @@ async def update_probe(cluster_id: int, payload: dict, user=Depends(require_oper
     return {"code": 200, "message": "success", "data": {"message": r.get("message")}}
 
 
-@router.post("/clusters/{cluster_id}/workloads/recreate")
-async def recreate_workload(cluster_id: int, payload: dict, user=Depends(require_operator)):
-    """重新创建服务（无状态先建后删；有状态/守护集滚动重启）"""
-    kind = payload.get("kind", "")
-    namespace = payload.get("namespace", "")
-    name = payload.get("name", "")
+@router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/image")
+async def update_workload_image(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
+                                user=Depends(require_operator)):
+    """更新工作负载容器镜像（R3 镜像更新核心）：取 YAML → 改 image → apply"""
     if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
         return denied
-    if not kind or not namespace or not name:
-        return {"code": 400, "message": "kind/namespace/name 必填", "data": None}
-    r = await executor_client.acall(executor_client.recreate_workload, cluster_id, kind, namespace, name)
+    container = (payload.get("container") or "").strip()
+    image = (payload.get("image") or "").strip()
+    if not image:
+        return {"code": 400, "message": "image 必填", "data": None}
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
     if not r.get("success"):
-        return {"code": 500, "message": r.get("error", "重建失败"), "data": None}
-    return {"code": 200, "message": "success", "data": {"message": r.get("message")}}
+        return {"code": 500, "message": r.get("error", "读取 YAML 失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    containers = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    target = None
+    for c in containers:
+        if (not container) or c.get("name") == container:
+            target = c
+            break
+    if target is None:
+        return {"code": 404, "message": f"容器 {container or '(第一个)'} 不存在", "data": None}
+    old_image = target.get("image")
+    target["image"] = image
+    new_yaml = yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+    if not r2.get("success"):
+        return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "success",
+            "data": {"container": target.get("name"), "old_image": old_image, "new_image": image}}
