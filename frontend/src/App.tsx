@@ -30,6 +30,7 @@ import Reports from './pages/Reports'
 import PlatformSettings from './pages/PlatformSettings'
 import LogSources from './pages/LogSources'
 import Tickets from './pages/Tickets'
+import ResourceGovernance from './pages/ResourceGovernance'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -95,6 +96,7 @@ export default function App() {
         <Route path="executions/:planId" element={<ExecutionDetail />} />
         <Route path="batch" element={<Navigate to="/alert-handling" replace />} />
         <Route path="custom-tasks" element={<RequireRole role="admin"><CustomTasks /></RequireRole>} />
+        <Route path="resource-governance" element={<RequireRole role="admin"><ResourceGovernance /></RequireRole>} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
         <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />
