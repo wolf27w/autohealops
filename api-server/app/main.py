@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.api import (
     agent, ai_proxy, alert_policies, alert_silences, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
-    db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, notifications, on_duty, permissions,
+    db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, notifications, on_duty, permissions,
     projects, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, webhooks,
 )
 from app.api import jvm
@@ -396,3 +396,4 @@ app.include_router(diagnostic.router)
 app.include_router(fault_diagnosis.router)
 app.include_router(agent.router)
 app.include_router(terminal.router)
+app.include_router(mcp.router)
