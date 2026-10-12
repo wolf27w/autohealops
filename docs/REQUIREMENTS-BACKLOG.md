@@ -579,8 +579,10 @@
 - 🔨 **R1 资源治理+准入**（进行中）：
   - ✅ 管控表 `resource_governance`（模型 + 迁移 `v5w6x7y8z9a0` + API `/api/v1/resource-governance`）。
   - ✅ executor 准入 webhook（`internal/admission`：JSONPatch 补丁计算 + 自签证书 HTTPS server + 读管控表 + **fail-open**；`go build`/`go test` 全绿）。配置项 `ADMISSION_ENABLED/ADDR/CLUSTER_ID/CERT_FILE/KEY_FILE`。
+  - ✅ 管控台前端页 `ResourceGovernance.tsx`（路由 + 菜单已接，admin 可见）；API 读/写冒烟通过（GET 列表、POST upsert）。
+  - ✅ 准入补丁本地合成验证通过（HTTP+DB+JSONPatch；未碰任何集群）。
   - ⚠️ **部署拓扑约束**：MutatingWebhook 需由 **集群 apiserver 可达** 的地址提供 → webhook 必须**跑在被管集群内**（生产上 executor 在集群内没问题；本地 executor 在 Mac 上，无法给远端集群提供 webhook）。需配套：向集群下发 Service + MutatingWebhookConfiguration（+ TLS）。
-  - ⬜ 管控台前端页、向集群下发 webhook 配置的动作、高峰采集。
+  - ⬜ 向集群下发 webhook 配置（Service+MutatingWebhookConfiguration）、高峰采集。
 - ⚠️ 备注：exec 链路与 api-server 冷启动均较慢（单次接口 40-60s、启动 3-4min），环境冷/HDD。
 
 | 批次 | 内容 | 合计工时 | 状态 |
