@@ -59,6 +59,11 @@ func ParseCommand(command string) (*ParsedCommand, error) {
 	}
 	// 提取资源类型和名称
 	switch pc.Verb {
+	case "cordon", "uncordon":
+		pc.Resource = "node"
+		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
+			pc.Name = fields[1]
+		}
 	case "scale", "rollout", "delete", "describe", "get", "edit", "set":
 		if len(fields) >= 2 {
 			// scale deployment/name / rollout restart deployment/name / delete deployment name
@@ -232,8 +237,10 @@ func (e *Executor) dispatch(ctx context.Context, pc *ParsedCommand) (string, err
 		return e.execRollout(ctx, pc, ns)
 	case "delete":
 		return e.execDelete(ctx, pc, ns)
+	case "cordon", "uncordon":
+		return e.execCordon(ctx, pc)
 	default:
-		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete）", pc.Verb)
+		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete/cordon/uncordon）", pc.Verb)
 	}
 }
 
@@ -324,9 +331,69 @@ func (e *Executor) execGet(ctx context.Context, pc *ParsedCommand, ns string) (s
 			b.WriteString(fmt.Sprintf("%s\t%s\n", p.Name, p.Status.Phase))
 		}
 		return b.String(), nil
+	case "node", "nodes":
+		list, err := e.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		if len(list.Items) == 0 {
+			return "(无节点)", nil
+		}
+		var b strings.Builder
+		for _, n := range list.Items {
+			var roles []string
+			for k := range n.Labels {
+				if strings.HasPrefix(k, "node-role.kubernetes.io/") {
+					roles = append(roles, strings.TrimPrefix(k, "node-role.kubernetes.io/"))
+				}
+			}
+			sched := "Schedulable"
+			if n.Spec.Unschedulable {
+				sched = "Unschedulable"
+			}
+			ready := "Unknown"
+			for _, c := range n.Status.Conditions {
+				if string(c.Type) == "Ready" {
+					if c.Status == "True" {
+						ready = "Ready"
+					} else {
+						ready = "NotReady"
+					}
+				}
+			}
+			b.WriteString(fmt.Sprintf("node %s: %s %s roles=%v\n", n.Name, ready, sched, roles))
+		}
+		return b.String(), nil
 	default:
 		return "", fmt.Errorf("get %s 暂不支持", pc.Resource)
 	}
+}
+
+// execCordon 节点 cordon/uncordon（禁止/恢复调度）
+func (e *Executor) execCordon(ctx context.Context, pc *ParsedCommand) (string, error) {
+	if pc.Name == "" {
+		return "", fmt.Errorf("cordon/uncordon 需要节点名")
+	}
+	unschedulable := pc.Verb == "cordon"
+	node, err := e.clientset.CoreV1().Nodes().Get(ctx, pc.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	if node.Spec.Unschedulable == unschedulable {
+		state := "可调度"
+		if unschedulable {
+			state = "不可调度"
+		}
+		return fmt.Sprintf("节点 %s 已处于「%s」状态（幂等跳过）", pc.Name, state), nil
+	}
+	node.Spec.Unschedulable = unschedulable
+	if _, err := e.clientset.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{}); err != nil {
+		return "", err
+	}
+	if unschedulable {
+		return fmt.Sprintf("节点 %s 已 cordon（禁止调度）", pc.Name), nil
+	}
+	return fmt.Sprintf("节点 %s 已 uncordon（恢复调度）", pc.Name), nil
 }
 
 func (e *Executor) execDescribe(ctx context.Context, pc *ParsedCommand, ns string) (string, error) {

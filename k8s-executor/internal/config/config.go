@@ -91,7 +91,7 @@ func Load() (*Config, error) {
 	// 命令白名单（逗号分隔）
 	wl := v.GetString("COMMAND_WHITELIST")
 	if wl == "" {
-		wl = "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit"
+		wl = "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon"
 	}
 	cfg.CommandWhitelist = strings.Split(wl, ",")
 	return cfg, nil

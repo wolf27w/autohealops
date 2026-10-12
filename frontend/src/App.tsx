@@ -32,6 +32,7 @@ import LogSources from './pages/LogSources'
 import Tickets from './pages/Tickets'
 import ResourceGovernance from './pages/ResourceGovernance'
 import AlertSilences from './pages/AlertSilences'
+import NodeManagement from './pages/NodeManagement'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -99,6 +100,7 @@ export default function App() {
         <Route path="custom-tasks" element={<RequireRole role="admin"><CustomTasks /></RequireRole>} />
         <Route path="resource-governance" element={<RequireRole role="admin"><ResourceGovernance /></RequireRole>} />
         <Route path="alert-silences" element={<RequireRole role="admin"><AlertSilences /></RequireRole>} />
+        <Route path="node-management" element={<RequireRole role="admin"><NodeManagement /></RequireRole>} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
         <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />

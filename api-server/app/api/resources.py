@@ -836,3 +836,46 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
                         "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
     return {"code": 200, "message": "success",
             "data": {"kind": kind, "name": name, "tail": tail, "previous": previous, "pods": results}}
+
+
+@router.get("/clusters/{cluster_id}/nodes")
+async def list_nodes(cluster_id: int, user=Depends(require_any_user)):
+    """节点列表（R4）：状态/可调度/角色"""
+    if denied := await _deny_cluster(user, cluster_id):
+        return denied
+    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", "get nodes")
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "查询节点失败"), "data": None}
+    out = r.get("output", "") or ""
+    nodes = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("node "):
+            continue
+        name, _, info = line[len("node "):].partition(": ")
+        parts = info.split()
+        ready = parts[0] if parts else "Unknown"
+        sched = parts[1] if len(parts) > 1 else ""
+        roles = info.split("roles=", 1)[1] if "roles=" in info else ""
+        nodes.append({"name": name, "ready": ready, "schedulable": sched == "Schedulable", "roles": roles})
+    return {"code": 200, "message": "success", "data": nodes}
+
+
+@router.post("/clusters/{cluster_id}/nodes/{node_name}/cordon")
+async def cordon_node(cluster_id: int, node_name: str, user=Depends(require_operator)):
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"cordon {node_name}")
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "cordon 失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("output", "")}}
+
+
+@router.post("/clusters/{cluster_id}/nodes/{node_name}/uncordon")
+async def uncordon_node(cluster_id: int, node_name: str, user=Depends(require_operator)):
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"uncordon {node_name}")
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "uncordon 失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("output", "")}}

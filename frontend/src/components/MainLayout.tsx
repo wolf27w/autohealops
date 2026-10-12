@@ -73,6 +73,7 @@ const menuItems: NavItem[] = [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
       { key: '/resource-governance', icon: <SettingOutlined />, label: '资源治理' },
+      { key: '/node-management', icon: <ClusterOutlined />, label: '节点管理' },
     ],
   },
   {
@@ -98,7 +99,7 @@ const menuItems: NavItem[] = [
 // admin 专属菜单项（viewer/operator 不可见；App.tsx 路由同样有 RequireRole 守卫）
 const ADMIN_ONLY_KEYS = new Set([
   '/strategy', '/notify-center', '/user-permission', '/log-sources',
-  '/ai-models', '/custom-tasks', '/settings', '/resource-governance', '/alert-silences',
+  '/ai-models', '/custom-tasks', '/settings', '/resource-governance', '/alert-silences', '/node-management',
 ])
 
 // 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（递归处理三级；空分组一并移除）

@@ -518,4 +518,10 @@ export const getWorkloadLogs = (clusterId: number, namespace: string, kind: stri
   http.get<{ kind: string; name: string; tail: number; previous: boolean; pods: AggLogPod[] }>(
     `/resources/clusters/${clusterId}/namespaces/${namespace}/workloads/${kind}/${name}/logs`, { params })
 
+// ============ 节点管理（P1-R4） ============
+export interface K8sNode { name: string; ready: string; schedulable: boolean; roles: string }
+export const getNodes = (clusterId: number) => http.get<K8sNode[]>(`/resources/clusters/${clusterId}/nodes`)
+export const cordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/cordon`)
+export const uncordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/uncordon`)
+
 export default api
