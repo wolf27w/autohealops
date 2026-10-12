@@ -18,10 +18,11 @@
 """
 import re
 
+import yaml
 from fastapi import APIRouter, Depends
 
 from app.clients.executor_client import executor_client
-from app.middleware.permission import require_operator
+from app.middleware.permission import require_any_user, require_operator
 from app.services.user_permission_service import check_cluster_permission
 
 router = APIRouter(prefix="/api/v1/jvm")
@@ -197,3 +198,58 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
         data["file_path"] = _FILE_PATHS[action]
         data["hint"] = "产物已写入容器内路径，可点「下载产物」拉取"
     return {"code": 200, "message": "success", "data": data}
+
+
+# ============ R2.2 JVM 启动参数采集（只读） ============
+
+def _extract_jvm_params(tokens: list) -> dict:
+    """从容器的 command+args 令牌中提取常见 JVM 启动参数。"""
+    out = {"xms": None, "xmx": None, "xss": None, "max_metaspace": None, "others": []}
+    for t in (tokens or []):
+        s = str(t)
+        if s.startswith("-Xms"):
+            out["xms"] = s[4:]
+        elif s.startswith("-Xmx"):
+            out["xmx"] = s[4:]
+        elif s.startswith("-Xss"):
+            out["xss"] = s[4:]
+        elif s.startswith("-XX:MaxMetaspaceSize="):
+            out["max_metaspace"] = s.split("=", 1)[1]
+        elif s.startswith("-X") or s.startswith("-XX") or s.startswith("-D"):
+            out["others"].append(s)
+    return out
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/deployments/{name}/params")
+async def get_deployment_jvm_params(cluster_id: int, namespace: str, name: str, container: str = "",
+                                    user=Depends(require_any_user)):
+    """读取 Deployment 各容器的 JVM 启动参数（从 command/args 提取，只读）。"""
+    if denied := await _deny(user, cluster_id, namespace, required="read"):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, "deployment", namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "读取 Deployment YAML 失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    containers = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    items = []
+    for c in containers:
+        if container and c.get("name") != container:
+            continue
+        env = {e.get("name"): e.get("value") for e in (c.get("env") or []) if e.get("name")}
+        env_jvm = []
+        for k in ("JAVA_OPTS", "JAVA_TOOL_OPTIONS", "JVM_OPTS", "CATALINA_OPTS"):
+            if env.get(k):
+                env_jvm += str(env[k]).split()
+        tokens = list(c.get("command") or []) + list(c.get("args") or []) + env_jvm
+        items.append({
+            "container": c.get("name"),
+            "image": c.get("image"),
+            "params": _extract_jvm_params(tokens),
+            "command": c.get("command") or [],
+            "args": c.get("args") or [],
+            "env_jvm": env_jvm,
+        })
+    return {"code": 200, "message": "success", "data": {"deployment": name, "namespace": namespace, "containers": items}}

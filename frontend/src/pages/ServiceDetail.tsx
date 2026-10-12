@@ -275,7 +275,7 @@ export default function ServiceDetail() {
       <PodMetricsDrawer pod={metricsPod} onClose={() => setMetricsPod(null)} />
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
-      <JvmDiagModal pod={jvmPod} onClose={() => setJvmPod(null)} />
+      <JvmDiagModal pod={jvmPod} deployment={name} onClose={() => setJvmPod(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />

@@ -473,4 +473,10 @@ export const getJvmProcesses = (clusterId: number, ns: string, pod: string, cont
 export const jvmDiagnose = (clusterId: number, ns: string, pod: string, payload: Payload) =>
   http.post<JvmDiagResult>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/diagnose`, payload)
 
+export interface JvmParams { xms: string | null; xmx: string | null; xss: string | null; max_metaspace: string | null; others: string[] }
+export interface JvmParamsContainer { container: string; image: string; params: JvmParams; command: string[]; args: string[] }
+export const getJvmParams = (clusterId: number, ns: string, deployment: string, container = '') =>
+  http.get<{ deployment: string; namespace: string; containers: JvmParamsContainer[] }>(
+    `/jvm/clusters/${clusterId}/namespaces/${ns}/deployments/${deployment}/params`, { params: { container } })
+
 export default api

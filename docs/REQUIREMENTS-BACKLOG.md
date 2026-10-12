@@ -574,8 +574,9 @@
 
 **进度（P0）**
 - ✅ **R2.1 JVM 一键诊断**（jstack/jmap/jcmd/JFR 九动作）——后端 `api-server/app/api/jvm.py` + 前端 `JvmDiagModal` + ServiceDetail 入口，复用 `ExecInPod`、**零 proto 改动**（本机缺 protoc-gen-go，改 proto 生成不了 stub，故全 P0 绕开 proto）；提交 `ab58b95`；**端到端冒烟通过**（测试集群 `efreight-gateway` → `jcmd 7 VM.flags` 返回真实参数）。
-- ⬜ R2.2 JVM 参数采集/管控、R2.3 堆/G1 指标+告警、R1 资源治理+准入（待做）。
-- ⚠️ 备注：exec 链路当前较慢（单次 ~45-60s），环境冷/HDD；后续可优化。
+- ✅ **R2.2 JVM 启动参数采集**（Deployment `command/args` + env(`JAVA_OPTS/JAVA_TOOL_OPTIONS/JVM_OPTS/CATALINA_OPTS`) 提取，只读；管控改写归 R1 准入）；接口 `GET /api/v1/jvm/.../deployments/{name}/params`，前端 JVM 弹窗展示。提取逻辑单测通过。
+- ⚠️ 备注：exec 链路与 api-server 冷启动均较慢（单次接口 40-60s、启动 3-4min），环境冷/HDD；后续可优化。
+- ⬜ R2.3 堆/G1 指标+告警、R1 资源治理+准入（待做）。
 
 | 批次 | 内容 | 合计工时 | 状态 |
 |---|---|---|---|

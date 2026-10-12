@@ -1,13 +1,15 @@
 // JVM 诊断弹窗（P0-R2）：对 Pod 内 Java 进程一键执行 jstack / jmap / jcmd / JFR
 import { useCallback, useEffect, useState } from 'react'
-import { Modal, Button, Select, Space, Input, message, Spin, Empty, Tag, Alert, Tooltip } from 'antd'
+import { Modal, Button, Select, Space, Input, message, Spin, Empty, Tag, Alert, Tooltip, Collapse } from 'antd'
 import { ReloadOutlined, BugOutlined, CopyOutlined } from '@ant-design/icons'
-import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers } from '../services/api'
-import type { JvmAction, JvmProcess, JvmDiagResult } from '../services/api'
+import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams } from '../services/api'
+import type { JvmAction, JvmProcess, JvmDiagResult, JvmParamsContainer } from '../services/api'
 
 interface JvmPod { clusterId: number; namespace: string; name: string }
 
-export default function JvmDiagModal({ pod, onClose }: { pod: JvmPod | null; onClose: () => void }) {
+interface Props { pod: JvmPod | null; deployment?: string; kind?: string; onClose: () => void }
+
+export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [container, setContainer] = useState('')
   const [actions, setActions] = useState<JvmAction[]>([])
@@ -17,13 +19,18 @@ export default function JvmDiagModal({ pod, onClose }: { pod: JvmPod | null; onC
   const [running, setRunning] = useState('')
   const [result, setResult] = useState<JvmDiagResult | null>(null)
   const [err, setErr] = useState('')
+  const [params, setParams] = useState<JvmParamsContainer[]>([])
 
   useEffect(() => {
     if (!pod) return
-    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr('')
+    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([])
     getJvmActions().then(setActions).catch(() => {})
     getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers(c || [])).catch(() => {})
-  }, [pod])
+    if (deployment) {
+      getJvmParams(pod.clusterId, pod.namespace, deployment)
+        .then((d) => setParams(d.containers || [])).catch(() => {})
+    }
+  }, [pod, deployment])
 
   const refreshProcs = useCallback(() => {
     if (!pod) return
@@ -54,6 +61,19 @@ export default function JvmDiagModal({ pod, onClose }: { pod: JvmPod | null; onC
   return (
     <Modal open title={<Space><BugOutlined />JVM 诊断：{pod.name}</Space>}
       footer={null} onCancel={onClose} width={860} destroyOnClose>
+      {params.length > 0 && (
+        <Collapse size="small" style={{ marginBottom: 12 }} items={params.map((c) => ({
+          key: c.container,
+          label: <Space>JVM 启动参数 · <b>{c.container}</b><Tag color={c.params.xmx ? 'blue' : 'default'}>{c.params.xmx ? `-Xmx${c.params.xmx}` : '未设置 -Xmx'}</Tag></Space>,
+          children: (
+            <div style={{ fontSize: 12, fontFamily: 'monospace', lineHeight: 1.9 }}>
+              <div>-Xms: {c.params.xms || '-'}　-Xmx: {c.params.xmx || '-'}　-Xss: {c.params.xss || '-'}　MaxMetaspace: {c.params.max_metaspace || '-'}</div>
+              {c.params.others.length > 0 && <div style={{ color: '#888' }}>其它: {c.params.others.join(' ')}</div>}
+              <div style={{ color: '#aaa' }}>image: {c.image}</div>
+            </div>
+          ),
+        }))} />
+      )}
       <Space style={{ marginBottom: 12 }} wrap>
         <span>容器：</span>
         <Select style={{ width: 200 }} allowClear placeholder="默认容器"
