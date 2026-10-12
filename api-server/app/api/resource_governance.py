@@ -5,13 +5,17 @@
 - 读：read 权限
 - 写：operate 权限（+ 集群权限校验）
 """
+import math
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from app.core.database import async_session
 from app.middleware.permission import require_any_user, require_operator
-from app.models import ResourceGovernance
+from app.models import PodMetric, ResourceGovernance
 from app.services.user_permission_service import check_cluster_permission
+from app.utils.pod import infer_deployment_name
 
 router = APIRouter(prefix="/api/v1/resource-governance")
 
@@ -92,3 +96,62 @@ async def delete_rule(rule_id: int, user=Depends(require_operator)):
         await s.delete(row)
         await s.commit()
     return {"code": 200, "message": "success", "data": {"id": rule_id}}
+
+
+# ============ 高峰采集（P0-R1） ============
+
+def _p80(vals):
+    if not vals:
+        return 0.0
+    s = sorted(vals)
+    idx = int(math.ceil(0.8 * len(s))) - 1
+    return s[max(0, min(idx, len(s) - 1))]
+
+
+def _mem(v):
+    if v >= 1024 ** 3:
+        return f"{v / 1024 ** 3:.2f}Gi"
+    return f"{v / 1024 ** 2:.1f}Mi"
+
+
+@router.get("/peak")
+async def peak_collect(cluster_id: int, namespace: str = "", days: int = 3,
+                       start_hour: float = 10.0, end_hour: float = 11.5, user=Depends(require_any_user)):
+    """高峰采集：按业务高峰时段（默认 10:00-11:30）统计各工作负载的 P80 CPU/内存。
+
+    数据源 = 平台 PodMetric 表（executor 每分钟采样）；按「小时:分钟」落进 [start_hour, end_hour] 窗口。
+    """
+    if denied := await _deny(user, cluster_id):
+        return denied
+    days = max(1, min(int(days or 3), 3))
+    since = datetime.now() - timedelta(days=days)
+    async with async_session() as s:
+        stmt = select(PodMetric.namespace, PodMetric.pod_name, PodMetric.cpu_usage,
+                      PodMetric.memory_usage, PodMetric.sampled_at).where(
+            PodMetric.cluster_id == cluster_id, PodMetric.sampled_at >= since)
+        if namespace:
+            stmt = stmt.where(PodMetric.namespace == namespace)
+        rows = (await s.execute(stmt)).all()
+    groups = {}
+    for ns, pod, cpu, mem, ts in rows:
+        if ts is None:
+            continue
+        h = ts.hour + ts.minute / 60.0 + ts.second / 3600.0
+        if not (start_hour <= h <= end_hour):
+            continue
+        dep = infer_deployment_name(pod)
+        g = groups.setdefault((ns, dep), {"cpu": [], "mem": [], "pods": set()})
+        g["cpu"].append(cpu or 0.0)
+        g["mem"].append(mem or 0)
+        g["pods"].add(pod)
+    out = []
+    for (ns, dep), g in sorted(groups.items()):
+        cpu_p80 = _p80(g["cpu"])
+        mem_p80 = _p80(g["mem"])
+        out.append({
+            "namespace": ns, "deployment": dep, "pod_count": len(g["pods"]),
+            "cpu_p80": round(cpu_p80, 4), "mem_p80_bytes": int(mem_p80),
+            "cpu_p80_str": f"{cpu_p80 * 1000:.0f}m", "mem_p80_str": _mem(mem_p80),
+            "samples": len(g["cpu"]),
+        })
+    return {"code": 200, "message": "success", "data": out}

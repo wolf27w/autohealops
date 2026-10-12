@@ -1,11 +1,11 @@
 // 资源治理·管控台（P0-R1）：维护管控表（副本数/资源配额/JVM 参数），供准入控制改写 Deployment
 import { useCallback, useEffect, useState } from 'react'
 import { Card, Table, Button, Space, Select, Input, Modal, Form, InputNumber, Switch, message, Popconfirm, Tag, Tooltip } from 'antd'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, FundOutlined } from '@ant-design/icons'
 import {
-  getClusters, getResourceGovernance, upsertResourceGovernance, deleteResourceGovernance,
+  getClusters, getResourceGovernance, upsertResourceGovernance, deleteResourceGovernance, getResourceGovernancePeak,
 } from '../services/api'
-import type { ResourceGovernanceRule } from '../services/api'
+import type { ResourceGovernanceRule, PeakResult } from '../services/api'
 import type { Cluster } from '../types'
 
 export default function ResourceGovernance() {
@@ -17,6 +17,9 @@ export default function ResourceGovernance() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editRow, setEditRow] = useState<ResourceGovernanceRule | null>(null)
   const [form] = Form.useForm()
+  const [peakOpen, setPeakOpen] = useState(false)
+  const [peakData, setPeakData] = useState<PeakResult[]>([])
+  const [peakLoading, setPeakLoading] = useState(false)
 
   useEffect(() => {
     getClusters().then((d) => setClusters(d || [])).catch(() => {})
@@ -52,6 +55,15 @@ export default function ResourceGovernance() {
     load()
   }
 
+  const collectPeak = async () => {
+    if (!clusterId) { message.warning('请先选择集群'); return }
+    setPeakOpen(true); setPeakLoading(true); setPeakData([])
+    getResourceGovernancePeak({ cluster_id: clusterId, namespace: namespace || undefined })
+      .then((d) => setPeakData(d || []))
+      .catch(() => {})
+      .finally(() => setPeakLoading(false))
+  }
+
   const clusterName = (id: number) => clusters.find((c) => c.id === id)?.name || `#${id}`
 
   return (
@@ -64,6 +76,7 @@ export default function ResourceGovernance() {
             <Input placeholder="命名空间（空=全部）" style={{ width: 160 }} value={namespace}
               onChange={(e) => setNamespace(e.target.value)} onPressEnter={load} allowClear />
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+            <Button icon={<FundOutlined />} onClick={collectPeak}>采集高峰</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增</Button>
           </Space>
         }>
@@ -136,6 +149,18 @@ export default function ResourceGovernance() {
         <Tooltip title="准入控制需配套：webhook 部署在集群内 + 下发 MutatingWebhookConfiguration（见 docs）">
           <span style={{ color: '#999', fontSize: 12 }}>提示：管控值在 Deployment 创建/发布时由准入 webhook 写回 spec。</span>
         </Tooltip>
+      </Modal>
+
+      <Modal open={peakOpen} title="高峰资源采集（P80）" footer={null} onCancel={() => setPeakOpen(false)} width={900}>
+        <Table rowKey={(r) => `${r.namespace}/${r.deployment}`} size="small" loading={peakLoading} dataSource={peakData} pagination={{ pageSize: 20 }}
+          columns={[
+            { title: '命名空间', dataIndex: 'namespace', width: 150 },
+            { title: '工作负载', dataIndex: 'deployment' },
+            { title: 'Pod 数', dataIndex: 'pod_count', width: 80 },
+            { title: 'CPU P80', dataIndex: 'cpu_p80_str', width: 110 },
+            { title: '内存 P80', dataIndex: 'mem_p80_str', width: 110 },
+            { title: '采样点', dataIndex: 'samples', width: 90 },
+          ]} />
       </Modal>
     </div>
   )

@@ -492,5 +492,8 @@ export const upsertResourceGovernance = (data: Payload) =>
   http.post<ResourceGovernanceRule>('/resource-governance', data)
 export const deleteResourceGovernance = (id: number) =>
   http.delete<{ id: number }>(`/resource-governance/${id}`)
+export interface PeakResult { namespace: string; deployment: string; pod_count: number; cpu_p80: number; mem_p80_bytes: number; cpu_p80_str: string; mem_p80_str: string; samples: number }
+export const getResourceGovernancePeak = (params: { cluster_id: number; namespace?: string; days?: number; start_hour?: number; end_hour?: number }) =>
+  http.get<PeakResult[]>('/resource-governance/peak', { params })
 
 export default api
