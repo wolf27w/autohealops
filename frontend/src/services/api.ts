@@ -499,4 +499,7 @@ export const getResourceGovernancePeak = (params: { cluster_id: number; namespac
 export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
   http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
 
+export const isolatePod = (clusterId: number, ns: string, pod: string, data: Payload = {}) =>
+  http.post<{ pod: string; app: string }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/isolate`, data)
+
 export default api

@@ -787,3 +787,30 @@ async def update_workload_image(cluster_id: int, kind: str, namespace: str, name
         return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
     return {"code": 200, "message": "success",
             "data": {"container": target.get("name"), "old_image": old_image, "new_image": image}}
+
+
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/isolate")
+async def isolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict, user=Depends(require_operator)):
+    """Pod 隔离（R8）：把 app 标签改为 <原值>-ALERT，脱离 Service 流量、保留现场排查"""
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.get_pod_yaml, cluster_id, namespace, pod_name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "读取 Pod YAML 失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    labels = (doc.get("metadata") or {}).get("labels") or {}
+    app = labels.get("app")
+    if not app:
+        return {"code": 400, "message": "Pod 无 app 标签，无法隔离", "data": None}
+    if str(app).endswith("-ALERT"):
+        return {"code": 400, "message": "Pod 已处于隔离状态", "data": None}
+    labels["app"] = str(app) + "-ALERT"
+    doc.setdefault("metadata", {})["labels"] = labels
+    new_yaml = yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    r2 = await executor_client.acall(executor_client.apply_pod_yaml, cluster_id, namespace, new_yaml)
+    if not r2.get("success"):
+        return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"pod": pod_name, "app": str(app) + "-ALERT"}}
