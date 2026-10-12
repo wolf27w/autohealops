@@ -12,6 +12,7 @@
 """
 import asyncio
 import json
+import re
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -462,6 +463,73 @@ async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str
         logger.warning("告警邮件发送失败: %s", e)
 
 
+_SILENCE_KEYS = ("cluster_id", "namespace", "resource_type", "resource_name", "fault_type", "severity")
+
+
+def silence_matches(matchers: list[dict], alert) -> bool:
+    """所有 matcher 都命中才返回 True（op：= != =~ !~，正则全匹配）。"""
+    if not matchers:
+        return False
+    for m in matchers:
+        key = m.get("key", "")
+        op = m.get("op", "=")
+        val = str(m.get("value", ""))
+        if key == "cluster_id":
+            av = str(alert.cluster_id or "")
+        elif key == "namespace":
+            av = alert.namespace or ""
+        elif key == "resource_type":
+            av = alert.resource_type or ""
+        elif key == "resource_name":
+            av = alert.resource_name or ""
+        elif key == "fault_type":
+            av = alert.fault_type or ""
+        elif key == "severity":
+            av = alert.severity or ""
+        else:
+            av = ""
+        if op == "=":
+            ok = av == val
+        elif op == "!=":
+            ok = av != val
+        elif op == "=~":
+            try:
+                ok = re.search(val, av) is not None
+            except re.error:
+                ok = False
+        elif op == "!~":
+            try:
+                ok = re.search(val, av) is None
+            except re.error:
+                ok = True
+        else:
+            ok = False
+        if not ok:
+            return False
+    return True
+
+
+async def _alert_matched_silence(alert) -> bool:
+    """是否存在「当前生效」的屏蔽条目命中该告警。表未迁移/DB 异常 → False（fail-open）。"""
+    from app.models import AlertSilence
+    now = datetime.now()
+    try:
+        async with async_session() as session:
+            rows = (await session.execute(
+                select(AlertSilence).where(AlertSilence.starts_at <= now, AlertSilence.ends_at >= now)
+            )).scalars().all()
+    except Exception:
+        return False
+    for r in rows:
+        try:
+            matchers = json.loads(r.matchers or "[]")
+        except Exception:
+            continue
+        if silence_matches(matchers, alert):
+            return True
+    return False
+
+
 async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False,
                        override_config_id: int | None = None) -> dict:
     """统一告警通知入口（全平台一份策略）——所有告警来源共用。
@@ -478,6 +546,8 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
     policy = await get_alert_notify_policy()
     if not policy.get("enabled", True):
         return {"sent": 0, "reason": "policy_disabled"}
+    if await _alert_matched_silence(alert):
+        return {"sent": 0, "reason": "alert_silenced"}
 
     # 规则级指定通知渠道（日志告警规则「套用通知源」）——优先于分级/项目/场景路由
     if override_config_id:

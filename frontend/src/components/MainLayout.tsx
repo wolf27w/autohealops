@@ -11,7 +11,7 @@ import {
   SettingOutlined, LogoutOutlined, DownOutlined, MedicineBoxOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
-  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined,
+  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -50,6 +50,7 @@ const menuItems: NavItem[] = [
     children: [
       { key: '/alert-handling', icon: <AlertOutlined />, label: '告警处理' },
       { key: '/tickets', icon: <FileTextOutlined />, label: '工单' },
+      { key: '/alert-silences', icon: <StopOutlined />, label: '告警屏蔽' },
     ],
   },
   {
@@ -97,7 +98,7 @@ const menuItems: NavItem[] = [
 // admin 专属菜单项（viewer/operator 不可见；App.tsx 路由同样有 RequireRole 守卫）
 const ADMIN_ONLY_KEYS = new Set([
   '/strategy', '/notify-center', '/user-permission', '/log-sources',
-  '/ai-models', '/custom-tasks', '/settings', '/resource-governance',
+  '/ai-models', '/custom-tasks', '/settings', '/resource-governance', '/alert-silences',
 ])
 
 // 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（递归处理三级；空分组一并移除）

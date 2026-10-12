@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.api import (
-    agent, ai_proxy, alert_policies, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
+    agent, ai_proxy, alert_policies, alert_silences, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, notifications, on_duty, permissions,
     projects, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, webhooks,
 )
@@ -357,6 +357,7 @@ app.include_router(ai_proxy.router)  # AI 服务代理（需在具体路由之�
 app.include_router(clusters.router)
 app.include_router(alerts.router)
 app.include_router(alert_policies.router)
+app.include_router(alert_silences.router)
 app.include_router(self_heal_rules.router)
 app.include_router(tasks.router)
 app.include_router(approvals.router)

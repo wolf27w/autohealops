@@ -499,6 +499,17 @@ export const getResourceGovernancePeak = (params: { cluster_id: number; namespac
 export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
   http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
 
+// ============ 告警屏蔽（P2-R11） ============
+export interface SilenceMatcher { key: string; op: string; value: string }
+export interface AlertSilence {
+  id: number; name: string; matchers: SilenceMatcher[]; starts_at: string; ends_at: string
+  comment: string; created_by: string; created_at: string; updated_at: string
+}
+export const getAlertSilences = () => http.get<AlertSilence[]>('/alert-silences')
+export const createAlertSilence = (data: Payload) => http.post<AlertSilence>('/alert-silences', data)
+export const deleteAlertSilence = (id: number) => http.delete<{ id: number }>(`/alert-silences/${id}`)
+export const previewAlertSilence = (data: Payload) => http.post<{ matched: boolean }>('/alert-silences/preview', data)
+
 export const isolatePod = (clusterId: number, ns: string, pod: string, data: Payload = {}) =>
   http.post<{ pod: string; app: string }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/isolate`, data)
 
