@@ -33,6 +33,7 @@ import Tickets from './pages/Tickets'
 import ResourceGovernance from './pages/ResourceGovernance'
 import AlertSilences from './pages/AlertSilences'
 import NodeManagement from './pages/NodeManagement'
+import MonitorScreen from './pages/MonitorScreen'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -78,6 +79,7 @@ export default function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
+        <Route path="monitor" element={<MonitorScreen />} />
         <Route path="clusters" element={<ClusterList />} />
         <Route path="clusters/:id" element={<ClusterDetail />} />
         <Route path="clusters/:id/workloads/:kind/:namespace/:name" element={<ServiceDetail />} />
