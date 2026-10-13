@@ -25,7 +25,7 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
     if (!pod) return
     setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([])
     getJvmActions().then(setActions).catch(() => {})
-    getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers(c || [])).catch(() => {})
+    getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers((c as unknown as { containers?: string[] }).containers || [])).catch(() => {})
     if (deployment) {
       getJvmParams(pod.clusterId, pod.namespace, deployment)
         .then((d) => setParams(d.containers || [])).catch(() => {})
