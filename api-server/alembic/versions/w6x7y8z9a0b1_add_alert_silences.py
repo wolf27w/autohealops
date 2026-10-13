@@ -22,7 +22,7 @@ def upgrade() -> None:
         'alert_silences',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column('name', sa.String(length=120), nullable=False, server_default=''),
-        sa.Column('matchers', sa.Text(), nullable=False, server_default='[]'),
+        sa.Column('matchers', sa.Text(), nullable=False),
         sa.Column('starts_at', sa.DateTime(), nullable=False),
         sa.Column('ends_at', sa.DateTime(), nullable=False),
         sa.Column('comment', sa.String(length=255), nullable=False, server_default=''),
