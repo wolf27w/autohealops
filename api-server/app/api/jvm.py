@@ -118,6 +118,34 @@ async def _locate_jdk_bin(cluster_id: int, namespace: str, pod: str, container: 
     return None
 
 
+async def _switch_to_aliyun_repo(cluster_id: int, namespace: str, pod: str, container: str) -> None:
+    """检查容器包源，尽量切到阿里云镜像（mirrors.aliyun.com）后再装。
+
+    注意：executor 的 exec 不做引号处理（strings.Fields 切分），故 sed 命令**不带引号**。
+    按 /etc/os-release 判 OS，best-effort（文件不存在/无 sed 则跳过）。
+    """
+    r = await _exec(cluster_id, namespace, pod, "cat /etc/os-release", container)
+    out = (r.get("output") or "").lower()
+    A = "mirrors.aliyun.com"
+    if "debian" in out:
+        expr, files = ["deb.debian.org", "security.debian.org"], ["/etc/apt/sources.list", "/etc/apt/sources.list.d/debian.sources"]
+    elif "ubuntu" in out:
+        expr, files = ["archive.ubuntu.com", "security.ubuntu.com", "ports.ubuntu.com"], ["/etc/apt/sources.list", "/etc/apt/sources.list.d/ubuntu.sources"]
+    elif any(x in out for x in ("centos", "rhel", "almalinux", "rocky", "fedora")):
+        expr, files = ["mirror.centos.org", "mirrorlist.centos.org", "dl.fedoraproject.org"], [
+            "/etc/yum.repos.d/CentOS-Base.repo", "/etc/yum.repos.d/CentOS-Linux-BaseOS.repo",
+            "/etc/yum.repos.d/Rocky-BaseOS.repo", "/etc/yum.repos.d/almalinux.repo",
+        ]
+    elif "alpine" in out:
+        expr, files = ["dl-cdn.alpinelinux.org"], ["/etc/apk/repositories"]
+    else:
+        return
+    sed_args = " ".join(f"-e s#{h}#{A}#g" for h in expr)
+    for f in files:
+        await _exec(cluster_id, namespace, pod, f"sed -i {sed_args} {f}", container)
+    logger.info("JVM 诊断：已尝试把包源切至阿里云（%s）", files)
+
+
 async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str) -> str:
     """返回 JDK bin 目录前缀（含结尾 /，''=jcmd 在 PATH）。
 
@@ -133,6 +161,7 @@ async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container:
         if not (probe.get("output") or "").strip():
             continue
         logger.info("JVM 诊断：容器缺 jcmd，尝试用 %s 安装 JDK 工具", pm)
+        await _switch_to_aliyun_repo(cluster_id, namespace, pod, container)
         for c in cmds:
             await _exec(cluster_id, namespace, pod, c, container)
         loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
