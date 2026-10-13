@@ -45,7 +45,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const navigate = useNavigate()
   const { token } = theme.useToken()
   const { mode } = useThemeMode()
-  const isDark = screen || mode === 'dark'
+  const isDark = mode === 'dark'
   const ink = token.colorText
   const muted = token.colorTextSecondary
   const chartTheme = isDark ? ({ theme: 'classicDark' } as const) : {}
@@ -84,23 +84,6 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     tick()
     const t = setInterval(tick, 1000)
     return () => clearInterval(t)
-  }, [screen])
-
-  // 大屏强制深色：内层 dark ConfigProvider 只改 antd token（文字变浅），
-  // 但 index.css 里 .ant-card 等白底是硬编码、只在 html[data-theme='dark'] 才覆盖深色。
-  // 这里同步 data-theme='dark'，让卡片/侧栏/顶栏的深色硬编码覆盖生效（否则白卡浅字=「黑白」）。
-  useEffect(() => {
-    if (!screen) return
-    const htmlPrev = document.documentElement.getAttribute('data-theme')
-    const bodyPrev = document.body.getAttribute('data-theme')
-    document.documentElement.setAttribute('data-theme', 'dark')
-    document.body.setAttribute('data-theme', 'dark')
-    return () => {
-      if (htmlPrev) document.documentElement.setAttribute('data-theme', htmlPrev)
-      else document.documentElement.removeAttribute('data-theme')
-      if (bodyPrev) document.body.setAttribute('data-theme', bodyPrev)
-      else document.body.removeAttribute('data-theme')
-    }
   }, [screen])
 
   useEffect(() => {
@@ -213,7 +196,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     }}>
       {/* ===== 第 1 段 · 顶部栏 ===== */}
       {screen ? (
-        <Card bodyStyle={{ padding: '16px 24px' }} style={{ marginBottom: 0, border: 'none', boxShadow: 'none', background: 'linear-gradient(90deg, rgba(22,119,255,0.14), rgba(114,46,209,0.10) 60%, rgba(22,119,255,0.06))' }}>
+        <Card bodyStyle={{ padding: '16px 24px' }} style={{ marginBottom: 0, border: 'none', boxShadow: 'none', background: 'linear-gradient(90deg, rgba(18,185,129,0.10), rgba(4,140,99,0.05) 60%, rgba(18,185,129,0.02))' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
             <div>
               <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: 1, color: ink }}>API-OPS 智能运维大屏</div>

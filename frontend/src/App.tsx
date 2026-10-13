@@ -1,7 +1,5 @@
 // 路由配置
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { ConfigProvider } from 'antd'
-import { buildTheme } from './utils/theme'
 import MainLayout from './components/MainLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -62,9 +60,7 @@ export default function App() {
         path="/screen"
         element={
           <RequireAuth>
-            <ConfigProvider theme={buildTheme('dark')}>
-              <Dashboard screen />
-            </ConfigProvider>
+            <Dashboard screen />
           </RequireAuth>
         }
       />
