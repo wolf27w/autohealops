@@ -11,11 +11,18 @@ const api = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：添加 token
+// 请求拦截器：添加 token + 同步 iframe 鉴权 cookie
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+    // iframe（Netdata 监控反代）无法带 Authorization 头，走 cookie 鉴权；
+    // 这里在每次请求时从 localStorage 补 cookie，避免「老会话没重新登录导致 cookie 缺失」
+    try {
+      if (!document.cookie.includes('apiops_token=')) {
+        document.cookie = `apiops_token=${token}; path=/; max-age=86400; samesite=lax`
+      }
+    } catch { /* ignore */ }
   }
   return config
 })
