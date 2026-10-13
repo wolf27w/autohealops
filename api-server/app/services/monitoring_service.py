@@ -194,13 +194,12 @@ spec:
       labels:
         app: {CHILD}
     spec:
-      hostNetwork: true
+      # 注意：不 hostNetwork（child 流式上报到 parent，无需宿主网络）；
+      # 不加全容忍 tolerations → 默认不调度到有 control-plane 污点的 master 节点（避免与 etcd/apiserver 抢资源）
       hostPID: true
       serviceAccountName: netdata
       imagePullSecrets:
         - name: {IMAGE_PULL_SECRET}
-      tolerations:
-        - operator: Exists
       containers:
         - name: netdata
           image: harbor.efreight.cn/ops/netdata:stable
