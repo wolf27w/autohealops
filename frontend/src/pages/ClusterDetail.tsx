@@ -6,7 +6,7 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, enableMonitoring, disableMonitoring } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
@@ -105,6 +105,8 @@ export default function ClusterDetail() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
+  const [monitorOpen, setMonitorOpen] = useState(false)
+  const [monitorKey, setMonitorKey] = useState(0)
 
   // 工作负载类型 Tab 持久化（URL ?type= + 本地记忆，与命名空间同口径）
   const changeType = (v: string) => {
@@ -651,6 +653,7 @@ export default function ClusterDetail() {
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
         <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>巡检</Button>
+        <Button size="small" onClick={() => setMonitorOpen(true)}>监控</Button>
       </div>
 
       <Card size="small">
@@ -714,6 +717,20 @@ export default function ClusterDetail() {
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
+      <Modal
+        title={`监控（Netdata）：${clusterName || id}`}
+        open={monitorOpen}
+        onCancel={() => setMonitorOpen(false)}
+        width="96%"
+        style={{ top: 16 }}
+        footer={[
+          <Button key="enable" size="small" onClick={async () => { try { await enableMonitoring(Number(id)); message.success('监控已启用'); setMonitorKey((k) => k + 1) } catch { /* 拦截器已提示 */ } }}>启用监控</Button>,
+          <Button key="disable" size="small" onClick={async () => { try { await disableMonitoring(Number(id)); message.success('监控已停用') } catch { /* 拦截器已提示 */ } }}>停用监控</Button>,
+          <Button key="close" type="primary" onClick={() => setMonitorOpen(false)}>关闭</Button>,
+        ]}
+      >
+        <iframe key={monitorKey} src={`/api/v1/clusters/${id}/monitoring/ui/`} title="netdata" style={{ width: '100%', height: '78vh', border: 'none', borderRadius: 8, background: '#fff' }} />
+      </Modal>
     </div>
   )
 }
