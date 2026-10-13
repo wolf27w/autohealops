@@ -35,5 +35,13 @@ class Cluster(Base):
     inspect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 定时巡检 cron（分 时 日 月 周；空=不定时，仅手动点击巡检）
     inspect_cron: Mapped[str] = mapped_column(String(100), default="")
+    # 集群监控（Netdata）：开关 + 状态 + 反代路径 + 参数 + stream key 密文
+    monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=False)   # 用户开关（默认关）
+    monitoring_status: Mapped[str] = mapped_column(String(255), default="none")  # none/deploying/running/stopping/stopped/failed/uninstalled
+    monitoring_url: Mapped[str] = mapped_column(String(255), default="")       # 平台侧反代逻辑路径
+    monitoring_ns: Mapped[str] = mapped_column(String(64), default="apiops-monitoring")
+    parent_storage_size: Mapped[str] = mapped_column(String(16), default="20Gi")
+    monitoring_retention_days: Mapped[int] = mapped_column(Integer, default=7)
+    stream_key_encrypted: Mapped[str] = mapped_column(String(255), default="")     # stream API key 密文（AES-256-GCM）
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

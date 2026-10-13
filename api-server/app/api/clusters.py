@@ -83,7 +83,12 @@ async def list_clusters(user=Depends(require_any_user)):
          "inspect_cron": c.inspect_cron or "",
          "last_check_at": str(c.last_check_at) if c.last_check_at else "",
          "last_check_error": c.last_check_error or "",
-         "maintenance_window": c.maintenance_window or "{}"} for c in clusters
+         "maintenance_window": c.maintenance_window or "{}",
+         "monitoring_enabled": bool(c.monitoring_enabled),
+         "monitoring_status": c.monitoring_status or "none",
+         "monitoring_url": c.monitoring_url or "",
+         "monitoring_ns": c.monitoring_ns or "apiops-monitoring",
+         "monitoring_retention_days": c.monitoring_retention_days or 7} for c in clusters
     ]}
 
 
@@ -101,6 +106,12 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
         "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",
+        "monitoring_enabled": bool(c.monitoring_enabled),
+        "monitoring_status": c.monitoring_status or "none",
+        "monitoring_url": c.monitoring_url or "",
+        "monitoring_ns": c.monitoring_ns or "apiops-monitoring",
+        "parent_storage_size": c.parent_storage_size or "20Gi",
+        "monitoring_retention_days": c.monitoring_retention_days or 7,
     }}
 
 
@@ -172,6 +183,33 @@ async def setup_rbac(cluster_id: int, user=Depends(require_admin)):
     from app.services import rbac_service
     result = await rbac_service.setup_cluster_rbac(cluster_id)
     return {"code": 200, "message": "success", "data": result}
+
+
+@router.post("/{cluster_id}/monitoring/enable")
+async def monitoring_enable(cluster_id: int, user=Depends(require_admin)):
+    """下发/启动该集群 Netdata 监控（parent+child）；幂等。"""
+    from app.services import monitoring_service
+    result = await monitoring_service.enable_monitoring(cluster_id)
+    ok = bool(result.get("success"))
+    return {"code": 200 if ok else 500, "message": "success" if ok else "下发失败", "data": result}
+
+
+@router.post("/{cluster_id}/monitoring/disable")
+async def monitoring_disable(cluster_id: int, user=Depends(require_admin)):
+    """停服务（parent scale 0 + 删 child），保留 PVC/ConfigMap/RBAC。"""
+    from app.services import monitoring_service
+    result = await monitoring_service.disable_monitoring(cluster_id)
+    ok = bool(result.get("success"))
+    return {"code": 200 if ok else 500, "message": "success" if ok else "停止失败", "data": result}
+
+
+@router.post("/{cluster_id}/monitoring/uninstall")
+async def monitoring_uninstall(cluster_id: int, keep_pvc: bool = True, user=Depends(require_admin)):
+    """卸载：删资源（默认保留 PVC）。"""
+    from app.services import monitoring_service
+    result = await monitoring_service.uninstall_monitoring(cluster_id, keep_pvc=keep_pvc)
+    ok = bool(result.get("success"))
+    return {"code": 200 if ok else 500, "message": "success" if ok else "卸载失败", "data": result}
 
 
 @router.post("/{cluster_id}/inspect")
