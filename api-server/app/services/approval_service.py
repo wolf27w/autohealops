@@ -194,10 +194,12 @@ async def _resolve_approve_status(approval: Approval, approved_by: list[str]) ->
     return "approved" if len(approved_by) >= required else "pending"
 
 
-def _check_approver_permission(approval: Approval, username: str) -> str | None:
+def _check_approver_permission(approval: Approval, username: str, is_admin: bool = False) -> str | None:
     """校验操作者是否为该单审批人；返回 "forbidden" 表示无权，None 表示放行。
 
     - 必须 `username ∈ approvers`；approvers 为空（旧数据）→ 放行并打 warning。
+    - **管理员（is_admin=True）**：在 approvers 内即可放行，不受当前节点接收人限制
+      （处理卡在「指定用户」节点——该用户非真实账号/无法审批——等的单）。
     - 单节点流程：当前节点有 receiver_usernames 且非空时，还须 `username ∈ 当前节点 receivers`。
     - 双人审批（含 manager 节点）：manager+admin 各节点**并行**生效，approvers 已是各节点
       receiver 并集，不再用单一 current_node_index 去卡（否则会误挡另一节点的审批人）。
@@ -209,6 +211,8 @@ def _check_approver_permission(approval: Approval, username: str) -> str | None:
     if username not in approvers:
         logger.warning("审批 %d 操作者 %s 不在审批人列表内，拒绝", approval.id, username)
         return "forbidden"
+    if is_admin:
+        return None
     nodes = json.loads(approval.flow_nodes or "[]")
     if nodes and any(n.get("type") == "manager" for n in nodes):
         return None  # 双人审批：approvers 即各节点 receiver 并集，上面的交集校验已足够
@@ -424,8 +428,8 @@ async def approve(approval_id: int, user_id: int, comment: str = "", execute_mod
 
         user_row = await session.get(User, user_id)
         username = user_row.username if user_row else str(user_id)
-        # 审批人身份校验：操作者须在本单审批人内（当前节点有 receivers 时还须在其中）
-        deny = _check_approver_permission(approval, username)
+        # 审批人身份校验：操作者须在本单审批人内（当前节点有 receivers 时还须在其中；管理员放行）
+        deny = _check_approver_permission(approval, username, is_admin=bool(user_row and user_row.role == "admin"))
         if deny:
             return deny
 
@@ -639,8 +643,8 @@ async def reject(approval_id: int, user_id: int, comment: str = "") -> str:
 
         user_row = await session.get(User, user_id)
         username = user_row.username if user_row else str(user_id)
-        # 审批人身份校验：操作者须在本单审批人内
-        deny = _check_approver_permission(approval, username)
+        # 审批人身份校验：操作者须在本单审批人内（管理员放行）
+        deny = _check_approver_permission(approval, username, is_admin=bool(user_row and user_row.role == "admin"))
         if deny:
             return deny
 
