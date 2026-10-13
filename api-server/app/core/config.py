@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     AI_SERVICE_HTTP_ADDR: str = "http://localhost:9000"
     # gRPC 并发上限（A4）：限制同时向 executor 发起的同步调用数，防止后台循环耗尽线程池
     EXECUTOR_MAX_CONCURRENCY: int = 8
-    EXECUTOR_MONITORING_PROXY_ADDR: str = "http://127.0.0.1:9100"  # executor 监控反代 HTTP 地址
 
     # CORS 允许来源（逗号分隔；留空则用本地开发默认白名单）
     CORS_ORIGINS: str = ""

@@ -16,7 +16,6 @@ import (
 	"github.com/api-ops-platform/k8s-executor/internal/health"
 	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
 	"github.com/api-ops-platform/k8s-executor/internal/metrics"
-	"github.com/api-ops-platform/k8s-executor/internal/monitoring"
 	"github.com/api-ops-platform/k8s-executor/internal/quota"
 	"github.com/api-ops-platform/k8s-executor/internal/script"
 	"github.com/api-ops-platform/k8s-executor/internal/watcher"
@@ -90,12 +89,6 @@ func main() {
 		}
 	}
 
-	// 9.6 集群监控（Netdata）反代 HTTP 服务（内部，供 api-server 转发）
-	monProxy := monitoring.NewServer(cfg.MonitoringProxyAddr, manager, logger)
-	if err := monProxy.Start(ctx); err != nil {
-		logger.Warn("监控反代服务启动失败", zap.Error(err))
-	}
-
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
 		logger.Fatal("gRPC 监听失败", zap.String("port", cfg.GRPCPort), zap.Error(err))
@@ -115,7 +108,6 @@ func main() {
 	<-sigCh
 	logger.Info("收到退出信号，优雅关闭...")
 	grpcServer.GracefulStop()
-	monProxy.Stop()
 	if admissionSrv != nil {
 		admissionSrv.Stop()
 	}

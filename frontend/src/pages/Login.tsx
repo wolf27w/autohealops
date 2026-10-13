@@ -14,8 +14,6 @@ export default function Login() {
       const data = await login({ ...values, auth_type: ldapLogin ? 'ldap' : 'local' })
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
-      // 供 iframe（Netdata 监控反代）自动携带：设置 cookie，浏览器对同源子请求自动带
-      document.cookie = `apiops_token=${data.token}; path=/; max-age=86400; samesite=lax`
       message.success('登录成功')
       navigate('/dashboard')
     } catch (e) {

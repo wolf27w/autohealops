@@ -11,18 +11,11 @@ const api = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：添加 token + 同步 iframe 鉴权 cookie
+// 请求拦截器：添加 token
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
-    // iframe（Netdata 监控反代）无法带 Authorization 头，走 cookie 鉴权；
-    // 这里在每次请求时从 localStorage 补 cookie，避免「老会话没重新登录导致 cookie 缺失」
-    try {
-      if (!document.cookie.includes('apiops_token=')) {
-        document.cookie = `apiops_token=${token}; path=/; max-age=86400; samesite=lax`
-      }
-    } catch { /* ignore */ }
   }
   return config
 })
@@ -75,9 +68,6 @@ export const updateCluster = (id: number, data: Payload) => http.put<Cluster>(`/
 export const deleteCluster = (id: number) => http.delete(`/clusters/${id}`)
 export const healthCheckCluster = (id: number) => http.post(`/clusters/${id}/health-check`)
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
-export const enableMonitoring = (id: number) => http.post(`/clusters/${id}/monitoring/enable`)
-export const disableMonitoring = (id: number) => http.post(`/clusters/${id}/monitoring/disable`)
-export const uninstallMonitoring = (id: number) => http.post(`/clusters/${id}/monitoring/uninstall`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })
 export const getClusterInspectProgress = (id: number) => http.get<{ pct: number; step: string }>(`/clusters/${id}/inspect/progress`)

@@ -245,26 +245,9 @@ func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}, nil
 	case "pod":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, nil
-	case "namespace":
-		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}, nil
-	case "serviceaccount":
-		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}, nil
-	case "clusterrole":
-		return schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}, nil
-	case "clusterrolebinding":
-		return schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"}, nil
 	default:
-		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（deployment/statefulset/daemonset/cronjob/pod/configmap/secret/service/ingress/pvc/namespace/serviceaccount/clusterrole/clusterrolebinding）", kind)
+		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（仅 deployment/statefulset/daemonset/cronjob/pod/configmap/secret/service/ingress/pvc）", kind)
 	}
-}
-
-// isClusterScoped 集群级资源（apply/删除时不带 namespace）
-func isClusterScoped(kind string) bool {
-	switch kind {
-	case "namespace", "clusterrole", "clusterrolebinding":
-		return true
-	}
-	return false
 }
 
 // GetWorkloadYaml 获取工作负载（整个服务）YAML（只读）
@@ -325,34 +308,25 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 	if err != nil {
 		return fmt.Errorf("创建 dynamic client 失败: %w", err)
 	}
-	ri := dc.Resource(gvr)
-	opts := metav1.ApplyOptions{FieldManager: "api-ops", Force: true}
-	if isClusterScoped(kind) {
-		if _, err := ri.Apply(ctx, obj.GetName(), obj, opts); err != nil {
-			return fmt.Errorf("apply 失败: %w", err)
-		}
-		return nil
-	}
-	if _, err := ri.Namespace(namespace).Apply(ctx, obj.GetName(), obj, opts); err != nil {
+	if _, err := dc.Resource(gvr).Namespace(namespace).Apply(
+		ctx, obj.GetName(), obj,
+		metav1.ApplyOptions{FieldManager: "api-ops", Force: true},
+	); err != nil {
 		return fmt.Errorf("apply 失败: %w", err)
 	}
 	return nil
 }
 
-// DeleteResource 删除资源（配置类/工作负载/RBAC/命名空间等）
+// DeleteResource 删除配置类对象（ConfigMap/Secret）
 func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name string) error {
 	switch kind {
 	case "configmap", "secret", "service", "ingress", "pvc",
-		"deployment", "statefulset", "daemonset", "cronjob", "pod",
-		"serviceaccount", "namespace", "clusterrole", "clusterrolebinding":
+		"deployment", "statefulset", "daemonset", "cronjob", "pod":
 	default:
-		return fmt.Errorf("不支持删除的类型 %q", kind)
+		return fmt.Errorf("不支持删除的类型 %q（仅 configmap/secret/service/ingress/pvc/deployment/statefulset/daemonset/cronjob/pod）", kind)
 	}
-	if name == "" {
-		return fmt.Errorf("name 不能为空")
-	}
-	if namespace == "" && !isClusterScoped(kind) {
-		return fmt.Errorf("namespace 不能为空")
+	if namespace == "" || name == "" {
+		return fmt.Errorf("namespace/name 不能为空")
 	}
 	gvr, err := workloadGVR(kind)
 	if err != nil {
@@ -362,14 +336,7 @@ func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name str
 	if err != nil {
 		return fmt.Errorf("创建 dynamic client 失败: %w", err)
 	}
-	ri := dc.Resource(gvr)
-	if isClusterScoped(kind) {
-		if err := ri.Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
-			return fmt.Errorf("删除失败: %w", err)
-		}
-		return nil
-	}
-	if err := ri.Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+	if err := dc.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
 		return fmt.Errorf("删除失败: %w", err)
 	}
 	return nil
@@ -426,14 +393,6 @@ func kindMatches(kind, internal string) bool {
 		return kind == "PersistentVolumeClaim"
 	case "pod":
 		return kind == "Pod"
-	case "namespace":
-		return kind == "Namespace"
-	case "serviceaccount":
-		return kind == "ServiceAccount"
-	case "clusterrole":
-		return kind == "ClusterRole"
-	case "clusterrolebinding":
-		return kind == "ClusterRoleBinding"
 	}
 	return false
 }

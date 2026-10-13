@@ -27,9 +27,6 @@ type Config struct {
 	AdmissionClusterID int    // 归属集群 ID（管控表按集群过滤）
 	AdmissionCertFile  string // TLS 证书（空=自签）
 	AdmissionKeyFile   string // TLS 私钥（空=自签）
-
-	// 集群监控（Netdata）反代：内部 HTTP 服务，供 api-server 转发到集群 netdata-parent
-	MonitoringProxyAddr string // 监听地址，默认 127.0.0.1:9100
 }
 
 // findEnvFile 向上查找项目根目录下的 .env 文件
@@ -75,7 +72,6 @@ func Load() (*Config, error) {
 		AdmissionClusterID: v.GetInt("ADMISSION_CLUSTER_ID"),
 		AdmissionCertFile:  v.GetString("ADMISSION_CERT_FILE"),
 		AdmissionKeyFile:   v.GetString("ADMISSION_KEY_FILE"),
-		MonitoringProxyAddr: v.GetString("MONITORING_PROXY_ADDR"),
 	}
 	if cfg.GRPCPort == "" {
 		cfg.GRPCPort = "9090"
@@ -88,9 +84,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL 未配置（请在项目根 .env 中设置）")
-	}
-	if cfg.MonitoringProxyAddr == "" {
-		cfg.MonitoringProxyAddr = "127.0.0.1:9100"
 	}
 	// .env 中 DATABASE_URL 为 SQLAlchemy 格式（mysql+aiomysql://user:pass@host:3306/db），
 	// 转换为 GORM DSN（user:pass@tcp(host:3306)/db?charset=utf8mb4&parseTime=True&loc=Local）
