@@ -86,6 +86,23 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     return () => clearInterval(t)
   }, [screen])
 
+  // 大屏强制深色：内层 dark ConfigProvider 只改 antd token（文字变浅），
+  // 但 index.css 里 .ant-card 等白底是硬编码、只在 html[data-theme='dark'] 才覆盖深色。
+  // 这里同步 data-theme='dark'，让卡片/侧栏/顶栏的深色硬编码覆盖生效（否则白卡浅字=「黑白」）。
+  useEffect(() => {
+    if (!screen) return
+    const htmlPrev = document.documentElement.getAttribute('data-theme')
+    const bodyPrev = document.body.getAttribute('data-theme')
+    document.documentElement.setAttribute('data-theme', 'dark')
+    document.body.setAttribute('data-theme', 'dark')
+    return () => {
+      if (htmlPrev) document.documentElement.setAttribute('data-theme', htmlPrev)
+      else document.documentElement.removeAttribute('data-theme')
+      if (bodyPrev) document.body.setAttribute('data-theme', bodyPrev)
+      else document.body.removeAttribute('data-theme')
+    }
+  }, [screen])
+
   useEffect(() => {
     const onFs = () => setFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', onFs)
