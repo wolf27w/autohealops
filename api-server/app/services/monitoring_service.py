@@ -36,14 +36,17 @@ def _indent(text: str, n: int) -> str:
 def build_manifest(ns: str, key: str, retention_days: int, storage_size: str) -> list[dict]:
     """返回待下发对象列表 [{kind, namespace, name, yaml}]（顺序 = 依赖顺序）。"""
     parent_stream = (
-        "[stream]\n"
-        "    enabled = yes\n"
-        "    default memory mode = dbengine\n"
-        "    destination = \n"
-        f"    retention = {retention_days}d\n"
-        "\n"
         f"[{key}]\n"
         "    enabled = yes\n"
+        "    type = api\n"
+        "    allow from = *\n"
+        "    db = dbengine\n"
+        f"    retention = {retention_days}d\n"
+    )
+    # parent 需允许集群内 child 通过 API 端口(19999)上报（默认只允许 localhost）
+    netdata_conf = (
+        "[web]\n"
+        "    allow connections from = *\n"
     )
     child_stream = (
         "[stream]\n"
@@ -106,6 +109,8 @@ data:
 {_indent(parent_stream, 4)}
   child-stream.conf: |
 {_indent(child_stream, 4)}
+  netdata.conf: |
+{_indent(netdata_conf, 4)}
 """))
 
     objs.append(dict(kind="pvc", namespace=ns, name="netdata-parent-data", yaml=f"""apiVersion: v1
@@ -155,11 +160,17 @@ spec:
             - name: stream
               mountPath: /etc/netdata/stream.conf
               subPath: parent-stream.conf
+            - name: netdata-conf
+              mountPath: /etc/netdata/netdata.conf
+              subPath: netdata.conf
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: netdata-parent-data
         - name: stream
+          configMap:
+            name: netdata-stream
+        - name: netdata-conf
           configMap:
             name: netdata-stream
 """))
