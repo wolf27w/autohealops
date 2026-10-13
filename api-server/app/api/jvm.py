@@ -22,10 +22,12 @@ import yaml
 from fastapi import APIRouter, Depends
 
 from app.clients.executor_client import executor_client
+from app.core.logging import get_logger
 from app.middleware.permission import require_any_user, require_operator
 from app.services.user_permission_service import check_cluster_permission
 
 router = APIRouter(prefix="/api/v1/jvm")
+logger = get_logger("api-server.jvm")
 
 
 # 动作 → (命令模板, 是否产物文件, 是否需 pid, 中文名/说明)
@@ -94,12 +96,17 @@ async def _exec(cluster_id: int, namespace: str, pod: str, command: str, contain
     )
 
 
-async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str) -> str:
-    """返回 JDK bin 目录前缀（含结尾 /）。jcmd 在 PATH 时返回 ''。
+# 容器内装 JDK 工具：按包管理器探测（缺命令则自装；老板 2026-10-13 确认需要）
+_JDK_INSTALL = {
+    "apt-get": ["apt-get update", "apt-get install -y --no-install-recommends default-jdk-headless"],
+    "yum": ["yum install -y java-17-openjdk-headless"],
+    "dnf": ["dnf install -y java-17-openjdk-headless"],
+    "apk": ["apk add --no-cache openjdk17-jdk"],
+}
 
-    生产镜像常见「JDK 工具不在 PATH」（jcmd/jstack/jmap 找不到）→ 从 PID 1 的 java 二进制
-    （readlink /proc/1/exe）反推同目录工具，用绝对路径执行。
-    """
+
+async def _locate_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str):
+    """定位 JDK bin 前缀（'' = jcmd 在 PATH；返回 None = 找不到）。"""
     r = await _exec(cluster_id, namespace, pod, "jcmd -l", container)
     if r.get("success"):
         return ""
@@ -108,6 +115,28 @@ async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container:
         p = (r.get("output") or "").strip()
         if p.endswith("/java"):
             return p[: -len("java")]
+    return None
+
+
+async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str) -> str:
+    """返回 JDK bin 目录前缀（含结尾 /，''=jcmd 在 PATH）。
+
+    定位顺序：① jcmd 在 PATH；② 从 PID 1 的 java 二进制（readlink /proc/1/exe）反推；
+    ③ 都失败 → **探测包管理器并自动装 JDK 工具**（apt/yum/dnf/apk），装完再定位。
+    返回 ''（既可能=在 PATH，也可能=最终没找到——调用方靠 jcmd 执行报错区分）。
+    """
+    loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
+    if loc is not None:
+        return loc
+    for pm, cmds in _JDK_INSTALL.items():
+        probe = await _exec(cluster_id, namespace, pod, f"which {pm}", container)
+        if not (probe.get("output") or "").strip():
+            continue
+        logger.info("JVM 诊断：容器缺 jcmd，尝试用 %s 安装 JDK 工具", pm)
+        for c in cmds:
+            await _exec(cluster_id, namespace, pod, c, container)
+        loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
+        return loc if loc is not None else ""
     return ""
 
 
