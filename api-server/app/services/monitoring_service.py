@@ -16,10 +16,12 @@ from app.models import Cluster
 
 logger = logging.getLogger(__name__)
 
-NS_DEFAULT = "apiops-monitoring"
+NS_DEFAULT = "apiops"
 PARENT = "netdata-parent"
 CHILD = "netdata-child"
 CLUSTERROLE = "apiops-netdata"
+# Harbor 认证 secret（拉 netdata 镜像用；需存在于目标命名空间，否则镜像拉取 401）
+IMAGE_PULL_SECRET = "eft-image-auth"
 
 
 def gen_stream_key() -> str:
@@ -136,9 +138,11 @@ spec:
         app: {PARENT}
     spec:
       serviceAccountName: netdata
+      imagePullSecrets:
+        - name: {IMAGE_PULL_SECRET}
       containers:
         - name: netdata
-          image: netdata/netdata:stable
+          image: harbor.efreight.cn/ops/netdata:stable
           args: ["-D"]
           env:
             - name: NETDATA_DISABLE_TELEMETRY
@@ -193,11 +197,13 @@ spec:
       hostNetwork: true
       hostPID: true
       serviceAccountName: netdata
+      imagePullSecrets:
+        - name: {IMAGE_PULL_SECRET}
       tolerations:
         - operator: Exists
       containers:
         - name: netdata
-          image: netdata/netdata:stable
+          image: harbor.efreight.cn/ops/netdata:stable
           args: ["-D"]
           env:
             - name: NETDATA_DISABLE_TELEMETRY

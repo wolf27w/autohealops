@@ -94,14 +94,32 @@ async def _exec(cluster_id: int, namespace: str, pod: str, command: str, contain
     )
 
 
+async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str) -> str:
+    """返回 JDK bin 目录前缀（含结尾 /）。jcmd 在 PATH 时返回 ''。
+
+    生产镜像常见「JDK 工具不在 PATH」（jcmd/jstack/jmap 找不到）→ 从 PID 1 的 java 二进制
+    （readlink /proc/1/exe）反推同目录工具，用绝对路径执行。
+    """
+    r = await _exec(cluster_id, namespace, pod, "jcmd -l", container)
+    if r.get("success"):
+        return ""
+    r = await _exec(cluster_id, namespace, pod, "readlink /proc/1/exe", container)
+    if r.get("success"):
+        p = (r.get("output") or "").strip()
+        if p.endswith("/java"):
+            return p[: -len("java")]
+    return ""
+
+
 async def _find_java_pid(cluster_id: int, namespace: str, pod: str, container: str) -> tuple[int | None, str]:
-    """通过 `jcmd -l` 定位容器内第一个 Java 进程 pid。
+    """通过 `jcmd -l` 定位容器内第一个 Java 进程 pid（jcmd 不在 PATH 时自动定位 JDK bin）。
 
     返回 (pid, 原始输出)。找不到时 pid=None。
     """
-    r = await _exec(cluster_id, namespace, pod, "jcmd -l", container)
+    jc = (await _resolve_jdk_bin(cluster_id, namespace, pod, container)) + "jcmd"
+    r = await _exec(cluster_id, namespace, pod, f"{jc} -l", container)
     if not r.get("success"):
-        return None, r.get("error", "执行 jcmd -l 失败（容器可能未安装 JDK）")
+        return None, r.get("error", "执行 jcmd -l 失败（容器内无 jcmd：镜像可能为 JRE，请用基于 JDK 的镜像）")
     out = r.get("output", "") or ""
     for line in out.splitlines():
         line = line.strip()
@@ -134,9 +152,10 @@ async def list_java_processes(cluster_id: int, namespace: str, pod_name: str, co
     """列出容器内 Java 进程（jcmd -l）"""
     if denied := await _deny(user, cluster_id, namespace):
         return denied
-    r = await _exec(cluster_id, namespace, pod_name, "jcmd -l", container)
+    jc = (await _resolve_jdk_bin(cluster_id, namespace, pod_name, container)) + "jcmd"
+    r = await _exec(cluster_id, namespace, pod_name, f"{jc} -l", container)
     if not r.get("success"):
-        return {"code": 500, "message": r.get("error", "执行 jcmd -l 失败（容器可能未安装 JDK）"), "data": None}
+        return {"code": 500, "message": r.get("error", "执行 jcmd -l 失败（容器内无 jcmd）"), "data": None}
     out = r.get("output", "") or ""
     procs = []
     for line in out.splitlines():
@@ -183,9 +202,12 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
         pid_str = ""
 
     cmd = spec["cmd"].format(pid=pid_str)
+    bin_dir = await _resolve_jdk_bin(cluster_id, namespace, pod_name, container)
+    if bin_dir:
+        cmd = bin_dir + cmd
     r = await _exec(cluster_id, namespace, pod_name, cmd, container)
     if not r.get("success"):
-        return {"code": 500, "message": r.get("error", "诊断命令执行失败（容器可能未安装 JDK 工具）"), "data": None}
+        return {"code": 500, "message": r.get("error", "诊断命令执行失败（容器内可能无 JDK 工具）"), "data": None}
 
     data = {
         "action": action,

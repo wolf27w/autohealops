@@ -39,7 +39,7 @@ class Cluster(Base):
     monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=False)   # 用户开关（默认关）
     monitoring_status: Mapped[str] = mapped_column(String(255), default="none")  # none/deploying/running/stopping/stopped/failed/uninstalled
     monitoring_url: Mapped[str] = mapped_column(String(255), default="")       # 平台侧反代逻辑路径
-    monitoring_ns: Mapped[str] = mapped_column(String(64), default="apiops-monitoring")
+    monitoring_ns: Mapped[str] = mapped_column(String(64), default="apiops")
     parent_storage_size: Mapped[str] = mapped_column(String(16), default="20Gi")
     monitoring_retention_days: Mapped[int] = mapped_column(Integer, default=7)
     stream_key_encrypted: Mapped[str] = mapped_column(String(255), default="")     # stream API key 密文（AES-256-GCM）

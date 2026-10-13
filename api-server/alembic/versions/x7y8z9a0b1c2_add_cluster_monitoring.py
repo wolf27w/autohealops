@@ -21,7 +21,7 @@ def upgrade() -> None:
     op.add_column('clusters', sa.Column('monitoring_enabled', sa.Boolean(), nullable=False, server_default=sa.text('0')))
     op.add_column('clusters', sa.Column('monitoring_status', sa.String(length=255), nullable=False, server_default='none'))
     op.add_column('clusters', sa.Column('monitoring_url', sa.String(length=255), nullable=False, server_default=''))
-    op.add_column('clusters', sa.Column('monitoring_ns', sa.String(length=64), nullable=False, server_default='apiops-monitoring'))
+    op.add_column('clusters', sa.Column('monitoring_ns', sa.String(length=64), nullable=False, server_default='apiops'))
     op.add_column('clusters', sa.Column('parent_storage_size', sa.String(length=16), nullable=False, server_default='20Gi'))
     op.add_column('clusters', sa.Column('monitoring_retention_days', sa.Integer(), nullable=False, server_default=sa.text('7')))
     op.add_column('clusters', sa.Column('stream_key_encrypted', sa.String(length=255), nullable=False, server_default=''))
