@@ -72,6 +72,20 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
 
+  // 大屏实时时钟（仅 /screen 需要）
+  const [clock, setClock] = useState('')
+  useEffect(() => {
+    if (!screen) return
+    const tick = () => {
+      const d = new Date()
+      const p = (n: number) => String(n).padStart(2, '0')
+      setClock(`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`)
+    }
+    tick()
+    const t = setInterval(tick, 1000)
+    return () => clearInterval(t)
+  }, [screen])
+
   useEffect(() => {
     const onFs = () => setFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', onFs)
@@ -181,6 +195,36 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       ...(screen ? { padding: 12, minHeight: '100vh', background: token.colorBgLayout, boxSizing: 'border-box' as const } : {}),
     }}>
       {/* ===== 第 1 段 · 顶部栏 ===== */}
+      {screen ? (
+        <Card bodyStyle={{ padding: '16px 24px' }} style={{ marginBottom: 0, border: 'none', boxShadow: 'none', background: 'linear-gradient(90deg, rgba(22,119,255,0.14), rgba(114,46,209,0.10) 60%, rgba(22,119,255,0.06))' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+            <div>
+              <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: 1, color: ink }}>API-OPS 智能运维大屏</div>
+              <div style={{ fontSize: 13, color: muted, marginTop: 3 }}>
+                {new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })} · 聚合视图 · 最近 7 天 · 5 秒自动刷新
+              </div>
+            </div>
+            <div style={{ flex: 1 }} />
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 12, color: muted }}>全局健康分</div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.1, color: scoreColor(hs.total), fontVariantNumeric: 'tabular-nums' }}>{Math.round(hs.total)}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 12, color: muted }}>当前时间</div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.1, color: ink, fontVariantNumeric: 'tabular-nums' }}>{clock}</div>
+            </div>
+            <Space size={6} style={{ padding: '0 8px', borderLeft: `1px solid ${token.colorBorderSecondary}` }}>
+              <span style={{ fontSize: 12, color: muted }}>平台</span>
+              <Badge color={platformOk(platformHealth?.api_server)} />
+              <span style={{ fontSize: 12, color: muted }}>DB</span>
+              <Badge color={platformOk(platformHealth?.database)} />
+              <span style={{ fontSize: 12, color: muted }}>Redis</span>
+              <Badge color={platformOk(platformHealth?.redis)} />
+            </Space>
+            <Button type="text" icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={toggleFullscreen} />
+          </div>
+        </Card>
+      ) : (
       <Card bodyStyle={{ padding: '10px 16px' }} style={{ marginBottom: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <span style={{ fontSize: 16, fontWeight: 600, marginRight: 4 }}>仪表盘</span>
@@ -250,6 +294,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
           />
         </div>
       </Card>
+      )}
 
       {/* ===== 第 2 段 · KPI 行（7 项） ===== */}
       <Row gutter={[12, 12]} align="stretch">
@@ -258,7 +303,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             <Card bodyStyle={{ padding: '12px 16px' }}>
               <Statistic
                 title={k.title} value={k.value}
-                valueStyle={{ color: k.color, fontSize: 24, fontWeight: 700 }}
+                valueStyle={{ color: k.color, fontSize: screen ? 30 : 24, fontWeight: 700 }}
               />
             </Card>
           </Col>
@@ -272,7 +317,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             {trendData.length ? (
               <Line
                 data={trendData} xField="bucket" yField="value" colorField="type"
-                height={320} smooth {...chartTheme}
+                height={screen ? 340 : 320} smooth {...chartTheme}
                 legend={{ color: { position: 'top' } }}
                 scale={{ color: { range: ['#1677ff', '#52c41a', '#13c2c2'] } }}
               />
@@ -286,7 +331,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 <div style={{ position: 'relative' }}>
                   <Pie
                     data={aiDistDraw} angleField="value" colorField="key"
-                    height={250} radius={0.72} innerRadius={0.56} {...chartTheme}
+                    height={screen ? 300 : 250} radius={0.72} innerRadius={0.56} {...chartTheme}
                     legend={false}
                     label={{
                       // 环外标签用 spider 布局（带引导线自动避让），小扇区也不会叠字
@@ -330,7 +375,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             <Table
               rowKey="id" size="small" pagination={false}
               dataSource={realtimeAlerts}
-              scroll={{ y: 240 }}
+              scroll={{ y: screen ? 300 : 240 }}
               locale={{ emptyText: <Empty description="当前无未处理告警" /> }}
               columns={[
                 { title: '集群', dataIndex: 'cluster_name', width: 110, ellipsis: true },
@@ -349,7 +394,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             {faultTopData.length ? (
               <Bar
                 data={faultTopData} xField="count" yField="fault_type"
-                height={240} colorField="fault_type" {...chartTheme}
+                height={screen ? 280 : 240} colorField="fault_type" {...chartTheme}
                 legend={false}
               />
             ) : <Empty description="暂无数据" />}
