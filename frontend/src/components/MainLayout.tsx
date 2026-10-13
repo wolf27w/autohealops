@@ -42,7 +42,6 @@ const menuItems: NavItem[] = [
     key: 'g-monitor', label: '监控中心', icon: <FundOutlined />,
     children: [
       { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-      { key: '/monitor', icon: <FundOutlined />, label: '监控大屏' },
       { key: '/clusters', icon: <ClusterOutlined />, label: '集群管理' },
     ],
   },
