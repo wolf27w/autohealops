@@ -353,6 +353,10 @@ async def recovery_notify_alert(alert_id: int, request: Request):
     if not token or token != settings.JWT_SECRET_KEY:
         return {"code": 401, "message": "未认证", "data": None}
     from app.services.notification_service import send_recovery_notification
+    # 外部（Go watcher）直接改库不会触发 api-server 的 ORM 缓存代次 → 此处显式递增，
+    # 让仪表盘/大屏「活跃告警」在恢复时即时归零（SSE + 5s 轮询据此刷新）。
+    from app.core.redis_client import bump_dashboard_generation
+    await bump_dashboard_generation()
     async with async_session() as session:
         a = await session.get(Alert, alert_id)
         if not a:

@@ -87,7 +87,7 @@ func (w *NodeWatcher) reconcileLoop() {
 		select {
 		case <-w.ctx.Done():
 			return
-		case <-time.After(60 * time.Second):
+		case <-time.After(30 * time.Second):
 		}
 		w.reconcileAll()
 	}
