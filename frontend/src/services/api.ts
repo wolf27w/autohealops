@@ -529,6 +529,8 @@ export interface RangeSeries { metric: Record<string, string>; values: [number, 
 export const getClusterMetricRange = (clusterId: number, metric: string, minutes = 30, step = 60, filters?: { namespace?: string; pod?: string; container?: string }) =>
   http.get<{ metric: string; label: string; unit: string; series: RangeSeries[] }>(
     `/monitoring/clusters/${clusterId}/metrics/${metric}/range`, { params: { minutes, step, ...filters } })
+export const getClusterContainers = (clusterId: number, namespace = '') =>
+  http.get<{ containers: string[] }>(`/monitoring/clusters/${clusterId}/containers`, { params: { namespace } })
 
 // ============ 告警屏蔽（P2-R11） ============
 export interface SilenceMatcher { key: string; op: string; value: string }

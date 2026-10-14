@@ -52,6 +52,21 @@ async def cluster_query(cluster_id: int, promql: str, user=Depends(require_any_u
     return {"code": 200, "message": "success", "data": {"items": r.get("result", [])}}
 
 
+@router.get("/clusters/{cluster_id}/containers")
+async def list_containers(cluster_id: int, namespace: str = "", user=Depends(require_any_user)):
+    """列出命名空间下的容器名（从 Prometheus container 指标 group 提取）。"""
+    if not await user_permission_service.check_cluster_permission(user, cluster_id):
+        return {"code": 403, "message": "无权限访问该集群", "data": None}
+    sel = 'container!="",container!="POD"'
+    if namespace:
+        sel = f'namespace="{namespace}",' + sel
+    r = await prometheus_service.query(cluster_id, f'group by (container) (container_cpu_usage_seconds_total{{{sel}}})')
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error"), "data": None}
+    names = sorted({x["metric"].get("container") for x in r["result"] if x["metric"].get("container")})
+    return {"code": 200, "message": "success", "data": {"containers": names}}
+
+
 # ============ 趋势（range）：Netdata 式曲线（细节点点） ============
 
 async def _range_series(cluster_id: int, promql: str, minutes: int, step: int) -> dict:

@@ -5,7 +5,7 @@ import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Se
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
-import { getDashboard, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getPodContainers } from '../services/api'
+import { getDashboard, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getClusterContainers } from '../services/api'
 import type { DashboardData, ClusterHealthDetail } from '../types'
 import type { RangeSeries } from '../services/api'
 import { useThemeMode } from '../utils/theme'
@@ -25,7 +25,8 @@ const TREND_METRICS = [
 
 function seriesLabel(m: Record<string, string>): string {
   if (m.instance) return m.instance
-  if (m.namespace || m.pod) return `${m.namespace || ''}/${m.pod || ''}${m.container ? ':' + m.container : ''}`
+  if (m.container) return m.pod ? `${m.container} · ${m.pod}` : m.container
+  if (m.namespace || m.pod) return `${m.namespace || ''}/${m.pod || ''}`
   return JSON.stringify(m)
 }
 function hhmmss(ts: number): string {
@@ -112,24 +113,18 @@ export default function Screen() {
     return () => { alive = false; window.clearInterval(t) }
   }, [effCluster, trendMetric, trendMin, fNs, fPod, fCont])
 
-  // 级联筛选：集群→namespace→pod→容器
+  // 级联筛选：集群→namespace→容器/Pod
   useEffect(() => {
     setFNs(''); setFPod(''); setFCont(''); setNsList([]); setPodList([]); setContList([])
     if (!effCluster) return
     getClusterNamespaces(effCluster).then((d) => setNsList((d as string[]) || [])).catch(() => setNsList([]))
   }, [effCluster])
   useEffect(() => {
-    setFPod(''); setFCont(''); setPodList([]); setContList([])
+    setFCont(''); setFPod(''); setContList([]); setPodList([])
     if (!effCluster || !fNs) return
+    getClusterContainers(effCluster, fNs).then((d) => setContList(d?.containers || [])).catch(() => setContList([]))
     getNamespacePods(effCluster, fNs).then((d) => setPodList((d as { name: string }[]) || [])).catch(() => setPodList([]))
   }, [effCluster, fNs])
-  useEffect(() => {
-    setFCont(''); setContList([])
-    if (!effCluster || !fNs || !fPod) return
-    getPodContainers(effCluster, fNs, fPod)
-      .then((d) => setContList(((d as unknown as { containers?: string[] }).containers) || []))
-      .catch(() => setContList([]))
-  }, [effCluster, fNs, fPod])
 
   const core = data?.core
   const trend = (data?.alert_trend && data.alert_trend.length ? data.alert_trend : data?.trend_24h) || []
@@ -253,10 +248,10 @@ export default function Screen() {
             <Space wrap style={{ marginBottom: 10 }}>
               <Select allowClear showSearch style={{ width: 170 }} placeholder="命名空间" value={fNs || undefined}
                 onChange={(v) => setFNs(v || '')} options={nsList.map((n) => ({ value: n, label: n }))} />
-              <Select allowClear showSearch style={{ width: 200 }} placeholder="Pod" value={fPod || undefined}
-                onChange={(v) => setFPod(v || '')} options={podList.map((p) => ({ value: p.name, label: p.name }))} />
-              <Select allowClear style={{ width: 150 }} placeholder="容器" value={fCont || undefined}
+              <Select allowClear showSearch style={{ width: 180 }} placeholder="容器" value={fCont || undefined}
                 onChange={(v) => setFCont(v || '')} options={contList.map((c) => ({ value: c, label: c }))} />
+              <Select allowClear showSearch style={{ width: 190 }} placeholder="Pod" value={fPod || undefined}
+                onChange={(v) => setFPod(v || '')} options={podList.map((p) => ({ value: p.name, label: p.name }))} />
               <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选仅对容器指标生效（节点指标忽略）</span>
             </Space>
             <Row gutter={12}>
