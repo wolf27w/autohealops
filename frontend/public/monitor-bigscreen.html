@@ -319,13 +319,12 @@ function renderOverview(){
   <div class="row" style="margin-bottom:16px">
     <div class="col panel">
       <h3>告警类型分布</h3>
+      <div style="display:grid;grid-template-columns:150px 1fr 130px;gap:12px 14px;align-items:center;font-size:12px">
       ${OVERVIEW.alertTypes.map(t=>`
-        <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
-            <span>${t.name}</span><span class="dim">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>
-          </div>
-          ${bar(t.count/maxType*100)}
-        </div>`).join('')}
+          <span class="ell">${t.name}</span>
+          <span style="display:flex;align-items:center">${bar(t.count/maxType*100)}</span>
+          <span class="dim" style="text-align:right">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>`).join('')}
+      </div>
     </div>
   </div>
 
