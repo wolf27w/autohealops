@@ -317,18 +317,7 @@ function renderOverview(){
 
   <!-- 第二行 -->
   <div class="row" style="margin-bottom:16px">
-    <div class="col panel" style="flex:1.3">
-      <h3>全局资源水位 <span class="sub">多集群取峰值，看最大值而非平均</span></h3>
-      ${OVERVIEW.waterline.map(w=>`
-        <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
-            <span>${w.dim}</span><span style="color:${barColor(w.pct)};font-weight:700">${w.pct}%</span>
-          </div>
-          ${bar(w.pct)}
-          <div class="xs dim" style="margin-top:4px">峰值集群 ${w.peak} ${w.pct}%</div>
-        </div>`).join('')}
-    </div>
-    <div class="col panel" style="flex:1.7">
+    <div class="col panel">
       <h3>告警类型分布</h3>
       ${OVERVIEW.alertTypes.map(t=>`
         <div style="margin-bottom:12px">
