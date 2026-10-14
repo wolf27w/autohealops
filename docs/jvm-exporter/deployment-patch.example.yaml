@@ -1,0 +1,22 @@
+# 示例：给某个 Deployment 接入 JMX Exporter（片段，按需合并进你的工作负载）
+spec:
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9404"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: <your-app>
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/opt/jmx/jmx_prometheus_javaagent.jar=9404:/opt/jmx/config.yaml"
+          volumeMounts:
+            - { name: jmx-exporter, mountPath: /opt/jmx }
+          ports:
+            - { name: jmx-metrics, containerPort: 9404 }
+      volumes:
+        - name: jmx-exporter
+          configMap:
+            name: jmx-exporter-config   # 含 config.yaml；jar 建议打进镜像或另挂

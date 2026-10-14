@@ -479,6 +479,15 @@ export const getJvmParams = (clusterId: number, ns: string, deployment: string, 
   http.get<{ deployment: string; namespace: string; containers: JvmParamsContainer[] }>(
     `/jvm/clusters/${clusterId}/namespaces/${ns}/deployments/${deployment}/params`, { params: { container } })
 
+// R2.3 JVM 堆/GC 指标
+export interface JvmMetricItem { metric: Record<string, string>; value: number }
+export interface JvmMetrics {
+  metrics: Record<string, { label: string; unit: string; items: JvmMetricItem[] }>
+  connected: boolean; hint: string
+}
+export const getJvmMetrics = (clusterId: number, ns: string, pod: string) =>
+  http.get<JvmMetrics>(`/jvm/clusters/${clusterId}/jvm-metrics`, { params: { namespace: ns, pod } })
+
 // ============ 资源治理·管控表（P0-R1） ============
 export interface ResourceGovernanceRule {
   id: number; cluster_id: number; namespace: string; workload_kind: string; workload_name: string; container: string

@@ -463,3 +463,53 @@ async def get_deployment_jvm_params(cluster_id: int, namespace: str, name: str, 
             "env_jvm": env_jvm,
         })
     return {"code": 200, "message": "success", "data": {"deployment": name, "namespace": namespace, "containers": items}}
+
+
+# ============ R2.3 JVM 堆/G1 指标（Prometheus jvm_* 数据源） ============
+# 前提：集群内 JVM 应用已挂 JMX Exporter（jmx_prometheus_javaagent）并被 Prometheus 采集（jvm_* 指标）。
+# 未接入时相关指标返回空，接口给出 hint（不报错）。物料见 docs/jvm-exporter/。
+
+from app.services import prometheus_service  # noqa: E402
+
+# metric -> (label, unit, promql_template(含 {SEL}), extra_selectors)
+JVM_METRICS = {
+    "heap_used":    ("堆已用", "bytes", "sum(jvm_memory_used_bytes{SEL}) by (pod)", 'area="heap"'),
+    "heap_max":     ("堆上限", "bytes", "sum(jvm_memory_max_bytes{SEL}) by (pod)", 'area="heap"'),
+    "heap_used_pct": ("堆使用率", "%",
+                      "100 * sum(jvm_memory_used_bytes{SEL}) by (pod) / clamp_min(sum(jvm_memory_max_bytes{SEL}) by (pod), 1)",
+                      'area="heap"'),
+    "gc_time_rate": ("GC 耗时/秒", "s/s", "sum(rate(jvm_gc_collection_seconds_sum{SEL}[5m])) by (pod)", ""),
+    "gc_count_rate": ("GC 次数/秒", "ops/s", "sum(rate(jvm_gc_collection_seconds_count{SEL}[5m])) by (pod)", ""),
+    "threads":      ("线程数", "", "sum(jvm_threads_current{SEL}) by (pod)", ""),
+    "classes_loaded": ("已加载类", "", "sum(jvm_classes_loaded{SEL}) by (pod)", ""),
+}
+
+
+def _jvm_sel(namespace: str, pod: str, extra: str) -> str:
+    pairs = []
+    if extra:
+        pairs.append(extra)
+    if namespace:
+        pairs.append(f'namespace="{namespace}"')
+    if pod:
+        pairs.append(f'pod="{pod}"')
+    return "{" + ",".join(pairs) + "}" if pairs else ""
+
+
+@router.get("/clusters/{cluster_id}/jvm-metrics")
+async def jvm_metrics(cluster_id: int, namespace: str = "", pod: str = "",
+                      user=Depends(require_any_user)):
+    """JVM 堆/GC 等指标（即时）。需集群已接入 JMX Exporter（jvm_* 指标）；未接入返回空 + hint。"""
+    if not await check_cluster_permission(user, cluster_id, namespace, "read"):
+        return {"code": 403, "message": "无权限访问该集群", "data": None}
+    out = {}
+    any_hit = False
+    for name, (label, unit, tpl, extra) in JVM_METRICS.items():
+        promql = tpl.replace("{SEL}", _jvm_sel(namespace, pod, extra))
+        r = await prometheus_service.query(cluster_id, promql)
+        items = r.get("result", []) if r.get("success") else []
+        if items:
+            any_hit = True
+        out[name] = {"label": label, "unit": unit, "items": items}
+    hint = "" if any_hit else ("未检测到 jvm_* 指标：请先为该应用接入 JMX Exporter（见 docs/jvm-exporter/）并由 Prometheus 采集。")
+    return {"code": 200, "message": "success", "data": {"metrics": out, "connected": any_hit, "hint": hint}}

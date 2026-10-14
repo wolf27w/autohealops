@@ -1,0 +1,21 @@
+# JMX Exporter 配置（JVM GC/内存/线程/类）——放到应用容器（例 /opt/jmx/config.yaml）
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>(used|max|committed|init)'
+    name: jvm_memory_$1_bytes
+    labels: { area: heap }
+  - pattern: 'java.lang<type=Memory><NonHeapMemoryUsage>(used|max|committed|init)'
+    name: jvm_memory_$1_bytes
+    labels: { area: nonheap }
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionCount'
+    name: jvm_gc_collection_seconds_count
+    labels: { gc: "$1" }
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionTime'
+    name: jvm_gc_collection_seconds_sum
+    labels: { gc: "$1" }
+    valueFactor: 0.001
+  - pattern: 'java.lang<type=Threading><>(ThreadCount|DaemonThreadCount|PeakThreadCount)'
+    name: jvm_threads_$1
+  - pattern: 'java.lang<type=ClassLoading><>(LoadedClassCount|TotalLoadedClassCount|UnloadedClassCount)'
+    name: jvm_classes_$1
