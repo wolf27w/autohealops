@@ -1041,3 +1041,22 @@ async def node_drain(cluster_id: int, node: str, payload: dict, user=Depends(req
     ok = bool(r.get("success"))
     return {"code": 200 if ok else 500, "message": "已执行排空" if ok else (r.get("error") or "排空失败"),
             "data": {"success": ok, "output": r.get("output", ""), "error": r.get("error", "") if not ok else ""}}
+
+
+# ============ 日志增强（P1-R5 收尾）：下载(gzip) + Deployment 聚合 ============
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs/download")
+async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, container: str = "",
+                            tail: int = 2000, previous: bool = False, user=Depends(require_any_user)):
+    """下载 Pod 容器日志（gzip，附件）。"""
+    import gzip
+    from fastapi.responses import Response
+    tail = max(1, min(int(tail or 2000), 5000))
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name, container, tail, previous)
+    text = r.get("logs", "") if r.get("success") else ""
+    body = gzip.compress(text.encode("utf-8"))
+    fn = f"{namespace}_{pod_name}_{'previous' if previous else 'current'}.log.gz"
+    return Response(content=body, media_type="application/gzip",
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})

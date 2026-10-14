@@ -1,8 +1,8 @@
 // 实时日志跟随弹窗（P1-R5）：浏览器 ↔ api-server(WS) ↔ executor 日志流 HTTP（apiserver follow）
 import { useEffect, useRef, useState } from 'react'
-import { Modal, Space, Input, Button, Select, Switch } from 'antd'
-import { PauseCircleOutlined, PlayCircleOutlined, ClearOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
-import { getPodContainers } from '../services/api'
+import { Modal, Space, Input, Button, Select, Switch, message } from 'antd'
+import { PauseCircleOutlined, PlayCircleOutlined, ClearOutlined, VerticalAlignBottomOutlined, DownloadOutlined } from '@ant-design/icons'
+import { getPodContainers, downloadPodLogs } from '../services/api'
 
 interface LogPod { clusterId: number; namespace: string; name: string }
 interface Props { pod: LogPod | null; onClose: () => void }
@@ -98,6 +98,15 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
         <Button icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
           onClick={() => { if (paused) { appendText(''); setPaused(false) } else setPaused(true) }}>{paused ? '继续' : '暂停'}</Button>
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>{autoScroll ? '取消贴底' : '自动贴底'}</Button>
+        <Button icon={<DownloadOutlined />} onClick={async () => {
+          if (!pod) return
+          try {
+            const blob = await downloadPodLogs(pod.clusterId, pod.namespace, pod.name, { container, tail, previous })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a'); a.href = url; a.download = `${pod.namespace}_${pod.name}.log.gz`; a.click()
+            setTimeout(() => URL.revokeObjectURL(url), 3000)
+          } catch (e) { message.error(String((e as Error)?.message || e)) }
+        }}>下载</Button>
         <Button type="primary" onClick={connect}>重连</Button>
       </Space>
       <pre ref={boxRef} style={{ maxHeight: '66vh', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'monospace' }}>
