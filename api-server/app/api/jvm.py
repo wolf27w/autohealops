@@ -7,8 +7,13 @@
   因为本机未安装 protoc-gen-go / protoc-gen-go-grpc，改 proto 无法重新生成 stub。
 - **命令白名单化**：只允许下方 `_ACTIONS` 里的固定模板，pid 强制为纯数字，
   从根上阻断任意命令注入（executor 侧还会再拦 shell/管道等元字符）。
-- **依赖**：目标容器需自带 JDK 工具（jstack/jmap/jcmd，含在 JDK，JRE 无）。
-  缺失时如实返回错误提示，不静默。
+- **两种执行后端**（2026-10-14 加，解决 JRE 生产镜像）：
+  1. **JDK 后端**：容器自带 JDK 工具（jstack/jmap/jcmd）时，直接用原生命令。
+  2. **jattach 后端**：容器仅含 JRE（无 jcmd/jstack/jmap）时，注入一个 ~63KB 的
+     `jattach` 静态二进制（走 JVM attach socket），可用 threaddump / inspectheap /
+     jcmd 子命令，**JRE 也能出线程栈 / 堆直方图 / 堆信息 / VM 参数**。
+     无法装 JDK 时不再裸执行 `jcmd` 抛 OCI 报错，而是明确降级 / 明确报因。
+  缺失时如实返回错误提示与「自动安装 JDK 失败原因」，不静默。
 
 动作分类
 --------
@@ -22,6 +27,7 @@ import yaml
 from fastapi import APIRouter, Depends
 
 from app.clients.executor_client import executor_client
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.middleware.permission import require_any_user, require_operator
 from app.services.user_permission_service import check_cluster_permission
@@ -30,44 +36,48 @@ router = APIRouter(prefix="/api/v1/jvm")
 logger = get_logger("api-server.jvm")
 
 
-# 动作 → (命令模板, 是否产物文件, 是否需 pid, 中文名/说明)
-# 模板中的 {pid} 会替换为校验过的纯数字 pid；{file} 替换为固定安全路径。
+# 动作 → (JDK 命令模板, jattach 子命令模板, 是否产物文件, 是否需 pid, 中文名/说明)
+# cmd 中的 {pid} 会替换为校验过的纯数字 pid；文件路径为固定安全路径。
+# attach 为空 = 该动作无 JRE 等价实现（如 jmap -histo 的 live 语义），降级时报明。
 _ACTIONS: dict[str, dict] = {
     "thread_dump": {
-        "cmd": "jstack {pid}", "file": False, "need_pid": True,
+        "cmd": "jstack {pid}", "attach": "threaddump", "file": False, "need_pid": True,
         "label": "线程栈 jstack", "desc": "定位 CPU 飙高 / 死锁 / 线程池打满 / 接口卡住",
     },
     "thread_print": {
-        "cmd": "jcmd {pid} Thread.print", "file": False, "need_pid": True,
+        "cmd": "jcmd {pid} Thread.print", "attach": "threaddump", "file": False, "need_pid": True,
         "label": "线程栈(jcmd)", "desc": "同上，走 jcmd，兼容性更好",
     },
     "heap_histo": {
-        "cmd": "jmap -histo:live {pid}", "file": False, "need_pid": True,
+        "cmd": "jmap -histo:live {pid}", "attach": "inspectheap", "file": False, "need_pid": True,
         "label": "堆直方图 jmap -histo", "desc": "对象数量/大小排行，查内存占用大户",
     },
     "heap_info": {
-        "cmd": "jcmd {pid} GC.heap_info", "file": False, "need_pid": True,
+        "cmd": "jcmd {pid} GC.heap_info", "attach": "jcmd GC.heap_info", "file": False, "need_pid": True,
         "label": "堆信息 GC.heap_info", "desc": "各代容量/已用，查 GC 压力",
     },
     "gc_class_histo": {
-        "cmd": "jcmd {pid} GC.class_histogram", "file": False, "need_pid": True,
+        "cmd": "jcmd {pid} GC.class_histogram", "attach": "jcmd GC.class_histogram", "file": False, "need_pid": True,
         "label": "类直方图", "desc": "GC 后存活对象直方图",
     },
     "vm_flags": {
-        "cmd": "jcmd {pid} VM.flags", "file": False, "need_pid": True,
+        "cmd": "jcmd {pid} VM.flags", "attach": "jcmd VM.flags", "file": False, "need_pid": True,
         "label": "JVM 启动参数 VM.flags", "desc": "查看 -Xms/-Xmx/-XX 等生效参数",
     },
     "sys_props": {
-        "cmd": "jcmd {pid} VM.system_properties", "file": False, "need_pid": True,
+        "cmd": "jcmd {pid} VM.system_properties", "attach": "jcmd VM.system_properties", "file": False, "need_pid": True,
         "label": "系统属性", "desc": "System.getProperties() 全量",
     },
     "heap_dump": {
-        "cmd": "jmap -dump:live,format=b,file=/tmp/jvm-heap.hprof {pid}", "file": True, "need_pid": True,
+        "cmd": "jmap -dump:live,format=b,file=/tmp/jvm-heap.hprof {pid}",
+        "attach": "dumpheap /tmp/jvm-heap.hprof", "file": True, "need_pid": True,
         "label": "堆转储 heap dump", "desc": "导出堆快照（大文件，落 /tmp 后下载分析）",
     },
     "jfr_start": {
-        "cmd": "jcmd {pid} JFR.start name=apiops duration=30s filename=/tmp/jvm-recording.jfr", "file": True, "need_pid": True,
-        "label": "飞行记录 JFR", "desc": "低开销持续记录 GC/线程/锁/IO（30s，落 /tmp 后下载）",
+        "cmd": "jcmd {pid} JFR.start name=apiops duration=30s filename=/tmp/jvm-recording.jfr",
+        "attach": "jcmd JFR.start name=apiops duration=30s filename=/tmp/jvm-recording.jfr",
+        "file": True, "need_pid": True,
+        "label": "飞行记录 JFR", "desc": "低开销持续记录 GC/线程/锁/IO（30s，落 /tmp 后下载；JRE8 无 JFR）",
     },
 }
 
@@ -80,6 +90,10 @@ _FILE_PATHS = {
 _SAFE_PID = re.compile(r"^\d{1,7}$")
 # jcmd -l 输出行：<pid> <主类/命令...>
 _JCMD_LINE = re.compile(r"^(\d{1,7})\s+(.*)$")
+# ps -eo pid,args 输出行：<pid> <args...>
+_PS_LINE = re.compile(r"^\s*(\d{1,7})\s+(.*)$")
+# 独立出现的 java 可执行（排除 -javaagent: 之类的参数）
+_JAVA_PROC = re.compile(r"(^|\s)java(\s|$)")
 
 
 async def _deny(user, cluster_id: int, namespace: str = "", required: str = "operate"):
@@ -105,11 +119,46 @@ _JDK_INSTALL = {
 }
 
 
+def _no_jdk_msg(note: str = "") -> str:
+    """容器无任何 JVM 诊断能力的统一提示（含自动安装失败原因）。"""
+    msg = (
+        "容器内没有 JDK 诊断工具（jcmd/jstack/jmap），且 jattach 注入失败；"
+        "该镜像疑似仅含 JRE，无法执行 JVM 诊断。"
+        "建议改用基于 JDK 的基础镜像，或在镜像内预装 JDK 工具。"
+    )
+    if note:
+        msg += f" 自动安装 JDK 失败：{note[:600]}"
+    else:
+        msg += " 未探测到可用包管理器，无法自动安装 JDK。"
+    return msg
+
+
 async def _locate_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str):
-    """定位 JDK bin 前缀（'' = jcmd 在 PATH；返回 None = 找不到）。"""
+    """定位可用的 JDK bin 目录前缀（含结尾 '/'）。
+
+    返回：'' = jcmd 在 PATH；非空 = bin 前缀；None = 找不到。
+    顺序：① jcmd 在 PATH；② which jcmd；③ 常见目录 find jcmd（覆盖 JAVA_HOME/
+    发行版默认路径，且 PID1 非 java 的情况）；④ 从 PID1 的 java 二进制反推。
+    """
     r = await _exec(cluster_id, namespace, pod, "jcmd -l", container)
     if r.get("success"):
         return ""
+    # which jcmd（PATH 有 jcmd 但 -l 失败时兜底）
+    r = await _exec(cluster_id, namespace, pod, "which jcmd", container)
+    for line in (r.get("output") or "").splitlines():
+        line = line.strip()
+        if line.endswith("/jcmd"):
+            return line[: -len("jcmd")]
+    # 常见 JDK 目录（PID1 是包装脚本 / JAVA_HOME 未在 PATH 时也能命中）
+    r = await _exec(
+        cluster_id, namespace, pod,
+        "find /usr/lib/jvm /usr/java /usr/local /opt /app -maxdepth 4 -name jcmd -type f", container,
+    )
+    for line in (r.get("output") or "").splitlines():
+        line = line.strip()
+        if line.endswith("/jcmd"):
+            return line[: -len("jcmd")]
+    # 从 PID1 的 java 反推
     r = await _exec(cluster_id, namespace, pod, "readlink /proc/1/exe", container)
     if r.get("success"):
         p = (r.get("output") or "").strip()
@@ -146,16 +195,17 @@ async def _switch_to_aliyun_repo(cluster_id: int, namespace: str, pod: str, cont
     logger.info("JVM 诊断：已尝试把包源切至阿里云（%s）", files)
 
 
-async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str) -> str:
-    """返回 JDK bin 目录前缀（含结尾 /，''=jcmd 在 PATH）。
+async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container: str) -> tuple[str | None, str]:
+    """返回 (bin 前缀, 安装失败说明)。
 
-    定位顺序：① jcmd 在 PATH；② 从 PID 1 的 java 二进制（readlink /proc/1/exe）反推；
-    ③ 都失败 → **探测包管理器并自动装 JDK 工具**（apt/yum/dnf/apk），装完再定位。
-    返回 ''（既可能=在 PATH，也可能=最终没找到——调用方靠 jcmd 执行报错区分）。
+    bin 前缀：'' = jcmd 在 PATH；非空 = 目录前缀（含结尾 '/'）；**None = 找不到**。
+    找不到时才尝试自动安装（apt/yum/dnf/apk）；安装命令的输出**完整保留**，
+    失败原因随 note 返回给前端（原来的坑：输出被丢弃，只报 cryptic 错误）。
     """
     loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
     if loc is not None:
-        return loc
+        return loc, ""
+    notes: list[str] = []
     for pm, cmds in _JDK_INSTALL.items():
         probe = await _exec(cluster_id, namespace, pod, f"which {pm}", container)
         if not (probe.get("output") or "").strip():
@@ -163,35 +213,86 @@ async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container:
         logger.info("JVM 诊断：容器缺 jcmd，尝试用 %s 安装 JDK 工具", pm)
         await _switch_to_aliyun_repo(cluster_id, namespace, pod, container)
         for c in cmds:
-            await _exec(cluster_id, namespace, pod, c, container)
+            rr = await _exec(cluster_id, namespace, pod, c, container)
+            if not rr.get("success"):
+                detail = (rr.get("error") or rr.get("output") or "").strip().replace("\n", " ")
+                notes.append(f"[{c}] {detail[:300]}")
         loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
-        return loc if loc is not None else ""
-    return ""
+        if loc is not None:
+            return loc, ""
+        if not notes:
+            notes.append(f"{pm} 安装执行完毕但仍未找到 jcmd")
+        break
+    return None, " ; ".join(notes)
 
 
-async def _find_java_pid(cluster_id: int, namespace: str, pod: str, container: str) -> tuple[int | None, str]:
-    """通过 `jcmd -l` 定位容器内第一个 Java 进程 pid（jcmd 不在 PATH 时自动定位 JDK bin）。
+async def _ensure_jattach(cluster_id: int, namespace: str, pod: str, container: str) -> str | None:
+    """确保容器内有 jattach：返回其路径，失败返回 None。
 
-    返回 (pid, 原始输出)。找不到时 pid=None。
+    用于 JRE 镜像（无 JDK 工具）：jattach 是单文件静态二进制（~63KB），走 JVM
+    attach socket，可做 threaddump / inspectheap / dumpheap / jcmd 子命令。
+    优先已存在（/tmp 可能被复用），否则从 settings.JVM_JATTACH_URL 下载并 chmod。
     """
-    jc = (await _resolve_jdk_bin(cluster_id, namespace, pod, container)) + "jcmd"
-    r = await _exec(cluster_id, namespace, pod, f"{jc} -l", container)
-    if not r.get("success"):
-        return None, r.get("error", "执行 jcmd -l 失败（容器内无 jcmd：镜像可能为 JRE，请用基于 JDK 的镜像）")
-    out = r.get("output", "") or ""
+    path = getattr(settings, "JVM_JATTACH_PATH", "/tmp/.apiops-jattach") or "/tmp/.apiops-jattach"
+    if (await _exec(cluster_id, namespace, pod, f"ls {path}", container)).get("success"):
+        return path
+    url = (getattr(settings, "JVM_JATTACH_URL", "") or "").strip()
+    if not url:
+        return None
+    logger.info("JVM 诊断：容器无 JDK，尝试注入 jattach（%s）", url)
+    dl = await _exec(cluster_id, namespace, pod, f"curl -sSL -m 25 -o {path} {url}", container)
+    if not dl.get("success"):
+        dl = await _exec(cluster_id, namespace, pod, f"wget -q -O {path} {url}", container)
+    if not dl.get("success"):
+        logger.warning("JVM 诊断：jattach 下载失败：%s", (dl.get("error") or "")[:200])
+        return None
+    await _exec(cluster_id, namespace, pod, f"chmod +x {path}", container)
+    if (await _exec(cluster_id, namespace, pod, f"ls {path}", container)).get("success"):
+        return path
+    return None
+
+
+async def _find_java_pid_ps(cluster_id: int, namespace: str, pod: str, container: str) -> tuple[int | None, str]:
+    """通过 `ps -eo pid,args` 定位 java 进程 pid（JRE 无 jcmd 时的兜底）。"""
+    r = await _exec(cluster_id, namespace, pod, "ps -eo pid,args", container)
+    out = r.get("output") or ""
     for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        m = _JCMD_LINE.match(line)
+        m = _PS_LINE.match(line)
         if not m:
             continue
-        pid, cls = m.group(1), m.group(2)
-        # 排除 jcmd/jps 自身
-        if "jcmd" in cls or "tools.jcmd" in cls:
+        pid, args = m.group(1), m.group(2)
+        if "/.apiops-jattach" in args or args.strip().startswith("ps "):
             continue
-        return int(pid), out
-    return None, out or "（jcmd -l 无输出：容器内可能没有 Java 进程或未装 JDK 工具）"
+        if _JAVA_PROC.search(f" {args} "):
+            return int(pid), out
+    return None, out or "（ps 无输出：容器内可能没有 java 进程，或镜像无 ps/procps）"
+
+
+async def _find_java_pid(cluster_id: int, namespace: str, pod: str, container: str,
+                         jdk_bin: str | None) -> tuple[int | None, str]:
+    """定位容器内第一个 Java 进程 pid。
+
+    jdk_bin 非 None 时优先走 `jcmd -l`；否则（JRE）走 `ps -eo pid,args`。
+    返回 (pid, 原始输出)；找不到时 pid=None。
+    """
+    if jdk_bin is not None:
+        jc = jdk_bin + "jcmd"
+        r = await _exec(cluster_id, namespace, pod, f"{jc} -l", container)
+        if r.get("success"):
+            out = r.get("output", "") or ""
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = _JCMD_LINE.match(line)
+                if not m:
+                    continue
+                pid, cls = m.group(1), m.group(2)
+                if "jcmd" in cls or "tools.jcmd" in cls:
+                    continue
+                return int(pid), out
+            return None, out or "（jcmd -l 无输出：容器内可能没有 Java 进程）"
+    return await _find_java_pid_ps(cluster_id, namespace, pod, container)
 
 
 @router.get("/actions")
@@ -207,23 +308,37 @@ async def list_actions(user=Depends(require_operator)):
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/processes")
 async def list_java_processes(cluster_id: int, namespace: str, pod_name: str, container: str = "",
                               user=Depends(require_operator)):
-    """列出容器内 Java 进程（jcmd -l）"""
+    """列出容器内 Java 进程（JDK：jcmd -l；JRE：ps 兜底）"""
     if denied := await _deny(user, cluster_id, namespace):
         return denied
-    jc = (await _resolve_jdk_bin(cluster_id, namespace, pod_name, container)) + "jcmd"
-    r = await _exec(cluster_id, namespace, pod_name, f"{jc} -l", container)
-    if not r.get("success"):
-        return {"code": 500, "message": r.get("error", "执行 jcmd -l 失败（容器内无 jcmd）"), "data": None}
-    out = r.get("output", "") or ""
-    procs = []
-    for line in out.splitlines():
-        line = line.strip()
-        m = _JCMD_LINE.match(line)
-        if not m:
-            continue
-        pid, cls = m.group(1), m.group(2)
-        procs.append({"pid": int(pid), "target": cls, "is_jcmd": ("jcmd" in cls or "tools.jcmd" in cls)})
-    return {"code": 200, "message": "success", "data": {"raw": out, "processes": procs}}
+    jdk_bin, note = await _resolve_jdk_bin(cluster_id, namespace, pod_name, container)
+    procs: list[dict] = []
+    raw = ""
+    if jdk_bin is not None:
+        jc = jdk_bin + "jcmd"
+        r = await _exec(cluster_id, namespace, pod_name, f"{jc} -l", container)
+        if not r.get("success"):
+            return {"code": 500, "message": r.get("error", "执行 jcmd -l 失败（容器内无 jcmd）"), "data": None}
+        raw = r.get("output", "") or ""
+        for line in raw.splitlines():
+            line = line.strip()
+            m = _JCMD_LINE.match(line)
+            if not m:
+                continue
+            pid, cls = m.group(1), m.group(2)
+            procs.append({"pid": int(pid), "target": cls, "is_jcmd": ("jcmd" in cls or "tools.jcmd" in cls)})
+        backend = "jdk"
+    else:
+        # JRE：ps 兜底，仍能列进程（并提示将用 jattach）
+        found, raw = await _find_java_pid_ps(cluster_id, namespace, pod_name, container)
+        if found is not None:
+            procs.append({"pid": found, "target": "java（ps 定位；容器为 JRE，诊断将用 jattach）", "is_jcmd": False})
+        backend = "ps"
+
+    data = {"raw": raw, "processes": procs, "backend": backend}
+    if jdk_bin is None:
+        data["hint"] = "容器无 JDK 工具（疑似 JRE）；诊断动作将自动注入 jattach 执行。" + (f"（自动装 JDK 失败：{note[:200]}）" if note else "")
+    return {"code": 200, "message": "success", "data": data}
 
 
 @router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/diagnose")
@@ -232,7 +347,8 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
     """对 Pod 内 Java 进程执行一个 JVM 诊断动作。
 
     body: { container?: str, action: str, pid?: int }
-    - 未传 pid 时先用 jcmd -l 自动定位第一个 Java 进程。
+    - 未传 pid 时自动定位容器内第一个 Java 进程。
+    - 后端选择：容器有 JDK → 原生 jcmd/jstack/jmap；仅 JRE → 注入 jattach。
     - 文件类动作返回 file_path，前端再调资源接口下载产物。
     """
     if denied := await _deny(user, cluster_id, namespace):
@@ -243,6 +359,16 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
     if not spec:
         return {"code": 400, "message": f"不支持的诊断动作：{action}（可选：{', '.join(_ACTIONS)}）", "data": None}
 
+    # 定位执行后端：优先 JDK，其次 jattach（JRE）
+    jdk_bin, note = await _resolve_jdk_bin(cluster_id, namespace, pod_name, container)
+    jattach = None
+    if jdk_bin is None:
+        jattach = await _ensure_jattach(cluster_id, namespace, pod_name, container)
+        if jattach is None:
+            return {"code": 500, "message": _no_jdk_msg(note), "data": None}
+        if not spec.get("attach"):
+            return {"code": 500, "message": f"动作 {action} 在 JRE 容器（无 JDK）下无等价实现", "data": None}
+
     # 解析 / 定位 pid
     pid = payload.get("pid")
     pid_out = ""
@@ -252,19 +378,22 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
             if not _SAFE_PID.match(pid_str):
                 return {"code": 400, "message": "pid 非法（应为纯数字）", "data": None}
         else:
-            found, pid_out = await _find_java_pid(cluster_id, namespace, pod_name, container)
+            found, pid_out = await _find_java_pid(cluster_id, namespace, pod_name, container, jdk_bin)
             if found is None:
-                return {"code": 500, "message": f"未能自动定位 Java 进程（{pid_out}）", "data": None}
+                return {"code": 500, "message": f"未能自动定位 Java 进程（{pid_out[:300]}）", "data": None}
             pid_str = str(found)
     else:
         pid_str = ""
 
-    cmd = spec["cmd"].format(pid=pid_str)
-    bin_dir = await _resolve_jdk_bin(cluster_id, namespace, pod_name, container)
-    if bin_dir:
-        cmd = bin_dir + cmd
+    if jdk_bin is not None:
+        cmd = (jdk_bin + spec["cmd"]).format(pid=pid_str)
+        backend = "jdk"
+    else:
+        cmd = f"{jattach} {pid_str} {spec['attach']}"
+        backend = "jattach"
+
     r = await _exec(cluster_id, namespace, pod_name, cmd, container)
-    if not r.get("success"):
+    if not r.get("success") and not (r.get("output") or "").strip():
         return {"code": 500, "message": r.get("error", "诊断命令执行失败（容器内可能无 JDK 工具）"), "data": None}
 
     data = {
@@ -273,6 +402,7 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
         "pid": pid_str or None,
         "output": r.get("output", ""),
         "file": spec["file"],
+        "backend": backend,
     }
     if spec["file"]:
         data["file_path"] = _FILE_PATHS[action]

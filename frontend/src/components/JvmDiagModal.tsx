@@ -19,11 +19,12 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
   const [running, setRunning] = useState('')
   const [result, setResult] = useState<JvmDiagResult | null>(null)
   const [err, setErr] = useState('')
+  const [jvmNote, setJvmNote] = useState('')
   const [params, setParams] = useState<JvmParamsContainer[]>([])
 
   useEffect(() => {
     if (!pod) return
-    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([])
+    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote('')
     getJvmActions().then(setActions).catch(() => {})
     getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers((c as unknown as { containers?: string[] }).containers || [])).catch(() => {})
     if (deployment) {
@@ -39,6 +40,7 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
       .then((d) => {
         const list = (d.processes || []).filter((p) => !p.is_jcmd)
         setProcs(list)
+        setJvmNote(d.hint || '')
         if (!pid && list.length) setPid(list[0].pid)
       })
       .catch((e) => setErr(String(e?.message || e)))
@@ -87,7 +89,8 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
       </Space>
 
       {err && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={err}
-        description="若容器未安装 JDK 工具（jstack/jmap/jcmd），请确认镜像基于 JDK 而非 JRE。" />}
+        description="容器无 JDK 工具（jstack/jmap/jcmd）时，平台会自动注入 jattach 以 JRE 兼容方式执行；若仍失败请确认容器有外网或改用基于 JDK 的镜像。" />}
+      {!err && jvmNote && <Alert type="info" showIcon style={{ marginBottom: 12 }} message={jvmNote} />}
 
       <div style={{ marginBottom: 12 }}>
         <Space wrap size={[8, 8]}>

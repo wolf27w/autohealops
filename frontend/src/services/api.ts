@@ -464,12 +464,12 @@ export interface JvmAction { action: string; label: string; desc: string; file: 
 export interface JvmProcess { pid: number; target: string; is_jcmd: boolean }
 export interface JvmDiagResult {
   action: string; command: string; pid: string | null; output: string
-  file: boolean; file_path?: string; hint?: string
+  file: boolean; file_path?: string; hint?: string; backend?: string
 }
 
 export const getJvmActions = () => http.get<JvmAction[]>('/jvm/actions')
 export const getJvmProcesses = (clusterId: number, ns: string, pod: string, container = '') =>
-  http.get<{ raw: string; processes: JvmProcess[] }>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/processes`, { params: { container } })
+  http.get<{ raw: string; processes: JvmProcess[]; backend?: string; hint?: string }>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/processes`, { params: { container } })
 export const jvmDiagnose = (clusterId: number, ns: string, pod: string, payload: Payload) =>
   http.post<JvmDiagResult>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/diagnose`, payload)
 

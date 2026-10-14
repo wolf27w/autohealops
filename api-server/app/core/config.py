@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # 命令白名单（逗号分隔的 kubectl 子命令；知识库命中/修复执行前校验）
     COMMAND_WHITELIST: str = "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit"
 
+    # JVM 诊断：容器无 JDK 工具（JRE 镜像）时，注入 jattach（~63KB 静态二进制，
+    # 走 JVM attach socket，JRE 也能做 threaddump / 堆直方图 / jcmd 子命令）
+    JVM_JATTACH_URL: str = "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
+    JVM_JATTACH_PATH: str = "/tmp/.apiops-jattach"
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
