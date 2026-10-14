@@ -97,6 +97,7 @@
   #topbar{position:fixed;right:14px;top:9px;z-index:99;display:flex;align-items:center;gap:10px}
   .clockbadge{font-size:12px;padding:3px 12px;border-radius:10px;background:var(--fill);border:1px solid var(--border-2);color:var(--text);backdrop-filter:blur(6px);font-variant-numeric:tabular-nums}
   .clockbadge b{color:var(--green);margin-right:8px;font-weight:600}
+  .updbadge{font-size:11px;padding:3px 10px;border-radius:10px;background:var(--fill);border:1px solid var(--border-2);color:var(--text-3);font-variant-numeric:tabular-nums}
   .modebadge{font-size:11px;padding:3px 12px;border-radius:10px;backdrop-filter:blur(6px)}
   .modebadge.demo{background:rgba(243,156,18,.16);color:var(--yellow);border:1px solid rgba(243,156,18,.4)}
   .modebadge.ok{background:rgba(46,204,113,.16);color:var(--green);border:1px solid rgba(46,204,113,.4)}
@@ -107,6 +108,7 @@
 <div id="topbar">
   <div id="clock" class="clockbadge"></div>
   <div id="mode" class="modebadge demo">数据：演示</div>
+  <div id="updated" class="updbadge">更新于 --:--:--</div>
 </div>
 
 <script>
@@ -289,6 +291,7 @@ function lineOpt(x, seriesArr, colors, yName){
 
 /* ---------- 渲染：全局总览 ---------- */
 function renderOverview(){
+  VIEW.page='overview';
   clearCharts();
   const k = OVERVIEW.kpi;
   const maxType = Math.max(...OVERVIEW.alertTypes.map(t=>t.count),1);
@@ -377,7 +380,7 @@ function renderOverview(){
     </div>
     <div class="col panel">
       <h3>优先处理 Top 5 <span class="sub">按严重程度 + 持续时间</span></h3>
-      ${OVERVIEW.top5.map(t=>`
+      ${(OVERVIEW.top5||[]).length ? OVERVIEW.top5.map(t=>`
         <div class="list-row">
           <span class="mid dim" style="width:20px">${t.rank}</span>
           <div class="grow">
@@ -385,7 +388,7 @@ function renderOverview(){
             <div class="xs dim">${t.cluster} / ${t.ns} / ${t.svc}${t.node?' · 节点 '+t.node:''}</div>
           </div>
           <span class="btn primary" onclick='navCluster(${JSON.stringify(t.clusterId)}, ${JSON.stringify(t.node?{node:t.node}:{ns:t.ns,svc:t.svc})})'>处理 →</span>
-        </div>`).join('')}
+        </div>`).join('') : '<div class="dim xs" style="padding:6px 0">当前无待处理告警 ✅</div>'}
     </div>
   </div>
 
@@ -393,7 +396,7 @@ function renderOverview(){
   <div class="row">
     <div class="col panel">
       <h3>实时故障告警</h3>
-      ${OVERVIEW.alerts.map((a,idx)=>{
+      ${(OVERVIEW.alerts||[]).length ? OVERVIEW.alerts.map((a,idx)=>{
         const healTag = {pending:['待处理','gray'],healing:['自愈中','yellow'],healed:['已自愈','green'],failed:['自愈失败','red']}[a.heal];
         const jump = `navCluster(${JSON.stringify(a.clusterId)}, ${JSON.stringify(a.node?{node:a.node}:{ns:a.ns,svc:a.svc})})`;
         return `<div class="list-row">
@@ -405,7 +408,7 @@ function renderOverview(){
           <span class="tag ${healTag[1]}">${healTag[0]}</span>
           <span class="btn" onclick="${jump}">查看${a.node?'节点':'监控'} →</span>
         </div>`;
-      }).join('')}
+      }).join('') : '<div class="dim xs" style="padding:6px 0">当前无活跃故障告警 ✅</div>'}
     </div>
     <div class="col panel">
       <h3>自愈事件流 <span class="sub">失败置顶</span></h3>
@@ -421,6 +424,7 @@ function renderOverview(){
 /* ---------- 渲染：单集群详情 ---------- */
 let CV = {}; // cluster view state
 function renderCluster(){
+  VIEW.page='cluster';
   clearCharts();
   const c = CLUSTERS.find(x=>String(x.id)===String(CV.cluster)) || CLUSTERS[0];
   const banner = CV.from ? `
@@ -677,6 +681,7 @@ function navCluster(id, params){
 
 /* ---------- 实时数据（同一平台 API；无 token / 失败则回退演示） ---------- */
 const API='/api/v1';
+const REFRESH_MS=15000;   // 大屏自动刷新间隔（15s）
 const TOK=()=> localStorage.getItem('token') || new URLSearchParams(location.search).get('token') || '';
 async function apiGet(path){ const r=await fetch(API+path,{headers:{Authorization:'Bearer '+TOK()}}); if(!r.ok) throw new Error(path+' '+r.status); const j=await r.json(); return (j&&j.data!==undefined)?j.data:j; }
 function setMode(m){ const el=$('#mode'); if(!el) return; el.textContent = m==='real'?'数据：实时':'数据：演示'; el.className='modebadge '+(m==='real'?'ok':'demo'); }
@@ -717,15 +722,11 @@ async function loadOverviewReal(){
   const rl = (Array.isArray(recs)?recs:(recs.items||recs.data||[]));
   const SEVR = {critical:0,high:1,medium:2,low:3};
   const mkSvc = rn => String(rn||'').replace(WL_STRIP,'');
-  let feed = al.map(a=>({ sev:sevDot(a.severity), sevRaw:a.severity, title:a.message||a.fault_type,
+  // 实时告警/优先处理：只看「活跃」(pending) 告警——已解决的在下次刷新自动消失；历史另见「自愈事件流」
+  const feed = al.map(a=>({ sev:sevDot(a.severity), sevRaw:a.severity, title:a.message||a.fault_type,
     clusterId:a.cluster_id, cluster:a.cluster_name||('#"'+a.cluster_id), ns:a.namespace||'',
     svc: a.resource_type==='node'?null:mkSvc(a.resource_name||a.deployment_name),
     node: a.resource_type==='node'?a.resource_name:null, heal:HEAL_MAP[a.status]||'pending' }));
-  rl.forEach(r=>feed.push({ sev:sevDot(r.severity), sevRaw:r.severity,
-    title:r.message||((r.fault_type||'')+' · '+(r.resource_name||'')),
-    clusterId:r.cluster_id, cluster:r.cluster_name||('#"'+r.cluster_id), ns:r.namespace||'',
-    svc: r.resource_type==='node'?null:mkSvc(r.resource_name),
-    node: r.resource_type==='node'?r.resource_name:null, heal:'healed' }));
   OVERVIEW.alerts = feed.slice(0,8);
   OVERVIEW.top5 = feed.slice().sort((a,b)=>(SEVR[a.sevRaw]??9)-(SEVR[b.sevRaw]??9)).slice(0,5)
     .map((f,i)=>({rank:i+1, desc:f.title, cluster:f.cluster, clusterId:f.clusterId, ns:f.ns, svc:f.svc, node:f.node}));
@@ -743,9 +744,21 @@ setInterval(tickClock,1000); tickClock();
 
 /* ---------- 启动 ---------- */
 window.addEventListener('resize', ()=>charts.forEach(c=>{try{c.resize()}catch(e){}}));
+function markUpdated(){ const el=document.getElementById('updated'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
+  el.textContent='更新于 '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
+async function refreshView(){
+  if(document.hidden) return;                 // 后台标签不刷新，省资源
+  try{
+    if(VIEW.page==='cluster'){ await openCluster(); }
+    else { await loadOverviewReal(); setMode('real'); renderOverview(); }
+    markUpdated();
+  }catch(e){ /* 失败保留上次的「最后可用」数据，不清屏 */ }
+}
 (async function boot(){
   try{ await loadOverviewReal(); setMode('real'); }catch(e){ setMode('demo'); }
   renderOverview();
+  markUpdated();
+  setInterval(refreshView, REFRESH_MS);
 })();
 </script>
 </body>
