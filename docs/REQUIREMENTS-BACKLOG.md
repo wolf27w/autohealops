@@ -627,7 +627,7 @@
 | R10 | AI 助手增强 | ✅ 完成（基本） | 新增 `query_metrics`（自由 PromQL，`86e3010`）→ 自动进 agent + MCP 统一工具集；断线续传（会话/消息持久化）与全局记忆（知识库 rag_search）已有 |
 | R11 | 告警屏蔽（Alertmanager 风格） | ✅ 完成 | `alert_silences` 模型 + `api/alert_silences.py`（含预览）+ `AlertSilences.tsx`（匹配/到期） |
 | R12 | agent 主动外连接入模式 | ❌ 未做 | 仍为集中连 |
-| R13 | 一键部署脚本 | ❌ 未做 | 仅 `start.sh`，无 `install.sh` |
+| R13 | 一键部署脚本 | ✅ 完成 | 新增 `install.sh`（本地/Docker 双模式 + `--check`/`--no-start`/`--skip-deps`）（`a48b9a1`）；README 加快速部署段 |
 
 ### 其它线
 
@@ -639,7 +639,7 @@
 
 ### 小结
 
-- **从零未做**：R3、R12、R13
+- **从零未做**：R3、R12
 - **半成品**：无（R4 主功能完成；仅「一键 drain 执行」待定）
 - **暂缓**：R2.3、Prometheus 监控趋势（老板「先不做」）
 - **已取消**：Netdata 接入及依赖项（主机/Docker）
