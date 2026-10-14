@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/api-ops-platform/k8s-executor/internal/database"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	"go.uber.org/zap"
 )
 
 // NodeWatcher 监听集群 Node 事件
@@ -40,6 +40,7 @@ func (w *NodeWatcher) Stop() {
 }
 
 func (w *NodeWatcher) run() {
+	go w.reconcileLoop() // 定时全量核对（补 watch 漏事件）
 	for {
 		w.watchLoop()
 		select {
@@ -71,12 +72,39 @@ func (w *NodeWatcher) watchLoop() {
 	}
 }
 
-// handleNodeEvent 解析 Node 事件，检测异常
+// handleNodeEvent 解析 Node 事件 → 检测
 func (w *NodeWatcher) handleNodeEvent(event watch.Event) {
 	node, ok := event.Object.(*corev1.Node)
 	if !ok {
 		return
 	}
+	w.detect(node)
+}
+
+// reconcileLoop 定时（60s）全量 List 节点并执行检测/恢复（兵底：watch 漏事件/断连时仍能收敛）
+func (w *NodeWatcher) reconcileLoop() {
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-time.After(60 * time.Second):
+		}
+		w.reconcileAll()
+	}
+}
+
+func (w *NodeWatcher) reconcileAll() {
+	nodes, err := w.clientset.CoreV1().Nodes().List(w.ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+	for i := range nodes.Items {
+		w.detect(&nodes.Items[i])
+	}
+}
+
+// detect 对单个节点做「故障检测 + 恢复关闭」（watch 事件与 60s 定时核对共用）
+func (w *NodeWatcher) detect(node *corev1.Node) {
 	// 检测 NotReady
 	ready := false
 	for _, cond := range node.Status.Conditions {
@@ -134,15 +162,22 @@ func (w *NodeWatcher) handleNodeEvent(event watch.Event) {
 			}
 		}
 	}
-	// 检测 cordon（不可调度）长期未恢复：SchedulingDisabled 污点
+	// 检测 cordon（不可调度）：Spec.Unschedulable 或 unschedulable 污点
+	cordoned := node.Spec.Unschedulable
 	for _, taint := range node.Spec.Taints {
 		if taint.Key == "node.kubernetes.io/unschedulable" && taint.Effect == corev1.TaintEffectNoSchedule {
-			t := time.Now()
-			w.emitAlert(node.Name, "NodeCordoned", "medium",
-				fmt.Sprintf("Node %s is cordoned (unschedulable taint)", node.Name), &t)
-			return
+			cordoned = true
+			break
 		}
 	}
+	if cordoned {
+		t := time.Now()
+		w.emitAlert(node.Name, "NodeCordoned", "medium",
+			fmt.Sprintf("Node %s is cordoned (unschedulable taint)", node.Name), &t)
+		return
+	}
+	// 已 uncordon → 关闭历史 NodeCordoned 告警（此前缺失恢复，导致 uncordon 后告警永远挂着）
+	w.resolveNodeFaultAlerts(node.Name, "NodeCordoned")
 }
 
 // resolveNodeFaultAlerts 节点故障恢复 → 关闭该节点的活跃告警（pending/awaiting_approval/ticketed）。
