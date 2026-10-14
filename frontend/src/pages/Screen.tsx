@@ -1,8 +1,8 @@
 // 统一监控大屏（P1-R7）：多集群总览 —— 配色跟随系统主题（antd token，浅/深色自适应）
 // 数据源：/stats/dashboard（聚合/集群明细/趋势/异常 Pod/故障 Top）+ /monitoring（节点/容器即时与趋势）
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Segmented, theme } from 'antd'
-import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
+import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Segmented, theme, Input } from 'antd'
+import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
 import { getDashboard, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getClusterContainers } from '../services/api'
@@ -66,8 +66,8 @@ function trendRowsOf(series: RangeSeries[]) {
       return s.values.map(([ts, v]) => ({ t: hhmmss(ts), v: Number(v.toFixed(3)), name: nm }))
     })
 }
-function topListOf(series: RangeSeries[]) {
-  return [...series].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 12)
+function topListOf(series: RangeSeries[], limit = 100) {
+  return [...series].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, limit)
     .map((s) => ({ name: seriesLabel(s.metric), v: lastVal(s) }))
 }
 
@@ -88,6 +88,7 @@ function MonitorPanel(props: {
   const [series, setSeries] = useState<RangeSeries[]>([])
   const [unit, setUnit] = useState('')
   const [loading, setLoading] = useState(false)
+  const [kw, setKw] = useState('')
 
   const f = props.filters || {}
   useEffect(() => {
@@ -108,8 +109,13 @@ function MonitorPanel(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.clusterId, metric, min, f.namespace, f.pod, f.container])
 
-  const rows = useMemo(() => trendRowsOf(series), [series])
-  const top = useMemo(() => topListOf(series), [series])
+  const filtered = useMemo(() => {
+    const k = kw.trim().toLowerCase()
+    if (!k) return series
+    return series.filter((s) => seriesLabel(s.metric).toLowerCase().includes(k))
+  }, [series, kw])
+  const rows = useMemo(() => trendRowsOf(filtered), [filtered])
+  const top = useMemo(() => topListOf(filtered), [filtered])
   const maxT = Math.max(...top.map((x) => x.v), 1)
 
   return (
@@ -119,6 +125,11 @@ function MonitorPanel(props: {
         <Segmented size="small" value={metric} onChange={(v) => setMetric(v as string)} options={props.metrics} />
         <Segmented size="small" value={min} onChange={(v) => setMin(v as number)} options={WINDOWS} />
       </Space>}>
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Input allowClear size="small" prefix={<SearchOutlined />} placeholder="搜索筛选（名称/关键字）" style={{ width: 230 }}
+          value={kw} onChange={(e) => setKw(e.target.value)} />
+        <span style={{ fontSize: 12, color: token.colorTextSecondary }}>显示 {filtered.length} / {series.length} 条序列（曲线取 Top6，列表可滚动）</span>
+      </Space>
       {props.showFilters && (
         <Space wrap style={{ marginBottom: 10 }}>
           <Select allowClear showSearch style={{ width: 170 }} placeholder="命名空间" value={f.namespace || undefined}
