@@ -45,6 +45,8 @@
   .bar>i{display:block;height:100%;border-radius:4px}
   .bar.sm{height:6px}
   .grid-cards{display:grid;gap:12px}
+  .cl-row{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2);margin-bottom:10px;cursor:pointer;transition:.15s}
+  .cl-row:hover{border-color:var(--green);background:var(--elev)}
   .cluster-card{cursor:pointer;transition:.15s;border:1px solid var(--border);border-radius:8px;background:var(--panel-2);overflow:hidden}
   .cluster-card:hover{border-color:var(--green);transform:translateY(-1px)}
   .cluster-card .topbar{height:4px}
@@ -319,36 +321,38 @@ function renderOverview(){
   <div class="row" style="margin-bottom:16px;align-items:flex-start">
     <div class="col panel" style="flex:2">
     <h3>集群总览 <span class="sub">点击卡片进入集群详情</span></h3>
-    <div class="grid-cards" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr))">
-      ${CLUSTERS.map(c=>{
-        const col = c.status==='bad'?'var(--red)':(c.status==='warn'?'var(--yellow)':'var(--green)');
-        const label = c.status==='bad'?'异常':(c.status==='warn'?'警告':'正常');
-        return `<div class="cluster-card" onclick='navCluster(${JSON.stringify(c.id)})'>
-          <div class="topbar" style="background:${col}"></div>
-          <div class="body">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span class="name">${c.name} <span class="xs dim">${c.env}</span></span>
-              <span class="tag ${c.status==='bad'?'red':(c.status==='warn'?'yellow':'green')}">${label}</span>
-            </div>
-            <div class="stat">节点 ${c.nodes} · Pod ${c.pods} · 告警 <b style="color:${c.alerts>5?'var(--red)':'var(--text)'}">${c.alerts}</b></div>
-            ${['CPU','mem','disk'].map(()=>'').join('')}
-            ${[['CPU',c.cpu],['内存',c.mem],['磁盘',c.disk]].map(([l,v])=>`
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                <span class="xs dim" style="width:30px">${l}</span>
-                <div style="flex:1">${bar(v, true)}</div>
-                <span class="xs" style="width:38px;text-align:right;color:${barColor(v)};font-weight:600">${v}%</span>
-              </div>`).join('')}
-          </div></div>`;
-      }).join('')}
-    </div>
+    ${CLUSTERS.map(c=>{
+      const color = c.status==='bad'?'red':(c.status==='warn'?'yellow':'green');
+      const label = c.status==='bad'?'异常':(c.status==='warn'?'警告':'正常');
+      return `<div class="cl-row" onclick='navCluster(${JSON.stringify(c.id)})'>
+        <span class="dot ${color}" style="width:10px;height:10px"></span>
+        <div style="width:160px;min-width:120px">
+          <div style="font-size:14px;font-weight:700">${c.name}</div>
+          <div class="xs dim">${c.env}</div>
+        </div>
+        <span class="tag ${color}">${label}</span>
+        <div class="xs dim" style="width:190px;min-width:150px">节点 ${c.nodes} · Pod ${c.pods} · 告警 <b style="color:${c.alerts>5?'var(--red)':'var(--text)'}">${c.alerts}</b></div>
+        <div style="flex:1;display:flex;gap:16px;min-width:260px">
+          ${[['CPU',c.cpu],['内存',c.mem],['磁盘',c.disk]].map(([l,v])=>`
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px"><span class="dim">${l}</span><span style="color:${barColor(v)};font-weight:600">${v}%</span></div>
+              ${bar(v, true)}
+            </div>`).join('')}
+        </div>
+      </div>`;
+    }).join('')}
     </div>
     <div class="col panel" style="flex:1">
       <h3>告警类型分布</h3>
-      <div style="display:grid;grid-template-columns:120px 1fr 110px;gap:10px 12px;align-items:center;font-size:12px">
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:12px">
       ${OVERVIEW.alertTypes.map(t=>`
-          <span class="ell">${t.name}</span>
-          <span style="display:flex;align-items:center">${bar(t.count/maxType*100)}</span>
-          <span class="dim" style="text-align:right">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>`).join('')}
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+              <span class="ell">${t.name}</span>
+              <span class="dim">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>
+            </div>
+            ${bar(t.count/maxType*100, true)}
+          </div>`).join('')}
       </div>
     </div>
   </div>
