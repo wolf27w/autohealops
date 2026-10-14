@@ -3,7 +3,6 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import MainLayout from './components/MainLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
-import Screen from './pages/Screen'
 import ClusterList from './pages/ClusterList'
 import ClusterDetail from './pages/ClusterDetail'
 import ServiceDetail from './pages/ServiceDetail'
@@ -61,7 +60,7 @@ export default function App() {
         path="/screen"
         element={
           <RequireAuth>
-            <Screen />
+            <Dashboard screen />
           </RequireAuth>
         }
       />
