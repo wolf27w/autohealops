@@ -188,6 +188,46 @@ async def _h_get_pod_metrics(args: dict, context: dict) -> dict:
     return {"success": True, "output": "\n".join(lines), "error": ""}
 
 
+async def _h_query_metrics(args: dict, context: dict) -> dict:
+    """自由指标查询：对目标集群自带 Prometheus 执行任意 PromQL（只读）。"""
+    promql = (args.get("query") or "").strip()
+    if not promql:
+        return {"success": False, "output": "", "error": "缺少 query（PromQL）"}
+    cluster_id = context.get("cluster_id")
+    if not cluster_id:
+        return {"success": False, "output": "", "error": "缺少集群上下文（cluster_id）"}
+    try:
+        limit = int(args.get("limit", 20))
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(limit, 50))
+    r = await executor_client.acall(executor_client.query_prometheus, cluster_id, promql)
+    if not r.get("success"):
+        return {"success": False, "output": "", "error": (r.get("error") or "PromQL 查询失败")[:300]}
+    try:
+        data = json.loads(r.get("data") or "{}")
+    except json.JSONDecodeError:
+        return {"success": False, "output": "", "error": "响应解析失败"}
+    d = data.get("data", {}) if isinstance(data, dict) else {}
+    rtype = d.get("resultType", "")
+    results = d.get("result", []) or []
+    if not results:
+        return {"success": True, "output": "（无数据：指标不存在或时间窗内无样本）", "error": ""}
+    lines = [f"resultType={rtype}，共 {len(results)} 条序列（显示前 {min(limit, len(results))}）:"]
+    for item in results[:limit]:
+        labels = item.get("metric", {}) or {}
+        lab = ",".join(f"{k}={v}" for k, v in labels.items()) or "{}"
+        if rtype == "matrix" or item.get("values"):
+            vals = item.get("values") or []
+            pts = " ".join(str(v[1]) for v in vals[-5:])
+            lines.append(f"{lab} → 最近值: {pts}")
+        else:
+            v = item.get("value") or []
+            val = v[1] if isinstance(v, (list, tuple)) and len(v) > 1 else str(v)
+            lines.append(f"{lab} → {val}")
+    return {"success": True, "output": "\n".join(lines)[:6000], "error": ""}
+
+
 async def _h_query_db_health(args: dict, context: dict) -> dict:
     """数据库健康采集：连接数/锁等待/表空间（只读账号）"""
     conn_id = args.get("conn_id") or context.get("db_conn_id")
@@ -369,6 +409,20 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_get_deployment,
+})
+
+
+_register({
+    "name": "query_metrics",
+    "label": "自由指标查询(PromQL)",
+    "description": "对目标集群自带 Prometheus 执行任意 PromQL（只读），查节点/Pod/容器/工作负载的 CPU/内存/网络/磁盘等指标与序列。内置指标未命中时用它自由查询。示例：'sum(rate(container_cpu_usage_seconds_total{namespace=\"prod\"}[5m])) by (pod)'、'node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes*100'、'kube_pod_container_status_restarts_total'。",
+    "args_schema": {
+        "query": {"type": "string", "required": True, "description": "PromQL 表达式"},
+        "limit": {"type": "int", "required": False, "description": "最多返回多少条序列，默认 20（上限 50）", "default": 20},
+    },
+    "permission": "readonly",
+    "domain": "all",
+    "handler": _h_query_metrics,
 })
 
 
