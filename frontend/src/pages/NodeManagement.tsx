@@ -2,7 +2,7 @@
 import { useEffect, useState, type Key } from 'react'
 import { Card, Table, Button, Space, Select, Tag, message, Popconfirm, Progress, Modal, InputNumber, Alert, Collapse } from 'antd'
 import { ReloadOutlined, ApartmentOutlined } from '@ant-design/icons'
-import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan } from '../services/api'
+import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan, drainPreview, drainNode } from '../services/api'
 import type { K8sNode, BalancePlan } from '../services/api'
 import type { Cluster } from '../types'
 
@@ -19,6 +19,11 @@ export default function NodeManagement() {
   const [plan, setPlan] = useState<BalancePlan | null>(null)
   const [threshold, setThreshold] = useState(80)
   const [planLoading, setPlanLoading] = useState(false)
+  const [drainOpen, setDrainOpen] = useState(false)
+  const [drainNodeName, setDrainNodeName] = useState('')
+  const [drainText, setDrainText] = useState('')
+  const [drainLoading, setDrainLoading] = useState(false)
+  const [draining, setDraining] = useState(false)
 
   useEffect(() => { getClusters().then((d) => setClusters(d || [])).catch(() => {}) }, [])
 
@@ -34,6 +39,20 @@ export default function NodeManagement() {
     if (op === 'cordon') { await cordonNode(clusterId, node); message.success(`已 cordon ${node}`) }
     else { await uncordonNode(clusterId, node); message.success(`已 uncordon ${node}`) }
     load()
+  }
+  const openDrain = async (node: string) => {
+    if (!clusterId) return
+    setDrainNodeName(node); setDrainOpen(true); setDrainText(''); setDrainLoading(true)
+    try { const d = await drainPreview(clusterId, node); setDrainText(d?.output || d?.error || '') }
+    catch (e) { setDrainText(String((e as Error)?.message || e)) }
+    finally { setDrainLoading(false) }
+  }
+  const doDrain = async () => {
+    if (!clusterId || !drainNodeName) return
+    setDraining(true)
+    try { const d = await drainNode(clusterId, drainNodeName); message.success('已执行排空'); setDrainText(d?.output || ''); setDrainOpen(false); load() }
+    catch (e) { message.error(String((e as Error)?.message || e)) }
+    finally { setDraining(false) }
   }
   const doBatch = async (op: 'cordon' | 'uncordon') => {
     if (!clusterId || selected.length === 0) { message.warning('请先选择节点'); return }
@@ -96,9 +115,12 @@ export default function NodeManagement() {
             { title: 'Kubelet', dataIndex: 'kubelet_version', width: 110, render: (v) => v || '-' },
             {
               title: '操作', width: 140, fixed: 'right', render: (_, r) => (
-                r.schedulable
-                  ? <Popconfirm title={`cordon ${r.name}？（禁止调度新 Pod）`} onConfirm={() => act(r.name, 'cordon')}><a>cordon</a></Popconfirm>
-                  : <Popconfirm title={`uncordon ${r.name}？（恢复调度）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>uncordon</a></Popconfirm>
+                <Space size="small">
+                  {r.schedulable
+                    ? <Popconfirm title={`cordon ${r.name}？（禁止调度新 Pod）`} onConfirm={() => act(r.name, 'cordon')}><a>cordon</a></Popconfirm>
+                    : <Popconfirm title={`uncordon ${r.name}？（恢复调度）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>uncordon</a></Popconfirm>}
+                  <a style={{ color: '#cf1322' }} onClick={() => openDrain(r.name)}>排空</a>
+                </Space>
               )
             },
           ]}
@@ -138,6 +160,18 @@ export default function NodeManagement() {
             },
           ]}
           locale={{ emptyText: '无热点节点（或 metrics-server 不可用）' }} />
+      </Modal>
+
+      <Modal open={drainOpen} title={`节点排空（drain）预览：${drainNodeName}`} width={760}
+        onCancel={() => setDrainOpen(false)}
+        okText="确认排空（cordon + 驱逐）"
+        okButtonProps={{ danger: true, loading: draining }}
+        onOk={doDrain}>
+        <Alert type="warning" showIcon style={{ marginBottom: 8 }}
+          message="排空会 cordon 该节点并驱逐其上的 Pod（PDB 感知，跳过 DaemonSet/mirror）。请先确认上层控制器能重新调度。" />
+        <pre style={{ background: '#f6f8fa', padding: 8, borderRadius: 6, fontSize: 12, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+          {drainLoading ? '预览计算中…' : drainText}
+        </pre>
       </Modal>
     </div>
   )

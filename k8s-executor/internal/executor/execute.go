@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -69,6 +70,11 @@ func ParseCommand(command string) (*ParsedCommand, error) {
 		// logs <pod> [-c container] [--previous] [--tail=N] [--all-containers=true]
 		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
 			pc.Resource, pc.Name = "pod", fields[1]
+		}
+	case "drain":
+		// drain <node> [--dry-run] [--force]
+		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
+			pc.Resource, pc.Name = "node", fields[1]
 		}
 	case "scale", "rollout", "delete", "describe", "get", "edit", "set":
 		if len(fields) >= 2 {
@@ -247,6 +253,8 @@ func (e *Executor) dispatch(ctx context.Context, pc *ParsedCommand) (string, err
 		return e.execCordon(ctx, pc)
 	case "logs":
 		return e.execLogs(ctx, pc, ns)
+	case "drain":
+		return e.execDrain(ctx, pc, ns)
 	default:
 		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete/cordon/uncordon/logs）", pc.Verb)
 	}
@@ -618,7 +626,81 @@ func (e *Executor) execLogs(ctx context.Context, pc *ParsedCommand, ns string) (
 	return b.String(), nil
 }
 
+// execDrain 节点排空：cordon + 驱逐节点上的 Pod（PDB 感知，跳过 DaemonSet/mirror/已结束）
+func (e *Executor) execDrain(ctx context.Context, pc *ParsedCommand, ns string) (string, error) {
+	if pc.Name == "" {
+		return "", fmt.Errorf("drain 需要节点名")
+	}
+	dryRun := false
+	for _, a := range pc.Args {
+		if a == "--dry-run" {
+			dryRun = true
+		}
+	}
+	node, err := e.clientset.CoreV1().Nodes().Get(ctx, pc.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	if !dryRun && !node.Spec.Unschedulable {
+		node.Spec.Unschedulable = true
+		if _, err := e.clientset.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{}); err != nil {
+			return "", err
+		}
+	}
+	pods, err := e.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + pc.Name,
+	})
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if dryRun {
+		b.WriteString(fmt.Sprintf("[dry-run] 节点 %s 可排空（未实际 cordon/驱逐）。\n", pc.Name))
+	} else {
+		b.WriteString(fmt.Sprintf("节点 %s 已 cordon（停止调度）。\n", pc.Name))
+	}
+	skipped, evicted, failed := 0, 0, 0
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if isDaemonSetPod(p) || isMirrorPod(p) || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			skipped++
+			continue
+		}
+		if dryRun {
+			b.WriteString(fmt.Sprintf("[dry-run] 将驱逐 %s/%s\n", p.Namespace, p.Name))
+			evicted++
+			continue
+		}
+		ev := &policyv1.Eviction{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
+		if err := e.clientset.PolicyV1().Evictions(p.Namespace).Evict(ctx, ev); err != nil {
+			failed++
+			b.WriteString(fmt.Sprintf("驱逐失败 %s/%s: %v\n", p.Namespace, p.Name, err))
+		} else {
+			evicted++
+			b.WriteString(fmt.Sprintf("已驱逐 %s/%s\n", p.Namespace, p.Name))
+		}
+	}
+	b.WriteString(fmt.Sprintf("汇总：驱逐 %d，失败 %d，跳过(DS/mirror/已结束) %d。\n", evicted, failed, skipped))
+	if failed > 0 {
+		b.WriteString("提示：失败多为 PDB 保护(minAvailable)或本地存储(emptyDir)；需先调整 PDB 或使用 --delete-emptydir-data。\n")
+	}
+	return b.String(), nil
+}
+
+func isDaemonSetPod(p *corev1.Pod) bool {
+	for _, o := range p.OwnerReferences {
+		if o.Kind == "DaemonSet" {
+			return true
+		}
+	}
+	return false
+}
+
+func isMirrorPod(p *corev1.Pod) bool {
+	_, ok := p.Annotations["kubernetes.io/config.mirror"]
+	return ok
+}
+
 func timeNowString() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
-

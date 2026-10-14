@@ -1012,3 +1012,32 @@ async def node_balance_plan(cluster_id: int, threshold: float = 80.0, user=Depen
         "batches": batches,
         "suggestion": "隔离式分批：每次 cordon 一个热点节点 → 驱逐其可迁移 Pod（DaemonSet/宿主网络/kube-system 除外）→ 观察再下一批。仅建议，未执行。",
     }}
+
+
+# ============ 节点排空 drain（P0-R4 收尾） ============
+# 安全设计：先 cordon + 预览（dry-run，不实际驱逐）；执行需 confirm=true，PDB 感知驱逐、跳过 DaemonSet/mirror。
+
+@router.get("/clusters/{cluster_id}/nodes/{node}/drain-preview")
+async def node_drain_preview(cluster_id: int, node: str, user=Depends(require_any_user)):
+    """预览节点排空（dry-run，不 cordon、不驱逐）：列出将被驱逐的 Pod。"""
+    if denied := await _deny_cluster(user, cluster_id):
+        return denied
+    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"drain {node} --dry-run")
+    return {"code": 200, "message": "success", "data": {
+        "success": bool(r.get("success")),
+        "output": r.get("output", "") if r.get("success") else "",
+        "error": r.get("error", "") if not r.get("success") else "",
+    }}
+
+
+@router.post("/clusters/{cluster_id}/nodes/{node}/drain")
+async def node_drain(cluster_id: int, node: str, payload: dict, user=Depends(require_operator)):
+    """执行节点排空：cordon + 驱逐该节点上的 Pod（PDB 感知，跳过 DaemonSet/mirror）。需 confirm=true。"""
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    if not (payload or {}).get("confirm"):
+        return {"code": 400, "message": "需 confirm=true 确认（会 cordon 该节点并驱逐其上的 Pod）", "data": None}
+    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"drain {node}")
+    ok = bool(r.get("success"))
+    return {"code": 200 if ok else 500, "message": "已执行排空" if ok else (r.get("error") or "排空失败"),
+            "data": {"success": ok, "output": r.get("output", ""), "error": r.get("error", "") if not ok else ""}}

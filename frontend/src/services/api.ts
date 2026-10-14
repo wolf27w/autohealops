@@ -578,6 +578,10 @@ export interface K8sNode {
 export const getNodes = (clusterId: number) => http.get<K8sNode[]>(`/resources/clusters/${clusterId}/nodes`)
 export const cordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/cordon`)
 export const uncordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/uncordon`)
+export const drainPreview = (clusterId: number, node: string) =>
+  http.get<{ success: boolean; output: string; error: string }>(`/resources/clusters/${clusterId}/nodes/${node}/drain-preview`)
+export const drainNode = (clusterId: number, node: string) =>
+  http.post<{ success: boolean; output: string; error: string }>(`/resources/clusters/${clusterId}/nodes/${node}/drain`, { confirm: true })
 export const batchNodes = (clusterId: number, op: 'cordon' | 'uncordon', names: string[]) =>
   http.post<{ results: { node: string; success: boolean; message: string }[] }>(`/resources/clusters/${clusterId}/nodes/batch`, { op, names })
 export interface BalanceNode { name: string; cpu_pct: number | null; mem_pct: number | null; pods_count: number }
