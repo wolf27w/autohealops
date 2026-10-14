@@ -245,11 +245,22 @@ async def lifespan(app: FastAPI):
     logger.info("API-OPS 平台启动中...")
     # 数据库表结构由 alembic 管理（部署时执行 alembic upgrade head），启动时只做初始化
     await startup_tasks()
+    # R12：启动 Agent 反向隧道网关（agent 主动外连接入）
+    try:
+        from app import agent_gateway
+        agent_gateway.start_server(getattr(settings, "AGENT_GATEWAY_ADDR", "0.0.0.0:9095"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Agent 网关启动失败: %s", e)
     logger.info("API-OPS 平台启动完成")
     yield
     # 关闭共享 HTTP 连接池
     from app.core.http_client import close_http_clients
     await close_http_clients()
+    try:
+        from app import agent_gateway
+        agent_gateway.stop_server()
+    except Exception:  # noqa: BLE001
+        pass
     logger.info("API-OPS 平台已停止")
 
 

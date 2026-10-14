@@ -40,6 +40,15 @@ def _get_stub():
     return _stub
 
 
+def _agent_call(cluster_id: int, method: str, req, resp_cls, timeout: float):
+    """R12：若该集群有在线 agent，则经反向隧道下发并反序列化响应；否则返回 None（走直连）。"""
+    from app import agent_gateway
+    if not agent_gateway.is_connected(cluster_id):
+        return None
+    data = agent_gateway.call(cluster_id, method, req.SerializeToString(), timeout=timeout)
+    return resp_cls.FromString(data)
+
+
 def _metadata(trace_id: str = ""):
     """构造 gRPC metadata（携带 trace_id）"""
     return (("trace-id", trace_id),) if trace_id else None
@@ -85,13 +94,12 @@ class ExecutorClient:
     def execute_command(self, cluster_id: int, namespace: str, command: str, trace_id: str = "") -> dict:
         """执行单条命令，返回 {success, output, error}"""
         try:
-            resp = _get_stub().ExecuteCommand(
-                executor_pb2.ExecuteCommandRequest(
-                    cluster_id=cluster_id, namespace=namespace, command=command, trace_id=trace_id
-                ),
-                timeout=self.TIMEOUT,
-                metadata=_metadata(trace_id),
+            req = executor_pb2.ExecuteCommandRequest(
+                cluster_id=cluster_id, namespace=namespace, command=command, trace_id=trace_id
             )
+            resp = _agent_call(cluster_id, "ExecuteCommand", req, executor_pb2.ExecuteCommandResponse, self.TIMEOUT)
+            if resp is None:
+                resp = _get_stub().ExecuteCommand(req, timeout=self.TIMEOUT, metadata=_metadata(trace_id))
             return {"success": resp.success, "output": resp.output, "error": resp.error}
         except Exception as e:  # noqa: BLE001
             logger.error("execute_command 失败: %s", e)
@@ -326,14 +334,13 @@ class ExecutorClient:
                      container: str = "", tail_lines: int = 200, previous: bool = False, trace_id: str = "") -> dict:
         """查看 Pod 容器日志 → 返回 {success, logs, error}"""
         try:
-            resp = _get_stub().GetPodLogs(
-                executor_pb2.GetPodLogsRequest(
-                    cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
-                    container=container, tail_lines=tail_lines, previous=previous,
-                ),
-                timeout=self.TIMEOUT,
-                metadata=_metadata(trace_id),
+            req = executor_pb2.GetPodLogsRequest(
+                cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
+                container=container, tail_lines=tail_lines, previous=previous,
             )
+            resp = _agent_call(cluster_id, "GetPodLogs", req, executor_pb2.GetPodLogsResponse, self.TIMEOUT)
+            if resp is None:
+                resp = _get_stub().GetPodLogs(req, timeout=self.TIMEOUT, metadata=_metadata(trace_id))
             return {"success": resp.success, "logs": resp.logs, "error": resp.error}
         except Exception as e:  # noqa: BLE001
             logger.error("get_pod_logs 失败: %s", e)

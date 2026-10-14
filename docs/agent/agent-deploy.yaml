@@ -1,0 +1,63 @@
+# R12：agent 主动外连接入模式 —— 集群内「单个 Deployment」部署示例
+# 用法：按需替换 <平台网关地址:9095> / <集群ID> / <接入令牌> / 镜像。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apiops-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: apiops-agent
+  namespace: apiops-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: apiops-agent
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: apiops-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: apiops-agent
+subjects:
+  - kind: ServiceAccount
+    name: apiops-agent
+    namespace: apiops-agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apiops-agent
+  namespace: apiops-agent
+  labels:
+    app: apiops-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apiops-agent
+  template:
+    metadata:
+      labels:
+        app: apiops-agent
+    spec:
+      serviceAccountName: apiops-agent
+      containers:
+        - name: agent
+          image: <镜像仓库>/apiops-agent:latest
+          args:
+            - "-platform=<平台网关地址>:9095"   # 平台对外暴露的 Agent 网关
+            - "-cluster-id=<集群ID>"
+            - "-token=<接入令牌>"             # 对应平台 AGENT_ACCESS_TOKEN
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
