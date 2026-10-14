@@ -371,12 +371,12 @@ function renderOverview(){
         <div class="cnt-box"><div class="n">${(OVERVIEW.heal.rate*100).toFixed(0)}%</div><div class="l">成功率</div></div>
       </div>
       <div class="sep"></div>
-      <div class="xs dim" style="margin-bottom:6px">顽固问题（反复自愈失败）</div>
-      ${OVERVIEW.heal.stubborn.map(s=>`
+      <div class="xs dim" style="margin-bottom:6px">顽固问题（反复自愈失败 / 需人工介入）</div>
+      ${(OVERVIEW.heal.stubborn||[]).length ? OVERVIEW.heal.stubborn.map(s=>`
         <div class="list-row">
           <span class="dot red"></span>
           <div class="grow"><div class="sm ell">${s.svc}</div><div class="xs dim">失败 ${s.fails} 次 · ${s.range}</div></div>
-        </div>`).join('')}
+        </div>`).join('') : '<div class="dim xs" style="padding:4px 0">无（暂无反复自愈失败的服务）</div>'}
     </div>
     <div class="col panel">
       <h3>优先处理 Top 5 <span class="sub">按严重程度 + 持续时间</span></h3>
@@ -699,6 +699,9 @@ async function loadOverviewReal(){
   OVERVIEW.kpi.healing = {v: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), avgMin: core.mttr_minutes??0};
   OVERVIEW.kpi.healedToday = {v: core.today_resolved??0, rate: core.heal_rate??0};
   OVERVIEW.kpi.failed = {v: core.manual_pending??0, abnormalClusters: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0))};
+  OVERVIEW.heal = { success: core.today_resolved??0, failed: core.manual_pending??0,
+    processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), rate: core.heal_rate??0 };
+  OVERVIEW.heal.stubborn = (function(){ var arr=Array.isArray(alerts)?alerts:(alerts.items||alerts.data||[]); return arr.filter(a=>a.manual_required).slice(0,3).map(a=>({svc:(a.namespace||'')+'/'+(a.deployment_name||a.resource_name||''), fails:a.event_count||a.group_count||1, range:'需人工介入'})); })();
   OVERVIEW.waterline = [
     {dim:'CPU', pct: Math.round(byCpu[0]?.cpu_pct||0), peak: byCpu[0]?.name||'-'},
     {dim:'内存', pct: Math.round(byMem[0]?.mem_pct||0), peak: byMem[0]?.name||'-'},
