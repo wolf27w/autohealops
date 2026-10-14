@@ -614,14 +614,14 @@
 
 | # | 需求 | 状态 | 落点 / 缺口（代码核实） |
 |---|---|---|---|
-| R1 | 资源治理 + 准入控制 | ⚠️ 半成品 | 管控表 `models/resource_governance.py` + `api/resource_governance.py` + 前端 `ResourceGovernance.tsx` + executor `internal/admission/`（补丁/证书/fail-open）均 ✅；**缺**：向集群下发 Service + MutatingWebhookConfiguration（准入尚未真正生效）、高峰采集 |
+| R1 | 资源治理 + 准入控制 | ✅ 完成（差集群内部署） | 管控表/API/高峰采集/前端/executor 准入模块 + **准入配置下发 install/uninstall/status（`b3c1d78`，测试集群实测）**；仅剩：准入服务本体在被管集群内部署（拓扑决策） |
 | R2 | JVM 深度诊断 + 参数管控 | ✅ 完成 | `api/jvm.py`（9 动作）+ `JvmDiagModal` + Deployment 参数采集；**2026-10-14 新增 jattach 后端**（JRE 镜像免装 JDK 也能 threaddump/堆信息/VM 参数）/明确报错/检测补全，commit `0c43d5f`；生产 JRE 容器实测通过 |
 | R2.3 | JVM 堆/G1 指标 + 告警 | ⏸ 暂缓 | 集群 Prometheus 无任何 `jvm_*` 指标，无数据源 |
 | R3 | 镜像更新（列仓库标签一键改） | ❌ 未做 | 仅 `RepairImagePull`（补 imagePullSecrets） |
 | R4 | 节点管理 + 均衡迁移 | ⚠️ 半成品 | `NodeManagement.tsx`（列表 + cordon/uncordon）+ `resources.py` 端点 ✅；**缺**：均衡/迁移算法、drain、调度到指定节点 |
-| R5 | 实时日志跟随 + 增强 | ❌ 未做 | 仅历史查询，无 follow/stream |
-| R6 | 实时状态推送（WebSocket） | ❌ 未做 | 仅仪表盘 SSE（`/stats/dashboard/stream`）+ 终端 WS；资源状态无 WS |
-| R7 | 统一监控大屏增强 | ⚠️ 半成品 | `/screen` 路由有（**复用同一 `Dashboard` 组件**）；**缺**多集群统一总览增强（全集群卡片/风险节点徽章/TopN） |
+| R5 | 实时日志跟随 + 增强 | ✅ 完成 | executor 日志流 HTTP(:9099，client-go follow) + api-server WS + 前端 `PodLogStreamModal`（`ed17fbe`）；未做：Deployment 聚合日志跟随、gzip 下载 |
+| R6 | 实时状态推送（WebSocket） | ✅ 完成 | executor `/watch`（client-go Watch Pod+Deploy） + api-server WS + ServiceDetail 实时刷新（`e0bced3`） |
+| R7 | 统一监控大屏增强 | ✅ 完成 | 独立 `frontend/src/pages/Screen.tsx`（多集群总览/KPI/集群墙/风险徽章/异常 Pod Top10/故障 Top/趋势/单集群切换）（`4a22884`） |
 | R8 | Pod 隔离 | ✅ 完成 | `resources.py`：`POST /clusters/{id}/namespaces/{ns}/pods/{pod}/isolate` |
 | R9 | MCP 标准接口 | ✅ 完成 | `api/mcp.py`（Streamable HTTP + JSON-RPC 2.0），已注册 `main.py` |
 | R10 | AI 助手增强 | ❌ 未做 | 仅基础会话 `AgentChat`；缺全局记忆 / 自由指标（MetricsQL）/ 断线续传 / 统一受控工具集 |
@@ -639,7 +639,9 @@
 
 ### 小结
 
-- **从零未做**：R3、R5、R6、R10、R12、R13
-- **半成品**：R1、R4、R7
+- **从零未做**：R3、R10、R12、R13
+- **半成品**：R4（缺节点均衡/迁移/drain）
 - **暂缓**：R2.3、Prometheus 监控趋势（老板「先不做」）
 - **已取消**：Netdata 接入及依赖项（主机/Docker）
+
+> 2026-10-14 本轮开发（老板「继续开发」）：R1 下发（`b3c1d78`）、R5（`ed17fbe`）、R6（`e0bced3`）、R7（`4a22884`）。
