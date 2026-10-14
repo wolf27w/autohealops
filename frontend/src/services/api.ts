@@ -496,6 +496,18 @@ export interface PeakResult { namespace: string; deployment: string; pod_count: 
 export const getResourceGovernancePeak = (params: { cluster_id: number; namespace?: string; days?: number; start_hour?: number; end_hour?: number }) =>
   http.get<PeakResult[]>('/resource-governance/peak', { params })
 
+// 准入控制下发（P0-R1）
+export interface AdmissionStatus {
+  webhook_installed: boolean; service_installed: boolean
+  namespace: string; webhook_name: string; webhook_yaml: string; hint: string
+}
+export const getAdmissionStatus = (clusterId: number) =>
+  http.get<AdmissionStatus>('/resource-governance/admission/status', { params: { cluster_id: clusterId } })
+export const installAdmission = (data: Payload) =>
+  http.post<Payload>('/resource-governance/admission/install', data)
+export const uninstallAdmission = (data: Payload) =>
+  http.post<Payload>('/resource-governance/admission/uninstall', data)
+
 export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
   http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
 

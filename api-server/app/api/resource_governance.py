@@ -5,12 +5,15 @@
 - 读：read 权限
 - 写：operate 权限（+ 集群权限校验）
 """
+import base64
 import math
 from datetime import datetime, timedelta
 
+import yaml
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.middleware.permission import require_any_user, require_operator
 from app.models import PodMetric, ResourceGovernance
@@ -155,3 +158,134 @@ async def peak_collect(cluster_id: int, namespace: str = "", days: int = 3,
             "samples": len(g["cpu"]),
         })
     return {"code": 200, "message": "success", "data": out}
+
+
+# ============ 准入控制下发（P0-R1） ============
+# 平台生成并下发 MutatingWebhookConfiguration（+ 命名空间/Service）到被管集群，使准入真正生效。
+# 走后 executor 现有 ApplyWorkloadYaml/DeleteResource（dynamic client，已支持 cluster-scoped 类型），零 proto 改动。
+# 准入服务本体（executor 的 admission server）需运行在集群内并被 apiserver 可达，此处只负责下发配置。
+
+ADMISSION_NS = "apiops-admission"
+ADMISSION_SVC = "apiops-admission"
+ADMISSION_WEBHOOK = "apiops-admission"
+ADMISSION_SVC_PORT = 443
+ADMISSION_TARGET_PORT = 9443
+ADMISSION_PATH = "/mutate"
+# 默认只对带该标签的命名空间生效（避免全局误伤）；空标签=不生效，安全默认
+ADMISSION_NS_LABEL_KEY = "apiops-admission"
+ADMISSION_NS_LABEL_VALUE = "enabled"
+
+
+def _ns_manifest(ns: str) -> str:
+    return yaml.safe_dump({
+        "apiVersion": "v1", "kind": "Namespace",
+        "metadata": {"name": ns, "labels": {"app.kubernetes.io/managed-by": "api-ops"}},
+    }, allow_unicode=True)
+
+
+def _svc_manifest(ns: str, name: str) -> str:
+    return yaml.safe_dump({
+        "apiVersion": "v1", "kind": "Service",
+        "metadata": {"name": name, "namespace": ns, "labels": {"app": name}},
+        "spec": {
+            "selector": {"app": name},
+            "ports": [{"name": "https", "port": ADMISSION_SVC_PORT, "targetPort": ADMISSION_TARGET_PORT, "protocol": "TCP"}],
+        },
+    }, allow_unicode=True)
+
+
+def _webhook_manifest(name: str, ns: str, svc: str, ca_bundle_pem: str) -> str:
+    ca_b64 = base64.b64encode(ca_bundle_pem.encode("utf-8")).decode("ascii") if ca_bundle_pem else ""
+    return yaml.safe_dump({
+        "apiVersion": "admissionregistration.k8s.io/v1",
+        "kind": "MutatingWebhookConfiguration",
+        "metadata": {"name": name, "labels": {"app.kubernetes.io/managed-by": "api-ops"}},
+        "webhooks": [{
+            "name": f"{name}.apiops.svc",
+            "admissionReviewVersions": ["v1"],
+            "sideEffects": "None",
+            "failurePolicy": "Ignore",           # fail-open
+            "matchPolicy": "Equivalent",
+            "reinvocationPolicy": "IfNeeded",
+            "clientConfig": {
+                "service": {"namespace": ns, "name": svc, "path": ADMISSION_PATH, "port": ADMISSION_SVC_PORT},
+                "caBundle": ca_b64,
+            },
+            "rules": [{
+                "apiGroups": ["apps"], "apiVersions": ["v1"],
+                "operations": ["CREATE", "UPDATE"], "resources": ["deployments"], "scope": "Namespaced",
+            }],
+            # 只对显式打标签的命名空间生效（空/未标注=不触发）
+            "namespaceSelector": {"matchLabels": {ADMISSION_NS_LABEL_KEY: ADMISSION_NS_LABEL_VALUE}},
+        }],
+    }, allow_unicode=True)
+
+
+@router.get("/admission/status")
+async def admission_status(cluster_id: int, namespace: str = ADMISSION_NS, webhook_name: str = ADMISSION_WEBHOOK,
+                           user=Depends(require_any_user)):
+    """查询准入配置下发状态（读 MutatingWebhookConfiguration / Service）。"""
+    if denied := await _deny(user, cluster_id):
+        return denied
+    wh = await executor_client.acall(executor_client.get_workload_yaml, cluster_id,
+                                     "mutatingwebhookconfiguration", "", webhook_name)
+    svc = await executor_client.acall(executor_client.get_workload_yaml, cluster_id,
+                                      "service", namespace, ADMISSION_SVC)
+    return {"code": 200, "message": "success", "data": {
+        "webhook_installed": bool(wh.get("success")),
+        "service_installed": bool(svc.get("success")),
+        "namespace": namespace, "webhook_name": webhook_name,
+        "webhook_yaml": wh.get("yaml", "") if wh.get("success") else "",
+        "hint": "仅对打了标签 %s=%s 的命名空间生效；准入服务需在集群内按 %s/%s:%s 提供。" % (
+            ADMISSION_NS_LABEL_KEY, ADMISSION_NS_LABEL_VALUE, namespace, ADMISSION_SVC, ADMISSION_TARGET_PORT),
+    }}
+
+
+@router.post("/admission/install")
+async def admission_install(payload: dict, user=Depends(require_operator)):
+    """向目标集群下发准入配置：Namespace（可选）+ Service + MutatingWebhookConfiguration。
+
+    body: { cluster_id, namespace?, ca_bundle?（准入服务 CA 的 PEM 文本，可空） }
+    注意：只下发配置，不部署准入服务本体（executor admission 需在集群内运行）。
+    """
+    cluster_id = int(payload.get("cluster_id") or 0)
+    if not cluster_id:
+        return {"code": 400, "message": "cluster_id 必填", "data": None}
+    if denied := await _deny(user, cluster_id, "operate"):
+        return denied
+    ns = (payload.get("namespace") or ADMISSION_NS).strip()
+    ca_pem = (payload.get("ca_bundle") or "").strip()
+    steps = []
+    plans = [
+        ("namespace", "", ns, _ns_manifest(ns)),
+        ("service", ns, ADMISSION_SVC, _svc_manifest(ns, ADMISSION_SVC)),
+        ("mutatingwebhookconfiguration", "", ADMISSION_WEBHOOK, _webhook_manifest(ADMISSION_WEBHOOK, ns, ADMISSION_SVC, ca_pem)),
+    ]
+    for kind, ns_arg, name, manifest in plans:
+        r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, ns_arg, name, manifest)
+        steps.append({"kind": kind, "name": name, "success": bool(r.get("success")),
+                      "error": r.get("error", "") if not r.get("success") else ""})
+    ok = all(s["success"] for s in steps)
+    return {"code": 200 if ok else 500, "message": "success" if ok else "部分下发失败",
+            "data": {"steps": steps,
+                     "note": "生效条件：准入服务在集群内可达（Service %s/%s:%s），且目标命名空间打标签 %s=%s" % (
+                         ns, ADMISSION_SVC, ADMISSION_TARGET_PORT, ADMISSION_NS_LABEL_KEY, ADMISSION_NS_LABEL_VALUE)}}
+
+
+@router.post("/admission/uninstall")
+async def admission_uninstall(payload: dict, user=Depends(require_operator)):
+    """回滚准入配置：删除 MutatingWebhookConfiguration + Service（保留命名空间，避免误删命名空间内其它资源）。"""
+    cluster_id = int(payload.get("cluster_id") or 0)
+    if not cluster_id:
+        return {"code": 400, "message": "cluster_id 必填", "data": None}
+    if denied := await _deny(user, cluster_id, "operate"):
+        return denied
+    ns = (payload.get("namespace") or ADMISSION_NS).strip()
+    wh = await executor_client.acall(executor_client.delete_resource, cluster_id,
+                                     "mutatingwebhookconfiguration", "", ADMISSION_WEBHOOK)
+    svc = await executor_client.acall(executor_client.delete_resource, cluster_id,
+                                      "service", ns, ADMISSION_SVC)
+    ok = bool(wh.get("success")) and (bool(svc.get("success")) or "NotFound" in (svc.get("error") or ""))
+    return {"code": 200 if ok else 500,
+            "message": "已回滚准入" if ok else (svc.get("error") or wh.get("error") or "回滚失败"),
+            "data": {"webhook_deleted": bool(wh.get("success")), "service_deleted": bool(svc.get("success"))}}

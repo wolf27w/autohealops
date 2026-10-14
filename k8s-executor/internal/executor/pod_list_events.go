@@ -222,6 +222,13 @@ func (e *Executor) GetPodEvents(ctx context.Context, namespace, podName string) 
 	return out, nil
 }
 
+// clusterScopedKinds 集群级（非命名空间）对象：apply/get/delete 不走 Namespace()
+var clusterScopedKinds = map[string]bool{
+	"namespace":                      true,
+	"mutatingwebhookconfiguration":   true,
+	"validatingwebhookconfiguration": true,
+}
+
 // workloadGVR 工作负载/配置类资源类型 → GVR
 func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 	switch kind {
@@ -245,8 +252,14 @@ func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}, nil
 	case "pod":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, nil
+	case "namespace":
+		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}, nil
+	case "mutatingwebhookconfiguration":
+		return schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}, nil
+	case "validatingwebhookconfiguration":
+		return schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}, nil
 	default:
-		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（仅 deployment/statefulset/daemonset/cronjob/pod/configmap/secret/service/ingress/pvc）", kind)
+		return schema.GroupVersionResource{}, fmt.Errorf("不支持的类型 %q（deployment/statefulset/daemonset/cronjob/pod/configmap/secret/service/ingress/pvc/namespace/mutatingwebhookconfiguration/validatingwebhookconfiguration）", kind)
 	}
 }
 
@@ -260,7 +273,13 @@ func (e *Executor) GetWorkloadYaml(ctx context.Context, kind, namespace, name st
 	if err != nil {
 		return "", fmt.Errorf("创建 dynamic client 失败: %w", err)
 	}
-	u, err := dc.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	ri := dc.Resource(gvr)
+	var u *unstructured.Unstructured
+	if clusterScopedKinds[kind] {
+		u, err = ri.Get(ctx, name, metav1.GetOptions{})
+	} else {
+		u, err = ri.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -295,10 +314,11 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 	if k := obj.GetKind(); k != "" && !kindMatches(k, kind) {
 		return fmt.Errorf("YAML Kind=%q 与目标类型 %q 不一致", k, kind)
 	}
+	clusterScoped := clusterScopedKinds[kind]
 	if ns := obj.GetNamespace(); ns != "" {
 		namespace = ns
 	}
-	if namespace == "" {
+	if !clusterScoped && namespace == "" {
 		namespace = "default"
 	}
 	if name != "" && obj.GetName() != name {
@@ -308,11 +328,15 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 	if err != nil {
 		return fmt.Errorf("创建 dynamic client 失败: %w", err)
 	}
-	if _, err := dc.Resource(gvr).Namespace(namespace).Apply(
-		ctx, obj.GetName(), obj,
-		metav1.ApplyOptions{FieldManager: "api-ops", Force: true},
-	); err != nil {
-		return fmt.Errorf("apply 失败: %w", err)
+	ri := dc.Resource(gvr)
+	var applyErr error
+	if clusterScoped {
+		_, applyErr = ri.Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "api-ops", Force: true})
+	} else {
+		_, applyErr = ri.Namespace(namespace).Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "api-ops", Force: true})
+	}
+	if applyErr != nil {
+		return fmt.Errorf("apply 失败: %w", applyErr)
 	}
 	return nil
 }
@@ -321,11 +345,13 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name string) error {
 	switch kind {
 	case "configmap", "secret", "service", "ingress", "pvc",
-		"deployment", "statefulset", "daemonset", "cronjob", "pod":
+		"deployment", "statefulset", "daemonset", "cronjob", "pod",
+		"namespace", "mutatingwebhookconfiguration", "validatingwebhookconfiguration":
 	default:
-		return fmt.Errorf("不支持删除的类型 %q（仅 configmap/secret/service/ingress/pvc/deployment/statefulset/daemonset/cronjob/pod）", kind)
+		return fmt.Errorf("不支持删除的类型 %q", kind)
 	}
-	if namespace == "" || name == "" {
+	clusterScoped := clusterScopedKinds[kind]
+	if name == "" || (!clusterScoped && namespace == "") {
 		return fmt.Errorf("namespace/name 不能为空")
 	}
 	gvr, err := workloadGVR(kind)
@@ -336,8 +362,15 @@ func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name str
 	if err != nil {
 		return fmt.Errorf("创建 dynamic client 失败: %w", err)
 	}
-	if err := dc.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
-		return fmt.Errorf("删除失败: %w", err)
+	ri := dc.Resource(gvr)
+	var delErr error
+	if clusterScoped {
+		delErr = ri.Delete(ctx, name, metav1.DeleteOptions{})
+	} else {
+		delErr = ri.Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	}
+	if delErr != nil {
+		return fmt.Errorf("删除失败: %w", delErr)
 	}
 	return nil
 }
@@ -393,6 +426,12 @@ func kindMatches(kind, internal string) bool {
 		return kind == "PersistentVolumeClaim"
 	case "pod":
 		return kind == "Pod"
+	case "namespace":
+		return kind == "Namespace"
+	case "mutatingwebhookconfiguration":
+		return kind == "MutatingWebhookConfiguration"
+	case "validatingwebhookconfiguration":
+		return kind == "ValidatingWebhookConfiguration"
 	}
 	return false
 }

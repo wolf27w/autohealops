@@ -4,8 +4,9 @@ import { Card, Table, Button, Space, Select, Input, Modal, Form, InputNumber, Sw
 import { PlusOutlined, ReloadOutlined, FundOutlined } from '@ant-design/icons'
 import {
   getClusters, getResourceGovernance, upsertResourceGovernance, deleteResourceGovernance, getResourceGovernancePeak,
+  getAdmissionStatus, installAdmission, uninstallAdmission,
 } from '../services/api'
-import type { ResourceGovernanceRule, PeakResult } from '../services/api'
+import type { ResourceGovernanceRule, PeakResult, AdmissionStatus } from '../services/api'
 import type { Cluster } from '../types'
 
 export default function ResourceGovernance() {
@@ -20,6 +21,8 @@ export default function ResourceGovernance() {
   const [peakOpen, setPeakOpen] = useState(false)
   const [peakData, setPeakData] = useState<PeakResult[]>([])
   const [peakLoading, setPeakLoading] = useState(false)
+  const [admission, setAdmission] = useState<AdmissionStatus | null>(null)
+  const [admLoading, setAdmLoading] = useState(false)
 
   useEffect(() => {
     getClusters().then((d) => setClusters(d || [])).catch(() => {})
@@ -66,6 +69,27 @@ export default function ResourceGovernance() {
 
   const clusterName = (id: number) => clusters.find((c) => c.id === id)?.name || `#${id}`
 
+  const loadAdmission = useCallback(() => {
+    if (!clusterId) { setAdmission(null); return }
+    getAdmissionStatus(clusterId).then(setAdmission).catch(() => setAdmission(null))
+  }, [clusterId])
+  useEffect(() => { loadAdmission() }, [loadAdmission])
+
+  const doInstall = async () => {
+    if (!clusterId) return
+    setAdmLoading(true)
+    try { await installAdmission({ cluster_id: clusterId }); message.success('已下发准入配置'); loadAdmission() }
+    catch (e) { message.error(String((e as Error)?.message || e)) }
+    finally { setAdmLoading(false) }
+  }
+  const doUninstall = async () => {
+    if (!clusterId) return
+    setAdmLoading(true)
+    try { await uninstallAdmission({ cluster_id: clusterId }); message.success('已回滚准入'); loadAdmission() }
+    catch (e) { message.error(String((e as Error)?.message || e)) }
+    finally { setAdmLoading(false) }
+  }
+
   return (
     <div style={{ padding: 16 }}>
       <Card size="small" title="资源治理 · 管控表"
@@ -103,6 +127,26 @@ export default function ResourceGovernance() {
             },
           ]} />
       </Card>
+
+      {clusterId && (
+        <Card size="small" title="准入控制下发（MutatingWebhook）" style={{ marginTop: 12 }}
+          extra={
+            <Space>
+              <Tag color={admission?.webhook_installed ? 'green' : 'default'}>
+                {admission?.webhook_installed ? 'Webhook 已下发' : 'Webhook 未下发'}
+              </Tag>
+              <Button size="small" icon={<ReloadOutlined />} onClick={loadAdmission}>刷新</Button>
+              <Popconfirm title="下发/更新准入配置（Namespace+Service+MutatingWebhookConfiguration）到该集群？" onConfirm={doInstall}>
+                <Button size="small" type="primary" loading={admLoading}>下发准入</Button>
+              </Popconfirm>
+              <Popconfirm title="回滚准入（删除 webhook + Service）？" onConfirm={doUninstall}>
+                <Button size="small" danger loading={admLoading}>回滚准入</Button>
+              </Popconfirm>
+            </Space>
+          }>
+          <div style={{ color: '#888', fontSize: 12 }}>{admission?.hint || '选择集群后查看/下发准入配置（下发仅装配置，准入服务需在集群内运行）。'}</div>
+        </Card>
+      )}
 
       <Modal open={modalOpen} title={editRow ? '编辑管控条目' : '新增管控条目'} onOk={submit}
         onCancel={() => setModalOpen(false)} width={640} destroyOnClose>
