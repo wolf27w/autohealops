@@ -320,6 +320,12 @@ function renderOverview(){
     </div>
   </div>
 
+  <!-- 趋势：近24h 告警 / 自愈 -->
+  <div class="panel" style="margin-bottom:20px">
+    <h3>近 24 小时 告警 / 自愈 趋势 <span class="sub">逐小时</span></h3>
+    <div id="ch-ov-trend" class="chart" style="height:200px"></div>
+  </div>
+
   <!-- 第二行：集群总览 + 告警类型分布（左右并排） -->
   <div class="row" style="margin-bottom:16px;align-items:flex-start">
     <div class="col panel" style="flex:2">
@@ -419,6 +425,12 @@ function renderOverview(){
         </div>`).join('')}
     </div>
   </div>`;
+  if(OVERVIEW.trend24h && OVERVIEW.trend24h.length){
+    const X = OVERVIEW.trend24h.map(t=>t.h);
+    mkChart('ch-ov-trend', lineOpt(X,
+      [{name:'告警',data:OVERVIEW.trend24h.map(t=>t.a)},{name:'自愈',data:OVERVIEW.trend24h.map(t=>t.s)}],
+      ['#e74c3c','#12b981'], '条'));
+  }
 }
 
 /* ---------- 渲染：单集群详情 ---------- */
@@ -712,6 +724,7 @@ async function loadOverviewReal(){
   ];
   OVERVIEW.alertTypes = (dash.fault_top||[]).slice(0,5).map(f=>({name:f.fault_type, count:f.count}));
   if(!OVERVIEW.alertTypes.length) OVERVIEW.alertTypes=[{name:'（当前无告警）',count:0}];
+  OVERVIEW.trend24h = (dash.trend_24h||[]).map(t=>({h:t.hour, a:t.alerts||0, s:t.healed||0}));
   CLUSTERS.length=0;
   cd.forEach(c=>{ CLUSTERS.push({id:c.id, name:c.name, env:(cById[c.id]||{}).env||'',
     status: c.status==='healthy'?'ok':((c.alert_pending||0)>0?'warn':'ok'),
