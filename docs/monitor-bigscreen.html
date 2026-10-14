@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>多集群 K8s 监控大屏 · Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0e17; --panel:#0d1420; --border:#1e2a3a; --border-2:#243248;
+    --text:#e6edf3; --text-2:#8b9cb3; --text-3:#5b6b82;
+    --red:#e74c3c; --yellow:#f39c12; --green:#2ecc71; --blue:#3b82f6; --cyan:#22d3ee;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none;cursor:pointer}
+  #app{padding:16px;max-width:2200px;margin:0 auto}
+  .row{display:flex;gap:16px;margin-bottom:16px}
+  .col{flex:1;min-width:0}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+  .panel h3{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px}
+  .panel h3 .sub{font-size:11px;color:var(--text-3);font-weight:400}
+  .muted{color:var(--text-2)} .dim{color:var(--text-3)}
+  .big{font-size:32px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+  .mid{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .sm{font-size:12px} .xs{font-size:11px}
+  .up{color:var(--red)} .down{color:var(--green)} .warn{color:var(--yellow)}
+  .kpi-label{font-size:12px;color:var(--text-2);display:flex;justify-content:space-between;align-items:center}
+  .kpi-sub{font-size:11px;color:var(--text-3);margin-top:6px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;line-height:18px;border:1px solid transparent}
+  .tag.red{background:rgba(231,76,60,.15);color:#ff7b6b;border-color:rgba(231,76,60,.4)}
+  .tag.yellow{background:rgba(243,156,18,.15);color:#f7b955;border-color:rgba(243,156,18,.4)}
+  .tag.green{background:rgba(46,204,113,.15);color:#5fe0a0;border-color:rgba(46,204,113,.4)}
+  .tag.gray{background:rgba(139,156,179,.12);color:var(--text-2);border-color:var(--border-2)}
+  .bar{height:8px;border-radius:4px;background:#16202f;overflow:hidden}
+  .bar>i{display:block;height:100%;border-radius:4px}
+  .bar.sm{height:6px}
+  .grid-cards{display:grid;gap:12px}
+  .cluster-card{cursor:pointer;transition:.15s;border:1px solid var(--border);border-radius:8px;background:#101a29;overflow:hidden}
+  .cluster-card:hover{border-color:var(--border-2);transform:translateY(-1px)}
+  .cluster-card .topbar{height:4px}
+  .cluster-card .body{padding:12px 14px}
+  .cluster-card .name{font-size:15px;font-weight:700}
+  .cluster-card .stat{font-size:12px;color:var(--text-2);margin:6px 0 10px}
+  .btn{display:inline-block;padding:3px 10px;border-radius:6px;border:1px solid var(--border-2);background:#16202f;color:var(--text);
+    font-size:12px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:var(--blue);color:#9cc2ff}
+  .btn.primary{background:rgba(59,130,246,.18);border-color:rgba(59,130,246,.5);color:#9cc2ff}
+  .list-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid #16202f}
+  .list-row:last-child{border-bottom:0}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+  .dot.red{background:var(--red)} .dot.yellow{background:var(--yellow)} .dot.green{background:var(--green)} .dot.gray{background:var(--text-3)}
+  .grow{flex:1;min-width:0}
+  .ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:14px;border:1px solid var(--border-2);
+    background:#121c2b;font-size:12px;cursor:pointer;margin:0 6px 6px 0}
+  .chip.sel{border-color:var(--blue);background:rgba(59,130,246,.15)}
+  .chip.bad{border-color:rgba(231,76,60,.6)}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab{padding:5px 12px;border-radius:6px;border:1px solid var(--border-2);background:#121c2b;font-size:12px;cursor:pointer;color:var(--text-2)}
+  .tab.sel{background:rgba(59,130,246,.18);border-color:rgba(59,130,246,.5);color:#cfe0ff}
+  .tab .cnt{opacity:.7;margin-left:4px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #16202f;white-space:nowrap}
+  th{color:var(--text-3);font-weight:500;font-size:11px}
+  tr.bad td{background:rgba(231,76,60,.09)}
+  select{background:#121c2b;color:var(--text);border:1px solid var(--border-2);border-radius:6px;padding:5px 8px;font-size:12px;min-width:260px}
+  .metric{padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#101a29}
+  .metric .lbl{font-size:11px;color:var(--text-2)}
+  .metric .val{font-size:22px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+  .metric .sub{font-size:11px;color:var(--text-3);margin-top:3px}
+  .cnt-box{padding:10px;border:1px solid var(--border);border-radius:8px;background:#101a29;text-align:center}
+  .cnt-box .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  .cnt-box .l{font-size:11px;color:var(--text-2);margin-top:2px}
+  .chart{width:100%}
+  .banner{display:flex;align-items:center;gap:10px;background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.4);
+    color:#cfe0ff;border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:16px}
+  .banner .x{margin-left:auto;cursor:pointer;color:var(--text-2)}
+  .ns-desc{font-size:11px;color:var(--text-3)}
+  .nodework{border-left:3px solid var(--border-2);padding-left:10px;margin-bottom:8px}
+  .nodework.bad{border-left-color:var(--red)}
+  .sep{height:1px;background:#16202f;margin:10px 0}
+  .empty{color:var(--text-3);font-size:12px;padding:16px;text-align:center}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* =========================================================
+   多集群 K8s 监控大屏 · 纯前端 Demo（数据为 JS 模拟）
+   设计：事件驱动优先，资源监控服务于定位
+   ========================================================= */
+
+/* ---------- 工具 ---------- */
+const $ = (s, r=document) => r.querySelector(s);
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const fmtPct = v => (v==null?'-':v.toFixed(0)+'%');
+const lvl = v => v>=85?'red':(v>=70?'yellow':'green');
+const barColor = v => v>=85?'var(--red)':(v>=70?'var(--yellow)':'var(--green)');
+function bar(pct, small){ return `<div class="bar ${small?'sm':''}"><i style="width:${clamp(pct,0,100)}%;background:${barColor(pct)}"></i></div>`; }
+function series(n, base, amp, noise){ const a=[]; let v=base; for(let i=0;i<n;i++){ v = v + (Math.random()-0.5)*amp + (Math.random()<0.5?-noise:noise); v=clamp(v,base*0.3,base*1.8); a.push(+v.toFixed(2)); } return a; }
+function times(n){ const a=[],now=Date.now(); for(let i=n-1;i>=0;i--){ const d=new Date(now-i*5*60000); a.push(`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`);} return a; }
+function timeAgo(min){ return min<60?`${min} 分钟`:`${(min/60).toFixed(1)} 小时`; }
+
+/* ---------- 模拟数据 ---------- */
+const CLUSTERS = [
+  {id:'prod-beijing', name:'prod-beijing', env:'生产', status:'warn',  nodes:48, pods:1260, alerts:7, cpu:78, mem:64, disk:52},
+  {id:'prod-shanghai',name:'prod-shanghai',env:'生产', status:'ok',    nodes:36, pods:980,  alerts:1, cpu:41, mem:55, disk:47},
+  {id:'prod-guangzhou',name:'prod-guangzhou',env:'生产',status:'bad',  nodes:24, pods:640,  alerts:12,cpu:91, mem:88, disk:79},
+  {id:'uat',          name:'uat',          env:'UAT',  status:'ok',    nodes:18, pods:420,  alerts:0, cpu:33, mem:44, disk:38},
+  {id:'test',         name:'test',         env:'测试', status:'ok',    nodes:20, pods:510,  alerts:2, cpu:37, mem:49, disk:41},
+];
+const NS_LIST = ['payment','order','infra','gateway','monitoring'];
+const TYPES = [{k:'deployment',n:'无状态'},{k:'statefulset',n:'有状态'},{k:'daemonset',n:'DaemonSet'}];
+
+const OVERVIEW = {
+  kpi:{
+    activeAlerts:{v:22, delta:+5, deltaLabel:'较 1 小时前'},
+    healing:{v:6, avgMin:8.4},
+    healedToday:{v:184, rate:0.94},
+    failed:{v:3, abnormalClusters:1}
+  },
+  waterline:[
+    {dim:'CPU', pct:91, peak:'prod-guangzhou'},
+    {dim:'内存', pct:88, peak:'prod-guangzhou'},
+    {dim:'磁盘', pct:79, peak:'prod-guangzhou'},
+    {dim:'网络吞吐', pct:63, peak:'prod-beijing'},
+  ],
+  alertTypes:[
+    {name:'OOM / 容器重启', count:9},
+    {name:'磁盘 / 存储', count:5},
+    {name:'流量异常', count:4},
+    {name:'探针 / 健康检查', count:3},
+    {name:'调度 / 资源不足', count:1},
+  ],
+  heal:{success:184, failed:3, processing:6, rate:0.94, avgMin:8.4,
+    stubborn:[
+      {svc:'payment/payment-svc', fails:5, range:'14:02 ~ 现在'},
+      {svc:'order/order-core', fails:3, range:'13:20 ~ 现在'},
+    ]},
+  top5:[
+    {rank:1, desc:'OOMKilled 反复重启（持续 22 分钟）', cluster:'prod-guangzhou', ns:'payment', svc:'payment-svc'},
+    {rank:2, desc:'磁盘使用率 91%（持续 40 分钟）', cluster:'prod-guangzhou', ns:'infra', svc:'log-collector', node:'gz-node-07'},
+    {rank:3, desc:'CPU 持续 92% 未扩容（持续 18 分钟）', cluster:'prod-beijing', ns:'order', svc:'order-core'},
+    {rank:4, desc:'Pod CrashLoopBackOff（持续 12 分钟）', cluster:'prod-beijing', ns:'gateway', svc:'api-gateway'},
+    {rank:5, desc:'探针连续失败（持续 9 分钟）', cluster:'prod-shanghai', ns:'payment', svc:'payment-svc'},
+  ],
+  alerts:[
+    {sev:'red', title:'OOMKilled：payment-svc 容器内存超限', cluster:'prod-guangzhou', ns:'payment', svc:'payment-svc', heal:'failed', kind:'service'},
+    {sev:'red', title:'容器反复重启：payment-svc (5 次/10min)', cluster:'prod-guangzhou', ns:'payment', svc:'payment-svc', heal:'healing', kind:'service'},
+    {sev:'yellow', title:'磁盘使用率 91%：gz-node-07 /data', cluster:'prod-guangzhou', ns:'infra', svc:'log-collector', node:'gz-node-07', heal:'pending', kind:'node'},
+    {sev:'yellow', title:'CPU 使用率 92%：order-core', cluster:'prod-beijing', ns:'order', svc:'order-core', heal:'healing', kind:'service'},
+    {sev:'yellow', title:'Pod CrashLoopBackOff：api-gateway', cluster:'prod-beijing', ns:'gateway', svc:'api-gateway', heal:'pending', kind:'service'},
+    {sev:'red', title:'探针连续失败：payment-svc liveness', cluster:'prod-shanghai', ns:'payment', svc:'payment-svc', heal:'healed', kind:'service'},
+  ],
+  events:[
+    {s:'fail', t:'❌ 自愈失败：payment-svc OOMKilled（已达最大重试）', time:'14:11'},
+    {s:'run',  t:'🔄 自愈中：order-core 触发 HPA 扩容 3→5', time:'14:09'},
+    {s:'ok',   t:'✅ 自愈成功：api-gateway 重建 Pod', time:'14:05'},
+    {s:'ok',   t:'✅ 自愈成功：payment-svc 重启容器', time:'13:58'},
+    {s:'fail', t:'❌ 自愈失败：order-core 内存未回落', time:'13:41'},
+    {s:'ok',   t:'✅ 自愈成功：log-collector 清理临时文件', time:'13:30'},
+  ]
+};
+
+/* 每集群服务数据（演示：按 ns+type 生成） */
+function servicesOf(ns, type){
+  const map = {
+    payment:['payment-svc','refund-svc','wallet-svc'],
+    order:['order-core','order-api','order-worker'],
+    infra:['log-collector','redis-operator','metrics-agent'],
+    gateway:['api-gateway','auth-gateway'],
+    monitoring:['prometheus','grafana','alertmanager'],
+  };
+  const base = map[ns] || ['svc-a','svc-b'];
+  if(type==='daemonset') return ns==='infra'?['node-exporter','filebeat']:[];
+  if(type==='statefulset') return (ns==='infra'||ns==='monitoring')?base.slice(0,2): (ns==='order'?['order-db']:[]);
+  return base;
+}
+function svcDetail(cluster, ns, type, name){
+  const abnormal = name.includes('payment') || name.includes('order-core') || name.includes('api-gateway');
+  const desired = type==='daemonset'?1:(abnormal?5:3);
+  const ready = abnormal?(desired-1):desired;
+  const pods = [];
+  for(let i=0;i<desired;i++){
+    const bad = abnormal && i===0;
+    pods.push({
+      name:`${name}-${Math.random().toString(16).slice(2,7)}-${Math.random().toString(36).slice(2,7)}`,
+      status: bad?(name.includes('payment')?'CrashLoopBackOff':'Running'):'Running',
+      node: `${cluster.slice(5,8)}-node-${String(Math.floor(Math.random()*20)).padStart(2,'0')}`,
+      bad
+    });
+  }
+  if(abnormal && name.includes('order-core')) pods[0].status='Pending';
+  const containers = [
+    {name: name.slice(0,12), image:`harbor.local/${ns}/${name}:1.4.${Math.floor(Math.random()*9)}`, cpu:'0.62 / 1', mem:'812Mi / 1Gi', restarts: abnormal?5:0, oom: abnormal?3:0, throttle:'2.4s', diskR:'12MiB/s', diskW:'3MiB/s', bad:abnormal},
+    {name:'istio-proxy', image:'istio/proxyv2:1.20', cpu:'0.04 / 0.2', mem:'96Mi / 256Mi', restarts:0, oom:0, throttle:'0s', diskR:'0', diskW:'0', bad:false},
+  ];
+  if(type==='statefulset') containers.push({name:'exporter', image:'prom/node-exporter:v1.7', cpu:'0.01 / 0.1', mem:'24Mi / 64Mi', restarts:1, oom:0, throttle:'0s', diskR:'0', diskW:'0', bad:false});
+  return {
+    name, type, ns, cluster, abnormal, desired, ready,
+    podList: pods,
+    containers,
+    metrics:{
+      cpu:{v: abnormal?86:34, limit:'1000m', req:'400m'},
+      mem:{v: abnormal?92:57, limit:'1Gi', req:'512Mi'},
+      fs:{v:21, read:'12MiB/s'},
+      net:{v:1.8, rx:'0.42%', tx:'0.31%'}, // 重传率 %
+    },
+    counters:{restarts: abnormal?5:0, oom: abnormal?3:0, throttle:'2.4s', retrans: 1482},
+    trend:{ cpu:series(24, abnormal?80:35, 8, 3), mem:series(24, abnormal?88:55, 5, 2),
+            rxLoss:series(24, abnormal?1.6:0.2, .4, .1).map(v=>+v.toFixed(2)),
+            txLoss:series(24, abnormal?1.1:0.15, .3, .08).map(v=>+v.toFixed(2)),
+            retrans:series(24, abnormal?1400:200, 300, 60).map(v=>Math.round(v)) }
+  };
+}
+function nodesOf(cluster){
+  const names = ['gz-node-07','gz-node-08','gz-node-11','gz-node-15','gz-node-21','gz-node-22','gz-node-31','gz-node-33'];
+  return names.map((n,i)=>{
+    const pressure = n==='gz-node-07'||n==='gz-node-15';
+    return {name:n, cond: pressure?'DiskPressure':'Ready', pressure,
+      cpu: pressure?91:(20+i*6)%100, mem: pressure?88:(40+i*4)%100, load:(1.2+i*0.7).toFixed(2), pods:18+i*3};
+  });
+}
+function nodeDetail(cluster, node){
+  const p = node.pressure;
+  return {
+    name:node.name, cond:node.cond, cpu:{v:node.cpu, load:node.load, cores:16}, mem:{v:node.mem, total:'64Gi'},
+    disk:{iops: p?3200:900, tput:'210MiB/s', lat: p?'18ms':'2.1ms'},
+    net:{rxLoss: p?'0.9%':'0.05%', txLoss: p?'0.6%':'0.03%', errs: p?12:0},
+    parts:[
+      {mp:'/', used: p?91:46, iops: p?2100:520, tput:'140MiB/s', lat: p?'16ms':'1.8ms'},
+      {mp:'/data', used: p?79:55, iops: p?1100:380, tput:'70MiB/s', lat: p?'20ms':'2.4ms'},
+      {mp:'/var/log', used: p?63:31, iops: p?320:90, tput:'8MiB/s', lat: p?'6ms':'1.1ms'},
+      {mp:'/tmp', used:31, iops:60, tput:'2MiB/s', lat:'0.8ms'},
+    ],
+    workloads:[
+      {name:'payment-svc', ns:'payment', type:'Deployment', cpu:'0.62 core', mem:'812Mi', bad:true},
+      {name:'log-collector', ns:'infra', type:'DaemonSet', cpu:'0.18 core', mem:'240Mi', bad:false},
+      {name:'redis-operator', ns:'infra', type:'Deployment', cpu:'0.08 core', mem:'180Mi', bad:false},
+    ],
+    trend:{ cpu:series(24, p?88:35, 6, 3), mem:series(24, p?85:52, 5, 2), iops:series(24, p?3000:900, 500, 120).map(v=>Math.round(v)) }
+  };
+}
+
+/* ---------- 状态 ---------- */
+let VIEW = { page:'overview' };
+let charts = [];
+function clearCharts(){ charts.forEach(c=>{try{c.dispose()}catch(e){}}); charts=[]; }
+function mkChart(id, option){ const dom=$('#'+id); if(!dom) return; const c=echarts.init(dom, null, {renderer:'canvas'}); c.setOption(option); charts.push(c); }
+function lineOpt(x, seriesArr, colors, yName){
+  return {
+    backgroundColor:'transparent',
+    grid:{left:38,right:16,top:28,bottom:26},
+    tooltip:{trigger:'axis',backgroundColor:'#0d1420',borderColor:'#1e2a3a',textStyle:{color:'#e6edf3',fontSize:11}},
+    legend:{top:0,textStyle:{color:'#8b9cb3',fontSize:11},itemWidth:12,itemHeight:8},
+    xAxis:{type:'category',data:x,boundaryGap:false,axisLine:{lineStyle:{color:'#1e2a3a'}},axisLabel:{color:'#5b6b82',fontSize:10}},
+    yAxis:{type:'value',name:yName||'',nameTextStyle:{color:'#5b6b82',fontSize:10},axisLabel:{color:'#5b6b82',fontSize:10},splitLine:{lineStyle:{color:'#141d2c'}}},
+    series:seriesArr.map((s,i)=>({name:s.name,type:'line',smooth:true,symbol:'none',data:s.data,
+      lineStyle:{width:2,color:colors[i%colors.length]},areaStyle:{opacity:.08,color:colors[i%colors.length]}}))
+  };
+}
+
+/* ---------- 渲染：全局总览 ---------- */
+function renderOverview(){
+  clearCharts();
+  const k = OVERVIEW.kpi;
+  const maxType = Math.max(...OVERVIEW.alertTypes.map(t=>t.count),1);
+  $('#app').innerHTML = `
+  <!-- 第一行：核心汇总 -->
+  <div class="row" style="margin-bottom:16px">
+    <div class="col panel">
+      <div class="kpi-label"><span>活跃故障告警</span><span class="${k.activeAlerts.delta>0?'up':'down'}">${k.activeAlerts.delta>0?'▲':'▼'} ${Math.abs(k.activeAlerts.delta)}</span></div>
+      <div class="big up">${k.activeAlerts.v}</div>
+      <div class="kpi-sub">${k.activeAlerts.deltaLabel}</div>
+    </div>
+    <div class="col panel">
+      <div class="kpi-label"><span>自愈中</span></div>
+      <div class="big warn">${k.healing.v}</div>
+      <div class="kpi-sub">平均处理时长 ${k.healing.avgMin} 分钟</div>
+    </div>
+    <div class="col panel">
+      <div class="kpi-label"><span>自愈成功（今日）</span></div>
+      <div class="big down">${k.healedToday.v}</div>
+      <div class="kpi-sub">成功率 ${(k.healedToday.rate*100).toFixed(0)}%</div>
+    </div>
+    <div class="col panel">
+      <div class="kpi-label"><span>自愈失败 / 异常集群</span><span class="tag yellow">需人工介入</span></div>
+      <div class="big"><span class="up">${k.failed.v}</span> <span class="dim" style="font-size:18px">/ ${k.failed.abnormalClusters}</span></div>
+      <div class="kpi-sub">存在反复自愈失败，请人工排查</div>
+    </div>
+  </div>
+
+  <!-- 第二行 -->
+  <div class="row" style="margin-bottom:16px">
+    <div class="col panel" style="flex:1.3">
+      <h3>全局资源水位 <span class="sub">多集群取峰值，看最大值而非平均</span></h3>
+      ${OVERVIEW.waterline.map(w=>`
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+            <span>${w.dim}</span><span style="color:${barColor(w.pct)};font-weight:700">${w.pct}%</span>
+          </div>
+          ${bar(w.pct)}
+          <div class="xs dim" style="margin-top:4px">峰值集群 ${w.peak} ${w.pct}%</div>
+        </div>`).join('')}
+    </div>
+    <div class="col panel" style="flex:1.7">
+      <h3>告警类型分布</h3>
+      ${OVERVIEW.alertTypes.map(t=>`
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+            <span>${t.name}</span><span class="dim">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>
+          </div>
+          ${bar(t.count/maxType*100)}
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- 第三行：集群总览（合并版，每集群只出现一次） -->
+  <div class="panel" style="margin-bottom:16px">
+    <h3>集群总览 <span class="sub">点击卡片进入集群详情</span></h3>
+    <div class="grid-cards" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
+      ${CLUSTERS.map(c=>{
+        const col = c.status==='bad'?'var(--red)':(c.status==='warn'?'var(--yellow)':'var(--green)');
+        const label = c.status==='bad'?'异常':(c.status==='warn'?'警告':'正常');
+        return `<div class="cluster-card" onclick="navCluster('${c.id}')">
+          <div class="topbar" style="background:${col}"></div>
+          <div class="body">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span class="name">${c.name} <span class="xs dim">${c.env}</span></span>
+              <span class="tag ${c.status==='bad'?'red':(c.status==='warn'?'yellow':'green')}">${label}</span>
+            </div>
+            <div class="stat">节点 ${c.nodes} · Pod ${c.pods} · 告警 <b style="color:${c.alerts>5?'var(--red)':'var(--text)'}">${c.alerts}</b></div>
+            ${['CPU','mem','disk'].map(()=>'').join('')}
+            ${[['CPU',c.cpu],['内存',c.mem],['磁盘',c.disk]].map(([l,v])=>`
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span class="xs dim" style="width:30px">${l}</span>
+                <div style="flex:1">${bar(v, true)}</div>
+                <span class="xs" style="width:38px;text-align:right;color:${barColor(v)};font-weight:600">${v}%</span>
+              </div>`).join('')}
+          </div></div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <!-- 第四行 -->
+  <div class="row" style="margin-bottom:16px">
+    <div class="col panel">
+      <h3>自愈效果</h3>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        <div class="cnt-box"><div class="n down">${OVERVIEW.heal.success}</div><div class="l">成功</div></div>
+        <div class="cnt-box"><div class="n up">${OVERVIEW.heal.failed}</div><div class="l">失败</div></div>
+        <div class="cnt-box"><div class="n warn">${OVERVIEW.heal.processing}</div><div class="l">处理中</div></div>
+        <div class="cnt-box"><div class="n">${(OVERVIEW.heal.rate*100).toFixed(0)}%</div><div class="l">成功率</div></div>
+      </div>
+      <div class="sep"></div>
+      <div class="xs dim" style="margin-bottom:6px">顽固问题（反复自愈失败）</div>
+      ${OVERVIEW.heal.stubborn.map(s=>`
+        <div class="list-row">
+          <span class="dot red"></span>
+          <div class="grow"><div class="sm ell">${s.svc}</div><div class="xs dim">失败 ${s.fails} 次 · ${s.range}</div></div>
+        </div>`).join('')}
+    </div>
+    <div class="col panel">
+      <h3>优先处理 Top 5 <span class="sub">按严重程度 + 持续时间</span></h3>
+      ${OVERVIEW.top5.map(t=>`
+        <div class="list-row">
+          <span class="mid dim" style="width:20px">${t.rank}</span>
+          <div class="grow">
+            <div class="sm ell">${t.desc}</div>
+            <div class="xs dim">${t.cluster} / ${t.ns} / ${t.svc}${t.node?' · 节点 '+t.node:''}</div>
+          </div>
+          <span class="btn primary" onclick='navCluster("${t.cluster}", ${JSON.stringify(t.node?{node:t.node}:{ns:t.ns,svc:t.svc})})'>处理 →</span>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- 第五行 -->
+  <div class="row">
+    <div class="col panel">
+      <h3>实时故障告警</h3>
+      ${OVERVIEW.alerts.map((a,idx)=>{
+        const healTag = {pending:['待处理','gray'],healing:['自愈中','yellow'],healed:['已自愈','green'],failed:['自愈失败','red']}[a.heal];
+        const jump = a.kind==='node' ? `navCluster('${a.cluster}', {node:'${a.node}'})` : `navCluster('${a.cluster}', {ns:'${a.ns}',svc:'${a.svc}'})`;
+        return `<div class="list-row">
+          <span class="dot ${a.sev}"></span>
+          <div class="grow">
+            <div class="sm ell">${a.title}</div>
+            <div class="xs dim">${a.cluster} / ${a.ns} / ${a.svc}${a.node?' · '+a.node:''}</div>
+          </div>
+          <span class="tag ${healTag[1]}">${healTag[0]}</span>
+          <span class="btn" onclick="${jump}">查看${a.kind==='node'?'节点':'监控'} →</span>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="col panel">
+      <h3>自愈事件流 <span class="sub">失败置顶</span></h3>
+      ${[...OVERVIEW.events].sort((a,b)=>(a.s==='fail'?-1:1)).slice(0,8).map(e=>`
+        <div class="list-row">
+          <span class="grow sm ${e.s==='fail'?'up':''}">${e.t}</span>
+          <span class="xs dim">${e.time}</span>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* ---------- 渲染：单集群详情 ---------- */
+let CV = {}; // cluster view state
+function renderCluster(){
+  clearCharts();
+  const c = CLUSTERS.find(x=>x.id===CV.cluster) || CLUSTERS[0];
+  const banner = CV.from ? `
+    <div class="banner">
+      <span>从告警跳转，已定位到：${CV.from}</span>
+      <span class="x" onclick="dismissBanner()">✕</span>
+    </div>` : '';
+  $('#app').innerHTML = `
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+    <span class="btn" onclick="renderOverview()">← 返回全局总览</span>
+    <span style="font-size:20px;font-weight:700">${c.name}</span>
+    <span class="tag ${c.status==='bad'?'red':(c.status==='warn'?'yellow':'green')}">${c.status==='bad'?'异常':(c.status==='warn'?'警告':'正常')}</span>
+    <span class="xs dim">节点 ${c.nodes} · Pod ${c.pods} · 告警 ${c.alerts}</span>
+  </div>
+  ${banner}
+  <div class="tabs" style="margin-bottom:16px">
+    <div class="tab ${CV.tab==='service'?'sel':''}" onclick="switchTab('service')">📦 服务 / 容器监控</div>
+    <div class="tab ${CV.tab==='node'?'sel':''}" onclick="switchTab('node')">🖥️ 节点监控</div>
+  </div>
+  <div id="cbody"></div>`;
+  if(CV.tab==='service') renderService(); else renderNode();
+}
+function switchTab(t){ CV.tab=t; renderCluster(); }
+function dismissBanner(){ CV.from=null; renderCluster(); }
+
+function renderService(){
+  // 两级筛选：ns 标签 + 类型标签（带数量角标）；再服务下拉
+  let ns = CV.ns || NS_LIST[0];
+  CV.ns = ns;
+  const typeCount = {};
+  TYPES.forEach(t=>{ typeCount[t.k] = servicesOf(ns,t.k).length; });
+  let type = CV.type || TYPES.find(t=>servicesOf(ns,t.k).length>0).k;
+  if(!servicesOf(ns,type)) type='deployment';
+  CV.type = type;
+  const list = servicesOf(ns,type);
+  // 默认选中：优先第一个异常
+  let svc = CV.svc;
+  if(!list.includes(svc)){ svc = list[0]; }
+  CV.svc = svc;
+  const d = svc ? svcDetail(CV.cluster, ns, type, svc) : null;
+
+  $('#cbody').innerHTML = `
+  <div class="panel" style="margin-bottom:16px">
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+      <div><div class="xs dim" style="margin-bottom:6px">Namespace</div>
+        <div class="tabs">${NS_LIST.map(n=>`<div class="tab ${n===ns?'sel':''}" onclick="setNs('${n}')">${n}</div>`).join('')}</div></div>
+      <div><div class="xs dim" style="margin-bottom:6px">工作负载类型</div>
+        <div class="tabs">${TYPES.map(t=>`<div class="tab ${t.k===type?'sel':''}" onclick="setType('${t.k}')">${t.n}<span class="cnt">${typeCount[t.k]}</span></div>`).join('')}</div></div>
+      <div><div class="xs dim" style="margin-bottom:6px">服务</div>
+        <select onchange="setSvc(this.value)">
+          ${list.length===0?`<option value="">（该类型下暂无服务）</option>`:
+            list.map(s=>`<option value="${s}" ${s===svc?'selected':''}>${s}${(s.includes('payment')||s.includes('order-core')||s.includes('api-gateway'))?' ⚠️':''}</option>`).join('')}
+        </select></div>
+    </div>
+  </div>
+  <div id="svcbody"></div>`;
+  if(d) renderServiceBody(d); else $('#svcbody').innerHTML = `<div class="empty">该命名空间 / 类型下暂无服务</div>`;
+}
+function setNs(n){ CV.ns=n; CV.svc=null; renderService(); }
+function setType(t){ CV.type=t; CV.svc=null; renderService(); }
+function setSvc(s){ CV.svc=s; renderService(); }
+
+function renderServiceBody(d){
+  const selPod = CV.pod || 0;
+  const sevTag = d.abnormal ? `<span class="tag red">异常</span>` : `<span class="tag green">正常</span>`;
+  $('#svcbody').innerHTML = `
+  <!-- 顶部信息 -->
+  <div class="panel" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <span style="font-size:18px;font-weight:700">${d.name}</span>
+      <span class="tag gray">${{deployment:'Deployment',statefulset:'StatefulSet',daemonset:'DaemonSet'}[d.type]}</span>
+      ${sevTag}
+      <span class="sm">副本 <b style="color:${d.ready<d.desired?'var(--red)':'var(--green)'}">${d.ready}/${d.desired}</b></span>
+      <span class="sm">所在节点
+        <a class="btn" onclick="gotoNode('${d.podList[0].node}')">${d.podList[0].node} →</a></span>
+    </div>
+    <div class="sep"></div>
+    <div class="xs dim" style="margin-bottom:6px">Pod（点击切换，下方联动）</div>
+    <div>${d.podList.map((p,i)=>`
+      <span class="chip ${i===selPod?'sel':''} ${p.bad?'bad':''}" onclick="setPod(${i})">
+        <span class="dot ${p.status==='Running'?'green':(p.status==='Pending'?'yellow':'red')}"></span>${p.name.slice(-12)}
+      </span>`).join('')}</div>
+  </div>
+
+  <!-- 容器实例表 -->
+  <div class="panel" style="margin-bottom:16px">
+    <h3>容器实例 <span class="sub">主容器 + sidecar</span></h3>
+    <table><thead><tr>
+      <th>容器</th><th>镜像</th><th>CPU</th><th>内存</th><th>重启</th><th>OOMKilled</th><th>Throttled</th><th>磁盘读</th><th>磁盘写</th>
+    </tr></thead><tbody>
+      ${d.containers.map(c=>`<tr class="${c.bad?'bad':''}">
+        <td>${c.name}</td><td class="dim">${c.image}</td><td>${c.cpu}</td><td>${c.mem}</td>
+        <td style="color:${c.restarts>0?'var(--red)':''}">${c.restarts}</td>
+        <td style="color:${c.oom>0?'var(--red)':''}">${c.oom}</td>
+        <td style="color:${c.throttle!=='0s'?'var(--yellow)':''}">${c.throttle}</td>
+        <td>${c.diskR}</td><td>${c.diskW}</td>
+      </tr>`).join('')}
+    </tbody></table>
+  </div>
+
+  <!-- 主容器 4 指标卡 -->
+  <div class="row" style="margin-bottom:16px">
+    ${[
+      ['CPU 使用率', fmtPct(d.metrics.cpu.v), `限额 ${d.metrics.cpu.limit} · 请求 ${d.metrics.cpu.req}`, d.metrics.cpu.v],
+      ['内存使用率', fmtPct(d.metrics.mem.v), `限额 ${d.metrics.mem.limit} · 请求 ${d.metrics.mem.req}`, d.metrics.mem.v],
+      ['文件系统', fmtPct(d.metrics.fs.v), `写入 ${d.metrics.fs.read}`, d.metrics.fs.v],
+      ['网络重传', d.metrics.net.v+'%', `Rx 丢包 ${d.metrics.net.rx} · Tx ${d.metrics.net.tx}`, d.metrics.net.v*8],
+    ].map(([l,v,s,p])=>`
+      <div class="col metric"><div class="lbl">${l}</div>
+        <div class="val" style="color:${barColor(p)}">${v}</div>
+        <div class="sub">${s}</div></div>`).join('')}
+  </div>
+
+  <!-- 异常计数条 -->
+  <div class="row" style="margin-bottom:16px">
+    ${[
+      ['容器重启次数', d.counters.restarts, d.counters.restarts>0],
+      ['OOMKilled 次数', d.counters.oom, d.counters.oom>0],
+      ['CPU Throttled', d.counters.throttle, d.counters.throttle!=='0s'],
+      ['网络重传次数', d.counters.retrans, d.counters.retrans>1000],
+    ].map(([l,v,bad])=>`
+      <div class="col cnt-box"><div class="n" style="color:${bad?'var(--red)':'var(--green)'}">${v}</div><div class="l">${l}</div></div>`).join('')}
+  </div>
+
+  <!-- 趋势图两张并排 -->
+  <div class="row">
+    <div class="col panel"><h3>资源使用趋势（CPU / 内存）</h3><div id="ch-svc-res" class="chart" style="height:220px"></div></div>
+    <div class="col panel"><h3>网络质量趋势（Rx 丢包 / Tx 丢包 / 重传）</h3><div id="ch-svc-net" class="chart" style="height:220px"></div></div>
+  </div>`;
+
+  const T = times(24);
+  mkChart('ch-svc-res', lineOpt(T, [
+    {name:'CPU%', data:d.trend.cpu},{name:'内存%', data:d.trend.mem}
+  ], ['#3b82f6','#22d3ee'], '%'));
+  mkChart('ch-svc-net', lineOpt(T, [
+    {name:'Rx 丢包%', data:d.trend.rxLoss},{name:'Tx 丢包%', data:d.trend.txLoss},{name:'重传', data:d.trend.retrans}
+  ], ['#e74c3c','#f39c12','#a855f7'], ''));
+}
+function setPod(i){ CV.pod=i; renderService(); }
+function gotoNode(n){ CV.tab='node'; CV.node=n; CV.from=`节点 ${n}`; renderCluster(); }
+
+function renderNode(){
+  const nodes = nodesOf(CV.cluster);
+  let sel = CV.node && nodes.find(n=>n.name===CV.node) ? CV.node : nodes[0].name;
+  CV.node = sel;
+  const d = nodeDetail(CV.cluster, nodes.find(n=>n.name===sel));
+
+  $('#cbody').innerHTML = `
+  <div class="panel" style="margin-bottom:16px">
+    <h3>节点卡片 <span class="sub">点击选中，下方联动；有压力的节点顶部红/黄条</span></h3>
+    <div class="grid-cards" style="grid-template-columns:repeat(4,1fr)">
+      ${nodes.map(n=>`
+        <div class="cluster-card" style="${n.name===sel?'border-color:var(--blue)':''}" onclick="setNode('${n.name}')">
+          <div class="topbar" style="background:${n.pressure?'var(--red)':'var(--green)'}"></div>
+          <div class="body">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span class="name">${n.name}</span>
+              <span class="tag ${n.pressure?'red':'green'}">${n.cond}</span>
+            </div>
+            <div style="margin-top:8px">
+              <div style="display:flex;justify-content:space-between" class="xs dim"><span>CPU</span><span>${n.cpu}%</span></div>
+              ${bar(n.cpu,true)}
+            </div>
+            <div style="margin-top:6px">
+              <div style="display:flex;justify-content:space-between" class="xs dim"><span>内存</span><span>${n.mem}%</span></div>
+              ${bar(n.mem,true)}
+            </div>
+            <div class="xs dim" style="margin-top:8px">负载 ${n.load} · Pod ${n.pods}</div>
+          </div></div>`).join('')}
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:16px">
+    <h3>${d.name} · 节点详情 <span class="sub">${d.cond}</span></h3>
+    <div class="row" style="margin-bottom:14px">
+      ${[
+        ['CPU 使用率', fmtPct(d.cpu.v), `负载 ${d.cpu.load} / ${d.cpu.cores} 核`, d.cpu.v],
+        ['内存使用率', fmtPct(d.mem.v), `总量 ${d.mem.total}`, d.mem.v],
+        ['磁盘 IOPS', d.disk.iops, `吞吐 ${d.disk.tput} · 延迟 ${d.disk.lat}`, d.disk.lat.includes('18')?90:30],
+        ['网络丢包 / 错误', `${d.net.rxLoss} / ${d.net.errs}`, `Tx 丢包 ${d.net.txLoss}`, d.net.errs>0?88:20],
+      ].map(([l,v,s,p])=>`<div class="col metric"><div class="lbl">${l}</div>
+        <div class="val" style="color:${barColor(p)}">${v}</div><div class="sub">${s}</div></div>`).join('')}
+    </div>
+    <div class="xs dim" style="margin-bottom:6px">磁盘分区（下钻到挂载点）</div>
+    <table style="margin-bottom:14px"><thead><tr><th>挂载点</th><th>使用率</th><th>IOPS</th><th>吞吐</th><th>延迟</th><th>状态</th></tr></thead><tbody>
+      ${d.parts.map(p=>`<tr class="${p.used>=85?'bad':''}">
+        <td>${p.mp}</td><td style="width:220px"><div style="display:flex;align-items:center;gap:8px">${bar(p.used,true)}<span style="color:${barColor(p.used)}">${p.used}%</span></div></td>
+        <td>${p.iops}</td><td>${p.tput}</td><td>${p.lat}</td>
+        <td><span class="tag ${p.used>=85?'red':(p.used>=70?'yellow':'green')}">${p.used>=85?'偏高':(p.used>=70?'关注':'正常')}</span></td>
+      </tr>`).join('')}
+    </tbody></table>
+    <div class="xs dim" style="margin-bottom:6px">该节点上的工作负载（点击进入服务监控）</div>
+    <div>${d.workloads.map(w=>`
+      <div class="nodework ${w.bad?'bad':''}" style="display:flex;align-items:center;gap:10px;cursor:pointer"
+        onclick="jumpToService('${w.ns}','${w.name}')">
+        <div class="grow"><div class="sm">${w.name} <span class="tag gray">${w.type}</span></div>
+          <div class="xs dim">${w.ns} · CPU ${w.cpu} · 内存 ${w.mem}</div></div>
+        <span class="btn">查看 →</span>
+      </div>`).join('')}
+    </div>
+  </div>
+
+  <div class="panel"><h3>节点资源趋势（CPU / 内存 / 磁盘 IOPS）</h3><div id="ch-node" class="chart" style="height:240px"></div></div>`;
+
+  const T = times(24);
+  mkChart('ch-node', lineOpt(T, [
+    {name:'CPU%', data:d.trend.cpu},{name:'内存%', data:d.trend.mem},{name:'磁盘 IOPS', data:d.trend.iops}
+  ], ['#3b82f6','#22d3ee','#a855f7'], ''));
+}
+function setNode(n){ CV.node=n; renderNode(); }
+function jumpToService(ns, svc){
+  CV.tab='service'; CV.ns=ns; CV.svc=svc; CV.from=`服务 ${ns}/${svc}`;
+  // 推断类型
+  for(const t of TYPES){ if(servicesOf(ns,t.k).includes(svc)){ CV.type=t.k; break; } }
+  renderCluster();
+}
+
+/* ---------- 导航 ---------- */
+function navCluster(id, params){
+  CV = { cluster:id, tab:'service', ns:(params&&params.ns)||null, type:null, svc:(params&&params.svc)||null, node:(params&&params.node)||null, pod:0 };
+  if(params && params.node){ CV.tab='node'; CV.from=`节点 ${params.node}`; }
+  else if(params && (params.ns||params.svc)){ CV.tab='service'; CV.from=`${params.ns||''} / ${params.svc||''}`; }
+  else CV.from=null;
+  renderCluster();
+}
+
+/* ---------- 启动 ---------- */
+window.addEventListener('resize', ()=>charts.forEach(c=>{try{c.resize()}catch(e){}}));
+renderOverview();
+</script>
+</body>
+</html>
