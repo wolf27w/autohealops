@@ -82,10 +82,14 @@
   .nodework.bad{border-left-color:var(--red)}
   .sep{height:1px;background:#16202f;margin:10px 0}
   .empty{color:var(--text-3);font-size:12px;padding:16px;text-align:center}
+  .modebadge{position:fixed;right:14px;top:12px;z-index:99;font-size:11px;padding:2px 10px;border-radius:10px;backdrop-filter:blur(6px)}
+  .modebadge.demo{background:rgba(243,156,18,.16);color:#f7b955;border:1px solid rgba(243,156,18,.4)}
+  .modebadge.ok{background:rgba(46,204,113,.16);color:#5fe0a0;border:1px solid rgba(46,204,113,.4)}
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="mode" class="modebadge demo">数据：演示</div>
 
 <script>
 /* =========================================================
@@ -635,9 +639,58 @@ function navCluster(id, params){
   renderCluster();
 }
 
+/* ---------- 实时数据（同一平台 API；无 token / 失败则回退演示） ---------- */
+const API='/api/v1';
+const TOK=()=> localStorage.getItem('token') || new URLSearchParams(location.search).get('token') || '';
+async function apiGet(path){ const r=await fetch(API+path,{headers:{Authorization:'Bearer '+TOK()}}); if(!r.ok) throw new Error(path+' '+r.status); const j=await r.json(); return (j&&j.data!==undefined)?j.data:j; }
+function setMode(m){ const el=$('#mode'); if(!el) return; el.textContent = m==='real'?'数据：实时':'数据：演示'; el.className='modebadge '+(m==='real'?'ok':'demo'); }
+const sevDot = s => (s==='critical'||s==='high')?'red':(s==='medium'?'yellow':'gray');
+const HEAL_MAP = {pending:'pending',awaiting_approval:'healing',ticketed:'healing',resolved:'healed',self_healed:'healed',closed:'healed'};
+
+async function loadOverviewReal(){
+  const [dash, clusters, alerts] = await Promise.all([
+    apiGet('/stats/dashboard?range=7d&ai_range=7d'),
+    apiGet('/clusters'),
+    apiGet('/alerts?group=true&page=1&size=10').catch(()=>[]),
+  ]);
+  const core = dash.core||{}, cd = dash.cluster_details||[], cById = {}; clusters.forEach(c=>cById[c.id]=c);
+  const byCpu = cd.slice().sort((a,b)=>(b.cpu_pct||0)-(a.cpu_pct||0));
+  const byMem = cd.slice().sort((a,b)=>(b.mem_pct||0)-(a.mem_pct||0));
+  OVERVIEW.kpi.activeAlerts = {v: core.alert_pending??0, delta:0, deltaLabel:'待处理告警'};
+  OVERVIEW.kpi.healing = {v: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), avgMin: core.mttr_minutes??0};
+  OVERVIEW.kpi.healedToday = {v: core.today_resolved??0, rate: core.heal_rate??0};
+  OVERVIEW.kpi.failed = {v: core.manual_pending??0, abnormalClusters: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0))};
+  OVERVIEW.waterline = [
+    {dim:'CPU', pct: Math.round(byCpu[0]?.cpu_pct||0), peak: byCpu[0]?.name||'-'},
+    {dim:'内存', pct: Math.round(byMem[0]?.mem_pct||0), peak: byMem[0]?.name||'-'},
+    {dim:'磁盘', pct: 0, peak:'（暂无数据源）'},
+    {dim:'网络吞吐', pct: 0, peak:'（暂无数据源）'},
+  ];
+  OVERVIEW.alertTypes = (dash.fault_top||[]).slice(0,5).map(f=>({name:f.fault_type, count:f.count}));
+  if(!OVERVIEW.alertTypes.length) OVERVIEW.alertTypes=[{name:'（当前无告警）',count:0}];
+  CLUSTERS.length=0;
+  cd.forEach(c=>{ CLUSTERS.push({id:c.id, name:c.name, env:(cById[c.id]||{}).env||'',
+    status: c.status==='healthy'?'ok':((c.alert_pending||0)>0?'warn':'ok'),
+    nodes:c.node_total||0, pods:c.pods||0, alerts:c.alert_pending||0,
+    cpu:Math.round(c.cpu_pct||0), mem:Math.round(c.mem_pct||0), disk:0}); });
+  const al = Array.isArray(alerts)?alerts:(alerts.items||alerts.data||[]);
+  OVERVIEW.alerts = al.slice(0,8).map(a=>({
+    sev: sevDot(a.severity), title:a.message||a.fault_type,
+    cluster:a.cluster_name||('#'+a.cluster_id), ns:a.namespace||'',
+    svc:a.deployment_name||a.resource_name, node: a.resource_type==='node'?a.resource_name:undefined,
+    heal: HEAL_MAP[a.status]||'healing', kind: a.resource_type==='node'?'node':'service',
+  }));
+  const ab = dash.abnormal_pods||[];
+  if(ab.length) OVERVIEW.top5 = ab.slice(0,5).map((p,i)=>({rank:i+1,
+    desc:(p.fault_type||'异常')+'（'+(p.pod_name||'')+'）', cluster:p.cluster_name, ns:p.namespace, svc:p.pod_name}));
+}
+
 /* ---------- 启动 ---------- */
 window.addEventListener('resize', ()=>charts.forEach(c=>{try{c.resize()}catch(e){}}));
-renderOverview();
+(async function boot(){
+  try{ await loadOverviewReal(); setMode('real'); }catch(e){ setMode('demo'); }
+  renderOverview();
+})();
 </script>
 </body>
 </html>

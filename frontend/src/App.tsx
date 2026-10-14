@@ -55,12 +55,13 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      {/* 大屏：独立路由（无侧栏/顶栏框架），强制深色主题，内容与仪表盘一致 */}
+      {/* 大屏：独立路由（无侧栏/顶栏框架），加载自研监控大屏（docs/monitor-bigscreen.html → frontend/public 同源服务） */}
       <Route
         path="/screen"
         element={
           <RequireAuth>
-            <Dashboard screen />
+            <iframe src="/monitor-bigscreen.html" title="监控大屏"
+              style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', border: 0 }} />
           </RequireAuth>
         }
       />
