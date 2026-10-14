@@ -24,15 +24,20 @@ async def list_metrics(user=Depends(require_any_user)):
 
 
 @router.get("/clusters/{cluster_id}/metrics/{metric}")
-async def cluster_metric(cluster_id: int, metric: str, user=Depends(require_any_user)):
-    """单集群某预置指标的当前值（即时查询）"""
+async def cluster_metric(cluster_id: int, metric: str, namespace: str = "", pod: str = "", container: str = "",
+                         user=Depends(require_any_user)):
+    """单集群某预置指标的当前值（即时查询）；container_* 支持 namespace/pod/container 细分过滤。"""
     if not await user_permission_service.check_cluster_permission(user, cluster_id):
         return {"code": 403, "message": "无权限访问该集群", "data": None}
-    r = await prometheus_service.query_metric(cluster_id, metric)
+    spec = prometheus_service.METRIC_QUERIES.get(metric)
+    if not spec:
+        return {"code": 500, "message": f"未知指标 {metric}", "data": None}
+    promql = prometheus_service.filtered_promql(metric, namespace, pod, container) or spec["promql"]
+    r = await prometheus_service.query(cluster_id, promql)
     if not r.get("success"):
         return {"code": 500, "message": r.get("error", "查询失败"), "data": None}
     return {"code": 200, "message": "success", "data": {
-        "metric": metric, "label": r.get("label"), "unit": r.get("unit"), "items": r.get("result", []),
+        "metric": metric, "label": spec["label"], "unit": spec["unit"], "items": r.get("result", []),
     }}
 
 
@@ -70,14 +75,16 @@ async def _range_series(cluster_id: int, promql: str, minutes: int, step: int) -
 
 @router.get("/clusters/{cluster_id}/metrics/{metric}/range")
 async def cluster_metric_range(cluster_id: int, metric: str, minutes: int = 30, step: int = 60,
+                               namespace: str = "", pod: str = "", container: str = "",
                                user=Depends(require_any_user)):
-    """预置指标的趋势曲线（range）。"""
+    """预置指标的趋势曲线（range）；container_* 支持 namespace/pod/container 细分过滤。"""
     if not await user_permission_service.check_cluster_permission(user, cluster_id):
         return {"code": 403, "message": "无权限访问该集群", "data": None}
     spec = prometheus_service.METRIC_QUERIES.get(metric)
     if not spec:
         return {"code": 400, "message": f"未知指标 {metric}", "data": None}
-    r = await _range_series(cluster_id, spec["promql"], minutes, step)
+    promql = prometheus_service.filtered_promql(metric, namespace, pod, container) or spec["promql"]
+    r = await _range_series(cluster_id, promql, minutes, step)
     if not r.get("success"):
         return {"code": 500, "message": r.get("error"), "data": None}
     return {"code": 200, "message": "success", "data": {

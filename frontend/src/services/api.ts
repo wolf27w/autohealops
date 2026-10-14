@@ -520,15 +520,15 @@ export const getRegistryTags = (image: string, limit = 100) =>
 export interface MonitoringMetric { metric: string; label: string; unit: string; scope: string }
 export interface MonitoringItem { metric: Record<string, string>; value: number | null }
 export const getMonitoringMetrics = () => http.get<MonitoringMetric[]>('/monitoring/metrics')
-export const getClusterMetric = (clusterId: number, metric: string) =>
+export const getClusterMetric = (clusterId: number, metric: string, filters?: { namespace?: string; pod?: string; container?: string }) =>
   http.get<{ metric: string; label: string; unit: string; items: MonitoringItem[] }>(
-    `/monitoring/clusters/${clusterId}/metrics/${metric}`)
+    `/monitoring/clusters/${clusterId}/metrics/${metric}`, { params: filters })
 
 // 趋势曲线（range）：Netdata 式
 export interface RangeSeries { metric: Record<string, string>; values: [number, number][] }
-export const getClusterMetricRange = (clusterId: number, metric: string, minutes = 30, step = 60) =>
+export const getClusterMetricRange = (clusterId: number, metric: string, minutes = 30, step = 60, filters?: { namespace?: string; pod?: string; container?: string }) =>
   http.get<{ metric: string; label: string; unit: string; series: RangeSeries[] }>(
-    `/monitoring/clusters/${clusterId}/metrics/${metric}/range`, { params: { minutes, step } })
+    `/monitoring/clusters/${clusterId}/metrics/${metric}/range`, { params: { minutes, step, ...filters } })
 
 // ============ 告警屏蔽（P2-R11） ============
 export interface SilenceMatcher { key: string; op: string; value: string }

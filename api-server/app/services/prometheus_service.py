@@ -119,3 +119,25 @@ async def query_metric(cluster_id: int, metric: str) -> dict:
 
 def list_metrics() -> list[dict]:
     return [{"metric": k, "label": v["label"], "unit": v["unit"], "scope": v["scope"]} for k, v in METRIC_QUERIES.items()]
+
+
+def _sel(namespace: str, pod: str, container: str) -> str:
+    sel = ['container!=""', 'container!="POD"']
+    if namespace:
+        sel.insert(0, f'namespace="{namespace}"')
+    if pod:
+        sel.insert(0, f'pod="{pod}"')
+    if container:
+        sel.insert(0, f'container="{container}"')
+    return ",".join(sel)
+
+
+def filtered_promql(metric: str, namespace: str = "", pod: str = "", container: str = "") -> str | None:
+    """对 container_* 指标按 namespace/pod/container 注入过滤；无过滤或非容器指标返回 None。"""
+    if not (namespace or pod or container):
+        return None
+    if metric in ("container_cpu_top", "container_cpu"):
+        return f'sum by (pod, container) (rate(container_cpu_usage_seconds_total{{{_sel(namespace, pod, container)}}}[5m]))'
+    if metric in ("container_mem_top", "container_mem"):
+        return f'sum by (pod, container) (container_memory_working_set_bytes{{{_sel(namespace, pod, container)}}})'
+    return None

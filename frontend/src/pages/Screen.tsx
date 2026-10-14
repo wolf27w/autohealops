@@ -5,7 +5,7 @@ import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Se
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
-import { getDashboard, getClusterMetric, getClusterMetricRange } from '../services/api'
+import { getDashboard, getClusterMetric, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getPodContainers } from '../services/api'
 import type { DashboardData, ClusterHealthDetail } from '../types'
 import type { MonitoringItem, RangeSeries } from '../services/api'
 import { useThemeMode } from '../utils/theme'
@@ -76,6 +76,12 @@ export default function Screen() {
   const [trendSeries, setTrendSeries] = useState<RangeSeries[]>([])
   const [trendUnit, setTrendUnit] = useState('')
   const [trendLoading, setTrendLoading] = useState(false)
+  const [fNs, setFNs] = useState('')
+  const [fPod, setFPod] = useState('')
+  const [fCont, setFCont] = useState('')
+  const [nsList, setNsList] = useState<string[]>([])
+  const [podList, setPodList] = useState<{ name: string }[]>([])
+  const [contList, setContList] = useState<string[]>([])
 
   const load = () => {
     setLoading(true)
@@ -101,11 +107,11 @@ export default function Screen() {
   useEffect(() => {
     if (!effCluster) { setCItems([]); return }
     setCLoading(true)
-    getClusterMetric(effCluster, cMetric)
+    getClusterMetric(effCluster, cMetric, { namespace: fNs || undefined, pod: fPod || undefined, container: fCont || undefined })
       .then((d) => { setCItems(d.items || []); setCUnit(d.unit || '') })
       .catch(() => setCItems([]))
       .finally(() => setCLoading(false))
-  }, [effCluster, cMetric])
+  }, [effCluster, cMetric, fNs, fPod, fCont])
 
   // 资源趋势（range）：Netdata 式曲线，30s 自刷
   useEffect(() => {
@@ -114,7 +120,7 @@ export default function Screen() {
     const step = Math.max(15, Math.round(trendMin * 60 / 80))
     const fetchT = () => {
       setTrendLoading(true)
-      getClusterMetricRange(effCluster, trendMetric, trendMin, step)
+      getClusterMetricRange(effCluster, trendMetric, trendMin, step, { namespace: fNs || undefined, pod: fPod || undefined, container: fCont || undefined })
         .then((d) => { if (alive) { setTrendSeries(d.series || []); setTrendUnit(d.unit || '') } })
         .catch(() => { if (alive) setTrendSeries([]) })
         .finally(() => { if (alive) setTrendLoading(false) })
@@ -122,7 +128,26 @@ export default function Screen() {
     fetchT()
     const t = window.setInterval(fetchT, 30000)
     return () => { alive = false; window.clearInterval(t) }
-  }, [effCluster, trendMetric, trendMin])
+  }, [effCluster, trendMetric, trendMin, fNs, fPod, fCont])
+
+  // 级联筛选：集群→namespace→pod→容器
+  useEffect(() => {
+    setFNs(''); setFPod(''); setFCont(''); setNsList([]); setPodList([]); setContList([])
+    if (!effCluster) return
+    getClusterNamespaces(effCluster).then((d) => setNsList((d as string[]) || [])).catch(() => setNsList([]))
+  }, [effCluster])
+  useEffect(() => {
+    setFPod(''); setFCont(''); setPodList([]); setContList([])
+    if (!effCluster || !fNs) return
+    getNamespacePods(effCluster, fNs).then((d) => setPodList((d as { name: string }[]) || [])).catch(() => setPodList([]))
+  }, [effCluster, fNs])
+  useEffect(() => {
+    setFCont(''); setContList([])
+    if (!effCluster || !fNs || !fPod) return
+    getPodContainers(effCluster, fNs, fPod)
+      .then((d) => setContList(((d as unknown as { containers?: string[] }).containers) || []))
+      .catch(() => setContList([]))
+  }, [effCluster, fNs, fPod])
 
   const core = data?.core
   const trend = (data?.alert_trend && data.alert_trend.length ? data.alert_trend : data?.trend_24h) || []
@@ -238,6 +263,15 @@ export default function Screen() {
               <Segmented size="small" value={trendMin} onChange={(v) => setTrendMin(v as number)}
                 options={[{ value: 10, label: '10m' }, { value: 30, label: '30m' }, { value: 60, label: '1h' }, { value: 180, label: '3h' }]} />
             </Space>}>
+            <Space wrap style={{ marginBottom: 10 }}>
+              <Select allowClear showSearch style={{ width: 170 }} placeholder="命名空间" value={fNs || undefined}
+                onChange={(v) => setFNs(v || '')} options={nsList.map((n) => ({ value: n, label: n }))} />
+              <Select allowClear showSearch style={{ width: 200 }} placeholder="Pod" value={fPod || undefined}
+                onChange={(v) => setFPod(v || '')} options={podList.map((p) => ({ value: p.name, label: p.name }))} />
+              <Select allowClear style={{ width: 150 }} placeholder="容器" value={fCont || undefined}
+                onChange={(v) => setFCont(v || '')} options={contList.map((c) => ({ value: c, label: c }))} />
+              <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选仅对「容器CPU/容器内存」生效（节点指标忽略）</span>
+            </Space>
             {trendLoading && trendRows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
               : trendRows.length === 0 ? <Empty description="无趋势数据（需该集群部署 Prometheus）" />
                 : <Line height={260} data={trendRows} xField="t" yField="v" colorField="name" smooth
