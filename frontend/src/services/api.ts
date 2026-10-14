@@ -516,6 +516,14 @@ export interface RegistryTags { host: string; repository: string; current_tag: s
 export const getRegistryTags = (image: string, limit = 100) =>
   http.get<RegistryTags>('/resources/registry/tags', { params: { image, limit } })
 
+// 集群监控（Prometheus 即时查询）
+export interface MonitoringMetric { metric: string; label: string; unit: string; scope: string }
+export interface MonitoringItem { metric: Record<string, string>; value: number | null }
+export const getMonitoringMetrics = () => http.get<MonitoringMetric[]>('/monitoring/metrics')
+export const getClusterMetric = (clusterId: number, metric: string) =>
+  http.get<{ metric: string; label: string; unit: string; items: MonitoringItem[] }>(
+    `/monitoring/clusters/${clusterId}/metrics/${metric}`)
+
 // ============ 告警屏蔽（P2-R11） ============
 export interface SilenceMatcher { key: string; op: string; value: string }
 export interface AlertSilence {

@@ -45,6 +45,23 @@ METRIC_QUERIES: dict[str, dict] = {
         "label": "Pod 重启次数 Top", "unit": "", "scope": "pod",
         "promql": "topk(20, kube_pod_container_status_restarts_total)",
     },
+    # ---- 容器（container，大屏容器监控） ----
+    "container_cpu_top": {
+        "label": "容器 CPU Top", "unit": "core", "scope": "container",
+        "promql": 'topk(20, sum by(namespace, pod, container) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])))',
+    },
+    "container_mem_top": {
+        "label": "容器内存 Top", "unit": "bytes", "scope": "container",
+        "promql": 'topk(20, sum by(namespace, pod, container) (container_memory_working_set_bytes{container!="",container!="POD"}))',
+    },
+    "container_net_rx": {
+        "label": "容器网络入站 Top", "unit": "bytes/s", "scope": "container",
+        "promql": 'topk(20, sum by(namespace, pod, container) (rate(container_network_receive_bytes_total{container!="",container!="POD"}[5m])))',
+    },
+    "container_net_tx": {
+        "label": "容器网络出站 Top", "unit": "bytes/s", "scope": "container",
+        "promql": 'topk(20, sum by(namespace, pod, container) (rate(container_network_transmit_bytes_total{container!="",container!="POD"}[5m])))',
+    },
 }
 
 
