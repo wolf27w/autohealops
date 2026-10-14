@@ -531,9 +531,27 @@ export const getWorkloadLogs = (clusterId: number, namespace: string, kind: stri
     `/resources/clusters/${clusterId}/namespaces/${namespace}/workloads/${kind}/${name}/logs`, { params })
 
 // ============ 节点管理（P1-R4） ============
-export interface K8sNode { name: string; ready: string; schedulable: boolean; roles: string }
+export interface K8sNode {
+  name: string; ready: string; schedulable: boolean; roles: string
+  kubelet_version?: string; cpu_allocatable?: string; mem_allocatable?: string; pods_allocatable?: string
+  pods_count?: number; has_metrics?: boolean; cpu_usage_milli?: number; mem_usage_bytes?: number
+  cpu_pct?: number | null; mem_pct?: number | null
+}
 export const getNodes = (clusterId: number) => http.get<K8sNode[]>(`/resources/clusters/${clusterId}/nodes`)
 export const cordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/cordon`)
 export const uncordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/uncordon`)
+export const batchNodes = (clusterId: number, op: 'cordon' | 'uncordon', names: string[]) =>
+  http.post<{ results: { node: string; success: boolean; message: string }[] }>(`/resources/clusters/${clusterId}/nodes/batch`, { op, names })
+export interface BalanceNode { name: string; cpu_pct: number | null; mem_pct: number | null; pods_count: number }
+export interface BalancePlan {
+  threshold: number
+  hot_nodes: BalanceNode[]
+  cold_nodes: BalanceNode[]
+  batches: { node: string; cpu_pct: number | null; mem_pct: number | null; total_candidates: number;
+    candidate_pods: { namespace: string; name: string; owner: string; cpu_request_milli: number; mem_request_bytes: number }[] }[]
+  suggestion: string
+}
+export const getNodeBalancePlan = (clusterId: number, threshold = 80) =>
+  http.get<BalancePlan>(`/resources/clusters/${clusterId}/nodes/balance-plan`, { params: { threshold } })
 
 export default api

@@ -838,27 +838,81 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
             "data": {"kind": kind, "name": name, "tail": tail, "previous": previous, "pods": results}}
 
 
+_MEM_UNITS = {"Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4,
+              "K": 1000, "M": 1000 ** 2, "G": 1000 ** 3, "T": 1000 ** 4}
+
+
+def _parse_cpu_milli(v) -> int:
+    """k8s CPU 量 → 毫核（'1500m'=1500，'4'=4000）"""
+    if not v:
+        return 0
+    s = str(v).strip()
+    try:
+        return int(float(s[:-1])) if s.endswith("m") else int(float(s) * 1000)
+    except ValueError:
+        return 0
+
+
+def _parse_mem_bytes(v) -> int:
+    """k8s 内存量 → 字节（'16Gi' / '512Mi' / '1G'）"""
+    if not v:
+        return 0
+    s = str(v).strip()
+    for u, mult in _MEM_UNITS.items():
+        if s.endswith(u):
+            try:
+                return int(float(s[:-len(u)]) * mult)
+            except ValueError:
+                return 0
+    try:
+        return int(float(s))
+    except ValueError:
+        return 0
+
+
+def _node_from_json(n: dict) -> dict:
+    alloc = n.get("allocatable") or {}
+    cpu_alloc = _parse_cpu_milli(alloc.get("cpu"))
+    mem_alloc = _parse_mem_bytes(alloc.get("memory"))
+    cpu_u = int(n.get("cpu_usage_milli") or 0)
+    mem_u = int(n.get("mem_usage_bytes") or 0)
+    return {
+        "name": n.get("name"),
+        "ready": "Ready" if n.get("ready") else "NotReady",
+        "schedulable": not n.get("unschedulable"),
+        "roles": ", ".join(n.get("roles") or []),
+        "kubelet_version": n.get("kubelet_version") or "",
+        "cpu_allocatable": alloc.get("cpu") or "",
+        "mem_allocatable": alloc.get("memory") or "",
+        "pods_allocatable": alloc.get("pods") or "",
+        "pods_count": int(n.get("pod_count") or 0),
+        "has_metrics": bool(n.get("has_metrics")),
+        "cpu_usage_milli": cpu_u, "mem_usage_bytes": mem_u,
+        "cpu_pct": round(cpu_u / cpu_alloc * 100, 1) if cpu_alloc else None,
+        "mem_pct": round(mem_u / mem_alloc * 100, 1) if mem_alloc else None,
+    }
+
+
+async def _fetch_nodes_json(cluster_id: int):
+    """取节点 JSON（executor get nodes -o json，含可分配量 + 用量）。返回 (nodes_json_raw, err)"""
+    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", "get nodes -o json")
+    if not r.get("success"):
+        return None, r.get("error", "查询节点失败")
+    try:
+        return json.loads(r.get("output") or "[]"), None
+    except (json.JSONDecodeError, ValueError):
+        return None, "节点数据解析失败"
+
+
 @router.get("/clusters/{cluster_id}/nodes")
 async def list_nodes(cluster_id: int, user=Depends(require_any_user)):
-    """节点列表（R4）：状态/可调度/角色"""
+    """节点列表（R4）：状态/角色/容量/用量（可分配量 + 使用率）。"""
     if denied := await _deny_cluster(user, cluster_id):
         return denied
-    r = await executor_client.acall(executor_client.execute_command, cluster_id, "", "get nodes")
-    if not r.get("success"):
-        return {"code": 500, "message": r.get("error", "查询节点失败"), "data": None}
-    out = r.get("output", "") or ""
-    nodes = []
-    for line in out.splitlines():
-        line = line.strip()
-        if not line.startswith("node "):
-            continue
-        name, _, info = line[len("node "):].partition(": ")
-        parts = info.split()
-        ready = parts[0] if parts else "Unknown"
-        sched = parts[1] if len(parts) > 1 else ""
-        roles = info.split("roles=", 1)[1] if "roles=" in info else ""
-        nodes.append({"name": name, "ready": ready, "schedulable": sched == "Schedulable", "roles": roles})
-    return {"code": 200, "message": "success", "data": nodes}
+    raw, err = await _fetch_nodes_json(cluster_id)
+    if raw is None:
+        return {"code": 500, "message": err, "data": None}
+    return {"code": 200, "message": "success", "data": [_node_from_json(n) for n in raw]}
 
 
 @router.post("/clusters/{cluster_id}/nodes/{node_name}/cordon")
@@ -879,3 +933,67 @@ async def uncordon_node(cluster_id: int, node_name: str, user=Depends(require_op
     if not r.get("success"):
         return {"code": 500, "message": r.get("error", "uncordon 失败"), "data": None}
     return {"code": 200, "message": "success", "data": {"message": r.get("output", "")}}
+
+
+@router.post("/clusters/{cluster_id}/nodes/batch")
+async def batch_node_op(cluster_id: int, payload: dict, user=Depends(require_operator)):
+    """批量 cordon/uncordon。body: {op: cordon|uncordon, names: [node...]}"""
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    op = (payload.get("op") or "").strip()
+    names = [str(x).strip() for x in (payload.get("names") or []) if str(x).strip()]
+    if op not in ("cordon", "uncordon") or not names:
+        return {"code": 400, "message": "op 需为 cordon/uncordon，names 非空", "data": None}
+    results = []
+    for n in names:
+        rr = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"{op} {n}")
+        results.append({"node": n, "success": bool(rr.get("success")),
+                        "message": (rr.get("output") or rr.get("error") or "").strip()[:200]})
+    ok = all(x["success"] for x in results)
+    return {"code": 200 if ok else 500, "message": "success" if ok else "部分失败", "data": {"results": results}}
+
+
+@router.get("/clusters/{cluster_id}/nodes/balance-plan")
+async def node_balance_plan(cluster_id: int, threshold: float = 80.0, user=Depends(require_any_user)):
+    """节点均衡建议（只读，不执行）：热点/冷门节点 + 可迁移 Pod + 隔离式分批建议。"""
+    if denied := await _deny_cluster(user, cluster_id):
+        return denied
+    raw, err = await _fetch_nodes_json(cluster_id)
+    if raw is None:
+        return {"code": 500, "message": err, "data": None}
+    nodes = [_node_from_json(n) for n in raw]
+    pr = await executor_client.acall(executor_client.execute_command, cluster_id, "", "get pods -o json")
+    pods = []
+    if pr.get("success"):
+        try:
+            pods = json.loads(pr.get("output") or "[]")
+        except (json.JSONDecodeError, ValueError):
+            pods = []
+    hot = [n for n in nodes if n["schedulable"] and n["has_metrics"] and (
+        (n["cpu_pct"] is not None and n["cpu_pct"] >= threshold) or (n["mem_pct"] is not None and n["mem_pct"] >= threshold))]
+    hot_names = {n["name"] for n in hot}
+    cold = sorted([n for n in nodes if n["schedulable"] and n["name"] not in hot_names and n["has_metrics"]],
+                  key=lambda x: (x["cpu_pct"] if x["cpu_pct"] is not None else 0))
+    skip_ns = {"kube-system", "kube-public", "kube-node-lease"}
+    batches = []
+    for n in hot:
+        cand = [p for p in pods
+                if p.get("node_name") == n["name"] and p.get("phase") == "Running"
+                and not p.get("host_network") and p.get("owner_kind") != "DaemonSet"
+                and p.get("namespace") not in skip_ns]
+        cand.sort(key=lambda p: (p.get("cpu_request_milli") or 0), reverse=True)
+        batches.append({
+            "node": n["name"], "cpu_pct": n["cpu_pct"], "mem_pct": n["mem_pct"],
+            "total_candidates": len(cand),
+            "candidate_pods": [{"namespace": p.get("namespace"), "name": p.get("name"),
+                                "owner": f"{p.get('owner_kind')}/{p.get('owner_name')}",
+                                "cpu_request_milli": p.get("cpu_request_milli"),
+                                "mem_request_bytes": p.get("mem_request_bytes")} for p in cand[:20]],
+        })
+    return {"code": 200, "message": "success", "data": {
+        "threshold": threshold,
+        "hot_nodes": [{"name": n["name"], "cpu_pct": n["cpu_pct"], "mem_pct": n["mem_pct"], "pods_count": n["pods_count"]} for n in hot],
+        "cold_nodes": [{"name": n["name"], "cpu_pct": n["cpu_pct"], "mem_pct": n["mem_pct"], "pods_count": n["pods_count"]} for n in cold[:5]],
+        "batches": batches,
+        "suggestion": "隔离式分批：每次 cordon 一个热点节点 → 驱逐其可迁移 Pod（DaemonSet/宿主网络/kube-system 除外）→ 观察再下一批。仅建议，未执行。",
+    }}

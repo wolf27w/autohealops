@@ -322,6 +322,9 @@ func (e *Executor) execGet(ctx context.Context, pc *ParsedCommand, ns string) (s
 		}
 		return b.String(), nil
 	case "pod", "pods":
+		if wantsJSON(pc.Args) {
+			return e.podsJSON(ctx, ns)
+		}
 		list, err := e.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return "", err
@@ -332,6 +335,9 @@ func (e *Executor) execGet(ctx context.Context, pc *ParsedCommand, ns string) (s
 		}
 		return b.String(), nil
 	case "node", "nodes":
+		if wantsJSON(pc.Args) {
+			return e.nodesJSON(ctx)
+		}
 		list, err := e.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return "", err
