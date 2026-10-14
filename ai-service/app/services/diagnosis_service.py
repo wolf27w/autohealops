@@ -8,7 +8,6 @@ from sqlalchemy import select
 from app.core.database import async_session
 from app.models import AIDiagnosisResult, ModelAccuracyStat, PromptTemplate
 from app.services import prompt_engine
-from app.services.es_client import ESClient
 from app.services.model_adapter import call_with_fallback
 from app.services.prometheus_client import PrometheusClient
 from app.utils.json_util import extract_json
@@ -75,7 +74,6 @@ async def _get_template(category: str, name: str) -> PromptTemplate | None:
 async def _collect_context(alert_data: dict) -> dict:
     """采集 Prometheus 指标 + ES 日志作为诊断上下文"""
     prom = PrometheusClient()
-    es = ESClient()
     fault_type = alert_data.get("fault_type", "")
     namespace = alert_data.get("namespace", "")
     metrics_trend = ""
@@ -85,7 +83,8 @@ async def _collect_context(alert_data: dict) -> dict:
         pod = alert_data.get("pod_name", "")
         if pod:
             metrics_trend = await prom.get_pod_metrics(namespace, pod)
-            recent_logs = (await es.search_logs(namespace, pod, tail=50)) or alert_data.get("recent_logs", "")
+            # 只用容器 stdout 日志（由 api-server 经 kubectl logs 采集传入），不走 ES
+            recent_logs = alert_data.get("recent_logs", "")
     elif fault_type in NODE_FAULTS:
         node = alert_data.get("node_name", "")
         if node:

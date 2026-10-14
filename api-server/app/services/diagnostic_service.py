@@ -110,6 +110,10 @@ async def run_app_diagnostic(task: DiagnosticTask) -> None:
     describe = await executor_client.acall(executor_client.execute_command, cluster_id, namespace, f"describe pod {pod_name}")
     events = describe.get("output", "")[:3000] if describe.get("success") else ""
 
+    # 2b. 容器 stdout 日志（诊断必须同时看日志，不走 ES）
+    from app.utils.pod_logs import fetch_pod_logs
+    logs_text = await fetch_pod_logs(cluster_id, namespace, pod_name)
+
     # 3. 调 AI 诊断（复用 diagnose 接口，通用诊断上下文）
     alert_data = {
         "alert_id": 0,
@@ -120,6 +124,7 @@ async def run_app_diagnostic(task: DiagnosticTask) -> None:
         "severity": "high",
         "status_info": f"手动诊断任务 #{task.id}，时间窗 {task.time_window_minutes} 分钟",
         "recent_events": events,
+        "recent_logs": (logs_text or "")[:4000],
     }
     conclusion, root_cause, suggestion, raw = "", "", "", ""
     try:

@@ -927,6 +927,15 @@ async def _process_one(alert: Alert) -> bool:
         recent_events = await _collect_pod_events(alert)
         if recent_events:
             alert_data["recent_events"] = recent_events
+        # 诊断必须同时看「容器 stdout 日志」（不走 ES）
+        if alert.resource_type == "pod" and alert.resource_name:
+            try:
+                from app.utils.pod_logs import fetch_pod_logs
+                logs_text = await fetch_pod_logs(alert.cluster_id, alert.namespace or "", alert.resource_name)
+                if logs_text:
+                    alert_data["recent_logs"] = logs_text[:4000]
+            except Exception as e:  # noqa: BLE001
+                logger.debug("采集 Pod 日志失败: %s", e)
         await audit_service.create_audit_record(trace_id, trigger_snapshot=json.dumps({
             "alert_id": alert.id, "cluster_id": alert.cluster_id,
             "fault_type": alert.fault_type,
