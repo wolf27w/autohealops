@@ -1,6 +1,5 @@
-// 统一运维大屏（P1-R7）—— 高级运维视角重做
-// 布局：KPI 条 → 集群健康墙 + 实时监控（主角） → 告警趋势/异常Pod/故障Top
-// 数据源：/stats/dashboard + /monitoring（节点/工作负载/容器 × CPU/内存/网络）
+// 统一运维大屏（P1-R7）—— Netdata 式重做
+// 实时监控：维度(节点/无状态/有状态/守护集/容器) × 指标(CPU/内存/网络 [+节点:磁盘/负载]) 同屏展示
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Segmented, theme, Input, Progress, Tooltip } from 'antd'
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons'
@@ -17,16 +16,29 @@ const DIMS = [
   { value: 'workload', label: '工作负载' },
   { value: 'pod', label: '容器(Pod)' },
 ]
-const METRICS = [
-  { value: 'cpu', label: 'CPU' },
-  { value: 'mem', label: '内存' },
-  { value: 'net', label: '网络' },
+const WL_TYPES = [
+  { value: 'all', label: '全部' },
+  { value: 'deploy', label: '无状态' },
+  { value: 'stateful', label: '有状态' },
+  { value: 'daemonset', label: '守护集' },
 ]
 const WINDOWS = [
   { value: 10, label: '10m' }, { value: 30, label: '30m' },
   { value: 60, label: '1h' }, { value: 180, label: '3h' },
 ]
-const WL_REGEX = '(.+?)(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+)$'
+// 工作负载名归一（Deployment 双段哈希 / StatefulSet 序号 / DaemonSet 单段哈希）
+const WL_REGEX = '(.+?)(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+|-[0-9a-f]{5,10})$'
+const WL_TYPE_SEL: Record<string, string> = {
+  deploy: ',pod=~".+-[0-9a-f]{5,10}-[0-9a-z]{5}$"',
+  stateful: ',pod=~"^[^-]+-[0-9]+$"',
+  daemonset: ',pod=~"^[^-]+-[0-9a-f]{5,10}$"',
+}
+
+const METRIC_DEFS: Record<string, { value: string; label: string }[]> = {
+  node: [{ value: 'cpu', label: 'CPU' }, { value: 'mem', label: '内存' }, { value: 'net', label: '网络' }, { value: 'disk', label: '磁盘' }, { value: 'load', label: '负载' }],
+  workload: [{ value: 'cpu', label: 'CPU' }, { value: 'mem', label: '内存' }, { value: 'net', label: '网络' }],
+  pod: [{ value: 'cpu', label: 'CPU' }, { value: 'mem', label: '内存' }, { value: 'net', label: '网络' }],
+}
 
 // ---------- 工具 ----------
 function useClock() {
@@ -35,7 +47,7 @@ function useClock() {
   return now
 }
 
-function buildPromql(dim: string, metric: string, ns: string): string {
+function buildPromql(dim: string, metric: string, ns: string, wlType: string): string {
   const nsSel = ns ? `namespace="${ns}",` : ''
   const podSel = `${nsSel}container!="",container!="POD"`
   const netSel = `${nsSel}namespace!=""`
@@ -43,24 +55,29 @@ function buildPromql(dim: string, metric: string, ns: string): string {
     if (metric === 'cpu') return '100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
     if (metric === 'mem') return '(1 - node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes)*100'
     if (metric === 'net') return 'sum by(instance)(rate(node_network_receive_bytes_total[5m]) + rate(node_network_transmit_bytes_total[5m]))'
+    if (metric === 'disk') return '100 - (sum by(instance)(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}) / sum by(instance)(node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100)'
+    if (metric === 'load') return 'node_load1'
   }
+  const typeSel = dim === 'workload' ? (WL_TYPE_SEL[wlType] || '') : ''
   if (dim === 'pod') {
     if (metric === 'cpu') return `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{${podSel}}[5m]))`
     if (metric === 'mem') return `sum by(namespace,pod)(container_memory_working_set_bytes{${podSel}})`
     if (metric === 'net') return `sum by(namespace,pod)(rate(container_network_receive_bytes_total{${netSel}}[5m]) + rate(container_network_transmit_bytes_total{${netSel}}[5m]))`
   }
   const inner = metric === 'cpu'
-    ? `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{${podSel}}[5m]))`
+    ? `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{${podSel}${typeSel}}[5m]))`
     : metric === 'mem'
-      ? `sum by(namespace,pod)(container_memory_working_set_bytes{${podSel}})`
-      : `sum by(namespace,pod)(rate(container_network_receive_bytes_total{${netSel}}[5m]) + rate(container_network_transmit_bytes_total{${netSel}}[5m]))`
+      ? `sum by(namespace,pod)(container_memory_working_set_bytes{${podSel}${typeSel}})`
+      : `sum by(namespace,pod)(rate(container_network_receive_bytes_total{${netSel}${typeSel}}[5m]) + rate(container_network_transmit_bytes_total{${netSel}${typeSel}}[5m]))`
   return `sum by(namespace,workload)(label_replace(${inner}, "workload", "$1", "pod", "${WL_REGEX}"))`
 }
 
 function unitOf(dim: string, metric: string): string {
   if (metric === 'cpu') return dim === 'node' ? '%' : 'core'
   if (metric === 'mem') return dim === 'node' ? '%' : 'bytes'
-  return 'bytes/s'
+  if (metric === 'net') return 'bytes/s'
+  if (metric === 'disk') return '%'
+  return ''
 }
 
 function seriesLabel(m: Record<string, string>): string {
@@ -83,6 +100,7 @@ function fmtVal(v: number | null, unit: string): string {
   if (v === null || v === undefined) return '-'
   if (unit === 'bytes' || unit === 'bytes/s') return fmtBytes(v) + (unit === 'bytes/s' ? '/s' : '')
   if (unit === 'core') return v.toFixed(3)
+  if (unit === '%' || unit === '') return `${v.toFixed(1)}${unit}`
   return `${v.toFixed(1)}${unit}`
 }
 function riskLevel(c: ClusterHealthDetail): { text: string; color: string } {
@@ -92,9 +110,9 @@ function riskLevel(c: ClusterHealthDetail): { text: string; color: string } {
   return { text: '正常', color: 'green' }
 }
 const lastVal = (s: RangeSeries) => (s.values.length ? s.values[s.values.length - 1][1] : 0)
+const nameOf = (s: RangeSeries) => seriesLabel(s.metric)
 
-// 内联 SVG sparkline（轻量，避免每行一个图表组件）
-function Sparkline({ values, color, width = 88, height = 24 }: { values: number[]; color: string; width?: number; height?: number }) {
+function Sparkline({ values, color, width = 70, height = 22 }: { values: number[]; color: string; width?: number; height?: number }) {
   if (values.length < 2) return <div style={{ width, height }} />
   const min = Math.min(...values), max = Math.max(...values), rng = max - min || 1
   const step = width / (values.length - 1)
@@ -102,59 +120,83 @@ function Sparkline({ values, color, width = 88, height = 24 }: { values: number[
   return <svg width={width} height={height}><polyline fill="none" stroke={color} strokeWidth="1.3" points={pts.join(' ')} /></svg>
 }
 
-// ---------- 实时监控面板 ----------
+// ---------- 实时监控面板（Netdata 式：多指标同屏） ----------
 function MonitorPanel({ clusterId, clusterName, nsList }: { clusterId?: number; clusterName: string; nsList: string[] }) {
   const { token } = theme.useToken()
   const { mode } = useThemeMode()
   const chartTheme = mode === 'dark' ? ({ theme: 'classicDark' } as const) : {}
   const [dim, setDim] = useState('node')
-  const [metric, setMetric] = useState('cpu')
+  const [wlType, setWlType] = useState('all')
   const [min, setMin] = useState(30)
   const [ns, setNs] = useState('')
   const [kw, setKw] = useState('')
-  const [series, setSeries] = useState<RangeSeries[]>([])
+  const [seriesMap, setSeriesMap] = useState<Record<string, RangeSeries[]>>({})
   const [loading, setLoading] = useState(false)
 
+  const metricDefs = METRIC_DEFS[dim]
+
   useEffect(() => {
-    if (!clusterId) { setSeries([]); return }
+    if (!clusterId) { setSeriesMap({}); return }
     let alive = true
-    const promql = buildPromql(dim, metric, dim === 'node' ? '' : ns)
     const step = Math.max(15, Math.round(min * 60 / 80))
-    const fetchT = () => {
-      setLoading(true)
-      getClusterRange(clusterId, promql, min, step)
-        .then((d) => { if (alive) setSeries(d.series || []) })
-        .catch(() => { if (alive) setSeries([]) })
-        .finally(() => { if (alive) setLoading(false) })
+    const fetchOne = async (m: { value: string }) => {
+      try {
+        const promql = buildPromql(dim, m.value, dim === 'node' ? '' : ns, wlType)
+        const d = await getClusterRange(clusterId, promql, min, step)
+        if (alive) setSeriesMap((s) => ({ ...s, [m.value]: d.series || [] }))
+      } catch { /* ignore */ }
     }
-    fetchT()
-    const t = window.setInterval(fetchT, 30000)
+    setLoading(true)
+    Promise.all(metricDefs.map(fetchOne)).finally(() => { if (alive) setLoading(false) })
+    const t = window.setInterval(() => Promise.all(metricDefs.map(fetchOne)), 30000)
     return () => { alive = false; window.clearInterval(t) }
-  }, [clusterId, dim, metric, min, ns])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusterId, dim, wlType, min, ns])
 
-  const unit = unitOf(dim, metric)
-  const filtered = useMemo(() => {
+  // 名称搜索过滤（作用于各指标系列）
+  const filteredMap = useMemo(() => {
     const k = kw.trim().toLowerCase()
-    if (!k) return series
-    return series.filter((s) => seriesLabel(s.metric).toLowerCase().includes(k))
-  }, [series, kw])
-  const rows = useMemo(() =>
-    [...filtered].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 6)
-      .flatMap((s) => s.values.map(([ts, v]) => ({ t: hhmmss(ts), v: Number(v.toFixed(3)), name: seriesLabel(s.metric) })))
-      .sort((a, b) => a.t.localeCompare(b.t)), [filtered])
-  const top = useMemo(() =>
-    [...filtered].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 40)
-      .map((s) => ({ name: seriesLabel(s.metric), v: lastVal(s), values: s.values.map(([, v]) => v) })), [filtered])
-  const maxT = Math.max(...top.map((x) => x.v), 1)
+    if (!k) return seriesMap
+    const out: Record<string, RangeSeries[]> = {}
+    for (const key of Object.keys(seriesMap)) out[key] = seriesMap[key].filter((s) => seriesLabel(s.metric).toLowerCase().includes(k))
+    return out
+  }, [seriesMap, kw])
 
-  const valColor = (v: number) => (unit === '%' ? (v >= 85 ? '#ef4444' : v >= 70 ? '#f59e0b' : token.colorPrimary) : token.colorPrimary)
+  // 每个指标：Top6 曲线数据
+  const rowsOf = (m: string) => {
+    const series = filteredMap[m] || []
+    return [...series].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 6)
+      .flatMap((s) => s.values.map(([ts, v]) => ({ t: hhmmss(ts), v: Number(v.toFixed(3)), name: seriesLabel(s.metric) })))
+      .sort((a, b) => a.t.localeCompare(b.t))
+  }
+  // 合并 Top 表：以 CPU 系列为主序，补齐其它指标当前值
+  const items = useMemo(() => {
+    const cpu = filteredMap['cpu'] || []
+    const lastOf = (m: string) => Object.fromEntries((filteredMap[m] || []).map((s) => [nameOf(s), lastVal(s)]))
+    const mem = lastOf('mem'), net = lastOf('net'), disk = lastOf('disk'), load = lastOf('load')
+    return [...cpu].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 20).map((s) => {
+      const n = nameOf(s)
+      return { name: n, cpu: lastVal(s), mem: mem[n], net: net[n], disk: disk?.[n], load: load?.[n], cpuVals: s.values.map(([, v]) => v) }
+    })
+  }, [filteredMap])
+
+  const cols = [
+    { title: '名称', key: 'name', width: 200, render: (x: any) => <Tooltip title={x.name}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', maxWidth: 190 }}>{x.name}</span></Tooltip> },
+    { title: 'CPU', key: 'cpu', render: (x: any) => <span style={{ color: token.colorPrimary }}>{fmtVal(x.cpu, unitOf(dim, 'cpu'))}</span> },
+    { title: '内存', key: 'mem', render: (x: any) => fmtVal(x.mem, unitOf(dim, 'mem')) },
+    { title: '网络', key: 'net', render: (x: any) => fmtVal(x.net, 'bytes/s') },
+  ]
+  if (dim === 'node') {
+    cols.push({ title: '磁盘', key: 'disk', render: (x: any) => fmtVal(x.disk, '%') })
+    cols.push({ title: '负载', key: 'load', render: (x: any) => fmtVal(x.load, '') })
+  }
 
   return (
     <Card size="small" variant="borderless"
-      title={<Space>实时监控<Tag color="blue">{clusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>节点 / 工作负载 / 容器 × CPU / 内存 / 网络</span></Space>}
+      title={<Space>实时监控<Tag color="blue">{clusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>CPU / 内存 / 网络{ dim === 'node' ? ' / 磁盘 / 负载' : '' } 同屏，按维度下钻</span></Space>}
       extra={<Space wrap>
         <Segmented size="small" value={dim} onChange={(v) => setDim(v as string)} options={DIMS} />
-        <Segmented size="small" value={metric} onChange={(v) => setMetric(v as string)} options={METRICS} />
+        {dim === 'workload' && <Segmented size="small" value={wlType} onChange={(v) => setWlType(v as string)} options={WL_TYPES} />}
         <Segmented size="small" value={min} onChange={(v) => setMin(v as number)} options={WINDOWS} />
       </Space>}>
       <Space wrap style={{ marginBottom: 10 }}>
@@ -162,38 +204,31 @@ function MonitorPanel({ clusterId, clusterName, nsList }: { clusterId?: number; 
           <Select allowClear showSearch size="small" style={{ width: 170 }} placeholder="命名空间" value={ns || undefined}
             onChange={(v) => setNs(v || '')} options={nsList.map((n) => ({ value: n, label: n }))} />
         )}
-        <Input allowClear size="small" prefix={<SearchOutlined />} placeholder="搜索名称/关键字" style={{ width: 210 }}
+        <Input allowClear size="small" prefix={<SearchOutlined />} placeholder="搜索名称/关键字" style={{ width: 200 }}
           value={kw} onChange={(e) => setKw(e.target.value)} />
-        <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{filtered.length}/{series.length} 条</span>
+        <span style={{ fontSize: 12, color: token.colorTextSecondary }}>曲线各取 Top6，下表按 CPU 排序</span>
       </Space>
-      <Row gutter={16}>
-        <Col xs={24} lg={15}>
-          {loading && rows.length === 0 ? <div style={{ padding: 30, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
-            : rows.length === 0 ? <Empty description="无数据（需该集群部署 Prometheus）" />
-              : <Line height={280} data={rows} xField="t" yField="v" colorField="name" smooth
-                point={{ size: 2, shape: 'circle' }} {...chartTheme}
-                axis={{ x: { labelAutoRotate: true, labelFormatter: (t: string) => t.slice(3, 8) } }}
-                legend={{ color: { position: 'top' } }} />}
-        </Col>
-        <Col xs={24} lg={9}>
-          <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
-            <span>当前值 Top（按最新）</span><span style={{ color: token.colorText }}>{fmtVal(maxT, unit)}</span>
-          </div>
-          {top.length === 0 ? <Empty description="无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            : <div style={{ maxHeight: 280, overflow: 'auto', paddingRight: 4 }}>
-                {top.map((x, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', borderBottom: `1px solid ${token.colorFillSecondary}` }}>
-                    <span style={{ width: 18, textAlign: 'right', color: token.colorTextSecondary, fontSize: 12 }}>{i + 1}</span>
-                    <Tooltip title={x.name}>
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{x.name}</span>
-                    </Tooltip>
-                    <Sparkline values={x.values.slice(-40)} color={valColor(x.v)} />
-                    <b style={{ width: 86, textAlign: 'right', fontSize: 12, color: valColor(x.v) }}>{fmtVal(x.v, unit)}</b>
-                  </div>
-                ))}
-              </div>}
-        </Col>
+
+      {/* 多指标同屏曲线 */}
+      <Row gutter={12} style={{ marginBottom: 10 }}>
+        {metricDefs.map((m) => {
+          const rows = rowsOf(m.value)
+          return (
+            <Col key={m.value} flex="1" style={{ minWidth: 200 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: token.colorText, marginBottom: 4 }}>{m.label}</div>
+              {rows.length === 0
+                ? <Empty description="无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 8 }} />
+                : <Line height={190} data={rows} xField="t" yField="v" colorField="name" smooth
+                  point={{ size: 1.5, shape: 'circle' }} {...chartTheme}
+                  axis={{ x: { label: null } }} legend={false} />}
+            </Col>
+          )
+        })}
       </Row>
+
+      {/* 合并 Top 表 */}
+      <Table size="small" rowKey="name" pagination={false} loading={loading && items.length === 0} dataSource={items}
+        columns={cols} locale={{ emptyText: <Empty description="无数据（需该集群部署 Prometheus）" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} />
     </Card>
   )
 }
@@ -230,7 +265,7 @@ export default function Screen() {
   }, [effCluster])
 
   const core = data?.core
-  const trend = (data?.alert_trend && data.alert_trend.length ? data.alert_trend : data?.trend_24h) || []
+  const trend24 = data?.trend_24h || []
   const abnormal = (data?.abnormal_pods || []).filter((p) => sel === 'all' || p.cluster_name === shown[0]?.name).slice(0, 12)
   const faultTop = data?.fault_top || []
   const statusDist = (data?.status_dist || []) as { status?: string; count?: number }[]
@@ -283,12 +318,18 @@ export default function Screen() {
         ))}
       </Row>
 
-      {/* 集群健康墙 + 实时监控 */}
+      {/* 实时监控（主角，整行） */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-        <Col xs={24} lg={9}>
-          <Card size="small" title="集群健康墙" variant="borderless" style={{ height: '100%' }}
-            extra={<Tag color="blue">{shown.length} 集群</Tag>}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Col span={24}>
+          <MonitorPanel clusterId={effCluster} clusterName={effClusterName} nsList={nsList} />
+        </Col>
+      </Row>
+
+      {/* 集群健康墙 + 告警趋势（对等） */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        <Col xs={24} lg={12}>
+          <Card size="small" title="集群健康墙" variant="borderless" extra={<Tag color="blue">{shown.length} 集群</Tag>}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 260 }}>
               {shown.map((c) => {
                 const r = riskLevel(c)
                 return (
@@ -328,49 +369,47 @@ export default function Screen() {
             </div>
           </Card>
         </Col>
-        <Col xs={24} lg={15}>
-          <MonitorPanel clusterId={effCluster} clusterName={effClusterName} nsList={nsList} />
+        <Col xs={24} lg={12}>
+          <Card size="small" title="告警趋势（24h）" variant="borderless">
+            <div style={{ minHeight: 260 }}>
+              {trend24.length > 0 ? (
+                <Line height={260} data={trend24.flatMap((p) => {
+                  const g = p as { hour?: string; alerts: number; healed: number }
+                  return [{ hour: g.hour || '', type: '告警', value: g.alerts }, { hour: g.hour || '', type: '已解决', value: g.healed }]
+                })} xField="hour" yField="value" colorField="type" smooth point={{ size: 2 }} {...chartTheme} legend={{ color: { position: 'top' } }} />
+              ) : <Empty description="暂无趋势数据" />}
+            </div>
+          </Card>
         </Col>
       </Row>
 
-      {/* 告警趋势 / 异常 Pod / 故障 Top */}
+      {/* 异常 Pod + 故障 Top（对等） */}
       <Row gutter={[12, 12]}>
-        <Col xs={24} lg={9}>
-          <Card size="small" title="告警趋势（24h）" variant="borderless">
-            {trend.length > 0 ? (
-              <Line height={200} data={trend.flatMap((p) => {
-                const g = p as { hour?: string; time?: string; alerts: number; healed: number }
-                const h = g.hour || g.time || ''
-                return [{ hour: h, type: '告警', value: g.alerts }, { hour: h, type: '已解决', value: g.healed }]
-              })} xField="hour" yField="value" colorField="type" smooth {...chartTheme} legend={{ color: { position: 'top' } }} />
-            ) : <Empty description="暂无趋势数据" />}
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
+        <Col xs={24} lg={12}>
           <Card size="small" title="异常 Pod" variant="borderless">
             <Table rowKey={(r) => `${r.cluster_name}/${r.namespace}/${r.pod_name}`} size="small" dataSource={abnormal} pagination={false}
               columns={[
-                { title: '命名空间', dataIndex: 'namespace', width: 110 },
+                { title: '命名空间', dataIndex: 'namespace', width: 130 },
                 { title: 'Pod', dataIndex: 'pod_name' },
-                { title: '故障', dataIndex: 'fault_type', width: 110, render: (v) => v ? <Tag color="volcano">{v}</Tag> : '-' },
-                { title: '次', dataIndex: 'alert_count', width: 50 },
+                { title: '故障', dataIndex: 'fault_type', width: 130, render: (v) => v ? <Tag color="volcano">{v}</Tag> : '-' },
+                { title: '次', dataIndex: 'alert_count', width: 60 },
               ]}
               locale={{ emptyText: <Empty description="无异常 Pod" /> }} />
           </Card>
         </Col>
-        <Col xs={24} lg={5}>
+        <Col xs={24} lg={12}>
           <Card size="small" title="故障类型 Top" variant="borderless">
             {faultTop.length === 0 ? <Empty description="暂无数据" /> : (
-              <div>
-                {faultTop.slice(0, 8).map((f, i) => {
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4 }}>
+                {faultTop.slice(0, 10).map((f, i) => {
                   const max = Math.max(...faultTop.map((x) => x.count), 1)
                   return (
-                    <div key={f.fault_type} style={{ marginBottom: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }}>{i + 1}. {f.fault_type}</span>
+                    <div key={f.fault_type}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '78%' }}>{i + 1}. {f.fault_type}</span>
                         <b>{f.count}</b>
                       </div>
-                      <div style={{ height: 5, background: token.colorFillSecondary, borderRadius: 3, marginTop: 3 }}>
+                      <div style={{ height: 7, background: token.colorFillSecondary, borderRadius: 3, marginTop: 4 }}>
                         <div style={{ width: `${(f.count / max) * 100}%`, height: '100%', borderRadius: 3, background: token.colorPrimary }} />
                       </div>
                     </div>
