@@ -508,6 +508,21 @@ export const installAdmission = (data: Payload) =>
 export const uninstallAdmission = (data: Payload) =>
   http.post<Payload>('/resource-governance/admission/uninstall', data)
 
+// 命名空间资源限制（P0-R1·B 方案：LimitRange + 可选 ResourceQuota；创建才生效）
+export interface NsLimitStatus {
+  namespace: string; limitrange_installed: boolean; quota_installed: boolean
+  limitrange_yaml: string; quota_yaml: string
+  others: { limitrange: string[]; resourcequota: string[] }; hint: string
+}
+export const getNsLimitStatus = (clusterId: number, namespace: string) =>
+  http.get<NsLimitStatus>('/resource-governance/ns-limit/status', { params: { cluster_id: clusterId, namespace } })
+export const previewNsLimit = (data: Payload) =>
+  http.post<Payload>('/resource-governance/ns-limit/preview', data)
+export const applyNsLimit = (data: Payload) =>
+  http.post<Payload>('/resource-governance/ns-limit/apply', data)
+export const deleteNsLimit = (data: Payload) =>
+  http.post<Payload>('/resource-governance/ns-limit/delete', data)
+
 export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
   http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
 

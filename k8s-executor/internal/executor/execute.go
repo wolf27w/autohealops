@@ -378,6 +378,38 @@ func (e *Executor) execGet(ctx context.Context, pc *ParsedCommand, ns string) (s
 			b.WriteString(fmt.Sprintf("node %s: %s %s roles=%v\n", n.Name, ready, sched, roles))
 		}
 		return b.String(), nil
+	case "limitrange", "limitranges":
+		list, err := e.clientset.CoreV1().LimitRanges(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		if len(list.Items) == 0 {
+			return "(该命名空间无 LimitRange)", nil
+		}
+		var b strings.Builder
+		for _, lr := range list.Items {
+			b.WriteString(fmt.Sprintf("LimitRange %s\n", lr.Name))
+			for _, it := range lr.Spec.Limits {
+				b.WriteString(fmt.Sprintf("  type=%s default=%v defaultRequest=%v\n", it.Type, it.Default, it.DefaultRequest))
+			}
+		}
+		return b.String(), nil
+	case "resourcequota", "resourcequotas", "quota", "quotas":
+		list, err := e.clientset.CoreV1().ResourceQuotas(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		if len(list.Items) == 0 {
+			return "(该命名空间无 ResourceQuota)", nil
+		}
+		var b strings.Builder
+		for _, q := range list.Items {
+			b.WriteString(fmt.Sprintf("ResourceQuota %s\n", q.Name))
+			for k, v := range q.Spec.Hard {
+				b.WriteString(fmt.Sprintf("  hard %s=%s\n", k, v.String()))
+			}
+		}
+		return b.String(), nil
 	default:
 		return "", fmt.Errorf("get %s 暂不支持", pc.Resource)
 	}

@@ -5,8 +5,9 @@ import { PlusOutlined, ReloadOutlined, FundOutlined } from '@ant-design/icons'
 import {
   getClusters, getResourceGovernance, upsertResourceGovernance, deleteResourceGovernance, getResourceGovernancePeak,
   getAdmissionStatus, installAdmission, uninstallAdmission,
+  getNsLimitStatus, previewNsLimit, applyNsLimit, deleteNsLimit,
 } from '../services/api'
-import type { ResourceGovernanceRule, PeakResult, AdmissionStatus } from '../services/api'
+import type { ResourceGovernanceRule, PeakResult, AdmissionStatus, NsLimitStatus } from '../services/api'
 import type { Cluster } from '../types'
 
 export default function ResourceGovernance() {
@@ -23,6 +24,12 @@ export default function ResourceGovernance() {
   const [peakLoading, setPeakLoading] = useState(false)
   const [admission, setAdmission] = useState<AdmissionStatus | null>(null)
   const [admLoading, setAdmLoading] = useState(false)
+  // 命名空间资源限制（LimitRange/Quota）
+  const [nsNs, setNsNs] = useState('')
+  const [nsStatus, setNsStatus] = useState<NsLimitStatus | null>(null)
+  const [nsLoading, setNsLoading] = useState(false)
+  const [nsPreview, setNsPreview] = useState<{ kind: string; name: string; yaml: string }[]>([])
+  const [nsForm, setNsForm] = useState({ cpuReq: '200m', memReq: '256Mi', cpuLim: '', memLim: '', quotaOn: false, qCpuLim: '', qMemLim: '', qPods: '' })
 
   useEffect(() => {
     getClusters().then((d) => setClusters(d || [])).catch(() => {})
@@ -90,6 +97,45 @@ export default function ResourceGovernance() {
     finally { setAdmLoading(false) }
   }
 
+  // ---- 命名空间资源限制 ----
+  const loadNsLimit = useCallback(() => {
+    if (!clusterId || !nsNs) { setNsStatus(null); setNsPreview([]); return }
+    setNsLoading(true)
+    getNsLimitStatus(clusterId, nsNs).then(setNsStatus).catch(() => setNsStatus(null)).finally(() => setNsLoading(false))
+  }, [clusterId, nsNs])
+  useEffect(() => { loadNsLimit() }, [loadNsLimit])
+
+  const nsBody = () => ({
+    cluster_id: clusterId, namespace: nsNs, force: true,
+    default_request: { cpu: nsForm.cpuReq, memory: nsForm.memReq },
+    default_limit: { cpu: nsForm.cpuLim, memory: nsForm.memLim },
+    quota: nsForm.quotaOn ? {
+      'requests.cpu': nsForm.qCpuLim, 'limits.cpu': nsForm.qCpuLim,
+      'requests.memory': nsForm.qMemLim, 'limits.memory': nsForm.qMemLim, pods: nsForm.qPods,
+    } : undefined,
+  })
+  const doNsPreview = async () => {
+    if (!clusterId || !nsNs) { message.warning('选择集群并填命名空间'); return }
+    try { const d = (await previewNsLimit(nsBody())) as unknown as { manifests?: { kind: string; name: string; yaml: string }[] }; setNsPreview(d?.manifests || []) }
+    catch (e) { message.error(String((e as Error)?.message || e)) }
+  }
+  const doNsApply = async () => {
+    if (!clusterId || !nsNs) return
+    setNsLoading(true)
+    try {
+      const d = (await applyNsLimit(nsBody())) as unknown as { steps?: { success: boolean }[] }
+      const ok = Array.isArray(d?.steps) && d.steps.every((s) => s.success)
+      message[ok ? 'success' : 'error'](ok ? '已下发（创建才生效）' : '部分失败')
+      loadNsLimit()
+    } catch (e) { message.error(String((e as Error)?.message || e)) } finally { setNsLoading(false) }
+  }
+  const doNsDelete = async () => {
+    if (!clusterId || !nsNs) return
+    setNsLoading(true)
+    try { await deleteNsLimit({ cluster_id: clusterId, namespace: nsNs }); message.success('已删除（不再限制）'); loadNsLimit() }
+    catch (e) { message.error(String((e as Error)?.message || e)) } finally { setNsLoading(false) }
+  }
+
   return (
     <div style={{ padding: 16 }}>
       <Card size="small" title="资源治理 · 管控表"
@@ -145,6 +191,63 @@ export default function ResourceGovernance() {
             </Space>
           }>
           <div style={{ color: '#888', fontSize: 12 }}>{admission?.hint || '选择集群后查看/下发准入配置（下发仅装配置，准入服务需在集群内运行）。'}</div>
+        </Card>
+      )}
+
+      {clusterId && (
+        <Card size="small" style={{ marginTop: 12 }}
+          title={<span>命名空间资源限制（LimitRange · <span style={{ color: '#888', fontWeight: 400 }}>创建才生效，不创建不限制</span>）</span>}
+          extra={
+            <Space>
+              <Input placeholder="命名空间" style={{ width: 150 }} value={nsNs} allowClear
+                onChange={(e) => setNsNs(e.target.value)} onPressEnter={loadNsLimit} />
+              <Button size="small" icon={<ReloadOutlined />} onClick={loadNsLimit}>检测</Button>
+              <Button size="small" onClick={doNsPreview} disabled={!nsNs}>预览</Button>
+              <Popconfirm title="下发到该命名空间？（创建才生效，仅补默认值、不改动已有对象）" onConfirm={doNsApply}>
+                <Button size="small" type="primary" loading={nsLoading} disabled={!nsNs}>下发</Button>
+              </Popconfirm>
+              <Popconfirm title="删除本平台下发的 LimitRange/Quota？（删除即不再限制）" onConfirm={doNsDelete}>
+                <Button size="small" danger loading={nsLoading} disabled={!nsNs}>删除</Button>
+              </Popconfirm>
+            </Space>
+          }>
+          <Space wrap style={{ marginBottom: 8 }}>
+            <span>默认请求 CPU</span>
+            <Input size="small" style={{ width: 90 }} value={nsForm.cpuReq} onChange={(e) => setNsForm({ ...nsForm, cpuReq: e.target.value })} />
+            <span>内存</span>
+            <Input size="small" style={{ width: 100 }} value={nsForm.memReq} onChange={(e) => setNsForm({ ...nsForm, memReq: e.target.value })} />
+            <span>默认上限 CPU</span>
+            <Input size="small" style={{ width: 90 }} value={nsForm.cpuLim} onChange={(e) => setNsForm({ ...nsForm, cpuLim: e.target.value })} />
+            <span>内存</span>
+            <Input size="small" style={{ width: 100 }} value={nsForm.memLim} onChange={(e) => setNsForm({ ...nsForm, memLim: e.target.value })} />
+          </Space>
+          <Space wrap style={{ marginBottom: 8 }}>
+            <Switch size="small" checked={nsForm.quotaOn} onChange={(v) => setNsForm({ ...nsForm, quotaOn: v })} />
+            <span>命名空间配额(ResourceQuota)</span>
+            {nsForm.quotaOn && (<>
+              <span>CPU 上限</span>
+              <Input size="small" style={{ width: 80 }} value={nsForm.qCpuLim} onChange={(e) => setNsForm({ ...nsForm, qCpuLim: e.target.value })} />
+              <span>内存上限</span>
+              <Input size="small" style={{ width: 90 }} value={nsForm.qMemLim} onChange={(e) => setNsForm({ ...nsForm, qMemLim: e.target.value })} />
+              <span>Pod 数</span>
+              <Input size="small" style={{ width: 70 }} value={nsForm.qPods} onChange={(e) => setNsForm({ ...nsForm, qPods: e.target.value })} />
+            </>)}
+          </Space>
+          <div style={{ fontSize: 12 }}>
+            {nsStatus ? (<>
+              <Tag color={nsStatus.limitrange_installed ? 'green' : 'default'}>{nsStatus.limitrange_installed ? 'LimitRange 已下发' : 'LimitRange 未下发'}</Tag>
+              <Tag color={nsStatus.quota_installed ? 'green' : 'default'}>{nsStatus.quota_installed ? 'Quota 已下发' : 'Quota 未下发'}</Tag>
+              {((nsStatus.others?.limitrange?.length || 0) + (nsStatus.others?.resourcequota?.length || 0)) > 0 && (
+                <Tag color="orange">该 ns 已有其它对象：{[...(nsStatus.others.limitrange || []), ...(nsStatus.others.resourcequota || [])].join('、')}（不会被改动）</Tag>
+              )}
+              <div style={{ color: '#888', marginTop: 4 }}>{nsStatus.hint}</div>
+            </>) : <span style={{ color: '#888' }}>输入命名空间后点「检测」查看状态；命名空间级对象，创建才生效。</span>}
+          </div>
+          {nsPreview.length > 0 && (
+            <pre style={{ marginTop: 8, background: '#f6f8fa', padding: 8, borderRadius: 6, fontSize: 11, maxHeight: 240, overflow: 'auto' }}>
+              {nsPreview.map((m) => m.yaml).join('\n')}
+            </pre>
+          )}
         </Card>
       )}
 
