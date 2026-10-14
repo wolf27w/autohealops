@@ -5,9 +5,9 @@ import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Se
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
-import { getDashboard, getClusterMetric, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getPodContainers } from '../services/api'
+import { getDashboard, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getPodContainers } from '../services/api'
 import type { DashboardData, ClusterHealthDetail } from '../types'
-import type { MonitoringItem, RangeSeries } from '../services/api'
+import type { RangeSeries } from '../services/api'
 import { useThemeMode } from '../utils/theme'
 
 function useClock() {
@@ -16,12 +16,6 @@ function useClock() {
   return now
 }
 
-const CONTAINER_METRICS = [
-  { value: 'container_cpu_top', label: 'CPU' },
-  { value: 'container_mem_top', label: '内存' },
-  { value: 'container_net_rx', label: '入站网络' },
-  { value: 'container_net_tx', label: '出站网络' },
-]
 const TREND_METRICS = [
   { value: 'node_cpu', label: '节点CPU%' },
   { value: 'node_mem', label: '节点内存%' },
@@ -67,10 +61,6 @@ export default function Screen() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [sel, setSel] = useState<number | 'all'>('all')
   const [loading, setLoading] = useState(false)
-  const [cMetric, setCMetric] = useState('container_cpu_top')
-  const [cItems, setCItems] = useState<MonitoringItem[]>([])
-  const [cUnit, setCUnit] = useState('')
-  const [cLoading, setCLoading] = useState(false)
   const [trendMetric, setTrendMetric] = useState('node_cpu')
   const [trendMin, setTrendMin] = useState(30)
   const [trendSeries, setTrendSeries] = useState<RangeSeries[]>([])
@@ -101,17 +91,9 @@ export default function Screen() {
     return a
   }, [shown])
 
-  // 容器监控：全部集群时取第一个集群，单集群时取所选
+  // 监控目标集群：全部集群时取第一个，单集群时取所选
   const effCluster = sel === 'all' ? details[0]?.id : sel
   const effClusterName = sel === 'all' ? (details[0]?.name || '-') : (details.find((c) => c.id === sel)?.name || '-')
-  useEffect(() => {
-    if (!effCluster) { setCItems([]); return }
-    setCLoading(true)
-    getClusterMetric(effCluster, cMetric, { namespace: fNs || undefined, pod: fPod || undefined, container: fCont || undefined })
-      .then((d) => { setCItems(d.items || []); setCUnit(d.unit || '') })
-      .catch(() => setCItems([]))
-      .finally(() => setCLoading(false))
-  }, [effCluster, cMetric, fNs, fPod, fCont])
 
   // 资源趋势（range）：Netdata 式曲线，30s 自刷
   useEffect(() => {
@@ -168,8 +150,13 @@ export default function Screen() {
   ]
 
   const enterFull = () => { const el = document.documentElement; el.requestFullscreen?.() }
-  const maxC = Math.max(...cItems.map((i) => i.value || 0), 1)
   const lastVal = (s: RangeSeries) => (s.values.length ? s.values[s.values.length - 1][1] : 0)
+  const topList = useMemo(() =>
+    [...trendSeries].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 12)
+      .map((s) => ({ name: seriesLabel(s.metric), v: lastVal(s) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [trendSeries])
+  const maxT = Math.max(...topList.map((x) => x.v), 1)
   const trendRows = useMemo(() => {
     const top = [...trendSeries].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 6)
     return top.flatMap((s) => {
@@ -257,7 +244,7 @@ export default function Screen() {
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col span={24}>
           <Card size="small" variant="borderless"
-            title={<Space>资源趋势<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（CPU/内存随时间·多序列，取自各集群 Prometheus）</span></Space>}
+            title={<Space>资源/容器监控<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（趋势曲线 + 当前值 Top；容器指标可下钻到 ns/Pod/容器）</span></Space>}
             extra={<Space wrap>
               <Segmented size="small" value={trendMetric} onChange={(v) => setTrendMetric(v as string)} options={TREND_METRICS} />
               <Segmented size="small" value={trendMin} onChange={(v) => setTrendMin(v as number)}
@@ -270,21 +257,42 @@ export default function Screen() {
                 onChange={(v) => setFPod(v || '')} options={podList.map((p) => ({ value: p.name, label: p.name }))} />
               <Select allowClear style={{ width: 150 }} placeholder="容器" value={fCont || undefined}
                 onChange={(v) => setFCont(v || '')} options={contList.map((c) => ({ value: c, label: c }))} />
-              <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选仅对「容器CPU/容器内存」生效（节点指标忽略）</span>
+              <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选仅对容器指标生效（节点指标忽略）</span>
             </Space>
-            {trendLoading && trendRows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
-              : trendRows.length === 0 ? <Empty description="无趋势数据（需该集群部署 Prometheus）" />
-                : <Line height={260} data={trendRows} xField="t" yField="v" colorField="name" smooth
-                  point={{ size: 2 }} {...chartTheme}
-                  legend={{ color: { position: 'top' } }} />}
+            <Row gutter={12}>
+              <Col xs={24} md={16}>
+                {trendLoading && trendRows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
+                  : trendRows.length === 0 ? <Empty description="无趋势数据（需该集群部署 Prometheus）" />
+                    : <Line height={260} data={trendRows} xField="t" yField="v" colorField="name" smooth
+                      point={{ size: 2 }} {...chartTheme}
+                      legend={{ color: { position: 'top' } }} />}
+              </Col>
+              <Col xs={24} md={8}>
+                <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6 }}>当前值 Top（按最新）</div>
+                {topList.length === 0 ? <Empty description="无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  : <div style={{ maxHeight: 260, overflow: 'auto' }}>
+                      {topList.map((x, i) => (
+                        <div key={i} style={{ marginBottom: 6 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{x.name}</span>
+                            <b>{fmtVal(x.v, trendUnit)}</b>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 3, background: token.colorFillSecondary, marginTop: 2 }}>
+                            <div style={{ width: `${(x.v / maxT) * 100}%`, height: '100%', borderRadius: 3, background: token.colorPrimary }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>}
+              </Col>
+            </Row>
           </Card>
         </Col>
       </Row>
 
-      {/* Pod 聚合 + 容器监控 */}
+      {/* Pod 聚合 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-        <Col xs={24} lg={12}>
-          <Card size="small" title="Pod 聚合" variant="borderless" style={{ height: '100%' }}>
+        <Col span={24}>
+          <Card size="small" title="Pod 聚合" variant="borderless">
             <Row gutter={12}>
               <Col span={8}>
                 <Statistic title="Pod 总数" value={agg.pods} valueStyle={{ color: token.colorPrimary }} />
@@ -308,33 +316,6 @@ export default function Screen() {
                   locale={{ emptyText: <Empty description="无数据" /> }} />
               </Col>
             </Row>
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card size="small" variant="borderless" style={{ height: '100%' }}
-            title={<Space>容器监控<Tag color="blue">{effClusterName}</Tag>{sel === 'all' && <span style={{ fontSize: 12, color: token.colorTextSecondary }}>（全部集群时取第一个，选单集群查看其容器）</span>}</Space>}
-            extra={<Segmented size="small" value={cMetric} onChange={(v) => setCMetric(v as string)} options={CONTAINER_METRICS} />}>
-            {cLoading ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
-              : cItems.length === 0 ? <Empty description="无数据（需该集群部署 Prometheus）" />
-                : (
-                  <div style={{ maxHeight: 240, overflow: 'auto' }}>
-                    {cItems.slice(0, 20).map((it, i) => {
-                      const m = it.metric || {}
-                      const name = `${m.namespace || ''}/${m.pod || ''}${m.container ? ':' + m.container : ''}`
-                      return (
-                        <div key={i} style={{ marginBottom: 6 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '72%' }}>{name}</span>
-                            <b>{fmtVal(it.value, cUnit)}</b>
-                          </div>
-                          <div style={{ height: 6, borderRadius: 3, background: token.colorFillSecondary, marginTop: 2 }}>
-                            <div style={{ width: `${((it.value || 0) / maxC) * 100}%`, height: '100%', borderRadius: 3, background: token.colorPrimary }} />
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
           </Card>
         </Col>
       </Row>

@@ -56,11 +56,11 @@ METRIC_QUERIES: dict[str, dict] = {
     },
     "container_net_rx": {
         "label": "容器网络入站 Top", "unit": "bytes/s", "scope": "container",
-        "promql": 'topk(20, sum by(namespace, pod, container) (rate(container_network_receive_bytes_total{container!="",container!="POD"}[5m])))',
+        "promql": 'sum by(namespace, pod, container) (rate(container_network_receive_bytes_total{container!="",container!="POD"}[5m]))',
     },
     "container_net_tx": {
         "label": "容器网络出站 Top", "unit": "bytes/s", "scope": "container",
-        "promql": 'topk(20, sum by(namespace, pod, container) (rate(container_network_transmit_bytes_total{container!="",container!="POD"}[5m])))',
+        "promql": 'sum by(namespace, pod, container) (rate(container_network_transmit_bytes_total{container!="",container!="POD"}[5m]))',
     },
     # ---- 趋势用（无 topk，供 range 曲线） ----
     "container_cpu": {
@@ -140,4 +140,8 @@ def filtered_promql(metric: str, namespace: str = "", pod: str = "", container: 
         return f'sum by (pod, container) (rate(container_cpu_usage_seconds_total{{{_sel(namespace, pod, container)}}}[5m]))'
     if metric in ("container_mem_top", "container_mem"):
         return f'sum by (pod, container) (container_memory_working_set_bytes{{{_sel(namespace, pod, container)}}})'
+    if metric in ("container_net_rx",):
+        return f'sum by (pod, container) (rate(container_network_receive_bytes_total{{{_sel(namespace, pod, container)}}}[5m]))'
+    if metric in ("container_net_tx",):
+        return f'sum by (pod, container) (rate(container_network_transmit_bytes_total{{{_sel(namespace, pod, container)}}}[5m]))'
     return None
