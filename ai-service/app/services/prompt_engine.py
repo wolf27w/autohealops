@@ -68,7 +68,7 @@ DEFAULT_TEMPLATES = [
         "name": "pod_crash_diagnosis",
         "category": "diagnosis",
         "system_prompt": "你是一个Kubernetes故障诊断专家。请分析以下Pod崩溃问题并返回JSON格式的诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",
-        "user_prompt_template": "请诊断以下Pod崩溃问题：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n重启次数：{restart_count}\n状态信息：{status_info}\n最近事件（describe events）：\n{recent_events}",
+        "user_prompt_template": "请诊断以下Pod崩溃问题：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n重启次数：{restart_count}\n状态信息：{status_info}\n最近事件（describe events）：\n{recent_events}\n最近日志（容器日志，含上次崩溃实例）：\n{recent_logs}",
     },
     {
         "name": "node_pressure_diagnosis",

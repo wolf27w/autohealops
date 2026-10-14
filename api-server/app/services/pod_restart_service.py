@@ -133,6 +133,40 @@ async def _describe_pod(cluster_id: int, namespace: str, pod_name: str) -> str:
     return r.get("output", "") if r.get("success") else ""
 
 
+_LOG_ERR_HINTS = ("error", "exception", "warn", "caused by", "timeout", "timed out",
+                  "failed", "refused", "unhealthy", "503", "oom", "killed", "startup", "liveness", "readiness")
+
+
+async def _pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: int = 200) -> str:
+    """拉取容器日志（含上次崩溃实例）作为诊断上下文。
+
+    诊断不能只看事件——事件只说「探针失败」，日志才说清「为什么失败」。
+    优先取 --previous（上次被杀的实例，最接近崩溃现场），再取当前实例；多容器用 --all-containers。
+    为避免大批 INFO 日志淹没崩溃现场：每个来源取「关键错误/告警行」+「日志末尾」两段。
+    """
+    parts: list[str] = []
+    for flag, label in (("--previous", "上次实例(--previous)"), ("", "当前实例")):
+        cmd = f"logs {pod_name} --all-containers=true --tail={tail} {flag}".strip()
+        try:
+            r = await executor_client.acall(executor_client.execute_command, cluster_id, namespace, cmd)
+            txt = (r.get("output") or "").strip() if r.get("success") else ""
+        except Exception as e:  # noqa: BLE001
+            logger.warning("拉取 Pod %s/%s 日志异常(%s): %s", namespace, pod_name, label, e)
+            txt = ""
+        if not txt:
+            continue
+        lines = [ln for ln in txt.splitlines() if ln.strip()]
+        # 超长行（多为请求/响应 payload JSON）不应作为「关键错误行」，避免淹没有效信息
+        err_lines = [ln[:300] for ln in lines if len(ln) <= 400 and any(h in ln.lower() for h in _LOG_ERR_HINTS)][-25:]
+        tail_lines = [ln[:300] for ln in lines[-30:]]
+        seg = f"【{label}】"
+        if err_lines:
+            seg += "\n关键错误/告警行：\n" + "\n".join(err_lines)
+        seg += "\n日志末尾：\n" + "\n".join(tail_lines)
+        parts.append(seg)
+    return "\n\n".join(parts)
+
+
 async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
                         restart: int, prev_r: int, extra: str = "") -> int:
     """建单/聚合：同 Deployment 同 fault_type 在途不重复建单；返回新建告警 id（0=在途聚合未新建）
@@ -198,6 +232,7 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         return
 
     events_text = await _describe_pod(cluster_id, pod["namespace"], pod["name"])
+    logs_text = await _pod_logs(cluster_id, pod["namespace"], pod["name"])
     alert_data = {
         "alert_id": alert_id,
         "cluster_name": str(cluster_id),
@@ -208,6 +243,7 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         "restart_count": str(restart),
         "status_info": f"重启次数 {prev_r} -> {restart}",
         "recent_events": (events_text or "")[:3000],
+        "recent_logs": (logs_text or "")[:4000],
     }
     trace_id = generate_trace_id()
 

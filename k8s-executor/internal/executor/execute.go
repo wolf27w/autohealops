@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -63,6 +64,11 @@ func ParseCommand(command string) (*ParsedCommand, error) {
 		pc.Resource = "node"
 		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
 			pc.Name = fields[1]
+		}
+	case "logs":
+		// logs <pod> [-c container] [--previous] [--tail=N] [--all-containers=true]
+		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
+			pc.Resource, pc.Name = "pod", fields[1]
 		}
 	case "scale", "rollout", "delete", "describe", "get", "edit", "set":
 		if len(fields) >= 2 {
@@ -239,8 +245,10 @@ func (e *Executor) dispatch(ctx context.Context, pc *ParsedCommand) (string, err
 		return e.execDelete(ctx, pc, ns)
 	case "cordon", "uncordon":
 		return e.execCordon(ctx, pc)
+	case "logs":
+		return e.execLogs(ctx, pc, ns)
 	default:
-		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete/cordon/uncordon）", pc.Verb)
+		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete/cordon/uncordon/logs）", pc.Verb)
 	}
 }
 
@@ -511,6 +519,71 @@ func (e *Executor) execDelete(ctx context.Context, pc *ParsedCommand, ns string)
 		return fmt.Sprintf("pod %s deleted", pc.Name), nil
 	}
 	return "", fmt.Errorf("delete 仅支持 pod（高危操作走审批）")
+}
+
+// execLogs 拉取容器日志（client-go GetLogs）：支持 -c/--container、--previous、--tail=N、--all-containers=true
+func (e *Executor) execLogs(ctx context.Context, pc *ParsedCommand, ns string) (string, error) {
+	if pc.Name == "" {
+		return "", fmt.Errorf("logs 需指定 pod 名称")
+	}
+	previous := false
+	allContainers := false
+	container := ""
+	tail := int64(200)
+	for i, a := range pc.Args {
+		switch {
+		case a == "--previous" || a == "-p":
+			previous = true
+		case a == "--all-containers=true" || a == "--all-containers":
+			allContainers = true
+		case a == "-c" || a == "--container":
+			if i+1 < len(pc.Args) {
+				container = pc.Args[i+1]
+			}
+		case strings.HasPrefix(a, "--container="):
+			container = strings.TrimPrefix(a, "--container=")
+		case strings.HasPrefix(a, "--tail="):
+			fmt.Sscanf(strings.TrimPrefix(a, "--tail="), "%d", &tail)
+		case a == "--tail":
+			if i+1 < len(pc.Args) {
+				fmt.Sscanf(pc.Args[i+1], "%d", &tail)
+			}
+		}
+	}
+	pod, err := e.clientset.CoreV1().Pods(ns).Get(ctx, pc.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	var names []string
+	switch {
+	case allContainers:
+		for _, c := range pod.Spec.Containers {
+			names = append(names, c.Name)
+		}
+	case container != "":
+		names = []string{container}
+	case len(pod.Spec.Containers) > 0:
+		names = []string{pod.Spec.Containers[0].Name}
+	}
+	if len(names) == 0 {
+		return "", fmt.Errorf("pod %s 无容器", pc.Name)
+	}
+	t := tail
+	var b strings.Builder
+	for _, cn := range names {
+		opts := &corev1.PodLogOptions{Container: cn, TailLines: &t, Previous: previous}
+		bs, err := e.clientset.CoreV1().Pods(ns).GetLogs(pc.Name, opts).DoRaw(ctx)
+		if err != nil {
+			b.WriteString(fmt.Sprintf("--- container %s (previous=%v): <无日志: %v>\n", cn, previous, err))
+			continue
+		}
+		if len(names) > 1 {
+			b.WriteString(fmt.Sprintf("--- container %s (previous=%v) ---\n", cn, previous))
+		}
+		b.Write(bs)
+		b.WriteString("\n")
+	}
+	return b.String(), nil
 }
 
 func timeNowString() string {

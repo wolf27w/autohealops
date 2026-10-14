@@ -85,7 +85,7 @@ async def _collect_context(alert_data: dict) -> dict:
         pod = alert_data.get("pod_name", "")
         if pod:
             metrics_trend = await prom.get_pod_metrics(namespace, pod)
-            recent_logs = await es.search_logs(namespace, pod, tail=50)
+            recent_logs = (await es.search_logs(namespace, pod, tail=50)) or alert_data.get("recent_logs", "")
     elif fault_type in NODE_FAULTS:
         node = alert_data.get("node_name", "")
         if node:
@@ -127,7 +127,7 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "status_info": _sanitize_external(alert_data.get("status_info", "")),
         "conditions": _sanitize_external(alert_data.get("conditions", "")),
         "recent_events": _sanitize_external(alert_data.get("recent_events", "")),
-        "recent_logs": _sanitize_external(ctx.get("recent_logs", "")),
+        "recent_logs": _sanitize_external(ctx.get("recent_logs") or alert_data.get("recent_logs", "")),
         "metrics_trend": _sanitize_external(ctx.get("metrics_trend", "")),
         "exec_output": _sanitize_external(ctx.get("exec_output", "")),
         "sql_text": _sanitize_external(alert_data.get("sql_text", "")),
@@ -191,7 +191,7 @@ async def multi_diagnose(alert_data: dict, context_data: dict | None = None) -> 
         "status_info": _sanitize_external(alert_data.get("status_info", "")),
         "conditions": _sanitize_external(alert_data.get("conditions", "")),
         "recent_events": _sanitize_external(alert_data.get("recent_events", "")),
-        "recent_logs": _sanitize_external(ctx.get("recent_logs", "")),
+        "recent_logs": _sanitize_external(ctx.get("recent_logs") or alert_data.get("recent_logs", "")),
         "metrics_trend": _sanitize_external(ctx.get("metrics_trend", "")),
     }
     user_prompt = prompt_engine.render_template(tpl.user_prompt_template, render_ctx)
