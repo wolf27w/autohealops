@@ -621,7 +621,7 @@
 | R4 | 节点管理 + 均衡迁移 | ✅ 完成（差 drain 执行） | `NodeManagement.tsx`：节点列表 + **容量/使用率（cpu_pct/mem_pct）+ 多选批量 cordon/uncordon + 均衡计划（只读建议：热点/冷门 + 可迁移 Pod + 分批）**（`1912dc1`）；executor `get nodes/pods -o json`。未做：一键 drain 执行（需评估高风险）、调度到指定节点 |
 | R5 | 实时日志跟随 + 增强 | ✅ 完成 | executor 日志流 HTTP(:9099，client-go follow) + api-server WS + 前端 `PodLogStreamModal`（`ed17fbe`）；未做：Deployment 聚合日志跟随、gzip 下载 |
 | R6 | 实时状态推送（WebSocket） | ✅ 完成 | executor `/watch`（client-go Watch Pod+Deploy） + api-server WS + ServiceDetail 实时刷新（`e0bced3`） |
-| R7 | 统一监控大屏增强 | ✅ 完成 | 独立 `frontend/src/pages/Screen.tsx`（多集群总览/KPI/集群墙/风险徽章/异常 Pod Top10/故障 Top/趋势/单集群切换）（`4a22884`） |
+| R7 | 统一监控大屏增强 | ↩️ 已回退（待重做） | 自研 `Screen.tsx` 视觉未通过老板审美，**2026-10-14 已回退**（`3ba584a`）：`/screen` 恢复 `<Dashboard screen />`。建议改走**仪表盘加「监控」Tab 下钻**（非独立大屏） |
 | R8 | Pod 隔离 | ✅ 完成 | `resources.py`：`POST /clusters/{id}/namespaces/{ns}/pods/{pod}/isolate` |
 | R9 | MCP 标准接口 | ✅ 完成 | `api/mcp.py`（Streamable HTTP + JSON-RPC 2.0），已注册 `main.py` |
 | R10 | AI 助手增强 | ✅ 完成（基本） | 新增 `query_metrics`（自由 PromQL，`86e3010`）→ 自动进 agent + MCP 统一工具集；断线续传（会话/消息持久化）与全局记忆（知识库 rag_search）已有 |
@@ -633,8 +633,8 @@
 
 - **集群监控（Prometheus 数据源，2026-10-13 定稿）**
   - ✅ 即时查询：`prometheus_service.py` + `/api/v1/monitoring/*`（`/metrics`、`/clusters/{id}/metrics/{m}`、`/clusters/{id}/query`）
-  - ✅ **趋势（range）**：executor `/prom/range`（apiserver proxy → query_range）+ `/monitoring/clusters/{id}/metrics/{m}/range` + 大屏「资源趋势」曲线（`697096c`）
-  - ⬜ 待做：仪表盘改「告警｜监控」Tab + 监控下钻页、后台「监控数据源」配置
+  - ✅ **趋势（range）**：executor `/prom/range`（apiserver proxy → query_range）+ `/monitoring/clusters/{id}/metrics/{m}/range`（`697096c`）；前端展示已随大屏回退撤下
+  - ⬜ 待做：**仪表盘加「告警｜监控」Tab + 监控下钻页**（节点/工作负载/容器 × CPU/内存/网络，range 已就绪）、后台「监控数据源」配置
 - **Netdata 监控接入（2026-10-09 的 A–D）**：❌ 已整套回滚（2026-10-13，代码删除）；依赖它的**主机(ECS)/Docker 接入 + 诊断（B/D）**一并取消（无 `hosts` 模型）
 - **项目级审批（2026-10-09 E）**：✅ 完成——`projects.approval_flow_id`（迁移 `t3u4v5w6x7y8`）+ `approval_service._load_default_flow` 项目优先 + 前端 `ProjectManagement` 审批流程下拉
 
