@@ -1,6 +1,6 @@
 // 统一监控大屏（P1-R7）：多集群总览 —— 配色跟随系统主题（antd token，浅/深色自适应）
-// 数据源：/stats/dashboard（聚合/集群明细/趋势/异常 Pod/故障 Top）+ /monitoring（容器即时指标）
-import { useEffect, useMemo, useState } from 'react'
+// 数据源：/stats/dashboard（聚合/集群明细/趋势/异常 Pod/故障 Top）+ /monitoring（节点/容器即时与趋势）
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Segmented, theme } from 'antd'
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
@@ -16,11 +16,17 @@ function useClock() {
   return now
 }
 
-const TREND_METRICS = [
+const NODE_METRICS = [
   { value: 'node_cpu', label: '节点CPU%' },
   { value: 'node_mem', label: '节点内存%' },
+]
+const CONT_METRICS = [
   { value: 'container_cpu', label: '容器CPU' },
   { value: 'container_mem', label: '容器内存' },
+]
+const WINDOWS = [
+  { value: 10, label: '10m' }, { value: 30, label: '30m' },
+  { value: 60, label: '1h' }, { value: 180, label: '3h' },
 ]
 
 function seriesLabel(m: Record<string, string>): string {
@@ -32,7 +38,6 @@ function seriesLabel(m: Record<string, string>): string {
 function hhmmss(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour12: false })
 }
-
 function fmtBytes(v: number | null): string {
   if (v === null || v === undefined) return '-'
   const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
@@ -46,12 +51,113 @@ function fmtVal(v: number | null, unit: string): string {
   if (unit === 'core') return v.toFixed(3)
   return `${v.toFixed(1)}${unit}`
 }
-
 function riskLevel(c: ClusterHealthDetail): { text: string; color: string } {
   if (c.status !== 'healthy') return { text: '异常', color: 'red' }
   if ((c.cpu_pct ?? 0) >= 85 || (c.mem_pct ?? 0) >= 85) return { text: '高水位', color: 'orange' }
   if ((c.alert_pending ?? 0) > 0) return { text: '有待办', color: 'gold' }
   return { text: '正常', color: 'green' }
+}
+
+const lastVal = (s: RangeSeries) => (s.values.length ? s.values[s.values.length - 1][1] : 0)
+function trendRowsOf(series: RangeSeries[]) {
+  return [...series].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 6)
+    .flatMap((s) => {
+      const nm = seriesLabel(s.metric)
+      return s.values.map(([ts, v]) => ({ t: hhmmss(ts), v: Number(v.toFixed(3)), name: nm }))
+    })
+}
+function topListOf(series: RangeSeries[]) {
+  return [...series].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 12)
+    .map((s) => ({ name: seriesLabel(s.metric), v: lastVal(s) }))
+}
+
+// 单个监控面板：曲线 + 当前值 Top（可选维度筛选）
+function MonitorPanel(props: {
+  clusterId?: number; clusterName: string; title: ReactNode
+  metrics: { value: string; label: string }[]; defaultMetric: string
+  filters?: { namespace?: string; pod?: string; container?: string }
+  nsList?: string[]; contList?: string[]; podList?: { name: string }[]
+  onNs?: (v: string) => void; onCont?: (v: string) => void; onPod?: (v: string) => void
+  showFilters?: boolean
+}) {
+  const { token } = theme.useToken()
+  const { mode } = useThemeMode()
+  const chartTheme = mode === 'dark' ? ({ theme: 'classicDark' } as const) : {}
+  const [metric, setMetric] = useState(props.defaultMetric)
+  const [min, setMin] = useState(30)
+  const [series, setSeries] = useState<RangeSeries[]>([])
+  const [unit, setUnit] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const f = props.filters || {}
+  useEffect(() => {
+    if (!props.clusterId) { setSeries([]); return }
+    let alive = true
+    const step = Math.max(15, Math.round(min * 60 / 80))
+    const fetchT = () => {
+      setLoading(true)
+      getClusterMetricRange(props.clusterId!, metric, min, step,
+        { namespace: f.namespace || undefined, pod: f.pod || undefined, container: f.container || undefined })
+        .then((d) => { if (alive) { setSeries(d.series || []); setUnit(d.unit || '') } })
+        .catch(() => { if (alive) setSeries([]) })
+        .finally(() => { if (alive) setLoading(false) })
+    }
+    fetchT()
+    const t = window.setInterval(fetchT, 30000)
+    return () => { alive = false; window.clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.clusterId, metric, min, f.namespace, f.pod, f.container])
+
+  const rows = useMemo(() => trendRowsOf(series), [series])
+  const top = useMemo(() => topListOf(series), [series])
+  const maxT = Math.max(...top.map((x) => x.v), 1)
+
+  return (
+    <Card size="small" variant="borderless"
+      title={props.title}
+      extra={<Space wrap>
+        <Segmented size="small" value={metric} onChange={(v) => setMetric(v as string)} options={props.metrics} />
+        <Segmented size="small" value={min} onChange={(v) => setMin(v as number)} options={WINDOWS} />
+      </Space>}>
+      {props.showFilters && (
+        <Space wrap style={{ marginBottom: 10 }}>
+          <Select allowClear showSearch style={{ width: 170 }} placeholder="命名空间" value={f.namespace || undefined}
+            onChange={(v) => props.onNs?.(v || '')} options={(props.nsList || []).map((n) => ({ value: n, label: n }))} />
+          <Select allowClear showSearch style={{ width: 180 }} placeholder="容器" value={f.container || undefined}
+            onChange={(v) => props.onCont?.(v || '')} options={(props.contList || []).map((c) => ({ value: c, label: c }))} />
+          <Select allowClear showSearch style={{ width: 190 }} placeholder="Pod" value={f.pod || undefined}
+            onChange={(v) => props.onPod?.(v || '')} options={(props.podList || []).map((p) => ({ value: p.name, label: p.name }))} />
+          <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选容器→Pod 逐级下钻</span>
+        </Space>
+      )}
+      <Row gutter={12}>
+        <Col xs={24} md={16}>
+          {loading && rows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
+            : rows.length === 0 ? <Empty description="无数据（需该集群部署 Prometheus）" />
+              : <Line height={240} data={rows} xField="t" yField="v" colorField="name" smooth
+                point={{ size: 2 }} {...chartTheme}
+                legend={{ color: { position: 'top' } }} />}
+        </Col>
+        <Col xs={24} md={8}>
+          <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6 }}>当前值 Top（按最新）</div>
+          {top.length === 0 ? <Empty description="无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            : <div style={{ maxHeight: 240, overflow: 'auto' }}>
+                {top.map((x, i) => (
+                  <div key={i} style={{ marginBottom: 6 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '68%' }}>{x.name}</span>
+                      <b>{fmtVal(x.v, unit)}</b>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: token.colorFillSecondary, marginTop: 2 }}>
+                      <div style={{ width: `${(x.v / maxT) * 100}%`, height: '100%', borderRadius: 3, background: token.colorPrimary }} />
+                    </div>
+                  </div>
+                ))}
+              </div>}
+        </Col>
+      </Row>
+    </Card>
+  )
 }
 
 export default function Screen() {
@@ -62,17 +168,12 @@ export default function Screen() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [sel, setSel] = useState<number | 'all'>('all')
   const [loading, setLoading] = useState(false)
-  const [trendMetric, setTrendMetric] = useState('node_cpu')
-  const [trendMin, setTrendMin] = useState(30)
-  const [trendSeries, setTrendSeries] = useState<RangeSeries[]>([])
-  const [trendUnit, setTrendUnit] = useState('')
-  const [trendLoading, setTrendLoading] = useState(false)
   const [fNs, setFNs] = useState('')
-  const [fPod, setFPod] = useState('')
   const [fCont, setFCont] = useState('')
+  const [fPod, setFPod] = useState('')
   const [nsList, setNsList] = useState<string[]>([])
-  const [podList, setPodList] = useState<{ name: string }[]>([])
   const [contList, setContList] = useState<string[]>([])
+  const [podList, setPodList] = useState<{ name: string }[]>([])
 
   const load = () => {
     setLoading(true)
@@ -92,30 +193,12 @@ export default function Screen() {
     return a
   }, [shown])
 
-  // 监控目标集群：全部集群时取第一个，单集群时取所选
   const effCluster = sel === 'all' ? details[0]?.id : sel
   const effClusterName = sel === 'all' ? (details[0]?.name || '-') : (details.find((c) => c.id === sel)?.name || '-')
 
-  // 资源趋势（range）：Netdata 式曲线，30s 自刷
-  useEffect(() => {
-    if (!effCluster) { setTrendSeries([]); return }
-    let alive = true
-    const step = Math.max(15, Math.round(trendMin * 60 / 80))
-    const fetchT = () => {
-      setTrendLoading(true)
-      getClusterMetricRange(effCluster, trendMetric, trendMin, step, { namespace: fNs || undefined, pod: fPod || undefined, container: fCont || undefined })
-        .then((d) => { if (alive) { setTrendSeries(d.series || []); setTrendUnit(d.unit || '') } })
-        .catch(() => { if (alive) setTrendSeries([]) })
-        .finally(() => { if (alive) setTrendLoading(false) })
-    }
-    fetchT()
-    const t = window.setInterval(fetchT, 30000)
-    return () => { alive = false; window.clearInterval(t) }
-  }, [effCluster, trendMetric, trendMin, fNs, fPod, fCont])
-
   // 级联筛选：集群→namespace→容器/Pod
   useEffect(() => {
-    setFNs(''); setFPod(''); setFCont(''); setNsList([]); setPodList([]); setContList([])
+    setFNs(''); setFCont(''); setFPod(''); setNsList([]); setPodList([]); setContList([])
     if (!effCluster) return
     getClusterNamespaces(effCluster).then((d) => setNsList((d as string[]) || [])).catch(() => setNsList([]))
   }, [effCluster])
@@ -131,7 +214,7 @@ export default function Screen() {
   const abnormal = (data?.abnormal_pods || []).filter((p) => sel === 'all' || p.cluster_name === shown[0]?.name).slice(0, 10)
   const faultTop = data?.fault_top || []
   const statusDist = (data?.status_dist || []) as { status?: string; count?: number }[]
-  const chartTheme = mode === 'dark' ? ({ theme: 'classicDark' } as const) : {}
+  const chartTheme = (mode: string) => (mode === 'dark' ? ({ theme: 'classicDark' } as const) : {})
 
   const kpi = [
     { label: '集群', value: `${core?.cluster_healthy ?? 0}/${core?.cluster_total ?? 0}` },
@@ -145,21 +228,6 @@ export default function Screen() {
   ]
 
   const enterFull = () => { const el = document.documentElement; el.requestFullscreen?.() }
-  const lastVal = (s: RangeSeries) => (s.values.length ? s.values[s.values.length - 1][1] : 0)
-  const topList = useMemo(() =>
-    [...trendSeries].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 12)
-      .map((s) => ({ name: seriesLabel(s.metric), v: lastVal(s) })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [trendSeries])
-  const maxT = Math.max(...topList.map((x) => x.v), 1)
-  const trendRows = useMemo(() => {
-    const top = [...trendSeries].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 6)
-    return top.flatMap((s) => {
-      const nm = seriesLabel(s.metric)
-      return s.values.map(([ts, v]) => ({ t: hhmmss(ts), v: Number(v.toFixed(3)), name: nm }))
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trendSeries])
 
   return (
     <div style={{ minHeight: '100vh', background: token.colorBgLayout, padding: 16 }}>
@@ -196,7 +264,7 @@ export default function Screen() {
         ))}
       </Row>
 
-      {/* 集群墙 + 趋势 */}
+      {/* 集群墙 + 告警趋势 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={24} lg={15}>
           <Card size="small" title="集群总览（节点 / 工作负载 / Pod / 水位 / 待办）" variant="borderless" style={{ height: '100%' }}>
@@ -228,59 +296,31 @@ export default function Screen() {
                 const g = p as { hour?: string; time?: string; alerts: number; healed: number }
                 const h = g.hour || g.time || ''
                 return [{ hour: h, type: '告警', value: g.alerts }, { hour: h, type: '已解决', value: g.healed }]
-              })} xField="hour" yField="value" colorField="type" smooth {...chartTheme}
+              })} xField="hour" yField="value" colorField="type" smooth {...chartTheme(mode)}
                 legend={{ color: { position: 'top' } }} />
             ) : <Empty description="暂无趋势数据" />}
           </Card>
         </Col>
       </Row>
 
-      {/* 资源趋势（Netdata 式曲线） */}
+      {/* 节点监控 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col span={24}>
-          <Card size="small" variant="borderless"
-            title={<Space>资源/容器监控<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（趋势曲线 + 当前值 Top；容器指标可下钻到 ns/Pod/容器）</span></Space>}
-            extra={<Space wrap>
-              <Segmented size="small" value={trendMetric} onChange={(v) => setTrendMetric(v as string)} options={TREND_METRICS} />
-              <Segmented size="small" value={trendMin} onChange={(v) => setTrendMin(v as number)}
-                options={[{ value: 10, label: '10m' }, { value: 30, label: '30m' }, { value: 60, label: '1h' }, { value: 180, label: '3h' }]} />
-            </Space>}>
-            <Space wrap style={{ marginBottom: 10 }}>
-              <Select allowClear showSearch style={{ width: 170 }} placeholder="命名空间" value={fNs || undefined}
-                onChange={(v) => setFNs(v || '')} options={nsList.map((n) => ({ value: n, label: n }))} />
-              <Select allowClear showSearch style={{ width: 180 }} placeholder="容器" value={fCont || undefined}
-                onChange={(v) => setFCont(v || '')} options={contList.map((c) => ({ value: c, label: c }))} />
-              <Select allowClear showSearch style={{ width: 190 }} placeholder="Pod" value={fPod || undefined}
-                onChange={(v) => setFPod(v || '')} options={podList.map((p) => ({ value: p.name, label: p.name }))} />
-              <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选仅对容器指标生效（节点指标忽略）</span>
-            </Space>
-            <Row gutter={12}>
-              <Col xs={24} md={16}>
-                {trendLoading && trendRows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
-                  : trendRows.length === 0 ? <Empty description="无趋势数据（需该集群部署 Prometheus）" />
-                    : <Line height={260} data={trendRows} xField="t" yField="v" colorField="name" smooth
-                      point={{ size: 2 }} {...chartTheme}
-                      legend={{ color: { position: 'top' } }} />}
-              </Col>
-              <Col xs={24} md={8}>
-                <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6 }}>当前值 Top（按最新）</div>
-                {topList.length === 0 ? <Empty description="无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                  : <div style={{ maxHeight: 260, overflow: 'auto' }}>
-                      {topList.map((x, i) => (
-                        <div key={i} style={{ marginBottom: 6 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{x.name}</span>
-                            <b>{fmtVal(x.v, trendUnit)}</b>
-                          </div>
-                          <div style={{ height: 6, borderRadius: 3, background: token.colorFillSecondary, marginTop: 2 }}>
-                            <div style={{ width: `${(x.v / maxT) * 100}%`, height: '100%', borderRadius: 3, background: token.colorPrimary }} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>}
-              </Col>
-            </Row>
-          </Card>
+          <MonitorPanel clusterId={effCluster} clusterName={effClusterName}
+            title={<Space>节点监控<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（每节点 CPU/内存趋势与当前值）</span></Space>}
+            metrics={NODE_METRICS} defaultMetric="node_cpu" />
+        </Col>
+      </Row>
+
+      {/* 容器监控 */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        <Col span={24}>
+          <MonitorPanel clusterId={effCluster} clusterName={effClusterName}
+            title={<Space>容器监控<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（容器 CPU/内存趋势与当前值，按命名空间/容器/Pod 下钻）</span></Space>}
+            metrics={CONT_METRICS} defaultMetric="container_cpu" showFilters
+            filters={{ namespace: fNs, pod: fPod, container: fCont }}
+            nsList={nsList} contList={contList} podList={podList}
+            onNs={setFNs} onCont={setFCont} onPod={setFPod} />
         </Col>
       </Row>
 
@@ -303,10 +343,10 @@ export default function Screen() {
               <Col span={16}>
                 <Table size="small" rowKey="name" pagination={false} dataSource={shown}
                   columns={[
-                    { title: '集群', dataIndex: 'name', width: 110 },
-                    { title: 'Pod', dataIndex: 'pods', width: 70 },
-                    { title: '工作负载', dataIndex: 'workloads', width: 90 },
-                    { title: '命名空间', dataIndex: 'namespaces', width: 90 },
+                    { title: '集群', dataIndex: 'name', width: 120 },
+                    { title: 'Pod', dataIndex: 'pods', width: 80 },
+                    { title: '工作负载', dataIndex: 'workloads', width: 100 },
+                    { title: '命名空间', dataIndex: 'namespaces', width: 100 },
                   ]}
                   locale={{ emptyText: <Empty description="无数据" /> }} />
               </Col>
