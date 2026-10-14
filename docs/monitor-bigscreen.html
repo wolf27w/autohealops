@@ -438,205 +438,236 @@ function renderCluster(){
 function switchTab(t){ CV.tab=t; renderCluster(); }
 function dismissBanner(){ CV.from=null; renderCluster(); }
 
-function renderService(){
-  // 两级筛选：ns 标签 + 类型标签（带数量角标）；再服务下拉
-  let ns = CV.ns || NS_LIST[0];
-  CV.ns = ns;
-  const typeCount = {};
-  TYPES.forEach(t=>{ typeCount[t.k] = servicesOf(ns,t.k).length; });
-  let type = CV.type || TYPES.find(t=>servicesOf(ns,t.k).length>0).k;
-  if(!servicesOf(ns,type)) type='deployment';
-  CV.type = type;
-  const list = servicesOf(ns,type);
-  // 默认选中：优先第一个异常
-  let svc = CV.svc;
-  if(!list.includes(svc)){ svc = list[0]; }
-  CV.svc = svc;
-  const d = svc ? svcDetail(CV.cluster, ns, type, svc) : null;
+/* ---- 真实数据工具（平台 API + Prometheus） ---- */
+async function promInstant(cid,q){ try{ const d=await apiGet('/monitoring/clusters/'+cid+'/query?promql='+encodeURIComponent(q)); return (d&&d.items)||[]; }catch(e){ return []; } }
+async function promRange(cid,q,min,step){ try{ const d=await apiGet('/monitoring/clusters/'+cid+'/range?promql='+encodeURIComponent(q)+'&minutes='+min+'&step='+(step||60)); return (d&&d.series)||[]; }catch(e){ return []; } }
+function mapBy(arr,key){ const m={}; (arr||[]).forEach(x=>{ const k=x.metric&&x.metric[key]; if(k!=null) m[k]=x.value; }); return m; }
+function sumObj(o){ return Object.values(o||{}).reduce((s,x)=>s+(x||0),0); }
+function parseCpuMilli(v){ if(!v) return 0; v=''+v; return v.endsWith('m')?parseFloat(v):Math.round(parseFloat(v)*1000); }
+function parseMemBytes(v){ if(!v) return 0; v=''+v; const u={Ki:1024,Mi:1048576,Gi:1073741824,Ti:1099511627776,K:1e3,M:1e6,G:1e9}; for(const k in u){ if(v.endsWith(k)) return parseFloat(v)*u[k]; } return parseFloat(v)||0; }
+function fmtBytes(n){ if(n==null||isNaN(n))return '-'; const u=['B','KiB','MiB','GiB','TiB']; let x=n,i=0; while(x>=1024&&i<u.length-1){x/=1024;i++;} return x.toFixed(i?1:0)+u[i]; }
+function dash(v){ return (v==null||v==='')?'-':v; }
+function podDot(s){ return s==='Running'?'green':(s==='Pending'?'yellow':'red'); }
+const WL_STRIP=/(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+|-[0-9a-f]{5,10})$/;
 
+async function openCluster(){
+  const cid=CV.cluster;
+  const [nsl,wls,nodes]=await Promise.all([
+    apiGet('/resources/clusters/'+cid+'/namespace-list').catch(()=>[]),
+    apiGet('/resources/clusters/'+cid+'/workloads?namespace=').catch(()=>[]),
+    apiGet('/resources/clusters/'+cid+'/nodes').catch(()=>[]),
+  ]);
+  CV.nsList=Array.isArray(nsl)?nsl:[]; CV.workloads=wls||[]; CV.nodes=nodes||[]; CV.loaded=true;
+  renderCluster();
+}
+
+function renderService(){
+  const wls=CV.workloads||[];
+  const nss=(CV.nsList&&CV.nsList.length)?CV.nsList:[...new Set(wls.map(w=>w.namespace))];
+  let ns=CV.ns; if(!ns||!nss.includes(ns)) ns=nss[0]||''; CV.ns=ns;
+  const inNs=wls.filter(w=>w.namespace===ns);
+  const cnt={deployment:inNs.filter(w=>w.kind==='deployment').length, statefulset:inNs.filter(w=>w.kind==='statefulset').length, daemonset:inNs.filter(w=>w.kind==='daemonset').length};
+  const TLAB={deployment:'无状态',statefulset:'有状态',daemonset:'DaemonSet'};
+  let type=CV.type||(['deployment','statefulset','daemonset'].find(k=>cnt[k]>0)||'deployment'); CV.type=type;
+  const list=inNs.filter(w=>w.kind===type);
+  let svc=CV.svc;
+  if(!list.some(w=>w.name===svc)) svc=(list.find(w=>(w.ready_replicas||0)<(w.replicas||0))||list[0]||{}).name;
+  CV.svc=svc;
   $('#cbody').innerHTML = `
   <div class="panel" style="margin-bottom:16px">
     <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
       <div><div class="xs dim" style="margin-bottom:6px">Namespace</div>
-        <div class="tabs">${NS_LIST.map(n=>`<div class="tab ${n===ns?'sel':''}" onclick="setNs('${n}')">${n}</div>`).join('')}</div></div>
+        <div class="tabs" style="max-height:70px;overflow:auto">${nss.map(n=>`<div class="tab ${n===ns?'sel':''}" onclick="setNs('${n}')">${n}</div>`).join('')}</div></div>
       <div><div class="xs dim" style="margin-bottom:6px">工作负载类型</div>
-        <div class="tabs">${TYPES.map(t=>`<div class="tab ${t.k===type?'sel':''}" onclick="setType('${t.k}')">${t.n}<span class="cnt">${typeCount[t.k]}</span></div>`).join('')}</div></div>
+        <div class="tabs">${['deployment','statefulset','daemonset'].map(k=>`<div class="tab ${k===type?'sel':''}" onclick="setType('${k}')">${TLAB[k]}<span class="cnt">${cnt[k]}</span></div>`).join('')}</div></div>
       <div><div class="xs dim" style="margin-bottom:6px">服务</div>
-        <select onchange="setSvc(this.value)">
-          ${list.length===0?`<option value="">（该类型下暂无服务）</option>`:
-            list.map(s=>`<option value="${s}" ${s===svc?'selected':''}>${s}${(s.includes('payment')||s.includes('order-core')||s.includes('api-gateway'))?' ⚠️':''}</option>`).join('')}
-        </select></div>
+        <select onchange="setSvc(this.value)">${list.length?list.map(w=>`<option value="${w.name}" ${w.name===svc?'selected':''}>${w.name}${(w.ready_replicas||0)<(w.replicas||0)?' ⚠️':''}</option>`).join(''):'<option value="">（该类型下暂无服务）</option>'}</select></div>
     </div>
   </div>
-  <div id="svcbody"></div>`;
-  if(d) renderServiceBody(d); else $('#svcbody').innerHTML = `<div class="empty">该命名空间 / 类型下暂无服务</div>`;
+  <div id="svcbody"><div class="empty">加载中…</div></div>`;
+  if(svc) renderServiceBody(); else $('#svcbody').innerHTML = `<div class="empty">该命名空间 / 类型下暂无服务</div>`;
 }
-function setNs(n){ CV.ns=n; CV.svc=null; renderService(); }
-function setType(t){ CV.type=t; CV.svc=null; renderService(); }
-function setSvc(s){ CV.svc=s; renderService(); }
+function setNs(n){ CV.ns=n; CV.svc=null; CV.pod=0; renderService(); }
+function setType(t){ CV.type=t; CV.svc=null; CV.pod=0; renderService(); }
+function setSvc(s){ CV.svc=s; CV.pod=0; renderService(); }
 
-function renderServiceBody(d){
-  const selPod = CV.pod || 0;
-  const sevTag = d.abnormal ? `<span class="tag red">异常</span>` : `<span class="tag green">正常</span>`;
-  $('#svcbody').innerHTML = `
-  <!-- 顶部信息 -->
+async function renderServiceBody(){
+  const cid=CV.cluster, ns=CV.ns, svc=CV.svc;
+  const wl=(CV.workloads||[]).find(w=>w.namespace===ns&&w.name===svc)||{name:svc,kind:CV.type,replicas:0,ready_replicas:0};
+  const pods=(await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods').catch(()=>[]))||[];
+  const mine=pods.filter(p=>p.name===svc||p.name.startsWith(svc+'-'));
+  const idx=(CV.pod<mine.length)?CV.pod:0; const pod=mine[idx]||null;
+  let contNames=[], contImg={}, contRestart={};
+  if(pod){
+    const detail=await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods/'+pod.name+'/detail').catch(()=>null);
+    ((detail&&detail.containers)||[]).forEach(c=>{ contNames.push(c.name); contImg[c.name]=c.image; contRestart[c.name]=c.restart_count; });
+    if(!contNames.length){ const cd=await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods/'+pod.name+'/containers').catch(()=>({containers:[]})); contNames=(cd&&cd.containers)||[]; }
+  }
+  let pts=[];
+  if(pod){ const pm=await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods/'+pod.name+'/metrics?range=1h').catch(()=>null); pts=(pm&&pm.points)||[]; }
+  const pf=`namespace="${ns}",pod="${pod?pod.name:''}",container!=""`;
+  let CCPU={},CMEM={},RST={},OOM={},THR={},RD={},WR={},NERR={},NETT={};
+  if(pod){
+    const [a,b,c,d,e,f,g,h,i]=await Promise.all([
+      promInstant(cid,`sum by(container)(rate(container_cpu_usage_seconds_total{${pf}}[5m]))`),
+      promInstant(cid,`sum by(container)(container_memory_working_set_bytes{${pf}})`),
+      promInstant(cid,`sum by(container)(kube_pod_container_status_restarts_total{namespace="${ns}",pod="${pod.name}"})`),
+      promInstant(cid,`sum by(container)(kube_pod_container_status_last_terminated_reason{reason="OOMKilled",namespace="${ns}",pod="${pod.name}"})`),
+      promInstant(cid,`sum by(container)(rate(container_cpu_cfs_throttled_seconds_total{${pf}}[5m]))`),
+      promInstant(cid,`sum by(container)(rate(container_fs_reads_bytes_total{${pf}}[5m]))`),
+      promInstant(cid,`sum by(container)(rate(container_fs_writes_bytes_total{${pf}}[5m]))`),
+      promInstant(cid,`sum by(container)(rate(container_network_receive_errors_total{${pf}}[5m]))`),
+      promInstant(cid,`sum by(container)(rate(container_network_transmit_errors_total{${pf}}[5m]))`),
+    ]);
+    CCPU=mapBy(a,'container'); CMEM=mapBy(b,'container'); RST=mapBy(c,'container'); OOM=mapBy(d,'container');
+    THR=mapBy(e,'container'); RD=mapBy(f,'container'); WR=mapBy(g,'container'); NERR=mapBy(h,'container'); NETT=mapBy(i,'container');
+  }
+  const cpuLim=parseCpuMilli(pod&&pod.cpu_limit), memLim=parseMemBytes(pod&&pod.memory_limit);
+  const cpuUsedMilli=sumObj(CCPU)*1000, memUsed=sumObj(CMEM);
+  const cpuPct=cpuLim?Math.min(999,Math.round(cpuUsedMilli/cpuLim*100)):null;
+  const memPct=memLim?Math.min(999,Math.round(memUsed/memLim*100)):null;
+  const desired=wl.replicas||0, ready=wl.ready_replicas||0, abnormal=ready<desired;
+  const rows=contNames.map(cn=>{
+    const bad=(RST[cn]||0)>0||(OOM[cn]||0)>0;
+    return `<tr class="${bad?'bad':''}"><td>${cn}</td><td class="dim">${contImg[cn]||'-'}</td>
+      <td>${CCPU[cn]!=null?CCPU[cn].toFixed(3)+' core':'-'}</td><td>${CMEM[cn]!=null?fmtBytes(CMEM[cn]):'-'}</td>
+      <td style="color:${(RST[cn]||0)>0?'var(--red)':''}">${RST[cn]!=null?RST[cn]:(contRestart[cn]||0)}</td>
+      <td style="color:${(OOM[cn]||0)>0?'var(--red)':''}">${OOM[cn]||0}</td>
+      <td style="color:${(THR[cn]||0)>0?'var(--yellow)':''}">${THR[cn]?(THR[cn]).toFixed(2)+'s/s':'-'}</td>
+      <td>${RD[cn]?fmtBytes(RD[cn])+'/s':'-'}</td><td>${WR[cn]?fmtBytes(WR[cn])+'/s':'-'}</td></tr>`;
+  }).join('');
+  const chips=mine.map((p,i)=>`<span class="chip ${i===idx?'sel':''} ${podDot(p.status)==='red'?'bad':''}" onclick="setPod(${i})"><span class="dot ${podDot(p.status)}"></span>${p.name.slice(-14)}</span>`).join('');
+  const xl=pts.length?pts.map(p=>String(p.sampled_at||'').slice(11,16)):times(24);
+  const cpuS=pts.map(p=>cpuLim?+((p.cpu_usage*1000)/cpuLim*100).toFixed(1):0);
+  const memS=pts.map(p=>memLim?+((p.memory_usage)/memLim*100).toFixed(1):0);
+  const rxS=pts.map(p=>+((p.network_rx||0)/1024).toFixed(1));
+  const txS=pts.map(p=>+((p.network_tx||0)/1024).toFixed(1));
+  $('#svcbody').innerHTML=`
   <div class="panel" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-      <span style="font-size:18px;font-weight:700">${d.name}</span>
-      <span class="tag gray">${{deployment:'Deployment',statefulset:'StatefulSet',daemonset:'DaemonSet'}[d.type]}</span>
-      ${sevTag}
-      <span class="sm">副本 <b style="color:${d.ready<d.desired?'var(--red)':'var(--green)'}">${d.ready}/${d.desired}</b></span>
-      <span class="sm">所在节点
-        <a class="btn" onclick="gotoNode('${d.podList[0].node}')">${d.podList[0].node} →</a></span>
+      <span style="font-size:18px;font-weight:700">${svc}</span>
+      <span class="tag gray">${{deployment:'Deployment',statefulset:'StatefulSet',daemonset:'DaemonSet'}[CV.type]}</span>
+      <span class="tag ${abnormal?'red':'green'}">${abnormal?'异常':'正常'}</span>
+      <span class="sm">副本 <b style="color:${abnormal?'var(--red)':'var(--green)'}">${ready}/${desired}</b></span>
+      ${pod&&pod.node?`<span class="sm">所在节点 <a class="btn" onclick="gotoNode('${String(pod.node).split(',')[0]}')">${pod.node} →</a></span>`:''}
     </div>
     <div class="sep"></div>
-    <div class="xs dim" style="margin-bottom:6px">Pod（点击切换，下方联动）</div>
-    <div>${d.podList.map((p,i)=>`
-      <span class="chip ${i===selPod?'sel':''} ${p.bad?'bad':''}" onclick="setPod(${i})">
-        <span class="dot ${p.status==='Running'?'green':(p.status==='Pending'?'yellow':'red')}"></span>${p.name.slice(-12)}
-      </span>`).join('')}</div>
+    <div class="xs dim" style="margin-bottom:6px">Pod（${mine.length}）</div>
+    <div>${chips||'<span class="dim xs">无匹配 Pod（可能名称前缀不同或未采集）</span>'}</div>
   </div>
 
-  <!-- 容器实例表 -->
-  <div class="panel" style="margin-bottom:16px">
-    <h3>容器实例 <span class="sub">主容器 + sidecar</span></h3>
-    <table><thead><tr>
-      <th>容器</th><th>镜像</th><th>CPU</th><th>内存</th><th>重启</th><th>OOMKilled</th><th>Throttled</th><th>磁盘读</th><th>磁盘写</th>
-    </tr></thead><tbody>
-      ${d.containers.map(c=>`<tr class="${c.bad?'bad':''}">
-        <td>${c.name}</td><td class="dim">${c.image}</td><td>${c.cpu}</td><td>${c.mem}</td>
-        <td style="color:${c.restarts>0?'var(--red)':''}">${c.restarts}</td>
-        <td style="color:${c.oom>0?'var(--red)':''}">${c.oom}</td>
-        <td style="color:${c.throttle!=='0s'?'var(--yellow)':''}">${c.throttle}</td>
-        <td>${c.diskR}</td><td>${c.diskW}</td>
-      </tr>`).join('')}
-    </tbody></table>
-  </div>
+  <div class="panel" style="margin-bottom:16px"><h3>容器实例 <span class="sub">主容器 + sidecar</span></h3>
+    <table><thead><tr><th>容器</th><th>镜像</th><th>CPU</th><th>内存</th><th>重启</th><th>OOMKilled</th><th>Throttled</th><th>磁盘读</th><th>磁盘写</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="9" class="dim">无容器数据</td></tr>'}</tbody></table></div>
 
-  <!-- 主容器 4 指标卡 -->
   <div class="row" style="margin-bottom:16px">
-    ${[
-      ['CPU 使用率', fmtPct(d.metrics.cpu.v), `限额 ${d.metrics.cpu.limit} · 请求 ${d.metrics.cpu.req}`, d.metrics.cpu.v],
-      ['内存使用率', fmtPct(d.metrics.mem.v), `限额 ${d.metrics.mem.limit} · 请求 ${d.metrics.mem.req}`, d.metrics.mem.v],
-      ['文件系统', fmtPct(d.metrics.fs.v), `写入 ${d.metrics.fs.read}`, d.metrics.fs.v],
-      ['网络重传', d.metrics.net.v+'%', `Rx 丢包 ${d.metrics.net.rx} · Tx ${d.metrics.net.tx}`, d.metrics.net.v*8],
-    ].map(([l,v,s,p])=>`
-      <div class="col metric"><div class="lbl">${l}</div>
-        <div class="val" style="color:${barColor(p)}">${v}</div>
-        <div class="sub">${s}</div></div>`).join('')}
+    ${[['CPU 使用率',cpuPct==null?'-':cpuPct+'%',`限额 ${dash(pod&&pod.cpu_limit)}`,cpuPct],
+       ['内存使用率',memPct==null?'-':memPct+'%',`限额 ${dash(pod&&pod.memory_limit)}`,memPct],
+       ['磁盘读/写',`${fmtBytes(sumObj(RD))}/${fmtBytes(sumObj(WR))}`,'容器文件系统(cAdvisor)',40],
+       ['网络错误/秒',`${sumObj(NERR).toFixed(2)}/${sumObj(NETT).toFixed(2)}`,'Rx/Tx errors',sumObj(NERR)>0?80:20]]
+      .map(([l,v,s,p])=>`<div class="col metric"><div class="lbl">${l}</div><div class="val" style="color:${barColor(p||0)}">${v}</div><div class="sub">${s}</div></div>`).join('')}
   </div>
-
-  <!-- 异常计数条 -->
   <div class="row" style="margin-bottom:16px">
-    ${[
-      ['容器重启次数', d.counters.restarts, d.counters.restarts>0],
-      ['OOMKilled 次数', d.counters.oom, d.counters.oom>0],
-      ['CPU Throttled', d.counters.throttle, d.counters.throttle!=='0s'],
-      ['网络重传次数', d.counters.retrans, d.counters.retrans>1000],
-    ].map(([l,v,bad])=>`
-      <div class="col cnt-box"><div class="n" style="color:${bad?'var(--red)':'var(--green)'}">${v}</div><div class="l">${l}</div></div>`).join('')}
+    ${[['容器重启次数',sumObj(RST),sumObj(RST)>0],['OOMKilled 次数',sumObj(OOM),sumObj(OOM)>0],
+       ['CPU Throttled',sumObj(THR).toFixed(1)+'s/s',sumObj(THR)>0],['网络错误/秒',sumObj(NERR).toFixed(2),sumObj(NERR)>0]]
+      .map(([l,v,b])=>`<div class="col cnt-box"><div class="n" style="color:${b?'var(--red)':'var(--green)'}">${v}</div><div class="l">${l}</div></div>`).join('')}
   </div>
-
-  <!-- 趋势图两张并排 -->
   <div class="row">
-    <div class="col panel"><h3>资源使用趋势（CPU / 内存）</h3><div id="ch-svc-res" class="chart" style="height:220px"></div></div>
-    <div class="col panel"><h3>网络质量趋势（Rx 丢包 / Tx 丢包 / 重传）</h3><div id="ch-svc-net" class="chart" style="height:220px"></div></div>
+    <div class="col panel"><h3>资源使用趋势（CPU / 内存 %）</h3><div id="ch-svc-res" class="chart" style="height:220px"></div></div>
+    <div class="col panel"><h3>网络流量趋势（Rx / Tx KiB，平台采样）</h3><div id="ch-svc-net" class="chart" style="height:220px"></div></div>
   </div>`;
-
-  const T = times(24);
-  mkChart('ch-svc-res', lineOpt(T, [
-    {name:'CPU%', data:d.trend.cpu},{name:'内存%', data:d.trend.mem}
-  ], ['#3b82f6','#22d3ee'], '%'));
-  mkChart('ch-svc-net', lineOpt(T, [
-    {name:'Rx 丢包%', data:d.trend.rxLoss},{name:'Tx 丢包%', data:d.trend.txLoss},{name:'重传', data:d.trend.retrans}
-  ], ['#e74c3c','#f39c12','#a855f7'], ''));
+  mkChart('ch-svc-res', lineOpt(xl,[{name:'CPU%',data:cpuS},{name:'内存%',data:memS}],['#3b82f6','#22d3ee'],'%'));
+  mkChart('ch-svc-net', lineOpt(xl,[{name:'Rx KiB',data:rxS},{name:'Tx KiB',data:txS}],['#22d3ee','#a855f7'],''));
 }
 function setPod(i){ CV.pod=i; renderService(); }
 function gotoNode(n){ CV.tab='node'; CV.node=n; CV.from=`节点 ${n}`; renderCluster(); }
 
 function renderNode(){
-  const nodes = nodesOf(CV.cluster);
-  let sel = CV.node && nodes.find(n=>n.name===CV.node) ? CV.node : nodes[0].name;
-  CV.node = sel;
-  const d = nodeDetail(CV.cluster, nodes.find(n=>n.name===sel));
-
-  $('#cbody').innerHTML = `
-  <div class="panel" style="margin-bottom:16px">
-    <h3>节点卡片 <span class="sub">点击选中，下方联动；有压力的节点顶部红/黄条</span></h3>
-    <div class="grid-cards" style="grid-template-columns:repeat(4,1fr)">
-      ${nodes.map(n=>`
-        <div class="cluster-card" style="${n.name===sel?'border-color:var(--blue)':''}" onclick="setNode('${n.name}')">
-          <div class="topbar" style="background:${n.pressure?'var(--red)':'var(--green)'}"></div>
-          <div class="body">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span class="name">${n.name}</span>
-              <span class="tag ${n.pressure?'red':'green'}">${n.cond}</span>
-            </div>
-            <div style="margin-top:8px">
-              <div style="display:flex;justify-content:space-between" class="xs dim"><span>CPU</span><span>${n.cpu}%</span></div>
-              ${bar(n.cpu,true)}
-            </div>
-            <div style="margin-top:6px">
-              <div style="display:flex;justify-content:space-between" class="xs dim"><span>内存</span><span>${n.mem}%</span></div>
-              ${bar(n.mem,true)}
-            </div>
-            <div class="xs dim" style="margin-top:8px">负载 ${n.load} · Pod ${n.pods}</div>
-          </div></div>`).join('')}
-    </div>
-  </div>
-
-  <div class="panel" style="margin-bottom:16px">
-    <h3>${d.name} · 节点详情 <span class="sub">${d.cond}</span></h3>
+  const nodes=CV.nodes||[];
+  let sel=CV.node&&nodes.some(n=>n.name===CV.node)?CV.node:(nodes[0]&&nodes[0].name); CV.node=sel;
+  const cards=nodes.map(n=>{
+    const cpu=Math.round(n.cpu_pct||0), mem=Math.round(n.mem_pct||0);
+    const pressure=(n.cpu_pct>=85)||(n.mem_pct>=85);
+    return `<div class="cluster-card" style="${n.name===sel?'border-color:var(--blue)':''}" onclick="setNode('${n.name}')">
+      <div class="topbar" style="background:${pressure?'var(--red)':(n.ready==='Ready'?'var(--green)':'var(--yellow)')}"></div>
+      <div class="body"><div style="display:flex;justify-content:space-between;align-items:center">
+        <span class="name">${n.name}</span><span class="tag ${n.ready!=='Ready'?'red':(pressure?'yellow':'green')}">${n.ready!=='Ready'?'异常':(pressure?'高水位':'Ready')}</span></div>
+      <div style="margin-top:8px"><div style="display:flex;justify-content:space-between" class="xs dim"><span>CPU</span><span>${cpu}%</span></div>${bar(cpu,true)}</div>
+      <div style="margin-top:6px"><div style="display:flex;justify-content:space-between" class="xs dim"><span>内存</span><span>${mem}%</span></div>${bar(mem,true)}</div>
+      <div class="xs dim" style="margin-top:8px">Pod ${n.pods_count||0} · ${n.roles||'worker'}</div></div></div>`;
+  }).join('');
+  $('#cbody').innerHTML=`<div class="panel" style="margin-bottom:16px"><h3>节点卡片 <span class="sub">点击选中，下方联动</span></h3>
+    <div class="grid-cards" style="grid-template-columns:repeat(4,1fr)">${cards||'<div class="empty">无节点</div>'}</div></div>
+    <div id="nodebody"><div class="empty">加载中…</div></div>`;
+  if(sel) renderNodeDetail();
+}
+async function renderNodeDetail(){
+  const cid=CV.cluster, node=CV.node; const n=(CV.nodes||[]).find(x=>x.name===node)||{};
+  const inst=`instance=~"^${node}([.:].*)?$"`;
+  const [load,fsSz,fsAv,iops,tput,drops,errs,podsOn]=await Promise.all([
+    promInstant(cid,`node_load1{${inst}}`),
+    promInstant(cid,`node_filesystem_size_bytes{${inst},fstype!~"tmpfs|overlay"}`),
+    promInstant(cid,`node_filesystem_avail_bytes{${inst},fstype!~"tmpfs|overlay"}`),
+    promInstant(cid,`sum(rate(node_disk_reads_completed_total{${inst}}[5m]) + rate(node_disk_writes_completed_total{${inst}}[5m]))`),
+    promInstant(cid,`sum(rate(node_disk_read_bytes_total{${inst}}[5m]) + rate(node_disk_written_bytes_total{${inst}}[5m]))`),
+    promInstant(cid,`sum(rate(node_network_receive_drop_total{${inst}}[5m]) + rate(node_network_transmit_drop_total{${inst}}[5m]))`),
+    promInstant(cid,`sum(rate(node_network_receive_errs_total{${inst}}[5m]) + rate(node_network_transmit_errs_total{${inst}}[5m]))`),
+    promInstant(cid,`kube_pod_info{node="${node}"}`),
+  ]);
+  const loads=load[0]?load[0].value:null;
+  const avBy={}; fsAv.forEach(x=>{avBy[x.metric.mountpoint]=x.value;});
+  const parts=fsSz.map(x=>{const mp=x.metric.mountpoint; const av=avBy[mp]||0; const used=Math.round(100-av/(x.value||1)*100); return {mp,used};}).sort((a,b)=>b.used-a.used);
+  const iopsV=iops[0]?iops[0].value:0, tputV=tput[0]?tput[0].value:0;
+  const dropV=drops[0]?drops[0].value:0, errV=errs[0]?errs[0].value:0;
+  const pods=(podsOn||[]).map(x=>x.metric.pod).filter(Boolean);
+  const wlSet={}; pods.forEach(p=>{ const m=String(p).replace(WL_STRIP,''); wlSet[m]=(wlSet[m]||0)+1; });
+  const wlds=Object.entries(wlSet).sort((a,b)=>b[1]-a[1]);
+  const [tcpu,tmem,tiops]=await Promise.all([
+    promRange(cid,`100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle",${inst}}[5m]))*100)`,30,60),
+    promRange(cid,`(1 - node_memory_MemAvailable_bytes{${inst}}/node_memory_MemTotal_bytes{${inst}})*100`,30,60),
+    promRange(cid,`sum(rate(node_disk_reads_completed_total{${inst}}[5m]) + rate(node_disk_writes_completed_total{${inst}}[5m]))`,30,60),
+  ]);
+  const mk=(s)=>s&&s[0]?s[0].values.map(v=>+Number(v[1]).toFixed(1)):[];
+  const X=(tcpu[0]&&tcpu[0].values.length)?tcpu[0].values.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):times(24);
+  $('#nodebody').innerHTML=`<div class="panel" style="margin-bottom:16px"><h3>${node} · 节点详情 <span class="sub">${n.ready||''} ${n.roles||''}</span></h3>
     <div class="row" style="margin-bottom:14px">
-      ${[
-        ['CPU 使用率', fmtPct(d.cpu.v), `负载 ${d.cpu.load} / ${d.cpu.cores} 核`, d.cpu.v],
-        ['内存使用率', fmtPct(d.mem.v), `总量 ${d.mem.total}`, d.mem.v],
-        ['磁盘 IOPS', d.disk.iops, `吞吐 ${d.disk.tput} · 延迟 ${d.disk.lat}`, d.disk.lat.includes('18')?90:30],
-        ['网络丢包 / 错误', `${d.net.rxLoss} / ${d.net.errs}`, `Tx 丢包 ${d.net.txLoss}`, d.net.errs>0?88:20],
-      ].map(([l,v,s,p])=>`<div class="col metric"><div class="lbl">${l}</div>
-        <div class="val" style="color:${barColor(p)}">${v}</div><div class="sub">${s}</div></div>`).join('')}
+      ${[['CPU 使用率',Math.round(n.cpu_pct||0)+'%',`可分配 ${dash(n.cpu_allocatable)} 核`,n.cpu_pct||0],
+         ['内存使用率',Math.round(n.mem_pct||0)+'%',`可分配 ${dash(n.mem_allocatable)}`,n.mem_pct||0],
+         ['负载 / 磁盘',`${loads==null?'-':loads.toFixed(2)} / ${iopsV.toFixed(0)} IOPS`,`吞吐 ${fmtBytes(tputV)}/s`,(loads!=null&&n.cpu_allocatable&&loads>Number(n.cpu_allocatable))?88:30],
+         ['网络丢包 / 错误',`${dropV.toFixed(2)} / ${errV.toFixed(2)}`,'次/秒',errV>0?80:20]]
+        .map(([l,v,s,p])=>`<div class="col metric"><div class="lbl">${l}</div><div class="val" style="color:${barColor(p)}">${v}</div><div class="sub">${s}</div></div>`).join('')}
     </div>
-    <div class="xs dim" style="margin-bottom:6px">磁盘分区（下钻到挂载点）</div>
-    <table style="margin-bottom:14px"><thead><tr><th>挂载点</th><th>使用率</th><th>IOPS</th><th>吞吐</th><th>延迟</th><th>状态</th></tr></thead><tbody>
-      ${d.parts.map(p=>`<tr class="${p.used>=85?'bad':''}">
-        <td>${p.mp}</td><td style="width:220px"><div style="display:flex;align-items:center;gap:8px">${bar(p.used,true)}<span style="color:${barColor(p.used)}">${p.used}%</span></div></td>
-        <td>${p.iops}</td><td>${p.tput}</td><td>${p.lat}</td>
-        <td><span class="tag ${p.used>=85?'red':(p.used>=70?'yellow':'green')}">${p.used>=85?'偏高':(p.used>=70?'关注':'正常')}</span></td>
-      </tr>`).join('')}
+    <div class="xs dim" style="margin-bottom:6px">磁盘分区（挂载点级）</div>
+    <table style="margin-bottom:14px"><thead><tr><th>挂载点</th><th>使用率</th><th>状态</th></tr></thead><tbody>
+      ${parts.slice(0,12).map(p=>`<tr class="${p.used>=85?'bad':''}"><td>${p.mp}</td><td style="width:320px"><div style="display:flex;align-items:center;gap:8px">${bar(p.used,true)}<span style="color:${barColor(p.used)}">${p.used}%</span></div></td>
+        <td><span class="tag ${p.used>=85?'red':(p.used>=70?'yellow':'green')}">${p.used>=85?'偏高':(p.used>=70?'关注':'正常')}</span></td></tr>`).join('')||'<tr><td colspan="3" class="dim">无分区数据</td></tr>'}
     </tbody></table>
-    <div class="xs dim" style="margin-bottom:6px">该节点上的工作负载（点击进入服务监控）</div>
-    <div>${d.workloads.map(w=>`
-      <div class="nodework ${w.bad?'bad':''}" style="display:flex;align-items:center;gap:10px;cursor:pointer"
-        onclick="jumpToService('${w.ns}','${w.name}')">
-        <div class="grow"><div class="sm">${w.name} <span class="tag gray">${w.type}</span></div>
-          <div class="xs dim">${w.ns} · CPU ${w.cpu} · 内存 ${w.mem}</div></div>
-        <span class="btn">查看 →</span>
-      </div>`).join('')}
-    </div>
+    <div class="xs dim" style="margin-bottom:6px">该节点上的工作负载（${wlds.length}）</div>
+    <div>${wlds.slice(0,20).map(([nm,c])=>`<div class="nodework" style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="jumpToWorkload('${nm}')">
+      <div class="grow"><div class="sm">${nm}</div><div class="xs dim">Pod ${c}</div></div><span class="btn">查看 →</span></div>`).join('')||'<div class="dim xs">无</div>'}</div>
   </div>
-
   <div class="panel"><h3>节点资源趋势（CPU / 内存 / 磁盘 IOPS）</h3><div id="ch-node" class="chart" style="height:240px"></div></div>`;
-
-  const T = times(24);
-  mkChart('ch-node', lineOpt(T, [
-    {name:'CPU%', data:d.trend.cpu},{name:'内存%', data:d.trend.mem},{name:'磁盘 IOPS', data:d.trend.iops}
-  ], ['#3b82f6','#22d3ee','#a855f7'], ''));
+  mkChart('ch-node', lineOpt(X,[{name:'CPU%',data:mk(tcpu)},{name:'内存%',data:mk(tmem)},{name:'磁盘 IOPS',data:mk(tiops)}],['#3b82f6','#22d3ee','#a855f7'],''));
 }
 function setNode(n){ CV.node=n; renderNode(); }
+function jumpToWorkload(nm){
+  const w=(CV.workloads||[]).find(x=>x.name===nm);
+  if(w){ CV.tab='service'; CV.ns=w.namespace; CV.type=w.kind; CV.svc=w.name; CV.pod=0; CV.from=`服务 ${w.namespace}/${w.name}`; renderCluster(); }
+  else { CV.tab='service'; CV.svc=nm; CV.from='服务 '+nm; renderCluster(); }
+}
 function jumpToService(ns, svc){
-  CV.tab='service'; CV.ns=ns; CV.svc=svc; CV.from=`服务 ${ns}/${svc}`;
-  // 推断类型
-  for(const t of TYPES){ if(servicesOf(ns,t.k).includes(svc)){ CV.type=t.k; break; } }
-  renderCluster();
+  const w=(CV.workloads||[]).find(x=>x.namespace===ns&&x.name===svc);
+  CV.tab='service'; CV.ns=ns; CV.svc=svc; CV.pod=0; CV.from=`服务 ${ns}/${svc}`; if(w) CV.type=w.kind; renderCluster();
 }
 
 /* ---------- 导航 ---------- */
 function navCluster(id, params){
-  CV = { cluster:id, tab:'service', ns:(params&&params.ns)||null, type:null, svc:(params&&params.svc)||null, node:(params&&params.node)||null, pod:0 };
+  CV = { cluster:id, tab:'service', ns:(params&&params.ns)||null, type:null, svc:(params&&params.svc)||null, node:(params&&params.node)||null, pod:0, loaded:false, workloads:null, nodes:null, nsList:null };
   if(params && params.node){ CV.tab='node'; CV.from=`节点 ${params.node}`; }
   else if(params && (params.ns||params.svc)){ CV.tab='service'; CV.from=`${params.ns||''} / ${params.svc||''}`; }
   else CV.from=null;
   renderCluster();
+  openCluster();
 }
 
 /* ---------- 实时数据（同一平台 API；无 token / 失败则回退演示） ---------- */
