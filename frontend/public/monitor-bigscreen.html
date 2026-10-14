@@ -3,11 +3,19 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<script>(function(){try{var p=window.parent;var d=(p&&p!==window)?p.document.documentElement.getAttribute('data-theme'):null;var m=d||localStorage.getItem('api_ops_theme_mode')||'light';document.documentElement.setAttribute('data-theme',(m==='dark')?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <title>多集群 K8s 监控大屏 · Demo</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
   :root{
-    --bg:#0a0e17; --panel:#0d1420; --border:#1e2a3a; --border-2:#243248;
+    --bg:#eef4ef; --panel:#ffffff; --panel-2:#f7fbf8; --elev:#f2f7f4; --fill:#e7f0ea;
+    --border:#e3ede7; --border-2:#d3e2da; --line-2:#eef4f0;
+    --text:#0f2018; --text-2:#5a7368; --text-3:#8aa196;
+    --red:#e74c3c; --yellow:#e08a00; --green:#12b981; --blue:#0ea5e9; --cyan:#0891b2;
+  }
+  html[data-theme='dark']{
+    --bg:#0a0e17; --panel:#0d1420; --panel-2:var(--panel-2); --elev:var(--elev); --fill:var(--fill);
+    --border:#1e2a3a; --border-2:#243248; --line-2:var(--fill);
     --text:#e6edf3; --text-2:#8b9cb3; --text-3:#5b6b82;
     --red:#e74c3c; --yellow:#f39c12; --green:#2ecc71; --blue:#3b82f6; --cyan:#22d3ee;
   }
@@ -29,48 +37,48 @@
   .kpi-label{font-size:12px;color:var(--text-2);display:flex;justify-content:space-between;align-items:center}
   .kpi-sub{font-size:11px;color:var(--text-3);margin-top:6px}
   .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;line-height:18px;border:1px solid transparent}
-  .tag.red{background:rgba(231,76,60,.15);color:#ff7b6b;border-color:rgba(231,76,60,.4)}
-  .tag.yellow{background:rgba(243,156,18,.15);color:#f7b955;border-color:rgba(243,156,18,.4)}
-  .tag.green{background:rgba(46,204,113,.15);color:#5fe0a0;border-color:rgba(46,204,113,.4)}
+  .tag.red{background:rgba(231,76,60,.15);color:var(--red);border-color:rgba(231,76,60,.4)}
+  .tag.yellow{background:rgba(243,156,18,.15);color:var(--yellow);border-color:rgba(243,156,18,.4)}
+  .tag.green{background:rgba(46,204,113,.15);color:var(--green);border-color:rgba(46,204,113,.4)}
   .tag.gray{background:rgba(139,156,179,.12);color:var(--text-2);border-color:var(--border-2)}
-  .bar{height:8px;border-radius:4px;background:#16202f;overflow:hidden}
+  .bar{height:8px;border-radius:4px;background:var(--fill);overflow:hidden}
   .bar>i{display:block;height:100%;border-radius:4px}
   .bar.sm{height:6px}
   .grid-cards{display:grid;gap:12px}
-  .cluster-card{cursor:pointer;transition:.15s;border:1px solid var(--border);border-radius:8px;background:#101a29;overflow:hidden}
+  .cluster-card{cursor:pointer;transition:.15s;border:1px solid var(--border);border-radius:8px;background:var(--panel-2);overflow:hidden}
   .cluster-card:hover{border-color:var(--border-2);transform:translateY(-1px)}
   .cluster-card .topbar{height:4px}
   .cluster-card .body{padding:12px 14px}
   .cluster-card .name{font-size:15px;font-weight:700}
   .cluster-card .stat{font-size:12px;color:var(--text-2);margin:6px 0 10px}
-  .btn{display:inline-block;padding:3px 10px;border-radius:6px;border:1px solid var(--border-2);background:#16202f;color:var(--text);
+  .btn{display:inline-block;padding:3px 10px;border-radius:6px;border:1px solid var(--border-2);background:var(--fill);color:var(--text);
     font-size:12px;cursor:pointer;transition:.15s}
-  .btn:hover{border-color:var(--blue);color:#9cc2ff}
-  .btn.primary{background:rgba(59,130,246,.18);border-color:rgba(59,130,246,.5);color:#9cc2ff}
-  .list-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid #16202f}
+  .btn:hover{border-color:var(--blue);color:var(--blue)}
+  .btn.primary{background:rgba(59,130,246,.18);border-color:rgba(59,130,246,.5);color:var(--blue)}
+  .list-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--fill)}
   .list-row:last-child{border-bottom:0}
   .dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
   .dot.red{background:var(--red)} .dot.yellow{background:var(--yellow)} .dot.green{background:var(--green)} .dot.gray{background:var(--text-3)}
   .grow{flex:1;min-width:0}
   .ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:14px;border:1px solid var(--border-2);
-    background:#121c2b;font-size:12px;cursor:pointer;margin:0 6px 6px 0}
+    background:var(--elev);font-size:12px;cursor:pointer;margin:0 6px 6px 0}
   .chip.sel{border-color:var(--blue);background:rgba(59,130,246,.15)}
   .chip.bad{border-color:rgba(231,76,60,.6)}
   .tabs{display:flex;gap:6px;flex-wrap:wrap}
-  .tab{padding:5px 12px;border-radius:6px;border:1px solid var(--border-2);background:#121c2b;font-size:12px;cursor:pointer;color:var(--text-2)}
+  .tab{padding:5px 12px;border-radius:6px;border:1px solid var(--border-2);background:var(--elev);font-size:12px;cursor:pointer;color:var(--text-2)}
   .tab.sel{background:rgba(59,130,246,.18);border-color:rgba(59,130,246,.5);color:#cfe0ff}
   .tab .cnt{opacity:.7;margin-left:4px}
   table{width:100%;border-collapse:collapse;font-size:12px}
-  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #16202f;white-space:nowrap}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--fill);white-space:nowrap}
   th{color:var(--text-3);font-weight:500;font-size:11px}
   tr.bad td{background:rgba(231,76,60,.09)}
-  select{background:#121c2b;color:var(--text);border:1px solid var(--border-2);border-radius:6px;padding:5px 8px;font-size:12px;min-width:260px}
-  .metric{padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#101a29}
+  select{background:var(--elev);color:var(--text);border:1px solid var(--border-2);border-radius:6px;padding:5px 8px;font-size:12px;min-width:260px}
+  .metric{padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2)}
   .metric .lbl{font-size:11px;color:var(--text-2)}
   .metric .val{font-size:22px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
   .metric .sub{font-size:11px;color:var(--text-3);margin-top:3px}
-  .cnt-box{padding:10px;border:1px solid var(--border);border-radius:8px;background:#101a29;text-align:center}
+  .cnt-box{padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2);text-align:center}
   .cnt-box .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
   .cnt-box .l{font-size:11px;color:var(--text-2);margin-top:2px}
   .chart{width:100%}
@@ -80,11 +88,11 @@
   .ns-desc{font-size:11px;color:var(--text-3)}
   .nodework{border-left:3px solid var(--border-2);padding-left:10px;margin-bottom:8px}
   .nodework.bad{border-left-color:var(--red)}
-  .sep{height:1px;background:#16202f;margin:10px 0}
+  .sep{height:1px;background:var(--fill);margin:10px 0}
   .empty{color:var(--text-3);font-size:12px;padding:16px;text-align:center}
   .modebadge{position:fixed;right:14px;top:12px;z-index:99;font-size:11px;padding:2px 10px;border-radius:10px;backdrop-filter:blur(6px)}
-  .modebadge.demo{background:rgba(243,156,18,.16);color:#f7b955;border:1px solid rgba(243,156,18,.4)}
-  .modebadge.ok{background:rgba(46,204,113,.16);color:#5fe0a0;border:1px solid rgba(46,204,113,.4)}
+  .modebadge.demo{background:rgba(243,156,18,.16);color:var(--yellow);border:1px solid rgba(243,156,18,.4)}
+  .modebadge.ok{background:rgba(46,204,113,.16);color:var(--green);border:1px solid rgba(46,204,113,.4)}
 </style>
 </head>
 <body>
@@ -254,16 +262,18 @@ let VIEW = { page:'overview' };
 let charts = [];
 function clearCharts(){ charts.forEach(c=>{try{c.dispose()}catch(e){}}); charts=[]; }
 function mkChart(id, option){ const dom=$('#'+id); if(!dom) return; const c=echarts.init(dom, null, {renderer:'canvas'}); c.setOption(option); charts.push(c); }
+function isDark(){ return document.documentElement.getAttribute('data-theme')==='dark'; }
 function lineOpt(x, seriesArr, colors, yName){
+  const ax=isDark()?'#8b9cb3':'#8aa196', ln=isDark()?'#1e2a3a':'#d3e2da', grid=isDark()?'#141d2c':'#eef4f0', tipBg=isDark()?'#0d1420':'#ffffff', tipTx=isDark()?'#e6edf3':'#0f2018';
   return {
     backgroundColor:'transparent',
     grid:{left:38,right:16,top:28,bottom:26},
-    tooltip:{trigger:'axis',backgroundColor:'#0d1420',borderColor:'#1e2a3a',textStyle:{color:'#e6edf3',fontSize:11}},
-    legend:{top:0,textStyle:{color:'#8b9cb3',fontSize:11},itemWidth:12,itemHeight:8},
-    xAxis:{type:'category',data:x,boundaryGap:false,axisLine:{lineStyle:{color:'#1e2a3a'}},axisLabel:{color:'#5b6b82',fontSize:10}},
-    yAxis:{type:'value',name:yName||'',nameTextStyle:{color:'#5b6b82',fontSize:10},axisLabel:{color:'#5b6b82',fontSize:10},splitLine:{lineStyle:{color:'#141d2c'}}},
+    tooltip:{trigger:'axis',backgroundColor:tipBg,borderColor:ln,textStyle:{color:tipTx,fontSize:11}},
+    legend:{top:0,textStyle:{color:ax,fontSize:11},itemWidth:12,itemHeight:8},
+    xAxis:{type:'category',data:x,boundaryGap:false,axisLine:{lineStyle:{color:ln}},axisLabel:{color:ax,fontSize:10}},
+    yAxis:{type:'value',name:yName||'',nameTextStyle:{color:ax,fontSize:10},axisLabel:{color:ax,fontSize:10},splitLine:{lineStyle:{color:grid}}},
     series:seriesArr.map((s,i)=>({name:s.name,type:'line',smooth:true,symbol:'none',data:s.data,
-      lineStyle:{width:2,color:colors[i%colors.length]},areaStyle:{opacity:.08,color:colors[i%colors.length]}}))
+      lineStyle:{width:2,color:colors[i%colors.length]},areaStyle:{opacity:.10,color:colors[i%colors.length]}}))
   };
 }
 
@@ -463,8 +473,9 @@ async function openCluster(){
 
 function renderService(){
   const wls=CV.workloads||[];
-  const nss=(CV.nsList&&CV.nsList.length)?CV.nsList:[...new Set(wls.map(w=>w.namespace))];
-  let ns=CV.ns; if(!ns||!nss.includes(ns)) ns=nss[0]||''; CV.ns=ns;
+  const wlNs=[...new Set(wls.map(w=>w.namespace))].sort();
+  const nss=wlNs.length?wlNs:((CV.nsList&&CV.nsList.length)?CV.nsList:[]);
+  let ns=CV.ns; if(!ns||!nss.includes(ns)) ns=(wlNs.find(n=>wls.some(w=>w.namespace===n))||nss[0])||''; CV.ns=ns;
   const inNs=wls.filter(w=>w.namespace===ns);
   const cnt={deployment:inNs.filter(w=>w.kind==='deployment').length, statefulset:inNs.filter(w=>w.kind==='statefulset').length, daemonset:inNs.filter(w=>w.kind==='daemonset').length};
   const TLAB={deployment:'无状态',statefulset:'有状态',daemonset:'DaemonSet'};
