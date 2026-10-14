@@ -83,8 +83,7 @@ func Query(clientset kubernetes.Interface, restConfig *rest.Config, promql strin
 	return body, nil
 }
 
-// ContainerUsagePromQL 容器资源使用率 PromQL（usage ÷ limit × 100）
-//
+// ContainerUsagePromQL 容器资源使用率 PromQL（usage ÷ limit × 100）//
 // 无 limit 的容器 join 不到 kube_pod_container_resource_limits → 自然不返回（跳过）
 const (
 	CPUPromQL = `sum by (namespace, pod, container) (rate(container_cpu_usage_seconds_total{container!="POD",container!=""}[2m])) ` +
@@ -98,4 +97,42 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// QueryRange 执行 PromQL 范围查询（query_range），返回 Prometheus 原始 JSON（趋势曲线用）。
+// start/end 为 Unix 秒，step 为秒。
+func QueryRange(clientset kubernetes.Interface, restConfig *rest.Config, promql string, start, end int64, step int) ([]byte, error) {
+	ns, svcName, err := discoverService(clientset)
+	if err != nil {
+		return nil, err
+	}
+	if step <= 0 {
+		step = 30
+	}
+	proxyPath := fmt.Sprintf(
+		"%s/api/v1/namespaces/%s/services/%s:9090/proxy/api/v1/query_range?query=%s&start=%d&end=%d&step=%d",
+		strings.TrimRight(restConfig.Host, "/"), ns, svcName, url.QueryEscape(promql), start, end, step,
+	)
+	req, err := http.NewRequest(http.MethodGet, proxyPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("请求构建失败: %w", err)
+	}
+	transport, err := rest.TransportFor(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("transport 构建失败: %w", err)
+	}
+	client := &http.Client{Transport: transport, Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Prometheus 范围查询失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Prometheus 响应读取失败: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, string(body)[:min(len(body), 300)])
+	}
+	return body, nil
 }

@@ -5,9 +5,9 @@ import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Se
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
-import { getDashboard, getClusterMetric } from '../services/api'
+import { getDashboard, getClusterMetric, getClusterMetricRange } from '../services/api'
 import type { DashboardData, ClusterHealthDetail } from '../types'
-import type { MonitoringItem } from '../services/api'
+import type { MonitoringItem, RangeSeries } from '../services/api'
 import { useThemeMode } from '../utils/theme'
 
 function useClock() {
@@ -22,6 +22,21 @@ const CONTAINER_METRICS = [
   { value: 'container_net_rx', label: '入站网络' },
   { value: 'container_net_tx', label: '出站网络' },
 ]
+const TREND_METRICS = [
+  { value: 'node_cpu', label: '节点CPU%' },
+  { value: 'node_mem', label: '节点内存%' },
+  { value: 'container_cpu', label: '容器CPU' },
+  { value: 'container_mem', label: '容器内存' },
+]
+
+function seriesLabel(m: Record<string, string>): string {
+  if (m.instance) return m.instance
+  if (m.namespace || m.pod) return `${m.namespace || ''}/${m.pod || ''}${m.container ? ':' + m.container : ''}`
+  return JSON.stringify(m)
+}
+function hhmmss(ts: number): string {
+  return new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour12: false })
+}
 
 function fmtBytes(v: number | null): string {
   if (v === null || v === undefined) return '-'
@@ -56,6 +71,11 @@ export default function Screen() {
   const [cItems, setCItems] = useState<MonitoringItem[]>([])
   const [cUnit, setCUnit] = useState('')
   const [cLoading, setCLoading] = useState(false)
+  const [trendMetric, setTrendMetric] = useState('node_cpu')
+  const [trendMin, setTrendMin] = useState(30)
+  const [trendSeries, setTrendSeries] = useState<RangeSeries[]>([])
+  const [trendUnit, setTrendUnit] = useState('')
+  const [trendLoading, setTrendLoading] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -87,6 +107,23 @@ export default function Screen() {
       .finally(() => setCLoading(false))
   }, [effCluster, cMetric])
 
+  // 资源趋势（range）：Netdata 式曲线，30s 自刷
+  useEffect(() => {
+    if (!effCluster) { setTrendSeries([]); return }
+    let alive = true
+    const step = Math.max(15, Math.round(trendMin * 60 / 80))
+    const fetchT = () => {
+      setTrendLoading(true)
+      getClusterMetricRange(effCluster, trendMetric, trendMin, step)
+        .then((d) => { if (alive) { setTrendSeries(d.series || []); setTrendUnit(d.unit || '') } })
+        .catch(() => { if (alive) setTrendSeries([]) })
+        .finally(() => { if (alive) setTrendLoading(false) })
+    }
+    fetchT()
+    const t = window.setInterval(fetchT, 30000)
+    return () => { alive = false; window.clearInterval(t) }
+  }, [effCluster, trendMetric, trendMin])
+
   const core = data?.core
   const trend = (data?.alert_trend && data.alert_trend.length ? data.alert_trend : data?.trend_24h) || []
   const abnormal = (data?.abnormal_pods || []).filter((p) => sel === 'all' || p.cluster_name === shown[0]?.name).slice(0, 10)
@@ -107,6 +144,15 @@ export default function Screen() {
 
   const enterFull = () => { const el = document.documentElement; el.requestFullscreen?.() }
   const maxC = Math.max(...cItems.map((i) => i.value || 0), 1)
+  const lastVal = (s: RangeSeries) => (s.values.length ? s.values[s.values.length - 1][1] : 0)
+  const trendRows = useMemo(() => {
+    const top = [...trendSeries].sort((a, b) => lastVal(b) - lastVal(a)).slice(0, 6)
+    return top.flatMap((s) => {
+      const nm = seriesLabel(s.metric)
+      return s.values.map(([ts, v]) => ({ t: hhmmss(ts), v: Number(v.toFixed(3)), name: nm }))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trendSeries])
 
   return (
     <div style={{ minHeight: '100vh', background: token.colorBgLayout, padding: 16 }}>
@@ -178,6 +224,25 @@ export default function Screen() {
               })} xField="hour" yField="value" colorField="type" smooth {...chartTheme}
                 legend={{ color: { position: 'top' } }} />
             ) : <Empty description="暂无趋势数据" />}
+          </Card>
+        </Col>
+      </Row>
+
+      {/* 资源趋势（Netdata 式曲线） */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        <Col span={24}>
+          <Card size="small" variant="borderless"
+            title={<Space>资源趋势<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（CPU/内存随时间·多序列，取自各集群 Prometheus）</span></Space>}
+            extra={<Space wrap>
+              <Segmented size="small" value={trendMetric} onChange={(v) => setTrendMetric(v as string)} options={TREND_METRICS} />
+              <Segmented size="small" value={trendMin} onChange={(v) => setTrendMin(v as number)}
+                options={[{ value: 10, label: '10m' }, { value: 30, label: '30m' }, { value: 60, label: '1h' }, { value: 180, label: '3h' }]} />
+            </Space>}>
+            {trendLoading && trendRows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
+              : trendRows.length === 0 ? <Empty description="无趋势数据（需该集群部署 Prometheus）" />
+                : <Line height={260} data={trendRows} xField="t" yField="v" colorField="name" smooth
+                  point={{ size: 2 }} {...chartTheme}
+                  legend={{ color: { position: 'top' } }} />}
           </Card>
         </Col>
       </Row>

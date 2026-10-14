@@ -524,6 +524,12 @@ export const getClusterMetric = (clusterId: number, metric: string) =>
   http.get<{ metric: string; label: string; unit: string; items: MonitoringItem[] }>(
     `/monitoring/clusters/${clusterId}/metrics/${metric}`)
 
+// 趋势曲线（range）：Netdata 式
+export interface RangeSeries { metric: Record<string, string>; values: [number, number][] }
+export const getClusterMetricRange = (clusterId: number, metric: string, minutes = 30, step = 60) =>
+  http.get<{ metric: string; label: string; unit: string; series: RangeSeries[] }>(
+    `/monitoring/clusters/${clusterId}/metrics/${metric}/range`, { params: { minutes, step } })
+
 // ============ 告警屏蔽（P2-R11） ============
 export interface SilenceMatcher { key: string; op: string; value: string }
 export interface AlertSilence {

@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
+	"github.com/api-ops-platform/k8s-executor/internal/prometheus"
 )
 
 // Server 日志流 HTTP 服务
@@ -37,6 +38,7 @@ func (s *Server) Start(_ context.Context) error {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/watch", s.handleWatch)
+	mux.HandleFunc("/prom/range", s.handlePromRange)
 	s.srv = &http.Server{Addr: s.addr, Handler: mux}
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -117,4 +119,42 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			return // io.EOF / 连接中断 / 客户端断开
 		}
 	}
+}
+
+// handlePromRange GET /prom/range?cluster_id=&query=&minutes=&step=
+// 趋势曲线：调 Prometheus query_range（经 apiserver Service Proxy），返回原始 JSON。
+func (s *Server) handlePromRange(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	cid, err := strconv.ParseUint(q.Get("cluster_id"), 10, 64)
+	if err != nil {
+		http.Error(w, "cluster_id 非法", http.StatusBadRequest)
+		return
+	}
+	query := q.Get("query")
+	if query == "" {
+		http.Error(w, "query 必填", http.StatusBadRequest)
+		return
+	}
+	minutes := 30
+	if v, e := strconv.Atoi(q.Get("minutes")); e == nil && v > 0 {
+		minutes = v
+	}
+	step := 30
+	if v, e := strconv.Atoi(q.Get("step")); e == nil && v > 0 {
+		step = v
+	}
+	cc, err := s.manager.GetClient(r.Context(), uint(cid))
+	if err != nil {
+		http.Error(w, "集群客户端不可用: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	end := time.Now().Unix()
+	start := end - int64(minutes)*60
+	body, err := prometheus.QueryRange(cc.Clientset, cc.RestConfig, query, start, end, step)
+	if err != nil {
+		http.Error(w, "Prometheus 范围查询失败: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body) //nolint:errcheck
 }

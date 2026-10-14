@@ -62,6 +62,19 @@ METRIC_QUERIES: dict[str, dict] = {
         "label": "容器网络出站 Top", "unit": "bytes/s", "scope": "container",
         "promql": 'topk(20, sum by(namespace, pod, container) (rate(container_network_transmit_bytes_total{container!="",container!="POD"}[5m])))',
     },
+    # ---- 趋势用（无 topk，供 range 曲线） ----
+    "container_cpu": {
+        "label": "容器 CPU", "unit": "core", "scope": "container",
+        "promql": 'sum by(namespace, pod, container) (rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m]))',
+    },
+    "container_mem": {
+        "label": "容器内存", "unit": "bytes", "scope": "container",
+        "promql": 'sum by(namespace, pod, container) (container_memory_working_set_bytes{container!="",container!="POD"})',
+    },
+    "node_net_rx": {
+        "label": "节点网络入站", "unit": "bytes/s", "scope": "node",
+        "promql": 'sum by(instance) (rate(node_network_receive_bytes_total[5m]))',
+    },
 }
 
 
