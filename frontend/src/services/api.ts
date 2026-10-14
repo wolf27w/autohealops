@@ -531,6 +531,8 @@ export const getClusterMetricRange = (clusterId: number, metric: string, minutes
     `/monitoring/clusters/${clusterId}/metrics/${metric}/range`, { params: { minutes, step, ...filters } })
 export const getClusterContainers = (clusterId: number, namespace = '') =>
   http.get<{ containers: string[] }>(`/monitoring/clusters/${clusterId}/containers`, { params: { namespace } })
+export const getClusterRange = (clusterId: number, promql: string, minutes = 30, step = 60) =>
+  http.get<{ series: RangeSeries[] }>(`/monitoring/clusters/${clusterId}/range`, { params: { promql, minutes, step } })
 
 // ============ 告警屏蔽（P2-R11） ============
 export interface SilenceMatcher { key: string; op: string; value: string }

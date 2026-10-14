@@ -1,11 +1,11 @@
 // 统一监控大屏（P1-R7）：多集群总览 —— 配色跟随系统主题（antd token，浅/深色自适应）
-// 数据源：/stats/dashboard（聚合/集群明细/趋势/异常 Pod/故障 Top）+ /monitoring（节点/容器即时与趋势）
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+// 数据源：/stats/dashboard（聚合/集群明细/趋势/异常 Pod/故障 Top）+ /monitoring（实时监控：节点/工作负载/容器 × CPU/内存/网络）
+import { useEffect, useMemo, useState } from 'react'
 import { Card, Select, Tag, Space, Button, Table, Statistic, Row, Col, Empty, Segmented, theme, Input } from 'antd'
 import { FullscreenOutlined, ReloadOutlined, ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
-import { getDashboard, getClusterMetricRange, getClusterNamespaces, getNamespacePods, getClusterContainers } from '../services/api'
+import { getDashboard, getClusterRange, getClusterNamespaces } from '../services/api'
 import type { DashboardData, ClusterHealthDetail } from '../types'
 import type { RangeSeries } from '../services/api'
 import { useThemeMode } from '../utils/theme'
@@ -16,23 +16,58 @@ function useClock() {
   return now
 }
 
-const NODE_METRICS = [
-  { value: 'node_cpu', label: '节点CPU%' },
-  { value: 'node_mem', label: '节点内存%' },
+const DIMS = [
+  { value: 'node', label: '节点' },
+  { value: 'workload', label: '工作负载' },
+  { value: 'pod', label: '容器(Pod)' },
 ]
-const CONT_METRICS = [
-  { value: 'container_cpu', label: '容器CPU' },
-  { value: 'container_mem', label: '容器内存' },
+const METRICS = [
+  { value: 'cpu', label: 'CPU' },
+  { value: 'mem', label: '内存' },
+  { value: 'net', label: '网络' },
 ]
 const WINDOWS = [
   { value: 10, label: '10m' }, { value: 30, label: '30m' },
   { value: 60, label: '1h' }, { value: 180, label: '3h' },
 ]
 
+// 工作负载名：从 Pod 名剥离 ReplicaSet 哈希+Pod 哈希（Deployment），或 StatefulSet 序号
+const WL_REGEX = '(.+?)(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+)$'
+
+function buildPromql(dim: string, metric: string, ns: string): string {
+  const nsSel = ns ? `namespace="${ns}",` : ''
+  const podSel = `${nsSel}container!="",container!="POD"`
+  const netSel = `${nsSel}namespace!=""`
+  if (dim === 'node') {
+    if (metric === 'cpu') return '100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+    if (metric === 'mem') return '(1 - node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes)*100'
+    if (metric === 'net') return 'sum by(instance)(rate(node_network_receive_bytes_total[5m]) + rate(node_network_transmit_bytes_total[5m]))'
+  }
+  if (dim === 'pod') {
+    if (metric === 'cpu') return `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{${podSel}}[5m]))`
+    if (metric === 'mem') return `sum by(namespace,pod)(container_memory_working_set_bytes{${podSel}})`
+    if (metric === 'net') return `sum by(namespace,pod)(rate(container_network_receive_bytes_total{${netSel}}[5m]) + rate(container_network_transmit_bytes_total{${netSel}}[5m]))`
+  }
+  // workload（Deployment / StatefulSet / DaemonSet）：pod 名 label_replace 归一到 workload
+  const inner = (m: string) => {
+    if (metric === 'cpu') return `sum by(namespace,pod)(rate(container_cpu_usage_seconds_total{${podSel}}[5m]))`
+    if (metric === 'mem') return `sum by(namespace,pod)(container_memory_working_set_bytes{${podSel}})`
+    return `sum by(namespace,pod)(rate(container_network_receive_bytes_total{${netSel}}[5m]) + rate(container_network_transmit_bytes_total{${netSel}}[5m]))`
+  }
+  return `sum by(namespace,workload)(label_replace(${inner('x')}, "workload", "$1", "pod", "${WL_REGEX}"))`
+}
+
+function unitOf(dim: string, metric: string): string {
+  if (metric === 'cpu') return dim === 'node' ? '%' : 'core'
+  if (metric === 'mem') return dim === 'node' ? '%' : 'bytes'
+  return 'bytes/s'
+}
+
 function seriesLabel(m: Record<string, string>): string {
   if (m.instance) return m.instance
+  if (m.workload) return `${m.namespace || ''}/${m.workload}`
   if (m.container) return m.pod ? `${m.container} · ${m.pod}` : m.container
-  if (m.namespace || m.pod) return `${m.namespace || ''}/${m.pod || ''}`
+  if (m.pod) return `${m.namespace || ''}/${m.pod}`
   return JSON.stringify(m)
 }
 function hhmmss(ts: number): string {
@@ -71,43 +106,35 @@ function topListOf(series: RangeSeries[], limit = 100) {
     .map((s) => ({ name: seriesLabel(s.metric), v: lastVal(s) }))
 }
 
-// 单个监控面板：曲线 + 当前值 Top（可选维度筛选）
-function MonitorPanel(props: {
-  clusterId?: number; clusterName: string; title: ReactNode
-  metrics: { value: string; label: string }[]; defaultMetric: string
-  filters?: { namespace?: string; pod?: string; container?: string }
-  nsList?: string[]; contList?: string[]; podList?: { name: string }[]
-  onNs?: (v: string) => void; onCont?: (v: string) => void; onPod?: (v: string) => void
-  showFilters?: boolean
-}) {
+// 实时监控面板：维度(节点/工作负载/容器) × 指标(CPU/内存/网络)，Netdata 式
+function MonitorPanel({ clusterId, clusterName, nsList }: { clusterId?: number; clusterName: string; nsList: string[] }) {
   const { token } = theme.useToken()
   const { mode } = useThemeMode()
   const chartTheme = mode === 'dark' ? ({ theme: 'classicDark' } as const) : {}
-  const [metric, setMetric] = useState(props.defaultMetric)
+  const [dim, setDim] = useState('node')
+  const [metric, setMetric] = useState('cpu')
   const [min, setMin] = useState(30)
-  const [series, setSeries] = useState<RangeSeries[]>([])
-  const [unit, setUnit] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [ns, setNs] = useState('')
   const [kw, setKw] = useState('')
+  const [series, setSeries] = useState<RangeSeries[]>([])
+  const [loading, setLoading] = useState(false)
 
-  const f = props.filters || {}
   useEffect(() => {
-    if (!props.clusterId) { setSeries([]); return }
+    if (!clusterId) { setSeries([]); return }
     let alive = true
+    const promql = buildPromql(dim, metric, dim === 'node' ? '' : ns)
     const step = Math.max(15, Math.round(min * 60 / 80))
     const fetchT = () => {
       setLoading(true)
-      getClusterMetricRange(props.clusterId!, metric, min, step,
-        { namespace: f.namespace || undefined, pod: f.pod || undefined, container: f.container || undefined })
-        .then((d) => { if (alive) { setSeries(d.series || []); setUnit(d.unit || '') } })
+      getClusterRange(clusterId, promql, min, step)
+        .then((d) => { if (alive) setSeries(d.series || []) })
         .catch(() => { if (alive) setSeries([]) })
         .finally(() => { if (alive) setLoading(false) })
     }
     fetchT()
     const t = window.setInterval(fetchT, 30000)
     return () => { alive = false; window.clearInterval(t) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.clusterId, metric, min, f.namespace, f.pod, f.container])
+  }, [clusterId, dim, metric, min, ns])
 
   const filtered = useMemo(() => {
     const k = kw.trim().toLowerCase()
@@ -117,30 +144,25 @@ function MonitorPanel(props: {
   const rows = useMemo(() => trendRowsOf(filtered), [filtered])
   const top = useMemo(() => topListOf(filtered), [filtered])
   const maxT = Math.max(...top.map((x) => x.v), 1)
+  const unit = unitOf(dim, metric)
 
   return (
     <Card size="small" variant="borderless"
-      title={props.title}
+      title={<Space>实时监控<Tag color="blue">{clusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（节点 / 工作负载 / 容器 × CPU / 内存 / 网络）</span></Space>}
       extra={<Space wrap>
-        <Segmented size="small" value={metric} onChange={(v) => setMetric(v as string)} options={props.metrics} />
+        <Segmented size="small" value={dim} onChange={(v) => setDim(v as string)} options={DIMS} />
+        <Segmented size="small" value={metric} onChange={(v) => setMetric(v as string)} options={METRICS} />
         <Segmented size="small" value={min} onChange={(v) => setMin(v as number)} options={WINDOWS} />
       </Space>}>
       <Space wrap style={{ marginBottom: 8 }}>
+        {dim !== 'node' && (
+          <Select allowClear showSearch size="small" style={{ width: 180 }} placeholder="命名空间（空=全部）" value={ns || undefined}
+            onChange={(v) => setNs(v || '')} options={nsList.map((n) => ({ value: n, label: n }))} />
+        )}
         <Input allowClear size="small" prefix={<SearchOutlined />} placeholder="搜索筛选（名称/关键字）" style={{ width: 230 }}
           value={kw} onChange={(e) => setKw(e.target.value)} />
-        <span style={{ fontSize: 12, color: token.colorTextSecondary }}>显示 {filtered.length} / {series.length} 条序列（曲线取 Top6，列表可滚动）</span>
+        <span style={{ fontSize: 12, color: token.colorTextSecondary }}>显示 {filtered.length} / {series.length} 条（曲线 Top6，列表可滚动）</span>
       </Space>
-      {props.showFilters && (
-        <Space wrap style={{ marginBottom: 10 }}>
-          <Select allowClear showSearch style={{ width: 170 }} placeholder="命名空间" value={f.namespace || undefined}
-            onChange={(v) => props.onNs?.(v || '')} options={(props.nsList || []).map((n) => ({ value: n, label: n }))} />
-          <Select allowClear showSearch style={{ width: 180 }} placeholder="容器" value={f.container || undefined}
-            onChange={(v) => props.onCont?.(v || '')} options={(props.contList || []).map((c) => ({ value: c, label: c }))} />
-          <Select allowClear showSearch style={{ width: 190 }} placeholder="Pod" value={f.pod || undefined}
-            onChange={(v) => props.onPod?.(v || '')} options={(props.podList || []).map((p) => ({ value: p.name, label: p.name }))} />
-          <span style={{ fontSize: 12, color: token.colorTextSecondary }}>筛选容器→Pod 逐级下钻</span>
-        </Space>
-      )}
       <Row gutter={12}>
         <Col xs={24} md={16}>
           {loading && rows.length === 0 ? <div style={{ padding: 20, textAlign: 'center', color: token.colorTextSecondary }}>加载中…</div>
@@ -179,12 +201,7 @@ export default function Screen() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [sel, setSel] = useState<number | 'all'>('all')
   const [loading, setLoading] = useState(false)
-  const [fNs, setFNs] = useState('')
-  const [fCont, setFCont] = useState('')
-  const [fPod, setFPod] = useState('')
   const [nsList, setNsList] = useState<string[]>([])
-  const [contList, setContList] = useState<string[]>([])
-  const [podList, setPodList] = useState<{ name: string }[]>([])
 
   const load = () => {
     setLoading(true)
@@ -207,25 +224,18 @@ export default function Screen() {
   const effCluster = sel === 'all' ? details[0]?.id : sel
   const effClusterName = sel === 'all' ? (details[0]?.name || '-') : (details.find((c) => c.id === sel)?.name || '-')
 
-  // 级联筛选：集群→namespace→容器/Pod
   useEffect(() => {
-    setFNs(''); setFCont(''); setFPod(''); setNsList([]); setPodList([]); setContList([])
+    setNsList([])
     if (!effCluster) return
     getClusterNamespaces(effCluster).then((d) => setNsList((d as string[]) || [])).catch(() => setNsList([]))
   }, [effCluster])
-  useEffect(() => {
-    setFCont(''); setFPod(''); setContList([]); setPodList([])
-    if (!effCluster || !fNs) return
-    getClusterContainers(effCluster, fNs).then((d) => setContList(d?.containers || [])).catch(() => setContList([]))
-    getNamespacePods(effCluster, fNs).then((d) => setPodList((d as { name: string }[]) || [])).catch(() => setPodList([]))
-  }, [effCluster, fNs])
 
   const core = data?.core
   const trend = (data?.alert_trend && data.alert_trend.length ? data.alert_trend : data?.trend_24h) || []
   const abnormal = (data?.abnormal_pods || []).filter((p) => sel === 'all' || p.cluster_name === shown[0]?.name).slice(0, 10)
   const faultTop = data?.fault_top || []
   const statusDist = (data?.status_dist || []) as { status?: string; count?: number }[]
-  const chartTheme = (mode: string) => (mode === 'dark' ? ({ theme: 'classicDark' } as const) : {})
+  const chartTheme = mode === 'dark' ? ({ theme: 'classicDark' } as const) : {}
 
   const kpi = [
     { label: '集群', value: `${core?.cluster_healthy ?? 0}/${core?.cluster_total ?? 0}` },
@@ -307,31 +317,17 @@ export default function Screen() {
                 const g = p as { hour?: string; time?: string; alerts: number; healed: number }
                 const h = g.hour || g.time || ''
                 return [{ hour: h, type: '告警', value: g.alerts }, { hour: h, type: '已解决', value: g.healed }]
-              })} xField="hour" yField="value" colorField="type" smooth {...chartTheme(mode)}
+              })} xField="hour" yField="value" colorField="type" smooth {...chartTheme}
                 legend={{ color: { position: 'top' } }} />
             ) : <Empty description="暂无趋势数据" />}
           </Card>
         </Col>
       </Row>
 
-      {/* 节点监控 */}
+      {/* 实时监控 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col span={24}>
-          <MonitorPanel clusterId={effCluster} clusterName={effClusterName}
-            title={<Space>节点监控<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（每节点 CPU/内存趋势与当前值）</span></Space>}
-            metrics={NODE_METRICS} defaultMetric="node_cpu" />
-        </Col>
-      </Row>
-
-      {/* 容器监控 */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-        <Col span={24}>
-          <MonitorPanel clusterId={effCluster} clusterName={effClusterName}
-            title={<Space>容器监控<Tag color="blue">{effClusterName}</Tag><span style={{ fontSize: 12, color: token.colorTextSecondary }}>（容器 CPU/内存趋势与当前值，按命名空间/容器/Pod 下钻）</span></Space>}
-            metrics={CONT_METRICS} defaultMetric="container_cpu" showFilters
-            filters={{ namespace: fNs, pod: fPod, container: fCont }}
-            nsList={nsList} contList={contList} podList={podList}
-            onNs={setFNs} onCont={setFCont} onPod={setFPod} />
+          <MonitorPanel clusterId={effCluster} clusterName={effClusterName} nsList={nsList} />
         </Col>
       </Row>
 
