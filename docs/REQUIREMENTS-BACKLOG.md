@@ -631,9 +631,10 @@
 
 ### 其它线
 
-- **集群监控（Prometheus 数据源，2026-10-13 定稿，老板「现在先不做」）**
+- **集群监控（Prometheus 数据源，2026-10-13 定稿）**
   - ✅ 即时查询：`prometheus_service.py` + `/api/v1/monitoring/*`（`/metrics`、`/clusters/{id}/metrics/{m}`、`/clusters/{id}/query`）
-  - ⬜ 待做：executor `range` 端点（趋势曲线）、前端仪表盘改「告警｜监控」Tab + 监控下钻页、后台「监控数据源」配置
+  - ✅ **趋势（range）**：executor `/prom/range`（apiserver proxy → query_range）+ `/monitoring/clusters/{id}/metrics/{m}/range` + 大屏「资源趋势」曲线（`697096c`）
+  - ⬜ 待做：仪表盘改「告警｜监控」Tab + 监控下钻页、后台「监控数据源」配置
 - **Netdata 监控接入（2026-10-09 的 A–D）**：❌ 已整套回滚（2026-10-13，代码删除）；依赖它的**主机(ECS)/Docker 接入 + 诊断（B/D）**一并取消（无 `hosts` 模型）
 - **项目级审批（2026-10-09 E）**：✅ 完成——`projects.approval_flow_id`（迁移 `t3u4v5w6x7y8`）+ `approval_service._load_default_flow` 项目优先 + 前端 `ProjectManagement` 审批流程下拉
 
