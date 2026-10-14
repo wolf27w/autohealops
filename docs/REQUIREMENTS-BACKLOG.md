@@ -617,7 +617,7 @@
 | R1 | 资源治理 + 准入控制 | ✅ 完成（差集群内部署） | 管控表/API/高峰采集/前端/executor 准入模块 + **准入配置下发 install/uninstall/status（`b3c1d78`，测试集群实测）**；仅剩：准入服务本体在被管集群内部署（拓扑决策） |
 | R2 | JVM 深度诊断 + 参数管控 | ✅ 完成 | `api/jvm.py`（9 动作）+ `JvmDiagModal` + Deployment 参数采集；**2026-10-14 新增 jattach 后端**（JRE 镜像免装 JDK 也能 threaddump/堆信息/VM 参数）/明确报错/检测补全，commit `0c43d5f`；生产 JRE 容器实测通过 |
 | R2.3 | JVM 堆/G1 指标 + 告警 | ⏸ 暂缓 | 集群 Prometheus 无任何 `jvm_*` 指标，无数据源 |
-| R3 | 镜像更新（列仓库标签一键改） | ❌ 未做 | 仅 `RepairImagePull`（补 imagePullSecrets） |
+| R3 | 镜像更新（列仓库标签一键改） | ✅ 完成 | 一键改镜像本已有（`/workloads/.../image`）；新增**列仓库标签**（Registry v2，Harbor/ACR/SWR）（`ff6e11d`）+ 前端标签下拉。私有仓库需配 `REGISTRY_CREDS` 只读凭据 |
 | R4 | 节点管理 + 均衡迁移 | ✅ 完成（差 drain 执行） | `NodeManagement.tsx`：节点列表 + **容量/使用率（cpu_pct/mem_pct）+ 多选批量 cordon/uncordon + 均衡计划（只读建议：热点/冷门 + 可迁移 Pod + 分批）**（`1912dc1`）；executor `get nodes/pods -o json`。未做：一键 drain 执行（需评估高风险）、调度到指定节点 |
 | R5 | 实时日志跟随 + 增强 | ✅ 完成 | executor 日志流 HTTP(:9099，client-go follow) + api-server WS + 前端 `PodLogStreamModal`（`ed17fbe`）；未做：Deployment 聚合日志跟随、gzip 下载 |
 | R6 | 实时状态推送（WebSocket） | ✅ 完成 | executor `/watch`（client-go Watch Pod+Deploy） + api-server WS + ServiceDetail 实时刷新（`e0bced3`） |
@@ -639,7 +639,7 @@
 
 ### 小结
 
-- **从零未做**：R3、R12
+- **从零未做**：R12（agent 外连，架构级）
 - **半成品**：无（R4 主功能完成；仅「一键 drain 执行」待定）
 - **暂缓**：R2.3、Prometheus 监控趋势（老板「先不做」）
 - **已取消**：Netdata 接入及依赖项（主机/Docker）
