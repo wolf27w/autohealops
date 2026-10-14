@@ -474,9 +474,10 @@ async function openCluster(){
 function renderService(){
   if(!CV.loaded){ $('#cbody')&&($('#cbody').innerHTML='<div class="empty">加载中…</div>'); return; }
   const wls=CV.workloads||[];
-  const wlNs=[...new Set(wls.map(w=>w.namespace))].sort();
+  const cnts={}; wls.forEach(w=>{cnts[w.namespace]=(cnts[w.namespace]||0)+1;});
+  const wlNs=Object.keys(cnts).sort((a,b)=>(cnts[b]-cnts[a])||(a<b?-1:1));
   const nss=wlNs.length?wlNs:((CV.nsList&&CV.nsList.length)?CV.nsList:[]);
-  let ns=CV.ns; if(!ns||!nss.includes(ns)) ns=(wlNs.find(n=>wls.some(w=>w.namespace===n))||nss[0])||''; CV.ns=ns;
+  let ns=CV.ns; if(!ns||!nss.includes(ns)) ns=wlNs[0]||''; CV.ns=ns;
   const inNs=wls.filter(w=>w.namespace===ns);
   const cnt={deployment:inNs.filter(w=>w.kind==='deployment').length, statefulset:inNs.filter(w=>w.kind==='statefulset').length, daemonset:inNs.filter(w=>w.kind==='daemonset').length};
   const TLAB={deployment:'无状态',statefulset:'有状态',daemonset:'DaemonSet'};
