@@ -315,23 +315,11 @@ function renderOverview(){
     </div>
   </div>
 
-  <!-- 第二行 -->
-  <div class="row" style="margin-bottom:16px">
-    <div class="col panel">
-      <h3>告警类型分布</h3>
-      <div style="display:grid;grid-template-columns:150px 1fr 130px;gap:12px 14px;align-items:center;font-size:12px">
-      ${OVERVIEW.alertTypes.map(t=>`
-          <span class="ell">${t.name}</span>
-          <span style="display:flex;align-items:center">${bar(t.count/maxType*100)}</span>
-          <span class="dim" style="text-align:right">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>`).join('')}
-      </div>
-    </div>
-  </div>
-
-  <!-- 第三行：集群总览（合并版，每集群只出现一次） -->
-  <div class="panel" style="margin-bottom:16px">
+  <!-- 第二行：集群总览 + 告警类型分布（左右并排） -->
+  <div class="row" style="margin-bottom:16px;align-items:flex-start">
+    <div class="col panel" style="flex:2">
     <h3>集群总览 <span class="sub">点击卡片进入集群详情</span></h3>
-    <div class="grid-cards" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
+    <div class="grid-cards" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr))">
       ${CLUSTERS.map(c=>{
         const col = c.status==='bad'?'var(--red)':(c.status==='warn'?'var(--yellow)':'var(--green)');
         const label = c.status==='bad'?'异常':(c.status==='warn'?'警告':'正常');
@@ -352,6 +340,16 @@ function renderOverview(){
               </div>`).join('')}
           </div></div>`;
       }).join('')}
+    </div>
+    </div>
+    <div class="col panel" style="flex:1">
+      <h3>告警类型分布</h3>
+      <div style="display:grid;grid-template-columns:120px 1fr 110px;gap:10px 12px;align-items:center;font-size:12px">
+      ${OVERVIEW.alertTypes.map(t=>`
+          <span class="ell">${t.name}</span>
+          <span style="display:flex;align-items:center">${bar(t.count/maxType*100)}</span>
+          <span class="dim" style="text-align:right">${t.count} 条 · ${Math.round(t.count/OVERVIEW.kpi.activeAlerts.v*100)}%</span>`).join('')}
+      </div>
     </div>
   </div>
 
