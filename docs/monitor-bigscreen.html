@@ -92,17 +92,20 @@
   .sep{height:1px;background:var(--fill);margin:10px 0}
   .empty{color:var(--text-3);font-size:12px;padding:16px;text-align:center}
   #app{padding-top:40px}
-  .clockbadge{position:fixed;left:14px;top:9px;z-index:99;font-size:12px;padding:3px 12px;border-radius:10px;background:var(--fill);border:1px solid var(--border-2);color:var(--text);backdrop-filter:blur(6px);font-variant-numeric:tabular-nums}
+  #topbar{position:fixed;left:14px;top:9px;z-index:99;display:flex;align-items:center;gap:10px}
+  .clockbadge{font-size:12px;padding:3px 12px;border-radius:10px;background:var(--fill);border:1px solid var(--border-2);color:var(--text);backdrop-filter:blur(6px);font-variant-numeric:tabular-nums}
   .clockbadge b{color:var(--green);margin-right:8px;font-weight:600}
-  .modebadge{position:fixed;right:14px;top:12px;z-index:99;font-size:11px;padding:2px 10px;border-radius:10px;backdrop-filter:blur(6px)}
+  .modebadge{font-size:11px;padding:3px 12px;border-radius:10px;backdrop-filter:blur(6px)}
   .modebadge.demo{background:rgba(243,156,18,.16);color:var(--yellow);border:1px solid rgba(243,156,18,.4)}
   .modebadge.ok{background:rgba(46,204,113,.16);color:var(--green);border:1px solid rgba(46,204,113,.4)}
 </style>
 </head>
 <body>
 <div id="app"></div>
-<div id="clock" class="clockbadge"></div>
-<div id="mode" class="modebadge demo">数据：演示</div>
+<div id="topbar">
+  <div id="clock" class="clockbadge"></div>
+  <div id="mode" class="modebadge demo">数据：演示</div>
+</div>
 
 <script>
 /* =========================================================
