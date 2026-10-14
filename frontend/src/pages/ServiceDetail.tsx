@@ -8,6 +8,7 @@ import TerminalModal from '../components/TerminalModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
+import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
@@ -453,6 +454,7 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(false)
   const [container, setContainer] = useState('')
+  const [streamOpen, setStreamOpen] = useState(false)
   // 实时查看容器标准输出（/dev/stdout）：默认关闭，开启后每 2 秒拉取最新日志
   const [live, setLive] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -555,6 +557,7 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
           onDropdownVisibleChange={(open) => { if (open && containers.length === 0 && pod) getPodContainers(pod.clusterId, pod.namespace, pod.name).then((d) => setContainers((d as unknown as { containers?: string[] }).containers || [])).catch(() => {}) }}
         />
         <Button type="primary" onClick={load}>查询</Button>
+        <Button onClick={() => setStreamOpen(true)}>WS 实时跟随</Button>
         <Space size={6}>
           <Switch checked={live} onChange={setLive} />
           <span style={{ fontSize: 13 }}>实时查看 stdout</span>
@@ -573,6 +576,9 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
         {live ? '● 实时中（每 2 秒刷新，退出抽屉自动停止）' : '○ 实时已关闭（点「查询」看当前日志快照）'}
       </div>
       <pre ref={preRef} style={{ maxHeight: '52vh', overflow: 'auto', background: '#f5f5f5', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>{loading && !logs ? '加载中...' : logs}</pre>
+      <PodLogStreamModal
+        pod={streamOpen && pod ? { clusterId: pod.clusterId, namespace: pod.namespace, name: pod.name } : null}
+        onClose={() => setStreamOpen(false)} />
 
       {/* ===== 容器内日志文件（只读下载） ===== */}
       <Divider orientation="left" style={{ marginTop: 16 }}>容器内日志文件（只读下载）</Divider>

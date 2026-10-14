@@ -15,6 +15,7 @@ import (
 	execgrpc "github.com/api-ops-platform/k8s-executor/internal/grpc"
 	"github.com/api-ops-platform/k8s-executor/internal/health"
 	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
+	"github.com/api-ops-platform/k8s-executor/internal/logstream"
 	"github.com/api-ops-platform/k8s-executor/internal/metrics"
 	"github.com/api-ops-platform/k8s-executor/internal/quota"
 	"github.com/api-ops-platform/k8s-executor/internal/script"
@@ -89,6 +90,15 @@ func main() {
 		}
 	}
 
+	// 9.6 实时日志跟随 HTTP（P1-R5，可选）
+	var logStreamSrv *logstream.Server
+	if cfg.LogStreamAddr != "" {
+		logStreamSrv = logstream.NewServer(manager, cfg.LogStreamAddr, logger)
+		if err := logStreamSrv.Start(ctx); err != nil {
+			logger.Warn("日志流服务启动失败", zap.Error(err))
+		}
+	}
+
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
 		logger.Fatal("gRPC 监听失败", zap.String("port", cfg.GRPCPort), zap.Error(err))
@@ -108,6 +118,9 @@ func main() {
 	<-sigCh
 	logger.Info("收到退出信号，优雅关闭...")
 	grpcServer.GracefulStop()
+	if logStreamSrv != nil {
+		logStreamSrv.Stop()
+	}
 	if admissionSrv != nil {
 		admissionSrv.Stop()
 	}

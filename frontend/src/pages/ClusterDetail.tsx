@@ -17,6 +17,7 @@ import ServiceSettingsModal from '../components/ServiceSettingsModal'
 import IngressSettingsModal from '../components/IngressSettingsModal'
 import PvcCreateModal from '../components/PvcCreateModal'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../components/WorkloadCreateModal'
+import PodLogStreamModal from '../components/PodLogStreamModal'
 
 const POD_STATUS_COLOR: Record<string, string> = {
   Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
@@ -875,6 +876,7 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(false)
   const [container, setContainer] = useState('')
+  const [streamOpen, setStreamOpen] = useState(false)
 
   const load = () => {
     if (!pod) return
@@ -892,10 +894,14 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
       <Space style={{ marginBottom: 12 }}>
         <Input placeholder="容器名（空=第一个）" value={container} onChange={(e) => setContainer(e.target.value)} style={{ width: 220 }} />
         <Button type="primary" onClick={load}>查询</Button>
+        <Button onClick={() => setStreamOpen(true)}>实时跟随</Button>
       </Space>
       <pre style={{ maxHeight: '70vh', overflow: 'auto', background: '#f5f5f5', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>
         {loading ? '加载中...' : logs}
       </pre>
+      <PodLogStreamModal
+        pod={streamOpen && pod ? { clusterId: pod.clusterId, namespace: pod.namespace, name: pod.name } : null}
+        onClose={() => setStreamOpen(false)} />
     </Drawer>
   )
 }

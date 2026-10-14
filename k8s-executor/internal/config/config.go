@@ -27,6 +27,9 @@ type Config struct {
 	AdmissionClusterID int    // 归属集群 ID（管控表按集群过滤）
 	AdmissionCertFile  string // TLS 证书（空=自签）
 	AdmissionKeyFile   string // TLS 私钥（空=自签）
+
+	// 实时日志跟随（P1-R5）：executor 本地 HTTP 端口，供 api-server 代理流式日志（空=关闭）
+	LogStreamAddr string // 监听地址，如 :9099
 }
 
 // findEnvFile 向上查找项目根目录下的 .env 文件
@@ -72,6 +75,11 @@ func Load() (*Config, error) {
 		AdmissionClusterID: v.GetInt("ADMISSION_CLUSTER_ID"),
 		AdmissionCertFile:  v.GetString("ADMISSION_CERT_FILE"),
 		AdmissionKeyFile:   v.GetString("ADMISSION_KEY_FILE"),
+
+		LogStreamAddr: v.GetString("LOGSTREAM_ADDR"),
+	}
+	if cfg.LogStreamAddr == "" {
+		cfg.LogStreamAddr = ":9099" // 默认开启（api-server 经 EXECUTOR_LOGSTREAM_ADDR 访问）
 	}
 	if cfg.GRPCPort == "" {
 		cfg.GRPCPort = "9090"
