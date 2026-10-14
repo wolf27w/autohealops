@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     JVM_JATTACH_URL: str = "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
     JVM_JATTACH_PATH: str = "/tmp/.apiops-jattach"
 
+    # 镜像仓库（R3）：列仓库标签用。可选全局只读凭据；或 REGISTRY_CREDS 按 host 配（JSON）
+    #   例：REGISTRY_CREDS={"harbor.efreight.cn":{"username":"ro","password":"***"}}
+    REGISTRY_USERNAME: str = ""
+    REGISTRY_PASSWORD: str = ""
+    REGISTRY_CREDS: str = ""
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",

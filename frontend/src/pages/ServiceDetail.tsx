@@ -10,7 +10,7 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs, getRegistryTags } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 import type { AggLogPod } from '../services/api'
 
@@ -55,6 +55,9 @@ export default function ServiceDetail() {
   const [probeForm] = Form.useForm()
   const [imageModal, setImageModal] = useState(false)
   const [imageForm] = Form.useForm()
+  const [imgTags, setImgTags] = useState<string[]>([])
+  const [imgTagLoading, setImgTagLoading] = useState(false)
+  const [imgTagErr, setImgTagErr] = useState('')
   const [aggLogsOpen, setAggLogsOpen] = useState(false)
   const [aggLogs, setAggLogs] = useState<AggLogPod[]>([])
   const [aggLogsLoading, setAggLogsLoading] = useState(false)
@@ -175,13 +178,25 @@ export default function ServiceDetail() {
     load()
   }
 
-  const openImageModal = () => { imageForm.resetFields(); setImageModal(true) }
+  const openImageModal = () => { imageForm.resetFields(); setImageModal(true); setImgTags([]); setImgTagErr('') }
   const handleImageUpdate = async () => {
     const v = await imageForm.validateFields()
     await updateWorkloadImage(clusterId, kind, namespace, name, { container: v.container, image: v.image })
     message.success('镜像已更新（滚动生效）')
     setImageModal(false)
     load()
+  }
+  const loadImgTags = async () => {
+    const img = String(imageForm.getFieldValue('image') || '').trim()
+    if (!img) { message.warning('请先填写镜像（如 harbor.efreight.cn/proj/app:tag）'); return }
+    setImgTagLoading(true); setImgTagErr(''); setImgTags([])
+    try {
+      const d = await getRegistryTags(img, 100)
+      const tags = d?.tags || []
+      setImgTags(tags)
+      if (tags.length === 0) setImgTagErr('未列到标签（仓库可能私有需配凭据，或网络不通）')
+    } catch (e) { setImgTagErr(String((e as Error)?.message || e)) }
+    finally { setImgTagLoading(false) }
   }
 
   const loadAggLogs = async () => {
@@ -348,8 +363,26 @@ export default function ServiceDetail() {
       <Modal title={`更新镜像：${name}`} open={imageModal} onOk={handleImageUpdate} onCancel={() => setImageModal(false)} width={520}>
         <Form form={imageForm} layout="vertical">
           <Form.Item name="container" label="容器名（空=第一个容器）"><Input placeholder="如 app" /></Form.Item>
-          <Form.Item name="image" label="镜像" rules={[{ required: true, message: '请输入镜像' }]}><Input placeholder="harbor.efreight.cn/xinnuo/xxx:tag" /></Form.Item>
+          <Space.Compact style={{ width: '100%' }}>
+            <Form.Item name="image" label="镜像" style={{ flex: 1, marginBottom: 0 }} rules={[{ required: true, message: '请输入镜像' }]}>
+              <Input placeholder="harbor.efreight.cn/xinnuo/xxx:tag" />
+            </Form.Item>
+            <Button style={{ marginTop: 30 }} loading={imgTagLoading} onClick={loadImgTags}>列仓库标签</Button>
+          </Space.Compact>
         </Form>
+        {imgTagErr && <div style={{ color: '#cf1322', fontSize: 12, marginTop: 8 }}>{imgTagErr}</div>}
+        {imgTags.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>选择标签→填入镜像（共 {imgTags.length} 个）：</div>
+            <Select style={{ width: '100%' }} showSearch placeholder="选择标签"
+              filterOption={(i, o) => String(o?.value || '').includes(i)}
+              onChange={(t) => {
+                const repo = String(imageForm.getFieldValue('image') || '').split(':')[0]
+                if (repo) imageForm.setFieldsValue({ image: `${repo}:${t}` })
+              }}
+              options={imgTags.map((t) => ({ value: t, label: t }))} />
+          </div>
+        )}
       </Modal>
       <Modal open={aggLogsOpen} title={`聚合日志：${name}（${aggLogs.length} Pod）`} footer={null} onCancel={() => setAggLogsOpen(false)} width={900}>
         <Spin spinning={aggLogsLoading}>

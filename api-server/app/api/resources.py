@@ -789,6 +789,21 @@ async def update_workload_image(cluster_id: int, kind: str, namespace: str, name
             "data": {"container": target.get("name"), "old_image": old_image, "new_image": image}}
 
 
+@router.get("/registry/tags")
+async def registry_tags(image: str, limit: int = 100, user=Depends(require_any_user)):
+    """列镜像仓库标签（R3 镜像更新）：Docker Registry v2，兼容 Harbor/ACR/SWR/DockerHub。只读。"""
+    from app.services.registry_service import list_tags
+    return await list_tags(image, limit)
+
+
+@router.get("/registry/parse")
+async def registry_parse(image: str, user=Depends(require_any_user)):
+    """解析镜像引用为 host/repository/tag（只读，供前端提示）。"""
+    from app.services.registry_service import parse_image_ref
+    host, repo, tag = parse_image_ref(image)
+    return {"code": 200, "message": "success", "data": {"host": host, "repository": repo, "tag": tag}}
+
+
 @router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/isolate")
 async def isolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict, user=Depends(require_operator)):
     """Pod 隔离（R8）：把 app 标签改为 <原值>-ALERT，脱离 Service 流量、保留现场排查"""

@@ -511,6 +511,11 @@ export const uninstallAdmission = (data: Payload) =>
 export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
   http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
 
+// 镜像仓库标签（R3）：Docker Registry v2（Harbor/ACR/SWR）
+export interface RegistryTags { host: string; repository: string; current_tag: string; tags: string[]; total: number }
+export const getRegistryTags = (image: string, limit = 100) =>
+  http.get<RegistryTags>('/resources/registry/tags', { params: { image, limit } })
+
 // ============ 告警屏蔽（P2-R11） ============
 export interface SilenceMatcher { key: string; op: string; value: string }
 export interface AlertSilence {
