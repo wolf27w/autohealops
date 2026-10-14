@@ -91,6 +91,8 @@
   .nodework.bad{border-left-color:var(--red)}
   .sep{height:1px;background:var(--fill);margin:10px 0}
   .empty{color:var(--text-3);font-size:12px;padding:16px;text-align:center}
+  .clockbadge{position:fixed;left:14px;top:12px;z-index:99;font-size:12px;padding:3px 12px;border-radius:10px;background:var(--fill);border:1px solid var(--border-2);color:var(--text);backdrop-filter:blur(6px);font-variant-numeric:tabular-nums}
+  .clockbadge b{color:var(--green);margin-right:8px;font-weight:600}
   .modebadge{position:fixed;right:14px;top:12px;z-index:99;font-size:11px;padding:2px 10px;border-radius:10px;backdrop-filter:blur(6px)}
   .modebadge.demo{background:rgba(243,156,18,.16);color:var(--yellow);border:1px solid rgba(243,156,18,.4)}
   .modebadge.ok{background:rgba(46,204,113,.16);color:var(--green);border:1px solid rgba(46,204,113,.4)}
@@ -98,6 +100,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="clock" class="clockbadge"></div>
 <div id="mode" class="modebadge demo">数据：演示</div>
 
 <script>
@@ -340,7 +343,7 @@ function renderOverview(){
       ${CLUSTERS.map(c=>{
         const col = c.status==='bad'?'var(--red)':(c.status==='warn'?'var(--yellow)':'var(--green)');
         const label = c.status==='bad'?'异常':(c.status==='warn'?'警告':'正常');
-        return `<div class="cluster-card" onclick="navCluster('${c.id}')">
+        return `<div class="cluster-card" onclick='navCluster(${JSON.stringify(c.id)})'>
           <div class="topbar" style="background:${col}"></div>
           <div class="body">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -363,7 +366,7 @@ function renderOverview(){
   <!-- 第四行 -->
   <div class="row" style="margin-bottom:16px">
     <div class="col panel">
-      <h3>自愈效果</h3>
+      <h3>自愈效果 <span class="sub">平均自愈时长 ${OVERVIEW.heal.avgMin??0} 分钟</span></h3>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
         <div class="cnt-box"><div class="n down">${OVERVIEW.heal.success}</div><div class="l">成功</div></div>
         <div class="cnt-box"><div class="n up">${OVERVIEW.heal.failed}</div><div class="l">失败</div></div>
@@ -387,7 +390,7 @@ function renderOverview(){
             <div class="sm ell">${t.desc}</div>
             <div class="xs dim">${t.cluster} / ${t.ns} / ${t.svc}${t.node?' · 节点 '+t.node:''}</div>
           </div>
-          <span class="btn primary" onclick='navCluster("${t.cluster}", ${JSON.stringify(t.node?{node:t.node}:{ns:t.ns,svc:t.svc})})'>处理 →</span>
+          <span class="btn primary" onclick='navCluster(${JSON.stringify(t.clusterId)}, ${JSON.stringify(t.node?{node:t.node}:{ns:t.ns,svc:t.svc})})'>处理 →</span>
         </div>`).join('')}
     </div>
   </div>
@@ -398,7 +401,7 @@ function renderOverview(){
       <h3>实时故障告警</h3>
       ${OVERVIEW.alerts.map((a,idx)=>{
         const healTag = {pending:['待处理','gray'],healing:['自愈中','yellow'],healed:['已自愈','green'],failed:['自愈失败','red']}[a.heal];
-        const jump = a.kind==='node' ? `navCluster('${a.cluster}', {node:'${a.node}'})` : `navCluster('${a.cluster}', {ns:'${a.ns}',svc:'${a.svc}'})`;
+        const jump = `navCluster(${JSON.stringify(a.clusterId)}, ${JSON.stringify(a.node?{node:a.node}:{ns:a.ns,svc:a.svc})})`;
         return `<div class="list-row">
           <span class="dot ${a.sev}"></span>
           <div class="grow">
@@ -406,7 +409,7 @@ function renderOverview(){
             <div class="xs dim">${a.cluster} / ${a.ns} / ${a.svc}${a.node?' · '+a.node:''}</div>
           </div>
           <span class="tag ${healTag[1]}">${healTag[0]}</span>
-          <span class="btn" onclick="${jump}">查看${a.kind==='node'?'节点':'监控'} →</span>
+          <span class="btn" onclick="${jump}">查看${a.node?'节点':'监控'} →</span>
         </div>`;
       }).join('')}
     </div>
@@ -425,7 +428,7 @@ function renderOverview(){
 let CV = {}; // cluster view state
 function renderCluster(){
   clearCharts();
-  const c = CLUSTERS.find(x=>x.id===CV.cluster) || CLUSTERS[0];
+  const c = CLUSTERS.find(x=>String(x.id)===String(CV.cluster)) || CLUSTERS[0];
   const banner = CV.from ? `
     <div class="banner">
       <span>从告警跳转，已定位到：${CV.from}</span>
@@ -687,10 +690,11 @@ const sevDot = s => (s==='critical'||s==='high')?'red':(s==='medium'?'yellow':'g
 const HEAL_MAP = {pending:'pending',awaiting_approval:'healing',ticketed:'healing',resolved:'healed',self_healed:'healed',closed:'healed'};
 
 async function loadOverviewReal(){
-  const [dash, clusters, alerts] = await Promise.all([
+  const [dash, clusters, alerts, recs] = await Promise.all([
     apiGet('/stats/dashboard?range=7d&ai_range=7d'),
     apiGet('/clusters'),
     apiGet('/alerts?group=true&page=1&size=10').catch(()=>[]),
+    apiGet('/repair-records?page=1&size=50').catch(()=>[]),
   ]);
   const core = dash.core||{}, cd = dash.cluster_details||[], cById = {}; clusters.forEach(c=>cById[c.id]=c);
   const byCpu = cd.slice().sort((a,b)=>(b.cpu_pct||0)-(a.cpu_pct||0));
@@ -700,8 +704,7 @@ async function loadOverviewReal(){
   OVERVIEW.kpi.healedToday = {v: core.today_resolved??0, rate: core.heal_rate??0};
   OVERVIEW.kpi.failed = {v: core.manual_pending??0, abnormalClusters: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0))};
   OVERVIEW.heal = { success: core.today_resolved??0, failed: core.manual_pending??0,
-    processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), rate: core.heal_rate??0 };
-  OVERVIEW.heal.stubborn = (function(){ var arr=Array.isArray(alerts)?alerts:(alerts.items||alerts.data||[]); return arr.filter(a=>a.manual_required).slice(0,3).map(a=>({svc:(a.namespace||'')+'/'+(a.deployment_name||a.resource_name||''), fails:a.event_count||a.group_count||1, range:'需人工介入'})); })();
+    processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), rate: core.heal_rate??0, avgMin: core.mttr_minutes??0 };
   OVERVIEW.waterline = [
     {dim:'CPU', pct: Math.round(byCpu[0]?.cpu_pct||0), peak: byCpu[0]?.name||'-'},
     {dim:'内存', pct: Math.round(byMem[0]?.mem_pct||0), peak: byMem[0]?.name||'-'},
@@ -715,17 +718,34 @@ async function loadOverviewReal(){
     status: c.status==='healthy'?'ok':((c.alert_pending||0)>0?'warn':'ok'),
     nodes:c.node_total||0, pods:c.pods||0, alerts:c.alert_pending||0,
     cpu:Math.round(c.cpu_pct||0), mem:Math.round(c.mem_pct||0), disk:0}); });
-  const al = Array.isArray(alerts)?alerts:(alerts.items||alerts.data||[]);
-  OVERVIEW.alerts = al.slice(0,8).map(a=>({
-    sev: sevDot(a.severity), title:a.message||a.fault_type,
-    cluster:a.cluster_name||('#'+a.cluster_id), ns:a.namespace||'',
-    svc:a.deployment_name||a.resource_name, node: a.resource_type==='node'?a.resource_name:undefined,
-    heal: HEAL_MAP[a.status]||'healing', kind: a.resource_type==='node'?'node':'service',
-  }));
-  const ab = dash.abnormal_pods||[];
-  if(ab.length) OVERVIEW.top5 = ab.slice(0,5).map((p,i)=>({rank:i+1,
-    desc:(p.fault_type||'异常')+'（'+(p.pod_name||'')+'）', cluster:p.cluster_name, ns:p.namespace, svc:p.pod_name}));
+  /* ---- 真实告警 + 自愈处理记录 ---- */
+  const al = (Array.isArray(alerts)?alerts:(alerts.items||alerts.data||[]));
+  const rl = (Array.isArray(recs)?recs:(recs.items||recs.data||[]));
+  const SEVR = {critical:0,high:1,medium:2,low:3};
+  const mkSvc = rn => String(rn||'').replace(WL_STRIP,'');
+  let feed = al.map(a=>({ sev:sevDot(a.severity), sevRaw:a.severity, title:a.message||a.fault_type,
+    clusterId:a.cluster_id, cluster:a.cluster_name||('#"'+a.cluster_id), ns:a.namespace||'',
+    svc: a.resource_type==='node'?null:mkSvc(a.resource_name||a.deployment_name),
+    node: a.resource_type==='node'?a.resource_name:null, heal:HEAL_MAP[a.status]||'pending' }));
+  rl.forEach(r=>feed.push({ sev:sevDot(r.severity), sevRaw:r.severity,
+    title:r.message||((r.fault_type||'')+' · '+(r.resource_name||'')),
+    clusterId:r.cluster_id, cluster:r.cluster_name||('#"'+r.cluster_id), ns:r.namespace||'',
+    svc: r.resource_type==='node'?null:mkSvc(r.resource_name),
+    node: r.resource_type==='node'?r.resource_name:null, heal:'healed' }));
+  OVERVIEW.alerts = feed.slice(0,8);
+  OVERVIEW.top5 = feed.slice().sort((a,b)=>(SEVR[a.sevRaw]??9)-(SEVR[b.sevRaw]??9)).slice(0,5)
+    .map((f,i)=>({rank:i+1, desc:f.title, cluster:f.cluster, clusterId:f.clusterId, ns:f.ns, svc:f.svc, node:f.node}));
+  const mkMin = ts => ts? Math.max(0, Math.round((Date.now()-new Date(ts).getTime())/60000)) : 0;
+  OVERVIEW.events = rl.slice(0,20).map(r=>({ t:(r.handle_type||'自愈')+' · '+(r.fault_type||'')+' · '+(r.namespace?r.namespace+'/':'')+r.resource_name,
+    time: timeAgo(mkMin(r.detected_at)), s:(r.status==='self_healed'||r.status==='resolved')?'ok':'fail' }));
+  const cnt={}; rl.forEach(r=>{ if(r.resource_name) cnt[r.resource_name]=(cnt[r.resource_name]||0)+1; });
+  OVERVIEW.heal.stubborn = Object.entries(cnt).filter(([,c])=>c>=2).sort((a,b)=>b[1]-a[1]).slice(0,3)
+    .map(([rn,c])=>({ svc:((rl.find(r=>r.resource_name===rn)||{}).namespace||'')+'/'+rn, fails:c, range:'近期重复故障' }));
 }
+
+function tickClock(){ const el=document.getElementById('clock'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
+  el.innerHTML='<b>API-OPS 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]; }
+setInterval(tickClock,1000); tickClock();
 
 /* ---------- 启动 ---------- */
 window.addEventListener('resize', ()=>charts.forEach(c=>{try{c.resize()}catch(e){}}));
