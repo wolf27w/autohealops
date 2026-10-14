@@ -36,6 +36,7 @@ func (s *Server) Start(_ context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/logs", s.handleLogs)
+	mux.HandleFunc("/watch", s.handleWatch)
 	s.srv = &http.Server{Addr: s.addr, Handler: mux}
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {

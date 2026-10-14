@@ -67,6 +67,7 @@ export default function ServiceDetail() {
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [podTab, setPodTab] = useState('pods')
   const [pods, setPods] = useState<ServicePod[]>([])
+  const [liveWs, setLiveWs] = useState(false)
   const [events, setEvents] = useState<WorkloadEvent[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
 
@@ -103,6 +104,38 @@ export default function ServiceDetail() {
     })
   }
   useEffect(loadPods, [id, namespace, name])
+
+  // R6 实时状态推送：WS 订阅命名空间 Pod/Deployment 变化；变化即刷新 Pod 列表（节流），副本数实时更新
+  const loadPodsRef = useRef(loadPods)
+  useEffect(() => { loadPodsRef.current = loadPods })
+  useEffect(() => {
+    if (!clusterId || !namespace || !name) return
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const token = localStorage.getItem('token') || ''
+    const url = `${proto}//${window.location.host}/api/v1/ws/clusters/${clusterId}/namespaces/${namespace}/pods/status?token=${encodeURIComponent(token)}&name=${encodeURIComponent(name)}`
+    let ws: WebSocket | null = null
+    let closed = false
+    let last = 0
+    const trigger = () => { const now = Date.now(); if (now - last > 1500) { last = now; loadPodsRef.current() } }
+    const openWs = () => {
+      if (closed) return
+      ws = new WebSocket(url)
+      ws.onopen = () => setLiveWs(true)
+      ws.onmessage = (ev) => {
+        let j: { res?: string; name?: string; replicas?: number; readyReplicas?: number }
+        try { j = JSON.parse(typeof ev.data === 'string' ? ev.data : '') } catch { return }
+        if (j.res === 'deploy' && j.name === name) {
+          setWorkload((w) => (w ? { ...w, replicas: j.replicas ?? w.replicas, ready_replicas: j.readyReplicas ?? w.ready_replicas } : w))
+        }
+        trigger()
+      }
+      ws.onclose = () => { ws = null; setLiveWs(false); if (!closed) window.setTimeout(openWs, 3000) }
+      ws.onerror = () => { try { ws?.close() } catch { /* ignore */ } }
+    }
+    openWs()
+    return () => { closed = true; try { ws?.close() } catch { /* ignore */ } }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusterId, namespace, name])
 
   const handleScale = async () => {
     await scaleWorkload(clusterId, { kind, namespace, name, replicas })
@@ -198,6 +231,7 @@ export default function ServiceDetail() {
           <Descriptions.Item label="命名空间">{namespace}</Descriptions.Item>
           <Descriptions.Item label="副本数">
             {workload?.replicas ?? '-'}（就绪 {workload?.ready_replicas ?? '-'}）
+            <Tag color={liveWs ? 'green' : 'default'} style={{ marginLeft: 8 }}>{liveWs ? '实时' : '离线'}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="副本增减">
             <Space>
