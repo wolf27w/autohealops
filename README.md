@@ -2,6 +2,19 @@
 
 多 Kubernetes 集群管理 + AI 智能诊断自愈平台。统一管理多个 K8s 集群，通过 AI 智能诊断故障、生成修复方案，经决策审批后自动执行修复，全链路审计可追溯。
 
+## 快速部署
+
+```bash
+cp .env.example .env      # 填好 DATABASE_URL / REDIS_URL / ENCRYPTION_KEY / JWT_SECRET_KEY
+./install.sh --check      # 环境预检（不改动任何东西）
+./install.sh              # 本地模式：建 venv 装依赖 + 构建 executor + 迁移 + 启动
+# 或
+./install.sh --docker     # Docker 模式：构建镜像 + compose 起 + 容器内迁移
+```
+
+常用：`./install.sh --no-start`（只装不启动）、`./install.sh --skip-deps`（复用已有依赖）。
+本地默认端口：前端 5173（大屏 `/screen`）/ api-server 8080 / ai-service 9000 / executor gRPC 9090 + 日志流 HTTP 9099。
+
 ## 架构
 
 ```
