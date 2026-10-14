@@ -1,6 +1,6 @@
 # API-OPS 平台 —— 需求总账（Backlog）
 
-> 整理：小吴　更新：2026-10-12　依据：DESIGN-2026-09-10.md + 工作日志 + 代码核查
+> 整理：小吴　更新：2026-10-14　依据：DESIGN-2026-09-10.md + 工作日志 + 代码核查
 > 用途：一张表看清「已做 / 待做 / 待确认」。状态以代码为准，未核实项标 ❓。
 
 **状态图例**：✅ 已完成 ｜ ⏳ 待办 ｜ ❓ 待确认（老板拍板 / 状态不明） ｜ ⏸ 暂缓
@@ -30,9 +30,9 @@
 | 2 | **批二 · AI 诊断提速**（默认单轮、深度诊断开关） | ai-service/agent_service | ✅ 2026-09-12（知识库优先 + 单轮预采集 + 深度开关） |
 | 3 | **批二 · 命名空间加载提速** | resources 接口 | ✅ 2026-09-12（Redis 短缓存 + (cluster_id,namespace) 联合索引，索引迁移待执行） |
 | 4 | **一键回滚修复** | 处理记录 / 执行详情 行内按钮 | ✅ 2026-09-12（复用 executor RollbackPlan 逆序回滚 + 审计） |
-| 5 | **RAG 向量索引**（现为 O(N) 全表余弦） | ai-service 知识库检索 | ⏳ 无 faiss/hnsw |
+| 5 | **RAG 向量索引**（原 O(N) 全表余弦） | ai-service 知识库检索 | ✅ 2026-09-12（内存归一化矩阵 + 向量化余弦 + TTL/失效；非 faiss/hnsw） |
 | 6 | **httpx 连接池复用**（现每请求新建） | api-server / ai-service 多处 | ✅ 2026-09-12（共享客户端，见下） |
-| 7 | **CI/CD + 日志归档策略** | 仓库级 | ⏳ 无 CI；保留/归档策略未定 |
+| 7 | **CI/CD + 日志归档策略** | 仓库级 | ✅ 2026-09-12（`scripts/ci_check.sh` + GH Actions + `scripts/rotate_logs.sh`） |
 | 8 | **菜单合并 23→~12** | MainLayout 菜单 IA | ✅ 2026-09-12（合并为 15 项：告警处理/策略配置/通知配置/用户与权限 合并页） |
 | 9 | **幽灵页清理** | `OnDuty.tsx`（无路由无菜单） | ✅ 2026-09-12（已移除，未引用） |
 | 10 | **P3 工程化**：类型化（any 227 处）、重复收敛、react-query、关键路径单测 | 全栈 | ✅ 基本完成：any 全清(0)、react-query(4 轮询页)、单测+CI；仅剩深层次重复收敛 |
@@ -603,3 +603,43 @@
 5. **起止范围**：P0–P3 全做（范围已定，排期暂缓）。
 
 详见：**`docs/SHORTFALL-REQUIREMENTS.md`**
+
+---
+
+## 2026-10-14 状态复核（以代码为准）
+
+> 复核：小吴 2026-10-14。上面 10-12 的「需求清单」表是当时快照，**已滞后**——多项标 ❌ 实际已在 10-12/10-13 落地（见下表）。此节为最新口径。
+
+### R1–R13 最新状态
+
+| # | 需求 | 状态 | 落点 / 缺口（代码核实） |
+|---|---|---|---|
+| R1 | 资源治理 + 准入控制 | ⚠️ 半成品 | 管控表 `models/resource_governance.py` + `api/resource_governance.py` + 前端 `ResourceGovernance.tsx` + executor `internal/admission/`（补丁/证书/fail-open）均 ✅；**缺**：向集群下发 Service + MutatingWebhookConfiguration（准入尚未真正生效）、高峰采集 |
+| R2 | JVM 深度诊断 + 参数管控 | ✅ 完成 | `api/jvm.py`（9 动作）+ `JvmDiagModal` + Deployment 参数采集；**2026-10-14 新增 jattach 后端**（JRE 镜像免装 JDK 也能 threaddump/堆信息/VM 参数）/明确报错/检测补全，commit `0c43d5f`；生产 JRE 容器实测通过 |
+| R2.3 | JVM 堆/G1 指标 + 告警 | ⏸ 暂缓 | 集群 Prometheus 无任何 `jvm_*` 指标，无数据源 |
+| R3 | 镜像更新（列仓库标签一键改） | ❌ 未做 | 仅 `RepairImagePull`（补 imagePullSecrets） |
+| R4 | 节点管理 + 均衡迁移 | ⚠️ 半成品 | `NodeManagement.tsx`（列表 + cordon/uncordon）+ `resources.py` 端点 ✅；**缺**：均衡/迁移算法、drain、调度到指定节点 |
+| R5 | 实时日志跟随 + 增强 | ❌ 未做 | 仅历史查询，无 follow/stream |
+| R6 | 实时状态推送（WebSocket） | ❌ 未做 | 仅仪表盘 SSE（`/stats/dashboard/stream`）+ 终端 WS；资源状态无 WS |
+| R7 | 统一监控大屏增强 | ⚠️ 半成品 | `/screen` 路由有（**复用同一 `Dashboard` 组件**）；**缺**多集群统一总览增强（全集群卡片/风险节点徽章/TopN） |
+| R8 | Pod 隔离 | ✅ 完成 | `resources.py`：`POST /clusters/{id}/namespaces/{ns}/pods/{pod}/isolate` |
+| R9 | MCP 标准接口 | ✅ 完成 | `api/mcp.py`（Streamable HTTP + JSON-RPC 2.0），已注册 `main.py` |
+| R10 | AI 助手增强 | ❌ 未做 | 仅基础会话 `AgentChat`；缺全局记忆 / 自由指标（MetricsQL）/ 断线续传 / 统一受控工具集 |
+| R11 | 告警屏蔽（Alertmanager 风格） | ✅ 完成 | `alert_silences` 模型 + `api/alert_silences.py`（含预览）+ `AlertSilences.tsx`（匹配/到期） |
+| R12 | agent 主动外连接入模式 | ❌ 未做 | 仍为集中连 |
+| R13 | 一键部署脚本 | ❌ 未做 | 仅 `start.sh`，无 `install.sh` |
+
+### 其它线
+
+- **集群监控（Prometheus 数据源，2026-10-13 定稿，老板「现在先不做」）**
+  - ✅ 即时查询：`prometheus_service.py` + `/api/v1/monitoring/*`（`/metrics`、`/clusters/{id}/metrics/{m}`、`/clusters/{id}/query`）
+  - ⬜ 待做：executor `range` 端点（趋势曲线）、前端仪表盘改「告警｜监控」Tab + 监控下钻页、后台「监控数据源」配置
+- **Netdata 监控接入（2026-10-09 的 A–D）**：❌ 已整套回滚（2026-10-13，代码删除）；依赖它的**主机(ECS)/Docker 接入 + 诊断（B/D）**一并取消（无 `hosts` 模型）
+- **项目级审批（2026-10-09 E）**：✅ 完成——`projects.approval_flow_id`（迁移 `t3u4v5w6x7y8`）+ `approval_service._load_default_flow` 项目优先 + 前端 `ProjectManagement` 审批流程下拉
+
+### 小结
+
+- **从零未做**：R3、R5、R6、R10、R12、R13
+- **半成品**：R1、R4、R7
+- **暂缓**：R2.3、Prometheus 监控趋势（老板「先不做」）
+- **已取消**：Netdata 接入及依赖项（主机/Docker）
