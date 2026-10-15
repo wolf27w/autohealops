@@ -641,6 +641,31 @@ async def send_alert_notification(alert: Alert) -> None:
     await notify_alert(alert)
 
 
+async def notify_platform(content: str, at_all: bool = True) -> dict:
+    """平台自身事件通知（如 executor 掉线）：发到所有激活渠道 + 写站内消息给管理员。
+
+    与告警通知（notify_alert）分开：平台事件不关联 Alert，不走告警策略/静默。
+    返回 {channels_sent}。
+    """
+    sent = 0
+    for cfg in await _get_configs():
+        try:
+            if await _send_webhook_with_retry(cfg, content, at_all=at_all):
+                sent += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("平台通知发送失败（cfg=%s）: %s", getattr(cfg, "id", "?"), e)
+    # 站内消息给管理员
+    try:
+        from app.models import User
+        async with async_session() as session:
+            admins = list((await session.execute(select(User).where(User.role == "admin"))).scalars())
+        for u in admins:
+            await write_in_app_message(u.id, "平台告警", content, kind="error")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("平台站内消息写入失败: %s", e)
+    return {"channels_sent": sent}
+
+
 async def _cluster_name(cluster_id: int) -> str:
     """取集群名称（消息展示用，避免显示 ID）"""
     if not cluster_id:

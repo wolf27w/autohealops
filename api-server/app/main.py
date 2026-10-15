@@ -246,6 +246,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("主动诊断巡检启动失败: %s", e)
 
+    # executor 存活探测 + 掉线告警（M2；每 60 秒，状态翻转才通知）
+    try:
+        from app.services.executor_health_service import background_loop as executor_health_loop
+        _exec_health_task = asyncio.create_task(executor_health_loop())
+        logger.info("executor 掉线探测已启动（每 60 秒，状态翻转才通知）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("executor 掉线探测启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

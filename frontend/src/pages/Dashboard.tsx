@@ -292,6 +292,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
             <Badge color={platformOk(platformHealth?.database)} />
             <span style={{ fontSize: 12, color: muted }}>Redis</span>
             <Badge color={platformOk(platformHealth?.redis)} />
+            <span style={{ fontSize: 12, color: muted }}>executor</span>
+            <Badge color={platformOk(platformHealth?.executor ?? undefined)} />
           </Space>
 
           <Button icon={<ReloadOutlined spin={isFetching} />} onClick={() => refetch()}>刷新</Button>

@@ -8,8 +8,11 @@ from app.core.database import async_session
 from app.core.redis_client import redis_pool
 
 
-async def check_dependencies() -> dict:
-    """探活数据库与 Redis，返回 {api_server, database, redis}（api_server 恒 True，能执行到即存活）"""
+async def check_dependencies(with_executor: bool = False) -> dict:
+    """探活数据库与 Redis（+可选 executor），返回 {api_server, database, redis[, executor]}。
+
+    /ready 探针用（with_executor=False，保持快速）；/stats/platform-health 用（True）多看 executor。
+    """
     db_ok = True
     redis_ok = True
     try:
@@ -21,4 +24,14 @@ async def check_dependencies() -> dict:
         await redis_pool.ping()
     except Exception:  # noqa: BLE001
         redis_ok = False
-    return {"api_server": True, "database": db_ok, "redis": redis_ok}
+    out = {"api_server": True, "database": db_ok, "redis": redis_ok}
+    if with_executor:
+        try:
+            from app.services.executor_health_service import probe_executor
+            st = await probe_executor()
+            out["executor"] = st["running"]
+            out["executor_detail"] = {"logstream": st["logstream"], "grpc": st["grpc"], "error": st["detail"]}
+        except Exception as e:  # noqa: BLE001
+            out["executor"] = False
+            out["executor_detail"] = {"error": str(e)}
+    return out

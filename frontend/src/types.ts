@@ -377,6 +377,8 @@ export interface PlatformHealth {
   api_server: boolean
   database: boolean
   redis: boolean
+  executor?: boolean | null
+  executor_detail?: { logstream?: boolean; grpc?: boolean; error?: string }
   time?: string
 }
 

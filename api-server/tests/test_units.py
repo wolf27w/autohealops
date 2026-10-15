@@ -555,5 +555,18 @@ class TestScheduleToNode(unittest.TestCase):
         self.assertNotIn("nodeSelector", doc["spec"]["template"]["spec"])
 
 
+class TestExecutorHealth(unittest.TestCase):
+    """M2：executor 掉线状态翻转判定"""
+
+    def test_transitions(self):
+        from app.services.executor_health_service import evaluate_transition as ev
+        self.assertEqual(ev(None, True), ("", "up"))
+        self.assertEqual(ev("up", True), ("", "up"))
+        self.assertEqual(ev("up", False), ("down", "down"))
+        self.assertEqual(ev("down", False), ("", "down"))
+        self.assertEqual(ev("down", True), ("up", "up"))
+        self.assertEqual(ev(None, False), ("down", "down"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

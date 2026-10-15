@@ -1215,11 +1215,12 @@ async def ai_dashboard(range_days: int = 7, user=Depends(require_any_user)):
 
 @router.get("/platform-health")
 async def platform_health(user=Depends(require_any_user)):
-    """平台自身健康探活（api-server / 数据库 / Redis）—— 与 /ready 共用同一探测实现（去重）"""
+    """平台自身健康探活（api-server / 数据库 / Redis / executor）—— 与 /ready 共用探测实现。"""
     from app.services.platform_health_service import check_dependencies
 
-    dep = await check_dependencies()
+    dep = await check_dependencies(with_executor=True)
     return {"code": 200, "message": "success", "data": {
         "api_server": True, "database": dep["database"], "redis": dep["redis"],
+        "executor": dep.get("executor"), "executor_detail": dep.get("executor_detail"),
         "time": datetime.now().isoformat(),
     }}
