@@ -133,6 +133,41 @@ async def _h_search_logs(args: dict, context: dict) -> dict:
     return {"success": True, "output": txt[:8000], "error": ""}
 
 
+async def _h_get_probe_config(args: dict, context: dict) -> dict:
+    """读取 Pod 所属 Deployment 的探针配置（liveness/readiness/startup）。
+
+    探针失败类问题必备：先看探针本身配得对不对（path/port/timeout/failureThreshold/initialDelay），
+    再结合容器内证据找真因（GC 停顿/线程打满/依赖慢）。
+    """
+    import json as _json
+
+    import yaml
+
+    from app.utils.pod import infer_deployment_name
+
+    dep = (args.get("deployment") or "").strip() or infer_deployment_name(context.get("pod_name"))
+    ns = context["namespace"]
+    if not dep:
+        return {"success": False, "output": "", "error": "未能推断 Deployment 名（可显式传 deployment 参数）"}
+    r = await executor_client.acall(executor_client.get_workload_yaml, context["cluster_id"], "deployment", ns, dep)
+    if not r.get("success"):
+        return {"success": False, "output": "", "error": f"读取 Deployment {dep} 失败: {r.get('error') or ''}"}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"success": False, "output": "", "error": f"解析 YAML 失败: {e}"}
+    containers = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    lines = []
+    for c in containers:
+        for kind in ("livenessProbe", "readinessProbe", "startupProbe"):
+            p = c.get(kind)
+            if p:
+                lines.append(f"容器 {c.get('name')} {kind}: {_json.dumps(p, ensure_ascii=False)}")
+    if not lines:
+        return {"success": True, "output": f"Deployment {dep}（{ns}）未配置任何探针", "error": ""}
+    return {"success": True, "output": f"Deployment {dep}（{ns}）探针配置：\n" + "\n".join(lines), "error": ""}
+
+
 async def _h_jvm_diag(args: dict, context: dict) -> dict:
     """对 Java 容器执行一个 JVM 诊断动作（复用 api/jvm.py 的 run_jvm_action）。"""
     from app.api.jvm import run_jvm_action, _ACTIONS  # 延迟导入，避免加载顺序耦合
@@ -471,6 +506,24 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_jvm_diag,
+})
+
+
+_register({
+    "name": "get_probe_config",
+    "label": "探针配置",
+    "description": (
+        "读取 Pod 所属 Deployment 的探针配置（liveness/readiness/startup 的 path/port/超时/阈值等）。"
+        "用于诊断「探针失败/健康检查失败」类问题：先确认探针本身是否配错（路径/端口/超时太短/初始延迟不够），"
+        "再结合容器日志与 JVM 找容器内真因。只读。"
+    ),
+    "args_schema": {
+        "deployment": {"type": "string", "required": False,
+                       "description": "Deployment 名（留空则从 Pod 名自动推断）", "default": ""},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_probe_config,
 })
 
 

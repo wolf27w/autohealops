@@ -66,6 +66,43 @@ _JAVA_PROC_RE = re.compile(r"(^|[\s/])java(w)?(\s|$)")
 # 无 JVM 诊断能力的错误特征（命中则不再继续后面的 JVM 动作，避免白等）
 _JVM_UNAVAILABLE_HINTS = ("jattach", "无 JDK", "JRE", "Java 进程")
 
+
+# ===== 故障类型诊断模板（E4）：按故障类型追加专属采集项，让证据“对症”更全 =====
+# 关键词命中即归入该类（可多类）；tools 为基础证据之上的追加项（去重后执行）。
+FAULT_TEMPLATES: list[dict] = [
+    {
+        "key": "probe", "label": "探针失败",
+        "keywords": ["探针", "probe", "readiness", "liveness", "startup", "unhealthy", "健康检查", "就绪", "存活"],
+        "tools": [("get_probe_config", {}), ("get_deployment", {})],
+        "note": "探针失败往往是表象：重点看探针配置本身（path/port/超时/阈值）",
+    },
+    {
+        "key": "oom", "label": "内存/OOM",
+        "keywords": ["oom", "oomkilled", "out of memory", "内存", "memory", "被 kill", "被kill"],
+        "tools": [("get_deployment", {})],
+        "note": "关注 memory limit/requests 与容器实际用量是否倒挂",
+    },
+    {
+        "key": "resource", "label": "资源高水位",
+        "keywords": ["资源", "cpu", "使用率", "水位", "飙升", "飙高", "负载", "扩容", "hpa", "不回收", "降不下来"],
+        "tools": [("get_hpa", {}), ("get_deployment", {})],
+        "note": "关注 HPA 阈值 / requests-limits / 固定成本型负载",
+    },
+    {
+        "key": "crash", "label": "崩溃/重启",
+        "keywords": ["崩溃", "crash", "crashloop", "重启", "restart", "backoff", "反复"],
+        "tools": [],
+        "note": "重点看上次实例(--previous)日志与退出码",
+    },
+]
+
+
+def classify_fault(problem: str) -> list[dict]:
+    """从问题描述命中故障类型模板（可多类，按定义顺序）。"""
+    p = (problem or "").lower()
+    hits = [t for t in FAULT_TEMPLATES if any(k.lower() in p for k in t["keywords"])]
+    return hits
+
 # 诊断工具集：由统一工具注册表提供（tool_registry.py，P0-1），此处不再硬编码
 # 应用诊断域工具 = list_tools(domain="application")
 
@@ -170,12 +207,24 @@ async def _collect_jvm_evidence(session: DiagnosisSession, start_step: int) -> t
     return parts, steps
 
 
-async def _collect_quick_evidence(session: DiagnosisSession) -> tuple[str, list[dict]]:
+async def _collect_quick_evidence(session: DiagnosisSession, problem: str = "") -> tuple[str, list[dict]]:
     """单轮快速诊断：平台预采集只读证据（describe/日志/指标/容器内），拼接为证据文本。
 
     并行采集（asyncio.gather）：多个工具同时取证，总耗时≈最慢单个工具，避免串行累加导致超时。
-    结果仍按 QUICK_EVIDENCE_TOOLS 顺序落盘/拼接，保证输出稳定。
+    结果按「基础工具 + 故障类型专属工具」顺序落盘/拼接，保证输出稳定。
+    故障类型模板（E4）：根据 problem 关键词命中追加专属采集项。
     """
+    # 组装采集计划：基础项 + 故障类型专属项（去重）
+    plan: list[tuple[str, dict]] = list(QUICK_EVIDENCE_TOOLS)
+    seen: set[str] = {json.dumps({"t": tn, "a": a}, ensure_ascii=False, sort_keys=True) for tn, a in plan}
+    faults = classify_fault(problem)
+    for t in faults:
+        for tool, args in t["tools"]:
+            k = json.dumps({"t": tool, "a": args}, ensure_ascii=False, sort_keys=True)
+            if k not in seen:
+                seen.add(k)
+                plan.append((tool, args))
+
     async def _run_one(tool_name: str, args: dict) -> tuple[str, dict, dict]:
         try:
             res = await _execute_tool(tool_name, args, session)
@@ -183,10 +232,14 @@ async def _collect_quick_evidence(session: DiagnosisSession) -> tuple[str, list[
             res = {"success": False, "output": "", "error": str(e)}
         return tool_name, args, res
 
-    results = await asyncio.gather(*(_run_one(tn, a) for tn, a in QUICK_EVIDENCE_TOOLS))
+    results = await asyncio.gather(*(_run_one(tn, a) for tn, a in plan))
 
     parts: list[str] = []
     steps: list[dict] = []
+    # 故障类型判定段（让 AI 知道本次聚焦方向）
+    if faults:
+        fx = "；".join(f"{t['label']}（{t.get('note', '')}）" for t in faults)
+        parts.append(f"### 故障类型判定\n命中：{fx}")
     for i, (tool_name, args, res) in enumerate(results):
         out = (res.get("output") or res.get("error") or "").strip()
         if res.get("success") and out:
@@ -246,7 +299,7 @@ async def run_agent_turn(session: DiagnosisSession, user_input: str, cluster_nam
             await _persist_message(session.id, "assistant", content=json.dumps(fa, ensure_ascii=False))
             return {"final_answer": fa, "tool_steps": [kb["step"]], "error": None}
 
-        evidence, tool_steps = await _collect_quick_evidence(session)
+        evidence, tool_steps = await _collect_quick_evidence(session, user_input)
         try:
             fa = await ai_client.agent_diagnose_once(context, evidence)
         except Exception as e:  # noqa: BLE001

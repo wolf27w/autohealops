@@ -504,6 +504,27 @@ class TestJvmDiagnosisInAppDiag(unittest.TestCase):
         self.assertTrue(res["success"])
         self.assertIn("boom", res["output"])
 
+    def test_classify_fault(self):
+        from app.services.agent_service import classify_fault
+        keys = lambda s: [t["key"] for t in classify_fault(s)]
+        self.assertIn("probe", keys("容器反复重启，提示 liveness 探针失败"))
+        self.assertIn("oom", keys("Pod OOMKilled，内存一直涨"))
+        self.assertIn("resource", keys("CPU 使用率飙升，HPA 一直扩容"))
+        self.assertIn("crash", keys("应用崩溃重启 backoff"))
+        self.assertEqual(keys("什么都正常"), [])
+
+    def test_probe_config_tool_registered(self):
+        from app.services import tool_registry
+        t = tool_registry.get_tool("get_probe_config")
+        self.assertIsNotNone(t)
+        self.assertEqual(t["domain"], "application")
+        self.assertEqual(t["permission"], "readonly")
+
+    def test_probe_template_has_probe_tool(self):
+        from app.services.agent_service import FAULT_TEMPLATES
+        probe = next(t for t in FAULT_TEMPLATES if t["key"] == "probe")
+        self.assertIn(("get_probe_config", {}), probe["tools"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
