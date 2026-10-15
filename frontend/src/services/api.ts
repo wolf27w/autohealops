@@ -391,6 +391,12 @@ export interface ProactiveScanResult {
 }
 export const getProactiveStatus = () => http.get<Record<string, unknown>>('/agent/proactive/status')
 export const runProactiveScan = () => http.post<ProactiveScanResult>('/agent/proactive/scan')
+
+// ============ 监控数据源（按集群覆盖 Prometheus 地址）============
+export interface MonitoringSource { cluster_id: number; cluster_name: string; url: string }
+export const getMonitoringSources = () => http.get<MonitoringSource[]>('/monitoring/sources')
+export const setMonitoringSource = (cluster_id: number, url: string) =>
+  http.put<{ cluster_id: number; url: string }>('/monitoring/sources', { cluster_id, url })
 export const getAgentMessages = (id: number) => http.get(`/agent/sessions/${id}/messages`)
 export const sendAgentMessage = (id: number, content: string, deep = false) => http.post(`/agent/sessions/${id}/messages`, { content, deep })
 export const closeAgentSession = (id: number) => http.post(`/agent/sessions/${id}/close`)

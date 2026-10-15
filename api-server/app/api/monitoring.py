@@ -5,22 +5,52 @@
 - 单集群详细监控：本路由（查该集群 Prometheus，走 executor apiserver Service Proxy）
 """
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 
-from app.core.config import settings
-from app.core.logging import get_logger
-from app.middleware.permission import require_any_user
+from app.core.database import async_session
+from app.middleware.permission import require_admin, require_any_user
+from app.models import Cluster, MonitorSource
 from app.services import prometheus_service, user_permission_service
 
-import httpx
-
 router = APIRouter(prefix="/api/v1/monitoring")
-logger = get_logger("api-server.monitoring")
 
 
 @router.get("/metrics")
 async def list_metrics(user=Depends(require_any_user)):
     """可用监控指标清单（前端选图用）"""
     return {"code": 200, "message": "success", "data": prometheus_service.list_metrics()}
+
+
+@router.get("/sources")
+async def list_sources(user=Depends(require_any_user)):
+    """监控数据源（每集群 Prometheus 地址覆盖）。url 为空 = 走全局设置/自动发现。"""
+    async with async_session() as s:
+        clusters = list((await s.execute(select(Cluster).order_by(Cluster.id))).scalars())
+        rows = {m.cluster_id: (m.url or "") for m in (await s.execute(select(MonitorSource))).scalars()}
+    return {"code": 200, "message": "success", "data": [
+        {"cluster_id": c.id, "cluster_name": c.name, "url": rows.get(c.id, "")} for c in clusters
+    ]}
+
+
+@router.put("/sources")
+async def set_source(payload: dict, user=Depends(require_admin)):
+    """设置/清除某集群的 Prometheus 地址覆盖（需 admin）。url 为空表示清除（回退全局/自动发现）。"""
+    try:
+        cluster_id = int(payload.get("cluster_id"))
+    except (TypeError, ValueError):
+        return {"code": 400, "message": "cluster_id 必填", "data": None}
+    url = (payload.get("url") or "").strip()
+    async with async_session() as s:
+        row = await s.get(MonitorSource, cluster_id)
+        if row:
+            if url:
+                row.url = url
+            else:
+                await s.delete(row)
+        elif url:
+            s.add(MonitorSource(cluster_id=cluster_id, url=url))
+        await s.commit()
+    return {"code": 200, "message": "success", "data": {"cluster_id": cluster_id, "url": url}}
 
 
 @router.get("/clusters/{cluster_id}/metrics/{metric}")
@@ -70,22 +100,11 @@ async def list_containers(cluster_id: int, namespace: str = "", user=Depends(req
 # ============ 趋势（range）：Netdata 式曲线（细节点点） ============
 
 async def _range_series(cluster_id: int, promql: str, minutes: int, step: int) -> dict:
-    """调 executor /prom/range（apiserver Service Proxy → query_range），归一为 [{metric, values}]。"""
-    base = getattr(settings, "EXECUTOR_LOGSTREAM_ADDR", "http://localhost:9099")
-    params = {"cluster_id": cluster_id, "query": promql, "minutes": max(1, min(minutes, 1440)), "step": max(15, min(step, 3600))}
-    try:
-        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-            resp = await client.get(f"{base.rstrip('/')}/prom/range", params=params)
-            if resp.status_code != 200:
-                return {"success": False, "error": resp.text[:200]}
-            j = resp.json()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("range 查询失败: %s", e)
-        return {"success": False, "error": f"趋势查询失败：{e}"}
-    res = (j.get("data") or {}).get("result") or []
-    series = [{"metric": x.get("metric") or {},
-               "values": [[float(p[0]), float(p[1])] for p in (x.get("values") or [])]} for x in res]
-    return {"success": True, "series": series}
+    """趋势曲线：走 prometheus_service.query_range（自动支持自定义数据源覆盖）。"""
+    r = await prometheus_service.query_range(cluster_id, promql, minutes, step)
+    if not r.get("success"):
+        return {"success": False, "error": r.get("error")}
+    return {"success": True, "series": r["series"]}
 
 
 @router.get("/clusters/{cluster_id}/metrics/{metric}/range")

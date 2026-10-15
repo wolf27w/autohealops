@@ -1,7 +1,8 @@
 // 系统设置页：平台级配置（Prometheus/ES/LDAP）+ 密码修改
 import { useEffect, useState } from 'react'
-import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider, Select, Space } from 'antd'
-import { getSettings, updateSettings, changePassword, testEmbedding, getExternalToken, regenerateExternalToken } from '../services/api'
+import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider, Select, Space, Table } from 'antd'
+import { getSettings, updateSettings, changePassword, testEmbedding, getExternalToken, regenerateExternalToken, getMonitoringSources, setMonitoringSource } from '../services/api'
+import type { MonitoringSource } from '../services/api'
 import RiskPolicy from './RiskPolicy'
 
 export default function PlatformSettings() {
@@ -10,8 +11,25 @@ export default function PlatformSettings() {
   const [embTest, setEmbTest] = useState<{ ok: boolean; msg: string } | null>(null)
   const [embTesting, setEmbTesting] = useState(false)
   const [extToken, setExtToken] = useState('')
+  const [sources, setSources] = useState<MonitoringSource[]>([])
+  const [srcUrls, setSrcUrls] = useState<Record<number, string>>({})
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
+
+  const loadSources = () => getMonitoringSources().then((d) => {
+    const arr = (d || []) as MonitoringSource[]
+    setSources(arr)
+    const m: Record<number, string> = {}
+    arr.forEach((x) => { m[x.cluster_id] = x.url })
+    setSrcUrls(m)
+  })
+  useEffect(() => { loadSources() }, [])
+
+  const saveSource = async (cid: number) => {
+    await setMonitoringSource(cid, (srcUrls[cid] || '').trim())
+    message.success('已保存')
+    loadSources()
+  }
 
   useEffect(() => {
     getSettings().then((d) => {
@@ -65,9 +83,12 @@ export default function PlatformSettings() {
             label: '可观测性配置',
             children: (
               <Card>
-                <Divider orientation="left">监控（Prometheus）</Divider>
+                <Divider orientation="left">监控（Prometheus 数据源）</Divider>
+                <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                  默认由 executor 自动发现「集群自带 Prometheus」。如需指定外部/已暴露地址：全局地址对所有集群生效；下表可按集群覆盖（优先级高于全局）。
+                </div>
                 <Form form={form} layout="vertical">
-                  <Form.Item name="prometheus_url" label="Prometheus 地址">
+                  <Form.Item name="prometheus_url" label="全局 Prometheus 地址（可选，留空=自动发现）">
                     <Input placeholder="http://prometheus:9090" />
                   </Form.Item>
                   <Divider orientation="left">飞书应用（个人消息通知）</Divider>
@@ -82,6 +103,20 @@ export default function PlatformSettings() {
                   </Form.Item>
                   <Button type="primary" onClick={handleSave}>保存配置</Button>
                 </Form>
+                <Divider orientation="left">按集群覆盖 Prometheus 地址</Divider>
+                <Table<MonitoringSource>
+                  size="small" rowKey="cluster_id" pagination={false} dataSource={sources}
+                  columns={[
+                    { title: '集群', dataIndex: 'cluster_name', width: 180 },
+                    { title: 'Prometheus 地址（留空=自动发现）', render: (_v: unknown, r: MonitoringSource) => (
+                      <Input value={srcUrls[r.cluster_id] ?? ''} placeholder="http://prometheus:9090"
+                        onChange={(e) => setSrcUrls((m) => ({ ...m, [r.cluster_id]: e.target.value }))} />
+                    ) },
+                    { title: '操作', width: 90, render: (_v: unknown, r: MonitoringSource) => (
+                      <Button size="small" onClick={() => saveSource(r.cluster_id)}>保存</Button>
+                    ) },
+                  ]}
+                />
               </Card>
             ),
           },

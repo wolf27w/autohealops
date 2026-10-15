@@ -7,8 +7,15 @@
 """
 import json
 import logging
+import time
+
+import httpx
 
 from app.clients.executor_client import executor_client
+from app.core.config import settings
+from app.core.database import async_session
+from app.models.monitor_source import MonitorSource
+from app.services.system_setting_service import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +86,16 @@ METRIC_QUERIES: dict[str, dict] = {
 
 
 def _parse_prom_result(data: str) -> list[dict]:
-    """解析 Prometheus /api/v1/query 返回的 JSON 为 [{metric:{...}, value:float}]。"""
+    """解析 Prometheus /api/v1/query 返回的 JSON 字符串为 [{metric:{...}, value:float}]。"""
     try:
         obj = json.loads(data or "{}")
     except Exception:  # noqa: BLE001
         return []
+    return _parse_prom_obj(obj)
+
+
+def _parse_prom_obj(obj: dict) -> list[dict]:
+    """解析 Prometheus 查询结果对象为 [{metric:{...}, value:float}]。"""
     result = (obj.get("data") or {}).get("result") or []
     out = []
     for r in result:
@@ -96,12 +108,85 @@ def _parse_prom_result(data: str) -> list[dict]:
     return out
 
 
+def _parse_range_obj(obj: dict) -> list[dict]:
+    """解析 query_range 结果为 [{metric, values:[[ts,val]]}]。"""
+    res = (obj.get("data") or {}).get("result") or []
+    return [{"metric": x.get("metric") or {},
+             "values": [[float(p[0]), float(p[1])] for p in (x.get("values") or [])]}
+            for x in res]
+
+
+async def resolve_source(cluster_id: int) -> str:
+    """解析该集群的 Prometheus 数据源地址。返回 '' = 未配置（走 executor 自动发现）。
+
+    优先级：按集群覆盖（monitor_sources） > 全局设置 prometheus_url > 自动发现。
+    """
+    try:
+        async with async_session() as s:
+            row = await s.get(MonitorSource, cluster_id)
+        if row and (row.url or "").strip():
+            return row.url.strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取 monitor_sources 失败: %s", e)
+    try:
+        g = (await get_setting("prometheus_url", "") or "").strip()
+        if g:
+            return g
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取 prometheus_url 设置失败: %s", e)
+    return ""
+
+
 async def query(cluster_id: int, promql: str) -> dict:
-    """即时查询某集群 Prometheus。返回 {success, result:[{metric,value}], error}。"""
+    """即时查询某集群 Prometheus。返回 {success, result:[{metric,value}], error}。
+
+    配了自定义地址 → 先直连；不通则回退 executor（集群内自动发现），保证不断流。
+    """
+    url = await resolve_source(cluster_id)
+    if url:
+        try:
+            async with httpx.AsyncClient(timeout=30, trust_env=False) as c:
+                r = await c.get(f"{url.rstrip('/')}/api/v1/query", params={"query": promql})
+                r.raise_for_status()
+                return {"success": True, "result": _parse_prom_obj(r.json()), "error": ""}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("自定义 Prometheus(%s) 查询失败，回退自动发现: %s", url, e)
     res = await executor_client.acall(executor_client.query_prometheus, cluster_id, promql)
     if not res.get("success"):
         return {"success": False, "result": [], "error": res.get("error") or "查询失败"}
     return {"success": True, "result": _parse_prom_result(res.get("data", "")), "error": ""}
+
+
+async def query_range(cluster_id: int, promql: str, minutes: int = 30, step: int = 60) -> dict:
+    """趋势查询（range）。返回 {success, series:[{metric, values}], error}。
+
+    配了自定义地址 → 先直连 /api/v1/query_range；不通则回退 executor /prom/range。
+    """
+    minutes = max(1, min(int(minutes), 1440))
+    step = max(15, min(int(step), 3600))
+    url = await resolve_source(cluster_id)
+    if url:
+        end = time.time()
+        start = end - minutes * 60
+        try:
+            async with httpx.AsyncClient(timeout=60, trust_env=False) as c:
+                r = await c.get(f"{url.rstrip('/')}/api/v1/query_range",
+                                params={"query": promql, "start": start, "end": end, "step": step})
+                r.raise_for_status()
+                return {"success": True, "series": _parse_range_obj(r.json()), "error": ""}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("自定义 Prometheus(%s) 趋势查询失败，回退自动发现: %s", url, e)
+    base = getattr(settings, "EXECUTOR_LOGSTREAM_ADDR", "http://localhost:9099")
+    params = {"cluster_id": cluster_id, "query": promql, "minutes": minutes, "step": step}
+    try:
+        async with httpx.AsyncClient(timeout=60, trust_env=False) as c:
+            resp = await c.get(f"{base.rstrip('/')}/prom/range", params=params)
+            if resp.status_code != 200:
+                return {"success": False, "series": [], "error": resp.text[:200]}
+            j = resp.json()
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "series": [], "error": f"趋势查询失败：{e}"}
+    return {"success": True, "series": _parse_range_obj(j), "error": ""}
 
 
 async def query_metric(cluster_id: int, metric: str) -> dict:

@@ -24,6 +24,7 @@ from app.models.execution import ExecutionLog
 from app.models.knowledge import KnowledgeEntry
 from app.models.log_alert_rule import LogAlertRule
 from app.models.log_source import LogSource
+from app.models.monitor_source import MonitorSource
 from app.models.notification import NotificationConfig, NotificationLog
 from app.models.on_duty import Holiday, OnDutySchedule
 from app.models.duty_override import DutyOverride
