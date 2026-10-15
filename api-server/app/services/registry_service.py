@@ -39,8 +39,8 @@ def parse_image_ref(image: str) -> tuple[str, str, str]:
     return host, repo, tag
 
 
-def _creds_for(host: str):
-    """httpx auth 元组或 None：REGISTRY_CREDS[host] 优先，其次全局，最后匿名。"""
+def _creds_from_env(host: str):
+    """httpx auth 元组或 None：REGISTRY_CREDS[host] 优先，其次全局，最后匿名（env）。"""
     try:
         m = json.loads(settings.REGISTRY_CREDS) if settings.REGISTRY_CREDS else {}
     except json.JSONDecodeError:
@@ -50,6 +50,29 @@ def _creds_for(host: str):
     user = c.get("username") or settings.REGISTRY_USERNAME
     pwd = c.get("password") or settings.REGISTRY_PASSWORD
     return (user, pwd) if user else None
+
+
+async def _resolve_creds(host: str):
+    """凭据解析（可在系统设置配置，优先于 env）：
+
+    system_settings.registry_creds（按 host JSON）→ system_settings.registry_username/password（全局）
+    → env REGISTRY_CREDS / REGISTRY_USERNAME/PASSWORD → 匿名。
+    """
+    from app.services.system_setting_service import get_setting
+    try:
+        raw = (await get_setting("registry_creds", "") or "").strip()
+        if raw:
+            m = json.loads(raw)
+            c = (m.get(host) if isinstance(m, dict) else None) or {}
+            if c.get("username"):
+                return (c.get("username"), c.get("password") or "")
+        user = (await get_setting("registry_username", "") or "").strip()
+        if user:
+            pwd = await get_setting("registry_password", "") or ""
+            return (user, pwd)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取仓库凭据设置失败（回退 env）: %s", e)
+    return _creds_from_env(host)
 
 
 def _parse_wwwauth(header: str) -> dict:
@@ -82,7 +105,7 @@ async def list_tags(image: str, limit: int = 100) -> dict:
     if not host or not repo:
         return {"code": 400, "message": "无法解析镜像名（示例：harbor.example.com/proj/app:1.2.3）", "data": None}
     n = max(1, min(int(limit or 100), 1000))
-    creds = _creds_for(host)
+    creds = await _resolve_creds(host)
     url = f"https://{host}/v2/{repo}/tags/list?n={n}"
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=20) as client:

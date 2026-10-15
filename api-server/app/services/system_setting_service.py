@@ -28,7 +28,7 @@ ALERT_NOTIFY_POLICY_DEFAULT = {
 }
 
 # 敏感密钥字段：写入时加密存储，读取回显时脱敏
-SENSITIVE_KEYS = {"es_password", "ldap_bind_password", "feishu_app_secret", "embedding_api_key", "smtp_password"}
+SENSITIVE_KEYS = {"es_password", "ldap_bind_password", "feishu_app_secret", "embedding_api_key", "smtp_password", "registry_password", "registry_creds"}
 
 # 已迁移到「日志源」（log_sources 表）的字段：只读兜底，不再接受写入（N7 统一由日志源管理）
 DEPRECATED_KEYS = {"es_url", "es_index_pattern", "es_username", "es_password"}
@@ -36,6 +36,10 @@ DEPRECATED_KEYS = {"es_url", "es_index_pattern", "es_username", "es_password"}
 # 默认设置项定义（key: 默认值 + 描述）
 DEFAULT_SETTINGS = {
     "prometheus_url": ("", "Prometheus 地址（监控指标查询）"),
+    # 镜像仓库凭据（R3 列标签/更新镜像用；优先于 env）。全局一份，或按 host 覆盖（JSON）
+    "registry_username": ("", "镜像仓库用户名（全局，如 Harbor robot 账号）"),
+    "registry_password": ("", "镜像仓库密码/Token（全局）"),
+    "registry_creds": ("", "镜像仓库按 host 凭据 JSON：{\"host\":{\"username\":\"\",\"password\":\"\"}}"),
     "es_url": ("", "Elasticsearch 地址（内置只读兜底）"),
     "es_index_pattern": ("k8s-*", "ES 日志索引模式（内置只读兜底）"),
     "es_username": ("", "ES 用户名（内置只读兜底）"),

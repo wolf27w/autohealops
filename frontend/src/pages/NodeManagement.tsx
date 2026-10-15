@@ -1,5 +1,6 @@
 // 节点管理（P1-R4）：节点列表（容量/用量）+ 单个/批量 cordon·uncordon + 均衡计划（只读建议）
 import { useEffect, useState, type Key } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Card, Table, Button, Space, Select, Tag, message, Popconfirm, Progress, Modal, InputNumber, Alert, Collapse } from 'antd'
 import { ReloadOutlined, ApartmentOutlined } from '@ant-design/icons'
 import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan, drainPreview, drainNode } from '../services/api'
@@ -10,7 +11,11 @@ const pctColor = (v?: number | null) => (!v && v !== 0) ? '#999' : v >= 85 ? '#f
 
 export default function NodeManagement() {
   const [clusters, setClusters] = useState<Cluster[]>([])
-  const [clusterId, setClusterId] = useState<number | undefined>(undefined)
+  const [sp] = useSearchParams()
+  const [clusterId, setClusterId] = useState<number | undefined>(() => {
+    const c = sp.get('cluster')
+    return c ? Number(c) : undefined
+  })
   const [nodes, setNodes] = useState<K8sNode[]>([])
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<Key[]>([])

@@ -211,12 +211,12 @@ export default function AgentChat() {
 
   return (
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
-      <Sider width={280} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12 }}>
+      <Sider width={280} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
           新建诊断会话
         </Button>
         <List
-          style={{ marginTop: 12 }}
+          style={{ marginTop: 12, overflowY: 'auto', maxHeight: 'calc(100% - 48px)' }}
           dataSource={sessions}
           locale={{ emptyText: <Empty description="暂无会话" /> }}
           renderItem={(s) => (

@@ -101,6 +101,19 @@ export default function PlatformSettings() {
                   <Form.Item name="feishu_app_secret" label="飞书 App Secret">
                     <Input.Password placeholder="飞书应用凭证" />
                   </Form.Item>
+                  <Divider orientation="left">镜像仓库（列标签 / 更新镜像）</Divider>
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                    私有仓库拉取标签需凭据：填全局用户名/密码即可；多仓库可用下方 JSON 按 host 覆盖（优先生效）。
+                  </div>
+                  <Form.Item name="registry_username" label="仓库用户名（全局）">
+                    <Input placeholder="如 robot$apiops" />
+                  </Form.Item>
+                  <Form.Item name="registry_password" label="仓库密码 / Token（全局）">
+                    <Input.Password placeholder="私有仓库凭据" />
+                  </Form.Item>
+                  <Form.Item name="registry_creds" label="按 host 凭据（JSON，可选，优先于全局）">
+                    <Input.TextArea rows={3} placeholder='{"harbor.example.com":{"username":"robot$x","password":"..."}}' />
+                  </Form.Item>
                   <Button type="primary" onClick={handleSave}>保存配置</Button>
                 </Form>
                 <Divider orientation="left">按集群覆盖 Prometheus 地址</Divider>
