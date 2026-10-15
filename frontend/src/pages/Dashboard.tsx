@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch, theme,
+  Card, Row, Col, Statistic, Select, Button, Table, Tag, Space, Progress, Empty, Badge, Tooltip, DatePicker, Switch, theme, Tabs,
 } from 'antd'
 import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { Line, Pie, Bar } from '@ant-design/charts'
@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import dayjs, { type Dayjs } from 'dayjs'
 import { getDashboard, getPlatformHealth } from '../services/api'
 import { useThemeMode } from '../utils/theme'
+import Monitor from './Monitor'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 import { ALERT_STATUS_LABEL } from '../constants'
@@ -189,6 +190,13 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   ]
 
   return (
+    <Tabs
+      defaultActiveKey="overview"
+      items={[
+        {
+          key: 'overview',
+          label: '告警与总览',
+          children: (
     <div style={{
       display: 'flex', flexDirection: 'column', gap: 12,
       // 大屏（/screen）：无侧栏/顶栏框架，自行补边距与底色，内容与仪表盘完全一致
@@ -514,5 +522,10 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         </Col>
       </Row>
     </div>
+          ),
+        },
+        { key: 'monitor', label: '监控', children: <Monitor /> },
+      ]}
+    />
   )
 }
