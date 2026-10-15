@@ -144,10 +144,22 @@ async def proactive_status(user=Depends(require_any_user)):
 
 
 @router.post("/proactive/scan")
-async def proactive_scan(user=Depends(require_operator)):
-    """立即执行一轮主动巡检（需 operator+）。"""
+async def proactive_scan(payload: dict | None = None, user=Depends(require_operator)):
+    """执行一轮巡检（需 operator+）。
+
+    body（可选）：{ cluster_id?, namespace?, kinds?: ["deployment","statefulset"] }
+    - 不传 = 全平台自动巡检；传 = 定向巡检（指定集群/命名空间/工作负载类型）。
+    """
     from app.services import proactive_diagnosis_service as pds
-    summary = await pds.run_scan()
+    p = payload or {}
+    cid = p.get("cluster_id")
+    ns = (p.get("namespace") or "").strip()
+    kinds = p.get("kinds") or []
+    if isinstance(kinds, str):
+        kinds = [kinds]
+    summary = await pds.run_scan(
+        cluster_id=int(cid) if cid else None, namespace=ns, kinds=[str(k) for k in kinds],
+    )
     return {"code": 200, "message": "success", "data": summary}
 
 

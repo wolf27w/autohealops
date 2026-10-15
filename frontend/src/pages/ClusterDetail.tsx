@@ -6,7 +6,8 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan } from '../services/api'
+import type { ProactiveScanResult } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import PodDetailDrawer from '../components/PodDetailDrawer'
@@ -106,6 +107,19 @@ export default function ClusterDetail() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
+  const [appInspectOpen, setAppInspectOpen] = useState(false)
+  const [aiNs, setAiNs] = useState<string>('')
+  const [aiKinds, setAiKinds] = useState<string[]>(['deployment', 'statefulset'])
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiResult, setAiResult] = useState<ProactiveScanResult | null>(null)
+  const runAppInspect = async () => {
+    setAiLoading(true); setAiResult(null)
+    try {
+      const r = await runProactiveScan({ cluster_id: Number(id), namespace: aiNs || undefined, kinds: aiKinds })
+      if (r?.skipped) message.info(`巡检跳过：${r.reason || '已有巡检进行中'}`)
+      setAiResult(r)
+    } catch { /* 拦截器已提示 */ } finally { setAiLoading(false) }
+  }
 
   // 工作负载类型 Tab 持久化（URL ?type= + 本地记忆，与命名空间同口径）
   const changeType = (v: string) => {
@@ -651,7 +665,8 @@ export default function ClusterDetail() {
         <span style={{ fontSize: 16, fontWeight: 700 }}>{clusterName || `集群 ${id}`}</span>
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
-        <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>巡检</Button>
+        <Button size="small" onClick={() => { setAiResult(null); setAiNs(''); setAppInspectOpen(true) }}>应用巡检</Button>
+        <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>集群巡检</Button>
       </div>
 
       <Card size="small">
@@ -715,6 +730,47 @@ export default function ClusterDetail() {
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
+
+      <Modal title={`应用巡检：${clusterName || id}`} open={appInspectOpen} onCancel={() => setAppInspectOpen(false)}
+        footer={<Button onClick={() => setAppInspectOpen(false)}>关闭</Button>} width={760}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>命名空间</div>
+            <Select style={{ width: 200 }} value={aiNs} onChange={setAiNs}
+              options={[{ label: '全部命名空间', value: '' }, ...namespaces.map((n) => ({ label: n.namespace, value: n.namespace }))]} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>工作负载类型</div>
+            <Select mode="multiple" style={{ width: 300 }} value={aiKinds} onChange={setAiKinds}
+              options={[{ label: '无状态 Deployment', value: 'deployment' }, { label: '有状态 StatefulSet', value: 'statefulset' }, { label: '守护集 DaemonSet', value: 'daemonset' }]} />
+          </div>
+          <Button type="primary" loading={aiLoading} onClick={runAppInspect}>开始巡检</Button>
+        </div>
+        <div style={{ color: '#888', fontSize: 12, marginBottom: 10 }}>
+          对所选范围内的「有状态 / 无状态」工作负载巡检：检查内存/CPU 持续高水位、频繁重启等异常，命中则自动发起 AI 全面诊断（含 JVM/日志/指标），不建告警。
+        </div>
+        {aiResult && (
+          aiResult.skipped ? <div>巡检跳过：{aiResult.reason}</div> : (
+            <div>
+              <div style={{ marginBottom: 8 }}>
+                扫描工作负载 <b>{aiResult.scanned_workloads ?? '-'}</b> 个 · 发现异常 <b style={{ color: (aiResult.hits || 0) > 0 ? '#cf1322' : '#52c41a' }}>{aiResult.hits ?? 0}</b> 个 · 已诊断 <b>{aiResult.diagnosed ?? 0}</b> 个
+                {(aiResult.skipped_open_alert || aiResult.skipped_cooldown) ? <span style={{ color: '#888' }}>（跳过：在途告警 {aiResult.skipped_open_alert ?? 0} / 冷却 {aiResult.skipped_cooldown ?? 0}）</span> : null}
+              </div>
+              {(aiResult.items || []).length > 0 ? (
+                <Table size="small" rowKey="id" pagination={false} dataSource={aiResult.items}
+                  columns={[
+                    { title: '工作负载', dataIndex: 'workload' },
+                    { title: '类型', dataIndex: 'kind', width: 110 },
+                    { title: '命名空间', dataIndex: 'namespace', width: 130 },
+                    { title: 'Pod', dataIndex: 'pod' },
+                    { title: '原因', dataIndex: 'reason' },
+                  ]} />
+              ) : <Empty description="范围内未发现异常（阈值：内存/CPU ≥85% 持续、近 30min 重启 ≥2）" />}
+              <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>诊断结果见「智能诊断 → 应用诊断助手」→ 带「巡检」标签的会话。</div>
+            </div>
+          )
+        )}
+      </Modal>
     </div>
   )
 }

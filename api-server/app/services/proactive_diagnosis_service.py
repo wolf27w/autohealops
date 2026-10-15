@@ -21,9 +21,11 @@
 - proactive_restart_inc（默认 2）
 """
 import asyncio
+import re
 
 from sqlalchemy import select
 
+from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import redis_pool
@@ -32,6 +34,9 @@ from app.services import agent_service, prometheus_service
 from app.services.system_setting_service import get_setting
 
 logger = get_logger("api-server.proactive")
+
+# Pod 名 → 工作负载名前缀剥离（与前端大屏一致）
+_WL_STRIP = re.compile(r"(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+|-[0-9a-f]{5,10})$")
 
 DEFAULT_INTERVAL_MIN = 30
 DEFAULT_COOLDOWN_HOURS = 12
@@ -186,9 +191,16 @@ async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str) -> 
     return sid
 
 
-async def run_scan() -> dict:
-    """执行一轮巡检（可手动触发 / 后台周期）。返回汇总。"""
+async def run_scan(cluster_id: int | None = None, namespace: str = "", kinds: list[str] | None = None) -> dict:
+    """执行一轮巡检。
+
+    - 无参数 → 全平台自动巡检（后台周期用）。
+    - 给 cluster_id / namespace / kinds → **定向巡检**：只扫指定范围
+      （如某集群下某 namespace 的「有状态/无状态」工作负载）。
+    返回汇总 + 命中清单。
+    """
     cfg = await _config()
+    kset = set(kinds or [])
     # 分布式锁：多副本只跑一个
     try:
         got = await redis_pool.set("lock:proactive_scan", "1", nx=True, ex=600)
@@ -197,13 +209,31 @@ async def run_scan() -> dict:
     if not got:
         return {"skipped": True, "reason": "另一个巡检正在进行"}
 
-    summary = {"clusters": 0, "hits": 0, "diagnosed": 0, "sessions": [], "skipped_open_alert": 0,
-               "skipped_cooldown": 0}
+    summary = {"clusters": 0, "scanned_workloads": 0, "hits": 0, "diagnosed": 0,
+               "sessions": [], "items": [], "skipped_open_alert": 0, "skipped_cooldown": 0}
     try:
         async with async_session() as s:
-            clusters = list((await s.execute(select(Cluster))).scalars())
+            q = select(Cluster)
+            if cluster_id:
+                q = q.where(Cluster.id == cluster_id)
+            clusters = list((await s.execute(q)).scalars())
         for c in clusters:
             summary["clusters"] += 1
+            # 范围工作负载（仅 kind 过滤需要查平台 workload 列表）
+            base2kind: dict[tuple, str] = {}
+            if kset:
+                try:
+                    wl = (await executor_client.acall(executor_client.list_workloads, c.id, namespace)).get("workloads") or []
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("集群 %s 列工作负载失败: %s", c.id, e)
+                    wl = []
+                for w in wl:
+                    if (w.get("kind") or "") not in kset:
+                        continue
+                    if namespace and w.get("namespace") != namespace:
+                        continue
+                    base2kind[(w.get("namespace"), w.get("name"))] = w.get("kind")
+                summary["scanned_workloads"] += len(base2kind)
             hits: list[dict] = []
             try:
                 hits += await _high_water_hits(c.id, cfg, cfg["interval_min"])
@@ -212,8 +242,21 @@ async def run_scan() -> dict:
                 logger.warning("集群 %s 巡检扫描异常: %s", c.id, e)
                 continue
             merged = _merge_hits(hits)
-            summary["hits"] += len(merged)
+            # 范围过滤（namespace / kinds）
+            filtered: list[dict] = []
             for h in merged:
+                if namespace and h["namespace"] != namespace:
+                    continue
+                if kset:
+                    base = _WL_STRIP.sub("", h["pod"])
+                    kind = base2kind.get((h["namespace"], base))
+                    if kind not in kset:
+                        continue
+                    h["kind"] = kind
+                    h["workload"] = base
+                filtered.append(h)
+            summary["hits"] += len(filtered)
+            for h in filtered:
                 if summary["diagnosed"] >= MAX_DIAG_PER_CYCLE:
                     break
                 ns, pod = h["namespace"], h["pod"]
@@ -234,13 +277,15 @@ async def run_scan() -> dict:
                     except Exception:  # noqa: BLE001
                         pass
                     summary["diagnosed"] += 1
-                    summary["sessions"].append({"id": sid, "cluster_id": c.id,
-                                                "namespace": ns, "pod": pod, "reason": h["reason"]})
+                    item = {"id": sid, "cluster_id": c.id, "namespace": ns, "pod": pod,
+                            "workload": h.get("workload"), "kind": h.get("kind"), "reason": h["reason"]}
+                    summary["sessions"].append(item)
+                    summary["items"].append(item)
                     logger.info("集群 %s 主动诊断会话 #%s：%s/%s（%s）", c.id, sid, ns, pod, h["reason"])
                 except Exception as e:  # noqa: BLE001
                     logger.warning("集群 %s 主动诊断 %s/%s 失败: %s", c.id, ns, pod, e)
     finally:
-        if got is not True:
+        if got:  # 抢到锁（或 redis 不可用降级）→ 释放，避免阻塞后续巡检
             try:
                 await redis_pool.delete("lock:proactive_scan")
             except Exception:  # noqa: BLE001

@@ -63,8 +63,25 @@
   "paths": {
     "/api/v1/agent/proactive/scan": {
       "post": {
-        "description": "立即执行一轮主动巡检（需 operator+）。",
+        "description": "执行一轮巡检（需 operator+）。\n\nbody（可选）：{ cluster_id?, namespace?, kinds?: [\"deployment\",\"statefulset\"] }\n- 不传 = 全平台自动巡检；传 = 定向巡检（指定集群/命名空间/工作负载类型）。",
         "operationId": "post_api_v1_agent_proactive_scan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -73,6 +90,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

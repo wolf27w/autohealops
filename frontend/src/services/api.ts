@@ -386,11 +386,14 @@ export const regenerateExternalToken = () => http.post('/external/tickets/token/
 export const createAgentSession = (data: Payload) => http.post('/agent/sessions', data)
 export const getAgentSessions = () => http.get('/agent/sessions')
 export interface ProactiveScanResult {
-  skipped?: boolean; reason?: string; clusters?: number; hits?: number; diagnosed?: number
-  skipped_open_alert?: number; skipped_cooldown?: number; sessions?: unknown[]
+  skipped?: boolean; reason?: string; clusters?: number; scanned_workloads?: number
+  hits?: number; diagnosed?: number; skipped_open_alert?: number; skipped_cooldown?: number
+  sessions?: unknown[]
+  items?: Array<{ id: number; cluster_id: number; namespace: string; pod: string; workload?: string; kind?: string; reason: string }>
 }
 export const getProactiveStatus = () => http.get<Record<string, unknown>>('/agent/proactive/status')
-export const runProactiveScan = () => http.post<ProactiveScanResult>('/agent/proactive/scan')
+export const runProactiveScan = (data?: { cluster_id?: number; namespace?: string; kinds?: string[] }) =>
+  http.post<ProactiveScanResult>('/agent/proactive/scan', data || {})
 
 // ============ 监控数据源（按集群覆盖 Prometheus 地址）============
 export interface MonitoringSource { cluster_id: number; cluster_name: string; url: string }
