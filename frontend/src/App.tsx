@@ -1,36 +1,40 @@
 // 路由配置
+import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Spin } from 'antd'
 import MainLayout from './components/MainLayout'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import ClusterList from './pages/ClusterList'
-import ClusterDetail from './pages/ClusterDetail'
-import ServiceDetail from './pages/ServiceDetail'
-import AlertList from './pages/AlertList'
-import ApprovalList from './pages/ApprovalList'
-import ProcessingRecords from './pages/ProcessingRecords'
-import AlertHandling from './pages/AlertHandling'
-import StrategyConfig from './pages/StrategyConfig'
-import NotificationCenter from './pages/NotificationCenter'
-import UserPermission from './pages/UserPermission'
-import AIConfig from './pages/AIConfig'
-import AlertPolicies from './pages/AlertPolicies'
-import SelfHealRules from './pages/SelfHealRules'
-import ExecutionDetail from './pages/ExecutionDetail'
-import BatchOperation from './pages/BatchOperation'
-import CustomTasks from './pages/CustomTasks'
-import AgentChat from './pages/AgentChat'
-import DiagnosticCenter from './pages/DiagnosticCenter'
-import FaultDiagnosis from './pages/FaultDiagnosis'
-import KnowledgeBase from './pages/KnowledgeBase'
-import AuditTrace from './pages/AuditTrace'
-import Reports from './pages/Reports'
-import PlatformSettings from './pages/PlatformSettings'
-import LogSources from './pages/LogSources'
-import Tickets from './pages/Tickets'
-import ResourceGovernance from './pages/ResourceGovernance'
-import AlertSilences from './pages/AlertSilences'
-import NodeManagement from './pages/NodeManagement'
+
+// 页面按路由懒加载（M5 打包优化）：首屏只加载壳 + 当前页，其余按需加载
+const Login = lazy(() => import('./pages/Login'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const ClusterList = lazy(() => import('./pages/ClusterList'))
+const ClusterDetail = lazy(() => import('./pages/ClusterDetail'))
+const ServiceDetail = lazy(() => import('./pages/ServiceDetail'))
+const AlertList = lazy(() => import('./pages/AlertList'))
+const ApprovalList = lazy(() => import('./pages/ApprovalList'))
+const ProcessingRecords = lazy(() => import('./pages/ProcessingRecords'))
+const AlertHandling = lazy(() => import('./pages/AlertHandling'))
+const StrategyConfig = lazy(() => import('./pages/StrategyConfig'))
+const NotificationCenter = lazy(() => import('./pages/NotificationCenter'))
+const UserPermission = lazy(() => import('./pages/UserPermission'))
+const AIConfig = lazy(() => import('./pages/AIConfig'))
+const AlertPolicies = lazy(() => import('./pages/AlertPolicies'))
+const SelfHealRules = lazy(() => import('./pages/SelfHealRules'))
+const ExecutionDetail = lazy(() => import('./pages/ExecutionDetail'))
+const BatchOperation = lazy(() => import('./pages/BatchOperation'))
+const CustomTasks = lazy(() => import('./pages/CustomTasks'))
+const AgentChat = lazy(() => import('./pages/AgentChat'))
+const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))
+const FaultDiagnosis = lazy(() => import('./pages/FaultDiagnosis'))
+const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
+const AuditTrace = lazy(() => import('./pages/AuditTrace'))
+const Reports = lazy(() => import('./pages/Reports'))
+const PlatformSettings = lazy(() => import('./pages/PlatformSettings'))
+const LogSources = lazy(() => import('./pages/LogSources'))
+const Tickets = lazy(() => import('./pages/Tickets'))
+const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
+const AlertSilences = lazy(() => import('./pages/AlertSilences'))
+const NodeManagement = lazy(() => import('./pages/NodeManagement'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -53,6 +57,7 @@ function RequireRole({ role, children }: { role: string; children: JSX.Element }
 
 export default function App() {
   return (
+    <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', paddingTop: 120 }}><Spin size="large" /></div>}>
     <Routes>
       <Route path="/login" element={<Login />} />
       {/* 大屏：独立路由（无侧栏/顶栏框架），加载自研监控大屏（docs/monitor-bigscreen.html → frontend/public 同源服务） */}
@@ -115,5 +120,6 @@ export default function App() {
         <Route path="settings" element={<RequireRole role="admin"><PlatformSettings /></RequireRole>} />
       </Route>
     </Routes>
+    </Suspense>
   )
 }
