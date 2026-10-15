@@ -127,13 +127,24 @@ async def _creds_from_cluster(cluster_id: int, namespace: str, host: str, kind: 
         if not rs.get("success"):
             continue
         sdoc = yaml.safe_load(rs.get("yaml", "")) or {}
-        data = sdoc.get("data") or {}
-        raw = data.get(".dockerconfigjson") or data.get(".dockercfg")
-        if not raw:
-            continue
-        try:
-            cfg = json.loads(base64.b64decode(raw).decode("utf-8"))
-        except Exception:  # noqa: BLE001
+        cfg = None
+        # 优先 stringData（明文），其次 data（base64）
+        sd = sdoc.get("stringData") or {}
+        st = sd.get(".dockerconfigjson") or sd.get(".dockercfg")
+        if st:
+            try:
+                cfg = json.loads(st) if isinstance(st, str) else st
+            except Exception:  # noqa: BLE001
+                cfg = None
+        if cfg is None:
+            data = sdoc.get("data") or {}
+            raw = data.get(".dockerconfigjson") or data.get(".dockercfg")
+            if raw:
+                try:
+                    cfg = json.loads(base64.b64decode(raw).decode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    cfg = None
+        if not cfg:
             continue
         for h, a in (cfg.get("auths") or {}).items():
             if host in h or h.rstrip("/") == host:
