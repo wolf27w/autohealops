@@ -47,7 +47,7 @@
 | **A1** | **Prometheus 监控前端落地**：仪表盘「告警与总览｜监控」Tab + 监控下钻页（节点/工作负载/容器 × CPU/内存/网络/磁盘） | ✅ 完成（`96f5fd4`）——新增 `Monitor.tsx`（实时 Top + range 趋势），`Dashboard.tsx` 加 Tabs | — |
 | **A2** | **后台「监控数据源」配置** | ✅ 完成（`737746b`）——新表 `monitor_sources`（按集群覆盖）> 全局 `prometheus_url` > 自动发现；直连不通自动回退；系统设置→可观测性加「按集群覆盖」表格 | — |
 | **A3** | 大屏（R7）审美复核 / 细节打磨 | 自研 HTML 大屏已接真实数据，**等老板验收** | `public/monitor-bigscreen.html` | 视反馈 |
-| **A4** | R4 尾巴：**调度 Pod 到指定节点** | 未做（只有 cordon/uncordon/drain） | `resources.py` + executor | ~1–2d |
+| **A4** | R4 尾巴：**调度 Pod 到指定节点** | ✅ 完成（`7179e1a`）——pod template 加 nodeSelector[kubernetes.io/hostname]（保留其他选择器）+ preview 预览；ServiceDetail「操作」菜单入口 | — |
 
 ### B. 🟡 需外部前置 / 部署决策
 
