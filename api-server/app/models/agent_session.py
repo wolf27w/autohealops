@@ -19,6 +19,8 @@ class DiagnosisSession(Base):
     namespace: Mapped[str] = mapped_column(String(100), default="")
     pod_name: Mapped[str] = mapped_column(String(200), default="")
     title: Mapped[str] = mapped_column(String(200), default="")  # 会话标题（首条消息摘要）
+    # 来源：agent=用户在诊断助手主动发起 / proactive=平台巡检自动发起（异常但未告警）
+    source: Mapped[str] = mapped_column(String(20), default="agent", index=True)
     # active=进行中 / closed=已闭环（处理完成，落盘知识库）
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

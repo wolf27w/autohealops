@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.middleware.permission import require_any_user
+from app.middleware.permission import require_any_user, require_operator
 from app.models import Cluster, DiagnosisMessage, DiagnosisSession
 from app.services import agent_service, user_permission_service
 
@@ -110,19 +110,45 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
 
 @router.get("/sessions")
 async def list_sessions(user=Depends(require_any_user)):
-    """我的诊断会话列表（user_id 隔离）"""
+    """我的诊断会话列表（user_id 隔离）。
+
+    - 普通用户：仅自己发起的会话。
+    - admin：额外包含平台巡检自动发起的会话（source='proactive'，user_id=0），便于统一查看。
+    """
+    is_admin = getattr(user, "role", "") == "admin"
     async with async_session() as s:
+        cond = DiagnosisSession.user_id == user.id
+        if is_admin:
+            from sqlalchemy import or_
+            cond = or_(DiagnosisSession.user_id == user.id, DiagnosisSession.source == "proactive")
         result = await s.execute(
-            select(DiagnosisSession).where(DiagnosisSession.user_id == user.id)
-            .order_by(DiagnosisSession.id.desc())
+            select(DiagnosisSession).where(cond)
+            .order_by(DiagnosisSession.id.desc()).limit(200)
         )
         sessions = list(result.scalars())
     return {"code": 200, "message": "success", "data": [
         {"id": x.id, "cluster_id": x.cluster_id, "namespace": x.namespace,
          "pod_name": x.pod_name, "title": x.title, "status": x.status,
+         "source": getattr(x, "source", "agent") or "agent",
          "created_at": str(x.created_at), "updated_at": str(x.updated_at)}
         for x in sessions
     ]}
+
+
+@router.get("/proactive/status")
+async def proactive_status(user=Depends(require_any_user)):
+    """主动诊断（巡检）配置与状态。"""
+    from app.services import proactive_diagnosis_service as pds
+    cfg = await pds._config()
+    return {"code": 200, "message": "success", "data": cfg}
+
+
+@router.post("/proactive/scan")
+async def proactive_scan(user=Depends(require_operator)):
+    """立即执行一轮主动巡检（需 operator+）。"""
+    from app.services import proactive_diagnosis_service as pds
+    summary = await pds.run_scan()
+    return {"code": 200, "message": "success", "data": summary}
 
 
 @router.get("/sessions/{session_id}/messages")

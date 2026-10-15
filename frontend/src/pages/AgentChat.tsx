@@ -6,18 +6,18 @@ import {
 } from 'antd'
 import {
   PlusOutlined, SendOutlined, RobotOutlined, UserOutlined,
-  CheckCircleOutlined, ToolOutlined, ReloadOutlined,
+  CheckCircleOutlined, ToolOutlined, ReloadOutlined, RadarChartOutlined,
 } from '@ant-design/icons'
 import {
   getClusters, getClusterNamespaces, getNamespacePods, getAgentSessions, getAgentMessages,
-  createAgentSession, sendAgentMessage, closeAgentSession,
+  createAgentSession, sendAgentMessage, closeAgentSession, runProactiveScan,
 } from '../services/api'
 import type { Cluster } from '../types'
 
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
 
-interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; updated_at: string }
+interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; updated_at: string }
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
@@ -48,10 +48,22 @@ export default function AgentChat() {
   const [pods, setPods] = useState<PodOption[]>([])
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [deep, setDeep] = useState(true)  // 深度诊断开关（多轮工具取证，默认开：直接给结果）
+  const [scanning, setScanning] = useState(false)
+  const isAdmin = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin' } catch { return false } })()
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<number | null>(null)  // 当前会话 id（轮询时防竞态）
 
   const loadSessions = () => getAgentSessions().then((d) => setSessions((d || []) as Session[]))
+
+  const handleProactiveScan = async () => {
+    setScanning(true)
+    try {
+      const d = await runProactiveScan()
+      if (d?.skipped) message.info(`巡检跳过：${d.reason || '已有巡检进行中'}`)
+      else message.success(`巡检完成：命中 ${d?.hits ?? 0}，自动诊断 ${d?.diagnosed ?? 0}（跳过在途告警 ${d?.skipped_open_alert ?? 0} / 冷却 ${d?.skipped_cooldown ?? 0}）`)
+      loadSessions()
+    } catch { message.error('触发巡检失败') } finally { setScanning(false) }
+  }
 
   useEffect(() => { loadSessions() }, [])
 
@@ -206,6 +218,11 @@ export default function AgentChat() {
         <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
           新建诊断会话
         </Button>
+        {isAdmin && (
+          <Button block style={{ marginTop: 8 }} icon={<RadarChartOutlined />} loading={scanning} onClick={handleProactiveScan}>
+            立即巡检（主动诊断）
+          </Button>
+        )}
         <List
           style={{ marginTop: 12 }}
           dataSource={sessions}
@@ -217,8 +234,11 @@ export default function AgentChat() {
             >
               <div style={{ width: '100%' }}>
                 <Space size={4} style={{ width: '100%', justifyContent: 'space-between' }}>
-                  <Text ellipsis style={{ maxWidth: 180 }}>{s.title}</Text>
-                  <Tag color={s.status === 'closed' ? 'green' : 'blue'}>{s.status === 'closed' ? '已闭环' : '进行中'}</Tag>
+                  <Text ellipsis style={{ maxWidth: 150 }}>{s.title}</Text>
+                  <Space size={2}>
+                    {s.source === 'proactive' && <Tag color="orange">巡检</Tag>}
+                    <Tag color={s.status === 'closed' ? 'green' : 'blue'}>{s.status === 'closed' ? '已闭环' : '进行中'}</Tag>
+                  </Space>
                 </Space>
                 <div style={{ color: '#999', fontSize: 12 }}>{s.namespace}/{s.pod_name}</div>
               </div>

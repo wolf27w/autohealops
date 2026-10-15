@@ -385,6 +385,12 @@ export const regenerateExternalToken = () => http.post('/external/tickets/token/
 // ============ AI 诊断助手（会话式 Agent）============
 export const createAgentSession = (data: Payload) => http.post('/agent/sessions', data)
 export const getAgentSessions = () => http.get('/agent/sessions')
+export interface ProactiveScanResult {
+  skipped?: boolean; reason?: string; clusters?: number; hits?: number; diagnosed?: number
+  skipped_open_alert?: number; skipped_cooldown?: number; sessions?: unknown[]
+}
+export const getProactiveStatus = () => http.get<Record<string, unknown>>('/agent/proactive/status')
+export const runProactiveScan = () => http.post<ProactiveScanResult>('/agent/proactive/scan')
 export const getAgentMessages = (id: number) => http.get(`/agent/sessions/${id}/messages`)
 export const sendAgentMessage = (id: number, content: string, deep = false) => http.post(`/agent/sessions/${id}/messages`, { content, deep })
 export const closeAgentSession = (id: number) => http.post(`/agent/sessions/${id}/close`)

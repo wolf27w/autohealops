@@ -238,6 +238,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("Pod 重启原因诊断扫描启动失败: %s", e)
 
+    # 主动诊断（应用巡检）：持续高水位/频繁重启但无告警 → 自动 AI 全面诊断（不建告警）
+    try:
+        from app.services.proactive_diagnosis_service import background_loop as proactive_loop
+        _proactive_task = asyncio.create_task(proactive_loop())
+        logger.info("主动诊断（应用巡检）已启动（默认每 30 分钟，可配开关/间隔）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("主动诊断巡检启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
