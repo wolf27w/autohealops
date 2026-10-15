@@ -17,7 +17,7 @@ import type { Cluster } from '../types'
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
 
-interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; updated_at: string }
+interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; merged_count?: number; updated_at: string }
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
@@ -229,6 +229,7 @@ export default function AgentChat() {
                   <Text ellipsis style={{ maxWidth: 150 }}>{s.title}</Text>
                   <Space size={2}>
                     {s.source === 'proactive' && <Tag color="orange">巡检</Tag>}
+                    {(s.merged_count || 0) > 0 && <Tag>合并 {s.merged_count}</Tag>}
                     <Tag color={s.status === 'closed' ? 'green' : 'blue'}>{s.status === 'closed' ? '已闭环' : '进行中'}</Tag>
                     <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
                       <DeleteOutlined style={{ color: '#bbb' }} onClick={(e) => e.stopPropagation()} />

@@ -123,15 +123,29 @@ async def list_sessions(user=Depends(require_any_user)):
             cond = or_(DiagnosisSession.user_id == user.id, DiagnosisSession.source == "proactive")
         result = await s.execute(
             select(DiagnosisSession).where(cond)
-            .order_by(DiagnosisSession.id.desc()).limit(200)
+            .order_by(DiagnosisSession.id.desc()).limit(500)
         )
         sessions = list(result.scalars())
+    # N5：巡检会话合并——同 (cluster,namespace,pod) 只保留最新一条，其余计入 merged_count
+    merged: list = []
+    counts: dict[tuple, int] = {}
+    for x in sessions:
+        src = getattr(x, "source", "agent") or "agent"
+        if src == "proactive":
+            k = (x.cluster_id, x.namespace, x.pod_name)
+            if k in counts:
+                counts[k] += 1
+                continue
+            counts[k] = 0
+        merged.append(x)
     return {"code": 200, "message": "success", "data": [
         {"id": x.id, "cluster_id": x.cluster_id, "namespace": x.namespace,
          "pod_name": x.pod_name, "title": x.title, "status": x.status,
          "source": getattr(x, "source", "agent") or "agent",
+         "merged_count": counts.get((x.cluster_id, x.namespace, x.pod_name), 0)
+                          if (getattr(x, "source", "agent") or "agent") == "proactive" else 0,
          "created_at": str(x.created_at), "updated_at": str(x.updated_at)}
-        for x in sessions
+        for x in merged
     ]}
 
 
