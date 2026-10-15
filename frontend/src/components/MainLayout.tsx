@@ -42,7 +42,14 @@ const menuItems: NavItem[] = [
     key: 'g-monitor', label: '监控中心', icon: <FundOutlined />,
     children: [
       { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-      { key: '/clusters', icon: <ClusterOutlined />, label: '集群管理' },
+      {
+        key: 'g-cluster', label: '集群管理', icon: <ClusterOutlined />,
+        children: [
+          { key: '/clusters', label: '集群' },
+          { key: '/node-management', label: '集群节点' },
+          { key: '/resource-governance', label: '资源治理' },
+        ],
+      },
     ],
   },
   {
@@ -72,8 +79,6 @@ const menuItems: NavItem[] = [
     children: [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
-      { key: '/resource-governance', icon: <SettingOutlined />, label: '资源治理' },
-      { key: '/node-management', icon: <ClusterOutlined />, label: '集群节点' },
       { key: '/host-management', icon: <DesktopOutlined />, label: '主机/虚拟机' },
     ],
   },
