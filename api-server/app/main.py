@@ -106,10 +106,15 @@ async def _maintenance_loop() -> None:
                     logger.info("资源快照清理完成（保留 %d 天）：删除 %d 条历史记录", _days, n)
             except Exception as e:  # noqa: BLE001
                 logger.warning("资源快照清理 异常: %s", e)
-            # 巡检/诊断报告保留期（30 天）
+            # 巡检/诊断报告保留期（可配，默认 30 天）
             try:
                 from app.services.inspection_service import cleanup_old_inspection_reports
-                n = await cleanup_old_inspection_reports(30)
+                from app.services.system_setting_service import get_setting
+                try:
+                    _inspect_days = int(await get_setting("inspection_retention_days", "30") or 30)
+                except (TypeError, ValueError):
+                    _inspect_days = 30
+                n = await cleanup_old_inspection_reports(max(1, _inspect_days))
                 if n:
                     logger.info("巡检报告清理完成：删除 %d 条超过保留期的报告", n)
             except Exception as e:  # noqa: BLE001

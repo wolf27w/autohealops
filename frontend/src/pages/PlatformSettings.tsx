@@ -101,6 +101,11 @@ export default function PlatformSettings() {
                   <Form.Item name="feishu_app_secret" label="飞书 App Secret">
                     <Input.Password placeholder="飞书应用凭证" />
                   </Form.Item>
+                  <Divider orientation="left">数据保留</Divider>
+                  <Space wrap>
+                    <Form.Item name="snapshot_retention_days" label="快照/指标保留(天)"><InputNumber min={1} max={365} /></Form.Item>
+                    <Form.Item name="inspection_retention_days" label="巡检报告保留(天)"><InputNumber min={1} max={365} /></Form.Item>
+                  </Space>
                   <Divider orientation="left">镜像仓库（列标签 / 更新镜像）</Divider>
                   <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
                     私有仓库拉取标签需凭据：填全局用户名/密码即可；多仓库可用下方 JSON 按 host 覆盖（优先生效）。
