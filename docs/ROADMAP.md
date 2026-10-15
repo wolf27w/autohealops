@@ -44,7 +44,7 @@
 
 | # | 需求 | 现状 | 落点 | 工时 |
 |---|---|---|---|---|
-| **A1** | **Prometheus 监控前端落地**：仪表盘「告警｜监控」Tab + 监控下钻页（节点/工作负载/容器 × CPU/内存/网络/IO） | 后端 `/monitoring/*`（即时+range+containers）**全就绪**；`api.ts` 方法已定义，但**无任何页面调用**（grep 零命中） | 前端：`Dashboard.tsx` 加 Tab + 新建 `Monitor` 下钻页 | ~2–3d |
+| **A1** | **Prometheus 监控前端落地**：仪表盘「告警与总览｜监控」Tab + 监控下钻页（节点/工作负载/容器 × CPU/内存/网络/磁盘） | ✅ 完成（`96f5fd4`）——新增 `Monitor.tsx`（实时 Top + range 趋势），`Dashboard.tsx` 加 Tabs | — |
 | **A2** | **后台「监控数据源」配置**（Prometheus 地址界面化） | 仅 `.env PROMETHEUS_URL`，无界面 | 后端后台配置 + `PlatformSettings` 表单 | ~0.5–1d |
 | **A3** | 大屏（R7）审美复核 / 细节打磨 | 自研 HTML 大屏已接真实数据，**等老板验收** | `public/monitor-bigscreen.html` | 视反馈 |
 | **A4** | R4 尾巴：**调度 Pod 到指定节点** | 未做（只有 cordon/uncordon/drain） | `resources.py` + executor | ~1–2d |
