@@ -27,6 +27,7 @@ build/
 # 归档/备份数据（JSON 备份等，不入版本控制）
 logs/archive/
 backups/
+.deploy-history
 
 # IDE
 .idea/

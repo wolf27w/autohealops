@@ -6,6 +6,13 @@ metadata:
   namespace: api-ops
 spec:
   replicas: 3
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: api-server
@@ -70,7 +77,12 @@ metadata:
   name: k8s-executor
   namespace: api-ops
 spec:
-  replicas: 1  # 固定单副本（有状态 watcher，多副本重复 watch）
+  replicas: 1
+  # 有状态 watcher（单写者）：用 Recreate 避免新旧同时 watch 双写
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: k8s-executor
@@ -119,6 +131,13 @@ metadata:
   namespace: api-ops
 spec:
   replicas: 2
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: ai-service
@@ -180,6 +199,13 @@ metadata:
   namespace: api-ops
 spec:
   replicas: 2
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: frontend
