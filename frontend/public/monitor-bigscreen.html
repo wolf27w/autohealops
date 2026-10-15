@@ -541,19 +541,18 @@ async function renderServiceBody(){
   const names=[...new Set([...Object.keys(CCPU),...Object.keys(CMEM),...Object.keys(RST),...Object.keys(OOM),...Object.keys(THR),...Object.keys(RD)])].sort();
   const imgMap={};
   if(mine[0]){ const det=await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods/'+mine[0].name+'/detail').catch(()=>null); ((det&&det.containers)||[]).forEach(x=>imgMap[x.name]=x.image); }
-  const [rcpu,rmem,rnx,rnt]=await Promise.all([
-    promRange(cid,`sum(rate(container_cpu_usage_seconds_total{${R}}[5m]))`,30,60),
-    promRange(cid,`sum(container_memory_working_set_bytes{${R}})`,30,60),
-    promRange(cid,`sum(rate(container_network_receive_bytes_total{namespace="${ns}",pod=~"${svc}-.*"}[5m]))`,30,60),
-    promRange(cid,`sum(rate(container_network_transmit_bytes_total{namespace="${ns}",pod=~"${svc}-.*"}[5m]))`,30,60),
+  const [rcpu,rmem,rnx]=await Promise.all([
+    promRange(cid,`sum by(container)(rate(container_cpu_usage_seconds_total{${R}}[5m]))`,30,60),
+    promRange(cid,`sum by(container)(container_memory_working_set_bytes{${R}})`,30,60),
+    promRange(cid,`sum by(container)(rate(container_network_receive_bytes_total{namespace="${ns}",pod=~"${svc}-.*"}[5m]))`,30,60),
   ]);
   const capCpu=cpuLim*podCount, capMem=memLim*podCount;
-  const vOf=arr=>(arr&&arr[0]?arr[0].values:[]);
-  const cV=vOf(rcpu), mV=vOf(rmem);
-  const X=cV.length?cV.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):times(24);
-  const cpuS=cV.map(v=>capCpu?+((v[1]*1000)/capCpu*100).toFixed(1):0);
-  const memS=mV.map(v=>capMem?+((v[1])/capMem*100).toFixed(1):0);
-  const nxS=vOf(rnx).map(v=>+(v[1]/1024).toFixed(1)), ntS=vOf(rnt).map(v=>+(v[1]/1024).toFixed(1));
+  // 容器粒度：每个容器一条线（不再工作负载聚合）
+  const cnames=[...new Set([...(rcpu||[]),...(rmem||[]),...(rnx||[])].map(s=>(s.metric&&s.metric.container)||'').filter(Boolean))].sort();
+  const X=(rcpu&&rcpu[0])?rcpu[0].values.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):times(24);
+  const sOf=(rr,f)=>cnames.map(cn=>{const s=(rr||[]).find(x=>x.metric&&x.metric.container===cn); return {name:cn,data:s?s.values.map(v=>+f(v[1]).toFixed(2)):[]};});
+  const cpuSeries=sOf(rcpu,v=>v), memSeries=sOf(rmem,v=>v/1048576), netSeries=sOf(rnx,v=>v/1024);
+  const PAL=['#3b82f6','#22d3ee','#a855f7','#22c55e','#f59e0b','#ef4444','#14b8a6','#eab308','#f472b6','#60a5fa'];
   const ready=wl.ready_replicas||0, desired=wl.replicas||0, abnormal=ready<desired;
   const rows=names.map(cn=>{
     const bad=(RST[cn]||0)>0||(OOM[cn]||0)>0;
@@ -564,7 +563,7 @@ async function renderServiceBody(){
       <td style="color:${(THR[cn]||0)>0?'var(--yellow)':''}">${THR[cn]?(THR[cn]).toFixed(2)+'s/s':'-'}</td>
       <td>${RD[cn]?fmtBytes(RD[cn])+'/s':'-'}</td><td>${WR[cn]?fmtBytes(WR[cn])+'/s':'-'}</td></tr>`;
   }).join('');
-  const curCpu=cV.length?cV[cV.length-1][1]:sumObj(CCPU), curMem=mV.length?mV[mV.length-1][1]:sumObj(CMEM);
+  const curCpu=sumObj(CCPU), curMem=sumObj(CMEM);
   const cpuPct=capCpu?Math.min(999,Math.round(curCpu*1000/capCpu*100)):null;
   const memPct=capMem?Math.min(999,Math.round(curMem/capMem*100)):null;
   $('#svcbody').innerHTML=`
@@ -592,12 +591,16 @@ async function renderServiceBody(){
        ['CPU Throttled(总)',sumObj(THR).toFixed(1)+'s/s',sumObj(THR)>0],['网络错误(总/s)',sumObj(NERR).toFixed(2),sumObj(NERR)>0]]
       .map(([l,v,b])=>`<div class="col cnt-box"><div class="n" style="color:${b?'var(--red)':'var(--green)'}">${v}</div><div class="l">${l}</div></div>`).join('')}
   </div>
+  <div class="row" style="margin-bottom:16px">
+    <div class="col panel"><h3>容器 CPU 趋势（core，每容器一线）</h3><div id="ch-svc-res" class="chart" style="height:250px"></div></div>
+    <div class="col panel"><h3>容器内存趋势（MiB，每容器一线）</h3><div id="ch-svc-mem" class="chart" style="height:250px"></div></div>
+  </div>
   <div class="row">
-    <div class="col panel"><h3>资源使用趋势（CPU / 内存 %，工作负载聚合）</h3><div id="ch-svc-res" class="chart" style="height:250px"></div></div>
-    <div class="col panel"><h3>网络流量趋势（Rx / Tx KiB，工作负载聚合）</h3><div id="ch-svc-net" class="chart" style="height:250px"></div></div>
+    <div class="col panel"><h3>容器网络入站趋势（KiB/s，每容器一线）</h3><div id="ch-svc-net" class="chart" style="height:250px"></div></div>
   </div>`;
-  mkChart('ch-svc-res', lineOpt(X,[{name:'CPU%',data:cpuS},{name:'内存%',data:memS}],['#3b82f6','#22d3ee'],'%'));
-  mkChart('ch-svc-net', lineOpt(X,[{name:'Rx KiB',data:nxS},{name:'Tx KiB',data:ntS}],['#22d3ee','#a855f7'],''));
+  mkChart('ch-svc-res', lineOpt(X,cpuSeries,PAL,'core'));
+  mkChart('ch-svc-mem', lineOpt(X,memSeries,PAL,'MiB'));
+  mkChart('ch-svc-net', lineOpt(X,netSeries,PAL,'KiB/s'));
 }
 function setPod(i){ CV.pod=i; renderService(); }
 function gotoNode(n){ CV.tab='node'; CV.node=n; CV.from=`节点 ${n}`; renderCluster(); }
