@@ -568,5 +568,36 @@ class TestExecutorHealth(unittest.TestCase):
         self.assertEqual(ev(None, False), ("down", "down"))
 
 
+class TestAiUsageSpike(unittest.TestCase):
+    """M12：AI 用量异常判定"""
+
+    CFG = {"cost_ratio": 3.0, "calls_ratio": 3.0, "cost_abs": 0.0, "calls_abs": 0.0}
+
+    def test_normal(self):
+        from app.services.ai_usage_service import evaluate_usage
+        self.assertEqual(evaluate_usage(10.0, 100, 10.0, 100, self.CFG), [])
+
+    def test_cost_spike(self):
+        from app.services.ai_usage_service import evaluate_usage
+        a = evaluate_usage(40.0, 100, 10.0, 100, self.CFG)
+        self.assertTrue(any("成本突增" in x for x in a))
+
+    def test_calls_spike(self):
+        from app.services.ai_usage_service import evaluate_usage
+        a = evaluate_usage(10.0, 400, 10.0, 100, self.CFG)
+        self.assertTrue(any("调用量异常" in x for x in a))
+
+    def test_no_baseline_no_ratio_alert(self):
+        # 基线为 0（新部署）→ 不做倍数告警，避免误报
+        from app.services.ai_usage_service import evaluate_usage
+        self.assertEqual(evaluate_usage(100.0, 1000, 0.0, 0.0, self.CFG), [])
+
+    def test_abs_threshold(self):
+        from app.services.ai_usage_service import evaluate_usage
+        cfg = {**self.CFG, "cost_abs": 50.0}
+        a = evaluate_usage(60.0, 10, 0.0, 0.0, cfg)
+        self.assertTrue(any("绝对阈值" in x for x in a))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -108,6 +108,13 @@ async def model_cost(range_days: str = Query("7d", alias="range"), user=Depends(
     return {"code": 200, "message": "success", "data": {"models": data, "total_cost": total_cost}}
 
 
+@router.get("/ai-usage")
+async def ai_usage(user=Depends(require_any_user)):
+    """AI 用量快照（M12）：今日 vs 近 N 日基线的成本/调用量 + 异常判定（成本看板/告警用）。"""
+    from app.services.ai_usage_service import get_usage_snapshot
+    return {"code": 200, "message": "success", "data": await get_usage_snapshot()}
+
+
 # ============ v2 动作分类口径（供 action_stat / action_timeline 使用） ============
 # 依据 RepairPlan.plan_json 步骤命令 + ExecutionLog 实际执行命令 + Alert.status 推导：
 #   - "rollout restart"          → restart（重启）

@@ -254,6 +254,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("executor 掉线探测启动失败: %s", e)
 
+    # AI 用量异常告警（M12；每小时巡检，单日成本/调用量突增才通知）
+    try:
+        from app.services.ai_usage_service import background_loop as ai_usage_loop
+        _ai_usage_task = asyncio.create_task(ai_usage_loop())
+        logger.info("AI 用量异常巡检已启动（每小时，成本/调用量突增告警）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI 用量异常巡检启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

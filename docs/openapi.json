@@ -13217,6 +13217,28 @@
         "summary": "Ai Effectiveness"
       }
     },
+    "/api/v1/stats/ai-usage": {
+      "get": {
+        "description": "AI 用量快照（M12）：今日 vs 近 N 日基线的成本/调用量 + 异常判定（成本看板/告警用）。",
+        "operationId": "get_api_v1_stats_ai_usage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ai Usage"
+      }
+    },
     "/api/v1/stats/dashboard": {
       "get": {
         "description": "仪表盘 / 大屏聚合数据（fresh 缓存 45s + 单飞锁 + last-good 兜底 + 后台 10s 预热）",
