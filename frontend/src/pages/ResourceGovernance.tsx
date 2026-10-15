@@ -1,5 +1,6 @@
 // 资源治理·管控台（P0-R1）：维护管控表（副本数/资源配额/JVM 参数），供准入控制改写 Deployment
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Card, Table, Button, Space, Select, Input, Modal, Form, InputNumber, Switch, message, Popconfirm, Tag, Tooltip } from 'antd'
 import { PlusOutlined, ReloadOutlined, FundOutlined } from '@ant-design/icons'
 import {
@@ -11,8 +12,12 @@ import type { ResourceGovernanceRule, PeakResult, AdmissionStatus, NsLimitStatus
 import type { Cluster } from '../types'
 
 export default function ResourceGovernance() {
+  const [sp] = useSearchParams()
   const [clusters, setClusters] = useState<Cluster[]>([])
-  const [clusterId, setClusterId] = useState<number | undefined>(undefined)
+  const [clusterId, setClusterId] = useState<number | undefined>(() => {
+    const c = sp.get('cluster')
+    return c ? Number(c) : undefined
+  })
   const [namespace, setNamespace] = useState('')
   const [rows, setRows] = useState<ResourceGovernanceRule[]>([])
   const [loading, setLoading] = useState(false)
