@@ -81,10 +81,7 @@ export default function ClusterDetail() {
   const [activeType, setActiveType] = useState<string>(() => {
     const fromUrl = searchParams.get('type')
     if (fromUrl && VALID_TYPES.includes(fromUrl)) return fromUrl
-    try {
-      const saved = localStorage.getItem(`cluster_type:${id}`)
-      if (saved && VALID_TYPES.includes(saved)) return saved
-    } catch { /* ignore */ }
+    // N4：默认落在「工作负载」（不再记忆上次类型）
     return 'deployments'
   })
   const [loading, setLoading] = useState(false)
@@ -109,7 +106,7 @@ export default function ClusterDetail() {
   const [inspectOpen, setInspectOpen] = useState(false)
   const [appInspectOpen, setAppInspectOpen] = useState(false)
   const [aiNs, setAiNs] = useState<string>('')
-  const [aiKinds, setAiKinds] = useState<string[]>(['deployment', 'statefulset'])
+  const [aiKinds, setAiKinds] = useState<string[]>([])
   const [aiLoading, setAiLoading] = useState(false)
   const [aiResult, setAiResult] = useState<ProactiveScanResult | null>(null)
   const runAppInspect = async () => {
@@ -121,10 +118,9 @@ export default function ClusterDetail() {
     } catch { /* 拦截器已提示 */ } finally { setAiLoading(false) }
   }
 
-  // 工作负载类型 Tab 持久化（URL ?type= + 本地记忆，与命名空间同口径）
+  // 工作负载类型 Tab：仅 URL ?type= 同步（不再本地记忆，N4 保证默认落到工作负载）
   const changeType = (v: string) => {
     setActiveType(v)
-    try { localStorage.setItem(`cluster_type:${id}`, v) } catch { /* ignore */ }
     const next = new URLSearchParams(searchParams)
     if (v && v !== 'deployments') next.set('type', v)
     else next.delete('type')
@@ -214,20 +210,6 @@ export default function ClusterDetail() {
       if (saved && saved !== '_all_') {
         const next = new URLSearchParams(searchParams)
         next.set('ns', saved)
-        setSearchParams(next, { replace: true })
-      }
-    } catch { /* ignore */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
-
-  // 类型 Tab 同理：URL 没有 type 但本地记住 → 同步进 URL
-  useEffect(() => {
-    if (searchParams.get('type')) return
-    try {
-      const saved = localStorage.getItem(`cluster_type:${id}`)
-      if (saved && VALID_TYPES.includes(saved)) {
-        const next = new URLSearchParams(searchParams)
-        next.set('type', saved)
         setSearchParams(next, { replace: true })
       }
     } catch { /* ignore */ }
@@ -665,7 +647,7 @@ export default function ClusterDetail() {
         <span style={{ fontSize: 16, fontWeight: 700 }}>{clusterName || `集群 ${id}`}</span>
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
-        <Button size="small" onClick={() => { setAiResult(null); setAiNs(''); setAppInspectOpen(true) }}>应用巡检</Button>
+        <Button size="small" onClick={() => { setAiResult(null); setAiNs(activeNs && activeNs !== '_all_' ? activeNs : ''); setAiKinds([]); setAppInspectOpen(true) }}>应用巡检</Button>
         <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>集群巡检</Button>
       </div>
 
@@ -735,16 +717,16 @@ export default function ClusterDetail() {
         footer={<Button onClick={() => setAppInspectOpen(false)}>关闭</Button>} width={760}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>命名空间</div>
-            <Select style={{ width: 200 }} value={aiNs} onChange={setAiNs}
-              options={[{ label: '全部命名空间', value: '' }, ...namespaces.map((n) => ({ label: n.namespace, value: n.namespace }))]} />
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>命名空间（必选）</div>
+            <Select style={{ width: 200 }} value={aiNs || undefined} onChange={setAiNs} placeholder="请选择命名空间"
+              options={namespaces.map((n) => ({ label: n.namespace, value: n.namespace }))} />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>工作负载类型</div>
-            <Select mode="multiple" style={{ width: 300 }} value={aiKinds} onChange={setAiKinds}
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>工作负载类型（自选，默认不选）</div>
+            <Select mode="multiple" style={{ width: 300 }} value={aiKinds} onChange={setAiKinds} placeholder="请选择类型"
               options={[{ label: '无状态 Deployment', value: 'deployment' }, { label: '有状态 StatefulSet', value: 'statefulset' }, { label: '守护集 DaemonSet', value: 'daemonset' }]} />
           </div>
-          <Button type="primary" loading={aiLoading} onClick={runAppInspect}>开始巡检</Button>
+          <Button type="primary" loading={aiLoading} disabled={!aiNs || aiKinds.length === 0} onClick={runAppInspect}>开始巡检</Button>
         </div>
         <div style={{ color: '#888', fontSize: 12, marginBottom: 10 }}>
           对所选范围内的「有状态 / 无状态」工作负载巡检：检查内存/CPU 持续高水位、频繁重启等异常，命中则自动发起 AI 全面诊断（含 JVM/日志/指标），不建告警。

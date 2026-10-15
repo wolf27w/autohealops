@@ -851,6 +851,24 @@ async def schedule_workload(cluster_id: int, kind: str, namespace: str, name: st
     return {"code": 200, "message": "success", "data": {"preview": False, "node": node, **info}}
 
 
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/containers")
+async def workload_containers(cluster_id: int, kind: str, namespace: str, name: str,
+                             user=Depends(require_any_user)):
+    """工作负载容器列表（name/image，按 spec 顺序）——更新镜像时默认选主容器、回填当前镜像。"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "读取 YAML 失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    ctrs = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    return {"code": 200, "message": "success", "data": {
+        "containers": [{"name": c.get("name"), "image": c.get("image")} for c in ctrs]}}
+
+
 @router.get("/registry/tags")
 async def registry_tags(image: str, limit: int = 100, user=Depends(require_any_user)):
     """列镜像仓库标签（R3 镜像更新）：Docker Registry v2，兼容 Harbor/ACR/SWR/DockerHub。只读。"""

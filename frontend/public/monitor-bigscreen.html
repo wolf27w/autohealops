@@ -279,6 +279,7 @@ function lineOpt(x, seriesArr, colors, yName){
   const ax=isDark()?'#8b9cb3':'#8aa196', ln=isDark()?'#1e2a3a':'#d3e2da', grid=isDark()?'#141d2c':'#eef4f0', tipBg=isDark()?'#0d1420':'#ffffff', tipTx=isDark()?'#e6edf3':'#0f2018';
   return {
     backgroundColor:'transparent',
+    animation:false,
     grid:{left:38,right:16,top:28,bottom:26},
     tooltip:{trigger:'axis',backgroundColor:tipBg,borderColor:ln,textStyle:{color:tipTx,fontSize:11}},
     legend:{top:0,textStyle:{color:ax,fontSize:11},itemWidth:12,itemHeight:8},
@@ -320,9 +321,9 @@ function renderOverview(){
     </div>
   </div>
 
-  <!-- 趋势：近24h 告警 / 自愈 -->
+  <!-- 趋势：近24h 告警（新增/已解决/自愈）——与仪表盘同源 -->
   <div class="panel" style="margin-bottom:20px">
-    <h3>近 24 小时 告警 / 自愈 趋势 <span class="sub">逐小时</span></h3>
+    <h3>近 24 小时 告警趋势 <span class="sub">新增 / 已解决 / 自愈（逐小时）</span></h3>
     <div id="ch-ov-trend" class="chart" style="height:200px"></div>
   </div>
 
@@ -425,7 +426,14 @@ function renderOverview(){
         </div>`).join('')}
     </div>
   </div>`;
-  if(OVERVIEW.trend24h && OVERVIEW.trend24h.length){
+  if(OVERVIEW.trend && OVERVIEW.trend.length){
+    const X = OVERVIEW.trend.map(t=>(String(t.b).split(' ')[1])||t.b);
+    mkChart('ch-ov-trend', lineOpt(X,
+      [{name:'新增',data:OVERVIEW.trend.map(t=>t.n)},
+       {name:'已解决',data:OVERVIEW.trend.map(t=>t.r)},
+       {name:'自愈',data:OVERVIEW.trend.map(t=>t.s)}],
+      ['#e74c3c','#3b82f6','#12b981'], '条'));
+  } else if(OVERVIEW.trend24h && OVERVIEW.trend24h.length){
     const X = OVERVIEW.trend24h.map(t=>t.h);
     mkChart('ch-ov-trend', lineOpt(X,
       [{name:'告警',data:OVERVIEW.trend24h.map(t=>t.a)},{name:'自愈',data:OVERVIEW.trend24h.map(t=>t.s)}],
@@ -705,7 +713,7 @@ const HEAL_MAP = {pending:'pending',awaiting_approval:'healing',ticketed:'healin
 
 async function loadOverviewReal(){
   const [dash, clusters, alerts, recs] = await Promise.all([
-    apiGet('/stats/dashboard?range=7d&ai_range=7d'),
+    apiGet('/stats/dashboard?range=24h&ai_range=24h'),
     apiGet('/clusters'),
     apiGet('/alerts?group=true&page=1&size=10').catch(()=>[]),
     apiGet('/repair-records?page=1&size=50').catch(()=>[]),
@@ -728,6 +736,9 @@ async function loadOverviewReal(){
   OVERVIEW.alertTypes = (dash.fault_top||[]).slice(0,5).map(f=>({name:f.fault_type, count:f.count}));
   if(!OVERVIEW.alertTypes.length) OVERVIEW.alertTypes=[{name:'（当前无告警）',count:0}];
   OVERVIEW.trend24h = (dash.trend_24h||[]).map(t=>({h:t.hour, a:t.alerts||0, s:t.healed||0}));
+  // N8：总览趋势改用与仪表盘同一数据源（alert_trend：新增/已解决/自愈），保证两者一致
+  OVERVIEW.trend = (dash.alert_trend||[]).map(t=>({b:String(t.bucket||''), n:t.new||0, r:t.resolved||0, s:t.self_healed||0}));
+  if(!OVERVIEW.trend.length) OVERVIEW.trend = (dash.trend_24h||[]).map(t=>({b:String(t.hour||''), n:t.alerts||0, r:0, s:t.healed||0}));
   CLUSTERS.length=0;
   cd.forEach(c=>{ CLUSTERS.push({id:c.id, name:c.name, env:(cById[c.id]||{}).env||'',
     status: c.status==='healthy'?'ok':((c.alert_pending||0)>0?'warn':'ok'),

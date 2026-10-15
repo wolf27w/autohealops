@@ -2,15 +2,15 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Layout, Button, Input, List, Tag, Space, Empty, Modal, Form, Select, Spin,
-  Card, Collapse, Typography, message, Switch, Tooltip,
+  Card, Collapse, Typography, message, Switch, Tooltip, Popconfirm,
 } from 'antd'
 import {
   PlusOutlined, SendOutlined, RobotOutlined, UserOutlined,
-  CheckCircleOutlined, ToolOutlined, ReloadOutlined,
+  CheckCircleOutlined, ToolOutlined, ReloadOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import {
   getClusters, getClusterNamespaces, getNamespacePods, getAgentSessions, getAgentMessages,
-  createAgentSession, sendAgentMessage, closeAgentSession,
+  createAgentSession, sendAgentMessage, closeAgentSession, deleteAgentSession,
 } from '../services/api'
 import type { Cluster } from '../types'
 
@@ -52,6 +52,15 @@ export default function AgentChat() {
   const activeIdRef = useRef<number | null>(null)  // 当前会话 id（轮询时防竞态）
 
   const loadSessions = () => getAgentSessions().then((d) => setSessions((d || []) as Session[]))
+
+  const handleDeleteSession = async (sid: number) => {
+    try {
+      await deleteAgentSession(sid)
+      message.success('已删除会话')
+      if (activeIdRef.current === sid) { activeIdRef.current = null; setActiveId(null); setMessages([]) }
+      loadSessions()
+    } catch { /* 拦截器已提示 */ }
+  }
 
   useEffect(() => { loadSessions() }, [])
 
@@ -221,6 +230,9 @@ export default function AgentChat() {
                   <Space size={2}>
                     {s.source === 'proactive' && <Tag color="orange">巡检</Tag>}
                     <Tag color={s.status === 'closed' ? 'green' : 'blue'}>{s.status === 'closed' ? '已闭环' : '进行中'}</Tag>
+                    <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
+                      <DeleteOutlined style={{ color: '#bbb' }} onClick={(e) => e.stopPropagation()} />
+                    </Popconfirm>
                   </Space>
                 </Space>
                 <div style={{ color: '#999', fontSize: 12 }}>{s.namespace}/{s.pod_name}</div>

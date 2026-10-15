@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -222,3 +222,18 @@ async def close_session(session_id: int, user=Depends(require_any_user)):
 
     result = await agent_service.close_session_and_sink(sess)
     return {"code": 200, "message": "success", "data": result}
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: int, user=Depends(require_any_user)):
+    """删除诊断会话（含消息）——本人才可删；admin 可删巡检会话。"""
+    async with async_session() as s:
+        sess = await s.get(DiagnosisSession, session_id)
+        if not sess:
+            return {"code": 404, "message": "会话不存在", "data": None}
+        if sess.user_id != user.id and getattr(user, "role", "") != "admin":
+            return {"code": 403, "message": "无该会话权限", "data": None}
+        await s.execute(delete(DiagnosisMessage).where(DiagnosisMessage.session_id == session_id))
+        await s.delete(sess)
+        await s.commit()
+    return {"code": 200, "message": "success", "data": {"id": session_id}}

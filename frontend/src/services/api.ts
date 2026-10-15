@@ -293,6 +293,8 @@ export const getWorkloadYaml = (clusterId: number, kind: string, ns: string, nam
   http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`)
 export const getWorkloadServiceInfo = (clusterId: number, kind: string, ns: string, name: string) =>
   http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/service-info`)
+export const getWorkloadContainers = (clusterId: number, kind: string, ns: string, name: string) =>
+  http.get<{ containers: { name: string; image: string }[] }>(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/containers`)
 export const applyWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string, yaml: string) =>
   http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`, { yaml })
 // 创建/编辑工作负载（name 留空=按 YAML 内 metadata.name 创建）
@@ -403,6 +405,7 @@ export const setMonitoringSource = (cluster_id: number, url: string) =>
 export const getAgentMessages = (id: number) => http.get(`/agent/sessions/${id}/messages`)
 export const sendAgentMessage = (id: number, content: string, deep = false) => http.post(`/agent/sessions/${id}/messages`, { content, deep })
 export const closeAgentSession = (id: number) => http.post(`/agent/sessions/${id}/close`)
+export const deleteAgentSession = (id: number) => http.delete<{ id: number }>(`/agent/sessions/${id}`)
 
 // ============ 诊断中心（任务/报告）============
 export const getDiagnosticTasks = () => http.get('/diagnostic-tasks')

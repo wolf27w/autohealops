@@ -195,6 +195,49 @@
         "summary": "Create Session"
       }
     },
+    "/api/v1/agent/sessions/{session_id}": {
+      "delete": {
+        "description": "删除诊断会话（含消息）——本人才可删；admin 可删巡检会话。",
+        "operationId": "delete_api_v1_agent_sessions_session_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Session"
+      }
+    },
     "/api/v1/agent/sessions/{session_id}/close": {
       "post": {
         "description": "用户确认处理完成 → 闭环落盘知识库",
@@ -12480,6 +12523,76 @@
           }
         ],
         "summary": "Delete Workload"
+      }
+    },
+    "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/containers": {
+      "get": {
+        "description": "工作负载容器列表（name/image，按 spec 顺序）——更新镜像时默认选主容器、回填当前镜像。",
+        "operationId": "get_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_containers",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Workload Containers"
       }
     },
     "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/image": {

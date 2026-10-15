@@ -10,7 +10,7 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 import type { AggLogPod, K8sNode } from '../services/api'
 
@@ -58,6 +58,7 @@ export default function ServiceDetail() {
   const [imgTags, setImgTags] = useState<string[]>([])
   const [imgTagLoading, setImgTagLoading] = useState(false)
   const [imgTagErr, setImgTagErr] = useState('')
+  const [wlContainers, setWlContainers] = useState<{ name: string; image: string }[]>([])
   const [aggLogsOpen, setAggLogsOpen] = useState(false)
   const [aggLogs, setAggLogs] = useState<AggLogPod[]>([])
   const [aggLogsLoading, setAggLogsLoading] = useState(false)
@@ -185,7 +186,19 @@ export default function ServiceDetail() {
     load()
   }
 
-  const openImageModal = () => { imageForm.resetFields(); setImageModal(true); setImgTags([]); setImgTagErr('') }
+  const openImageModal = async () => {
+    imageForm.resetFields(); setImageModal(true); setImgTags([]); setImgTagErr(''); setWlContainers([])
+    try {
+      const d = await getWorkloadContainers(clusterId, kind, namespace, name)
+      const cs = d?.containers || []
+      setWlContainers(cs)
+      const first = cs[0]   // spec 第一个 = 服务主容器（sidecar 在后）
+      if (first) {
+        imageForm.setFieldsValue({ container: first.name, image: first.image })
+        await loadImgTags()   // 自动列出当前镜像的 tag
+      }
+    } catch { /* ignore */ }
+  }
   const handleImageUpdate = async () => {
     const v = await imageForm.validateFields()
     await updateWorkloadImage(clusterId, kind, namespace, name, { container: v.container, image: v.image })
@@ -399,7 +412,10 @@ export default function ServiceDetail() {
 
       <Modal title={`更新镜像：${name}`} open={imageModal} onOk={handleImageUpdate} onCancel={() => setImageModal(false)} width={520}>
         <Form form={imageForm} layout="vertical">
-          <Form.Item name="container" label="容器名（空=第一个容器）"><Input placeholder="如 app" /></Form.Item>
+          <Form.Item name="container" label="容器（默认主容器，非 sidecar）">
+            <Select placeholder="主容器" options={wlContainers.map((c) => ({ label: c.name, value: c.name }))}
+              onChange={(v) => { const c = wlContainers.find((x) => x.name === v); if (c) { imageForm.setFieldsValue({ image: c.image }); setImgTags([]); setImgTagErr('') } }} />
+          </Form.Item>
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="image" label="镜像" style={{ flex: 1, marginBottom: 0 }} rules={[{ required: true, message: '请输入镜像' }]}>
               <Input placeholder="harbor.efreight.cn/xinnuo/xxx:tag" />
