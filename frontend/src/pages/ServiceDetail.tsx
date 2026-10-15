@@ -211,7 +211,7 @@ export default function ServiceDetail() {
     if (!img) { message.warning('请先填写镜像（如 harbor.efreight.cn/proj/app:tag）'); return }
     setImgTagLoading(true); setImgTagErr(''); setImgTags([])
     try {
-      const d = await getRegistryTags(img, 100)
+      const d = await getRegistryTags(img, 100, { cluster_id: clusterId, namespace, kind, name })
       const tags = d?.tags || []
       setImgTags(tags)
       if (tags.length === 0) setImgTagErr('未列到标签（仓库可能私有需配凭据，或网络不通）')

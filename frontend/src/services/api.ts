@@ -555,8 +555,8 @@ export const updateWorkloadImage = (clusterId: number, kind: string, namespace: 
 
 // 镜像仓库标签（R3）：Docker Registry v2（Harbor/ACR/SWR）
 export interface RegistryTags { host: string; repository: string; current_tag: string; tags: string[]; total: number }
-export const getRegistryTags = (image: string, limit = 100) =>
-  http.get<RegistryTags>('/resources/registry/tags', { params: { image, limit } })
+export const getRegistryTags = (image: string, limit = 100, ctx?: { cluster_id?: number; namespace?: string; kind?: string; name?: string }) =>
+  http.get<RegistryTags>('/resources/registry/tags', { params: { image, limit, ...(ctx || {}) } })
 
 // 集群监控（Prometheus 即时查询）
 export interface MonitoringMetric { metric: string; label: string; unit: string; scope: string }

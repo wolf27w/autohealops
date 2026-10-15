@@ -97,11 +97,11 @@ export default function NodeManagement() {
         {selected.length > 0 && (
           <Space style={{ marginBottom: 8 }}>
             <span>已选 {selected.length} 个：</span>
-            <Popconfirm title={`批量 cordon 选中 ${selected.length} 个节点？`} onConfirm={() => doBatch('cordon')}>
-              <Button size="small" loading={busy}>批量 cordon</Button>
+            <Popconfirm title={`批量停止调度选中 ${selected.length} 个节点？`} onConfirm={() => doBatch('cordon')}>
+              <Button size="small" loading={busy}>批量停止调度</Button>
             </Popconfirm>
-            <Popconfirm title="批量 uncordon？" onConfirm={() => doBatch('uncordon')}>
-              <Button size="small" loading={busy}>批量 uncordon</Button>
+            <Popconfirm title="批量启用调度？" onConfirm={() => doBatch('uncordon')}>
+              <Button size="small" loading={busy}>批量启用调度</Button>
             </Popconfirm>
             <Button size="small" type="link" onClick={() => setSelected([])}>清除选择</Button>
           </Space>
@@ -111,8 +111,8 @@ export default function NodeManagement() {
           scroll={{ x: 1000 }}
           columns={[
             { title: '节点', dataIndex: 'name', width: 160, fixed: 'left' },
-            { title: '状态', dataIndex: 'ready', width: 90, render: (v: string) => <Tag color={v === 'Ready' ? 'green' : 'red'}>{v}</Tag> },
-            { title: '可调度', dataIndex: 'schedulable', width: 90, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="orange">否（已 cordon）</Tag> },
+            { title: '状态', dataIndex: 'ready', width: 90, render: (v: string) => <Tag color={v === 'Ready' ? 'green' : 'red'}>{v === 'Ready' ? '就绪' : '未就绪'}</Tag> },
+            { title: '调度', dataIndex: 'schedulable', width: 90, render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag color="orange">停止</Tag> },
             { title: 'CPU', width: 130, render: (_, r) => pctCell(r.cpu_pct) },
             { title: '内存', width: 130, render: (_, r) => pctCell(r.mem_pct) },
             { title: 'Pod 用量', width: 110, render: (_, r) => `${r.pods_count ?? '-'} / ${r.pods_allocatable || '-'}` },
@@ -122,8 +122,8 @@ export default function NodeManagement() {
               title: '操作', width: 140, fixed: 'right', render: (_, r) => (
                 <Space size="small">
                   {r.schedulable
-                    ? <Popconfirm title={`cordon ${r.name}？（禁止调度新 Pod）`} onConfirm={() => act(r.name, 'cordon')}><a>cordon</a></Popconfirm>
-                    : <Popconfirm title={`uncordon ${r.name}？（恢复调度）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>uncordon</a></Popconfirm>}
+                    ? <Popconfirm title={`停止调度 ${r.name}？（禁止新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'cordon')}><a style={{ color: '#cf1322' }}>停止调度</a></Popconfirm>
+                    : <Popconfirm title={`启用调度 ${r.name}？（允许新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>启用调度</a></Popconfirm>}
                   <a style={{ color: '#cf1322' }} onClick={() => openDrain(r.name)}>排空</a>
                 </Space>
               )

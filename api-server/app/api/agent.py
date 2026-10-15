@@ -165,10 +165,10 @@ async def proactive_scan(payload: dict | None = None, user=Depends(require_opera
 
 @router.get("/sessions/{session_id}/messages")
 async def list_messages(session_id: int, user=Depends(require_any_user)):
-    """会话消息列表（校验归属）"""
+    """会话消息列表（校验归属；admin 可查看巡检等平台会话）。"""
     async with async_session() as s:
         sess = await s.get(DiagnosisSession, session_id)
-        if not sess or sess.user_id != user.id:
+        if not sess or (sess.user_id != user.id and getattr(user, "role", "") != "admin"):
             return {"code": 403, "message": "无该会话权限", "data": None}
         result = await s.execute(
             select(DiagnosisMessage).where(DiagnosisMessage.session_id == session_id)

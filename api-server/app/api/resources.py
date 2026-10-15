@@ -870,10 +870,14 @@ async def workload_containers(cluster_id: int, kind: str, namespace: str, name: 
 
 
 @router.get("/registry/tags")
-async def registry_tags(image: str, limit: int = 100, user=Depends(require_any_user)):
-    """列镜像仓库标签（R3 镜像更新）：Docker Registry v2，兼容 Harbor/ACR/SWR/DockerHub。只读。"""
+async def registry_tags(image: str, limit: int = 100, cluster_id: int = 0, namespace: str = "",
+                       kind: str = "", name: str = "", user=Depends(require_any_user)):
+    """列镜像仓库标签（R3）：Docker Registry v2，兼容 Harbor/ACR/SWR/DockerHub。只读。
+
+    传 cluster_id/namespace(/kind/name) 时，会自动读取该工作负载的 imagePullSecrets 做凭据。
+    """
     from app.services.registry_service import list_tags
-    return await list_tags(image, limit)
+    return await list_tags(image, limit, cluster_id=cluster_id, namespace=namespace, kind=kind, name=name)
 
 
 @router.get("/registry/parse")

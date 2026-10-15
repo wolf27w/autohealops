@@ -5,10 +5,12 @@
 realm/service/scope → 取 token → 重试）。
 凭据来源优先级：`settings.REGISTRY_CREDS`（按 host 的 JSON）→ `REGISTRY_USERNAME/PASSWORD`（全局）→ 匿名。
 """
+import base64
 import json
 import re
 
 import httpx
+import yaml
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -95,17 +97,67 @@ async def _fetch_token(client, challenge: str, creds):
     return j.get("token") or j.get("access_token")
 
 
+async def _creds_from_cluster(cluster_id: int, namespace: str, host: str, kind: str = "", name: str = ""):
+    """自动识别：从工作负载的 imagePullSecrets（docker-registry secret）取该 host 的凭据。
+
+    找不到返回 None（继续回退匿名）。
+    """
+    if not cluster_id or not namespace:
+        return None
+    from app.clients.executor_client import executor_client
+    names: list[str] = []
+    if kind and name:
+        r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+        if r.get("success"):
+            doc = yaml.safe_load(r.get("yaml", "")) or {}
+            ips = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("imagePullSecrets") or []
+            names += [s.get("name") for s in ips if isinstance(s, dict) and s.get("name")]
+    for sn in names:
+        rs = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, "secret", namespace, sn)
+        if not rs.get("success"):
+            continue
+        sdoc = yaml.safe_load(rs.get("yaml", "")) or {}
+        data = sdoc.get("data") or {}
+        raw = data.get(".dockerconfigjson") or data.get(".dockercfg")
+        if not raw:
+            continue
+        try:
+            cfg = json.loads(base64.b64decode(raw).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        for h, a in (cfg.get("auths") or {}).items():
+            if host in h or h.rstrip("/") == host:
+                if a.get("username") and a.get("password"):
+                    return (a["username"], a["password"])
+                if a.get("auth"):
+                    try:
+                        u, p = base64.b64decode(a["auth"]).decode("utf-8").split(":", 1)
+                        return (u, p)
+                    except Exception:  # noqa: BLE001
+                        pass
+    return None
+
+
 def _tag_key(t: str):
     return tuple((0, int(x)) if x.isdigit() else (1, x) for x in re.split(r"[._-]", t))
 
 
-async def list_tags(image: str, limit: int = 100) -> dict:
-    """列仓库标签。返回 {code,message,data:{host,repository,current_tag,tags,total}}。"""
+async def list_tags(image: str, limit: int = 100, cluster_id: int = 0, namespace: str = "",
+                    kind: str = "", name: str = "") -> dict:
+    """列仓库标签。返回 {code,message,data:{host,repository,current_tag,tags,total}}。
+
+    凭据：系统设置(host/全局) > **集群 imagePullSecrets（自动识别）** > env > 匿名。
+    """
     host, repo, cur = parse_image_ref(image)
     if not host or not repo:
         return {"code": 400, "message": "无法解析镜像名（示例：harbor.example.com/proj/app:1.2.3）", "data": None}
     n = max(1, min(int(limit or 100), 1000))
     creds = await _resolve_creds(host)
+    if not creds:
+        try:
+            creds = await _creds_from_cluster(cluster_id, namespace, host, kind, name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("从集群 imagePullSecrets 取凭据失败: %s", e)
     url = f"https://{host}/v2/{repo}/tags/list?n={n}"
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=20) as client:
