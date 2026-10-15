@@ -21,13 +21,6 @@ type Config struct {
 	APIURL           string   // api-server 基地址（告警写入后回调触发立即处理）
 	InternalToken    string   // 内部服务令牌（X-Internal-Token，与 api-server JWT_SECRET_KEY 一致）
 
-	// 资源治理·准入控制（P0-R1）
-	AdmissionEnabled   bool   // 是否启用准入 webhook
-	AdmissionAddr      string // 监听地址，如 :9443
-	AdmissionClusterID int    // 归属集群 ID（管控表按集群过滤）
-	AdmissionCertFile  string // TLS 证书（空=自签）
-	AdmissionKeyFile   string // TLS 私钥（空=自签）
-
 	// 实时日志跟随（P1-R5）：executor 本地 HTTP 端口，供 api-server 代理流式日志（空=关闭）
 	LogStreamAddr string // 监听地址，如 :9099
 }
@@ -69,12 +62,6 @@ func Load() (*Config, error) {
 		EncryptionKey: v.GetString("ENCRYPTION_KEY"),
 		APIURL:        v.GetString("API_SERVER_URL"),
 		InternalToken: v.GetString("JWT_SECRET_KEY"),
-
-		AdmissionEnabled:   v.GetBool("ADMISSION_ENABLED"),
-		AdmissionAddr:      v.GetString("ADMISSION_ADDR"),
-		AdmissionClusterID: v.GetInt("ADMISSION_CLUSTER_ID"),
-		AdmissionCertFile:  v.GetString("ADMISSION_CERT_FILE"),
-		AdmissionKeyFile:   v.GetString("ADMISSION_KEY_FILE"),
 
 		LogStreamAddr: v.GetString("LOGSTREAM_ADDR"),
 	}

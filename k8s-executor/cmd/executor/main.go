@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/api-ops-platform/k8s-executor/internal/admission"
 	"github.com/api-ops-platform/k8s-executor/internal/config"
 	"github.com/api-ops-platform/k8s-executor/internal/database"
 	execgrpc "github.com/api-ops-platform/k8s-executor/internal/grpc"
@@ -81,15 +80,6 @@ func main() {
 	pb.RegisterExecutorServiceServer(grpcServer, server)
 	reflection.Register(grpcServer)
 
-	// 9.5 资源治理·准入 webhook（可选，默认关）
-	var admissionSrv *admission.Server
-	if cfg.AdmissionEnabled && cfg.AdmissionAddr != "" {
-		admissionSrv = admission.NewServer(cfg.AdmissionClusterID, cfg.AdmissionAddr, cfg.AdmissionCertFile, cfg.AdmissionKeyFile, logger)
-		if err := admissionSrv.Start(ctx); err != nil {
-			logger.Warn("准入 webhook 启动失败", zap.Error(err))
-		}
-	}
-
 	// 9.6 实时日志跟随 HTTP（P1-R5，可选）
 	var logStreamSrv *logstream.Server
 	if cfg.LogStreamAddr != "" {
@@ -120,9 +110,6 @@ func main() {
 	grpcServer.GracefulStop()
 	if logStreamSrv != nil {
 		logStreamSrv.Stop()
-	}
-	if admissionSrv != nil {
-		admissionSrv.Stop()
 	}
 	cancel()
 }

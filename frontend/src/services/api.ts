@@ -507,36 +507,7 @@ export interface JvmMetrics {
 export const getJvmMetrics = (clusterId: number, ns: string, pod: string) =>
   http.get<JvmMetrics>(`/jvm/clusters/${clusterId}/jvm-metrics`, { params: { namespace: ns, pod } })
 
-// ============ 资源治理·管控表（P0-R1） ============
-export interface ResourceGovernanceRule {
-  id: number; cluster_id: number; namespace: string; workload_kind: string; workload_name: string; container: string
-  replicas: number; cpu_request: string; cpu_limit: string; memory_request: string; memory_limit: string
-  jvm_xms: string; jvm_xmx: string; jvm_xss: string; jvm_max_metaspace: string
-  admission_enabled: boolean; remark: string; created_at: string; updated_at: string
-}
-export const getResourceGovernance = (params?: { cluster_id?: number; namespace?: string }) =>
-  http.get<ResourceGovernanceRule[]>('/resource-governance', { params })
-export const upsertResourceGovernance = (data: Payload) =>
-  http.post<ResourceGovernanceRule>('/resource-governance', data)
-export const deleteResourceGovernance = (id: number) =>
-  http.delete<{ id: number }>(`/resource-governance/${id}`)
-export interface PeakResult { namespace: string; deployment: string; pod_count: number; cpu_p80: number; mem_p80_bytes: number; cpu_p80_str: string; mem_p80_str: string; samples: number }
-export const getResourceGovernancePeak = (params: { cluster_id: number; namespace?: string; days?: number; start_hour?: number; end_hour?: number }) =>
-  http.get<PeakResult[]>('/resource-governance/peak', { params })
-
-// 准入控制下发（P0-R1）
-export interface AdmissionStatus {
-  webhook_installed: boolean; service_installed: boolean
-  namespace: string; webhook_name: string; webhook_yaml: string; hint: string
-}
-export const getAdmissionStatus = (clusterId: number) =>
-  http.get<AdmissionStatus>('/resource-governance/admission/status', { params: { cluster_id: clusterId } })
-export const installAdmission = (data: Payload) =>
-  http.post<Payload>('/resource-governance/admission/install', data)
-export const uninstallAdmission = (data: Payload) =>
-  http.post<Payload>('/resource-governance/admission/uninstall', data)
-
-// 命名空间资源限制（P0-R1·B 方案：LimitRange + 可选 ResourceQuota；创建才生效）
+// 命名空间资源限制（LimitRange 默认值 + ResourceQuota 总量；创建才生效）
 export interface NsLimitStatus {
   namespace: string; limitrange_installed: boolean; quota_installed: boolean
   limitrange_yaml: string; quota_yaml: string
