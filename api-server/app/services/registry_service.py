@@ -167,38 +167,53 @@ async def list_tags(image: str, limit: int = 100, cluster_id: int = 0, namespace
                     kind: str = "", name: str = "") -> dict:
     """列仓库标签。返回 {code,message,data:{host,repository,current_tag,tags,total}}。
 
-    凭据：系统设置(host/全局) > **集群 imagePullSecrets（自动识别）** > env > 匿名。
+    凭据：系统设置(host/全局) > **集群 imagePullSecrets / 命名空间 docker-registry Secret（自动识别）** > env > 匿名。
+    连通性：镜像 host 为阿里云 VPC 域名（含 -vpc）时，回退去 -vpc 的公网域名重试（平台往往只能访问公网）。
     """
     host, repo, cur = parse_image_ref(image)
     if not host or not repo:
         return {"code": 400, "message": "无法解析镜像名（示例：harbor.example.com/proj/app:1.2.3）", "data": None}
     n = max(1, min(int(limit or 100), 1000))
-    creds = await _resolve_creds(host)
-    if not creds:
+    # host 候选：原 host + （VPC ）去 -vpc 公网域名
+    cands = [host]
+    if "-vpc" in host:
+        cands.append(host.replace("-vpc", ""))
+    # 凭据：逐个候选 host 解析（命中即用，同一仓库共用）
+    creds = None
+    for h in cands:
+        creds = await _resolve_creds(h)
+        if not creds:
+            try:
+                creds = await _creds_from_cluster(cluster_id, namespace, h, kind, name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("从集群 Secret 取凭据失败: %s", e)
+        if creds:
+            break
+    last = (500, "仓库访问失败")
+    for h in cands:
+        url = f"https://{h}/v2/{repo}/tags/list?n={n}"
         try:
-            creds = await _creds_from_cluster(cluster_id, namespace, host, kind, name)
+            async with httpx.AsyncClient(trust_env=False, timeout=20) as client:
+                r = await client.get(url, auth=creds)
+                if r.status_code == 401:
+                    token = await _fetch_token(client, r.headers.get("www-authenticate", ""), creds)
+                    if not token:
+                        last = (401, f"仓库 {h} 需要认证（可在系统设置填仓库凭据，或确保命名空间有 docker-registry Secret）")
+                        continue
+                    r = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if r.status_code == 404:
+                    return {"code": 404, "message": f"仓库不存在：{h}/{repo}", "data": None}
+                if r.status_code != 200:
+                    last = (r.status_code, f"仓库返回 {r.status_code}：{r.text[:200]}")
+                    continue
+                j = r.json()
         except Exception as e:  # noqa: BLE001
-            logger.warning("从集群 imagePullSecrets 取凭据失败: %s", e)
-    url = f"https://{host}/v2/{repo}/tags/list?n={n}"
-    try:
-        async with httpx.AsyncClient(trust_env=False, timeout=20) as client:
-            r = await client.get(url, auth=creds)
-            if r.status_code == 401:
-                token = await _fetch_token(client, r.headers.get("www-authenticate", ""), creds)
-                if not token:
-                    return {"code": 401, "message": f"仓库 {host} 需要认证（配置 REGISTRY_CREDS 或 REGISTRY_USERNAME/PASSWORD）", "data": None}
-                r = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-            if r.status_code == 404:
-                return {"code": 404, "message": f"仓库不存在：{host}/{repo}", "data": None}
-            if r.status_code != 200:
-                return {"code": r.status_code, "message": f"仓库返回 {r.status_code}：{r.text[:200]}", "data": None}
-            j = r.json()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("registry 查询失败: %s", e)
-        return {"code": 500, "message": f"访问仓库失败：{type(e).__name__}: {e}", "data": None}
-    tags = j.get("tags") or []
-    tags = sorted(tags, key=_tag_key, reverse=True)
-    return {"code": 200, "message": "success", "data": {
-        "host": host, "repository": repo, "current_tag": cur,
-        "tags": tags[:n], "total": len(tags),
-    }}
+            logger.warning("registry 查询失败(%s): %s", h, e)
+            last = (500, f"访问仓库失败（{h}）：{type(e).__name__}: {e}")
+            continue
+        tags = sorted(j.get("tags") or [], key=_tag_key, reverse=True)
+        return {"code": 200, "message": "success", "data": {
+            "host": h, "repository": repo, "current_tag": cur,
+            "tags": tags[:n], "total": len(tags),
+        }}
+    return {"code": last[0], "message": last[1], "data": None}
