@@ -597,6 +597,9 @@ export interface K8sNode {
   cpu_pct?: number | null; mem_pct?: number | null
 }
 export const getNodes = (clusterId: number) => http.get<K8sNode[]>(`/resources/clusters/${clusterId}/nodes`)
+export const scheduleWorkload = (clusterId: number, kind: string, namespace: string, name: string, data: { node: string; preview?: boolean }) =>
+  http.post<{ preview: boolean; node: string; old_node_selector: Record<string, string>; new_node_selector: Record<string, string> }>(
+    `/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/schedule`, data)
 export const cordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/cordon`)
 export const uncordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/uncordon`)
 export const drainPreview = (clusterId: number, node: string) =>

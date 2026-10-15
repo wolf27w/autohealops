@@ -10,9 +10,9 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs, getRegistryTags } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
-import type { AggLogPod } from '../services/api'
+import type { AggLogPod, K8sNode } from '../services/api'
 
 const KIND_LABEL: Record<string, string> = {
   deployment: '无状态 Deployment', statefulset: '有状态 StatefulSet',
@@ -61,6 +61,11 @@ export default function ServiceDetail() {
   const [aggLogsOpen, setAggLogsOpen] = useState(false)
   const [aggLogs, setAggLogs] = useState<AggLogPod[]>([])
   const [aggLogsLoading, setAggLogsLoading] = useState(false)
+  const [scheduleModal, setScheduleModal] = useState(false)
+  const [scheduleNode, setScheduleNode] = useState<string | undefined>(undefined)
+  const [scheduleNodes, setScheduleNodes] = useState<K8sNode[]>([])
+  const [schedulePreview, setSchedulePreview] = useState<{ old_node_selector: Record<string, string>; new_node_selector: Record<string, string> } | null>(null)
+  const [scheduleBusy, setScheduleBusy] = useState(false)
   const [metricsPod, setMetricsPod] = useState<PodTarget | null>(null)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
@@ -232,6 +237,28 @@ export default function ServiceDetail() {
     setProbeModal(true)
   }
 
+  // A4：调度到指定节点
+  const openSchedule = async () => {
+    setScheduleNode(undefined); setSchedulePreview(null); setScheduleModal(true)
+    try { setScheduleNodes((await getNodes(clusterId)) || []) } catch { setScheduleNodes([]) }
+  }
+  const handleSchedulePreview = async () => {
+    setScheduleBusy(true)
+    try {
+      const d = await scheduleWorkload(clusterId, kind, namespace, name, { node: scheduleNode || '', preview: true })
+      setSchedulePreview(d)
+    } catch { /* 拦截器已提示 */ } finally { setScheduleBusy(false) }
+  }
+  const handleScheduleApply = async () => {
+    setScheduleBusy(true)
+    try {
+      await scheduleWorkload(clusterId, kind, namespace, name, { node: scheduleNode || '' })
+      message.success(scheduleNode ? `已调度到节点 ${scheduleNode}（滚动重建中）` : '已清除节点调度（恢复默认调度）')
+      setScheduleModal(false)
+      load()
+    } catch { /* ignore */ } finally { setScheduleBusy(false) }
+  }
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
@@ -263,6 +290,7 @@ export default function ServiceDetail() {
                 { key: 'restart', label: '滚动重启' },
                 { key: 'yaml', label: '编辑 YAML（整个服务）' },
                 { key: 'image', label: '更新镜像' },
+                { key: 'schedule', label: '调度到节点' },
                 { key: 'logs', label: '聚合日志' },
                 ...(kind === 'deployment' ? [
                   { key: 'undo', label: '回滚上一版本' },
@@ -275,6 +303,7 @@ export default function ServiceDetail() {
                 if (key === 'restart') handleRollout('restart')
                 else if (key === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
                 else if (key === 'image') openImageModal()
+                else if (key === 'schedule') openSchedule()
                 else if (key === 'logs') loadAggLogs()
                 else if (key === 'undo') { Modal.confirm({ title: '回滚到上一版本？', onOk: () => handleRollout('undo') }) }
                 else if (key === 'probe') openProbe()
@@ -381,6 +410,24 @@ export default function ServiceDetail() {
                 if (repo) imageForm.setFieldsValue({ image: `${repo}:${t}` })
               }}
               options={imgTags.map((t) => ({ value: t, label: t }))} />
+          </div>
+        )}
+      </Modal>
+      <Modal title={`调度到节点：${name}`} open={scheduleModal} onCancel={() => setScheduleModal(false)}
+        onOk={handleScheduleApply} okText="确认执行" confirmLoading={scheduleBusy}
+        okButtonProps={{ danger: true, disabled: !scheduleNode }} width={560}>
+        <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 10 }}>
+          给该工作负载的 Pod 模板加 <code>nodeSelector[kubernetes.io/hostname]</code>，把 Pod 固定调度到指定节点；变更会触发<b>滚动重建</b>。留空并执行 = 清除调度选择器（恢复默认调度）。
+        </div>
+        <Select style={{ width: '100%' }} allowClear showSearch placeholder="选择节点（留空=清除）"
+          value={scheduleNode} onChange={(v) => { setScheduleNode(v); setSchedulePreview(null) }}
+          filterOption={(i, o) => String(o?.value || '').includes(i)}
+          options={scheduleNodes.map((n) => ({ value: n.name, label: `${n.name}${n.schedulable ? '' : '（已封锁）'}` }))} />
+        <Button style={{ marginTop: 12 }} loading={scheduleBusy} onClick={handleSchedulePreview}>预览变更（不改集群）</Button>
+        {schedulePreview && (
+          <div style={{ marginTop: 10, fontSize: 12 }}>
+            <div>原 nodeSelector：<code>{JSON.stringify(schedulePreview.old_node_selector)}</code></div>
+            <div>新 nodeSelector：<code>{JSON.stringify(schedulePreview.new_node_selector)}</code></div>
           </div>
         )}
       </Modal>

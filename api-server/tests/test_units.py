@@ -526,5 +526,34 @@ class TestJvmDiagnosisInAppDiag(unittest.TestCase):
         self.assertIn(("get_probe_config", {}), probe["tools"])
 
 
+class TestScheduleToNode(unittest.TestCase):
+    """A4：调度到指定节点（build_schedule_doc 纯函数）"""
+
+    def test_set_selector(self):
+        from app.api.resources import build_schedule_doc
+        doc, info = build_schedule_doc({"spec": {"template": {"spec": {"containers": []}}}}, "k8s-node01")
+        sel = doc["spec"]["template"]["spec"]["nodeSelector"]
+        self.assertEqual(sel["kubernetes.io/hostname"], "k8s-node01")
+        self.assertEqual(info["new_node_selector"]["kubernetes.io/hostname"], "k8s-node01")
+
+    def test_preserve_other_selector(self):
+        from app.api.resources import build_schedule_doc
+        doc, _ = build_schedule_doc({"spec": {"template": {"spec": {"nodeSelector": {"disktype": "ssd"}}}}}, "n1")
+        sel = doc["spec"]["template"]["spec"]["nodeSelector"]
+        self.assertEqual(sel["disktype"], "ssd")
+        self.assertEqual(sel["kubernetes.io/hostname"], "n1")
+
+    def test_clear_keeps_others(self):
+        from app.api.resources import build_schedule_doc
+        doc, _ = build_schedule_doc(
+            {"spec": {"template": {"spec": {"nodeSelector": {"kubernetes.io/hostname": "n1", "disktype": "ssd"}}}}}, "")
+        self.assertEqual(doc["spec"]["template"]["spec"].get("nodeSelector"), {"disktype": "ssd"})
+
+    def test_clear_removes_empty(self):
+        from app.api.resources import build_schedule_doc
+        doc, _ = build_schedule_doc({"spec": {"template": {"spec": {"nodeSelector": {"kubernetes.io/hostname": "n1"}}}}}, "")
+        self.assertNotIn("nodeSelector", doc["spec"]["template"]["spec"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

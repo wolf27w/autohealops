@@ -789,6 +789,68 @@ async def update_workload_image(cluster_id: int, kind: str, namespace: str, name
             "data": {"container": target.get("name"), "old_image": old_image, "new_image": image}}
 
 
+# 节点名合法字符（k8s 节点名：小写字母/数字/'-'/'.'）
+_NODE_NAME_RE = re.compile(r"^[a-z0-9.-]{1,253}$")
+
+
+def build_schedule_doc(doc: dict, node: str) -> tuple[dict, dict]:
+    """在 workload 的 pod template 上设置/清除「调度到指定节点」。
+
+    用 `nodeSelector: {kubernetes.io/hostname: <node>}` 固定到该节点（标准标签，所有节点都有）。
+    node 为空 = 清除本平台设置的 hostname 选择器（保留其他 nodeSelector）。
+    返回 (new_doc, info{old_node_selector,new_node_selector})。
+    """
+    spec_obj = doc.setdefault("spec", {}) or {}
+    tmpl = spec_obj.setdefault("template", {}) or {}
+    tspec = tmpl.setdefault("spec", {}) or {}
+    sel = tspec.get("nodeSelector")
+    if not isinstance(sel, dict):
+        sel = {}
+    old = dict(sel)
+    if node:
+        sel["kubernetes.io/hostname"] = node
+    else:
+        sel.pop("kubernetes.io/hostname", None)
+    if sel:
+        tspec["nodeSelector"] = sel
+    else:
+        tspec.pop("nodeSelector", None)
+    return doc, {"old_node_selector": old, "new_node_selector": dict(sel)}
+
+
+@router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/schedule")
+async def schedule_workload(cluster_id: int, kind: str, namespace: str, name: str, payload: dict,
+                            user=Depends(require_operator)):
+    """把工作负载调度到指定节点（pod template 加 nodeSelector[kubernetes.io/hostname]）。
+
+    body: { node: str, preview?: bool }
+    - node 为空 = 清除调度选择器（恢复默认调度）
+    - preview=true 只返回将要做的变更（读 YAML，不落集群）
+    变更 pod template 会触发滚动重建。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    node = (payload.get("node") or "").strip()
+    preview = bool(payload.get("preview"))
+    if node and not _NODE_NAME_RE.match(node):
+        return {"code": 400, "message": "节点名非法", "data": None}
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "读取 YAML 失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    doc, info = build_schedule_doc(doc, node)
+    if preview:
+        return {"code": 200, "message": "success", "data": {"preview": True, "node": node, **info}}
+    new_yaml = yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+    if not r2.get("success"):
+        return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"preview": False, "node": node, **info}}
+
+
 @router.get("/registry/tags")
 async def registry_tags(image: str, limit: int = 100, user=Depends(require_any_user)):
     """列镜像仓库标签（R3 镜像更新）：Docker Registry v2，兼容 Harbor/ACR/SWR/DockerHub。只读。"""
