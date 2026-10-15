@@ -14,6 +14,8 @@ def require_role(*allowed_roles: str):
             raise HTTPException(status_code=403, detail="权限不足")
         return user
 
+    # 自省用：供权限覆盖测试（tests/test_permissions.py）遍历路由时识别角色要求
+    _dependency._allowed_roles = tuple(allowed_roles)
     return _dependency
 
 
