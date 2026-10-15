@@ -10,7 +10,7 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 import type { AggLogPod, K8sNode } from '../services/api'
 
@@ -338,8 +338,11 @@ export default function ServiceDetail() {
                     <Button size="small" type="link" onClick={() => setLogPod({ ...r, clusterId })}>日志</Button>
                     <Button size="small" type="link" onClick={() => setExecTarget({ ...r, clusterId })}>进容器</Button>
                     <Button size="small" type="link" onClick={() => setJvmPod({ ...r, clusterId })}>JVM诊断</Button>
-                    <Popconfirm title="隔离该 Pod？（app 标签改为 xxx-ALERT，脱离 Service 流量）" onConfirm={async () => { await isolatePod(clusterId, r.namespace, r.name); message.success('已隔离'); loadPods() }}>
+                    <Popconfirm title="隔离该 Pod？（app / app.kubernetes.io/name 等标签改为 xxx-ALERT，脱离 Service 流量）" onConfirm={async () => { await isolatePod(clusterId, r.namespace, r.name); message.success('已隔离'); loadPods() }}>
                       <Button size="small" type="link">隔离</Button>
+                    </Popconfirm>
+                    <Popconfirm title="取消隔离？（还原标签，回到 Service 流量）" onConfirm={async () => { await unisolatePod(clusterId, r.namespace, r.name); message.success('已取消隔离'); loadPods() }}>
+                      <Button size="small" type="link">取消隔离</Button>
                     </Popconfirm>
                     <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId })}>YAML</Button>
                   </Space>
@@ -414,8 +417,8 @@ export default function ServiceDetail() {
         )}
       </Modal>
       <Modal title={`调度到节点：${name}`} open={scheduleModal} onCancel={() => setScheduleModal(false)}
-        onOk={handleScheduleApply} okText="确认执行" confirmLoading={scheduleBusy}
-        okButtonProps={{ danger: true, disabled: !scheduleNode }} width={560}>
+        onOk={handleScheduleApply} okText={scheduleNode ? '确认执行（调度到该节点）' : '确认执行（清除调度，恢复默认）'}
+        confirmLoading={scheduleBusy} okButtonProps={{ danger: true }} width={560}>
         <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 10 }}>
           给该工作负载的 Pod 模板加 <code>nodeSelector[kubernetes.io/hostname]</code>，把 Pod 固定调度到指定节点；变更会触发<b>滚动重建</b>。留空并执行 = 清除调度选择器（恢复默认调度）。
         </div>

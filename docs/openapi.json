@@ -10345,7 +10345,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/isolate": {
       "post": {
-        "description": "Pod 隔离（R8）：把 app 标签改为 <原值>-ALERT，脱离 Service 流量、保留现场排查",
+        "description": "Pod 隔离（R8）：把可用的 app 类标签改为 <原值>-ALERT，脱离 Service 流量、保留现场排查。\n\n兼容普通 `app` 与 k8s 推荐的 `app.kubernetes.io/name` 等标签键（按优先级取第一个存在的）。",
         "operationId": "post_api_v1_resources_clusters_cluster_id_namespaces_namespace_pods_pod_name_isolate",
         "parameters": [
           {
@@ -10666,6 +10666,84 @@
           }
         ],
         "summary": "Pod Metrics"
+      }
+    },
+    "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/unisolate": {
+      "post": {
+        "description": "取消 Pod 隔离：把带 -ALERT 后缀的 app 类标签恢复为原值（回到 Service 流量）。",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_namespaces_namespace_pods_pod_name_unisolate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pod_name",
+            "required": true,
+            "schema": {
+              "title": "Pod Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unisolate Pod"
       }
     },
     "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/yaml": {

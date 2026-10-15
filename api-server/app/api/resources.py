@@ -866,9 +866,17 @@ async def registry_parse(image: str, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": {"host": host, "repository": repo, "tag": tag}}
 
 
+# 隔离可用标签键（优先 app；兼容 k8s 推荐的 app.kubernetes.io/* 命名）
+_ISO_LABEL_KEYS = ("app", "app.kubernetes.io/name", "k8s-app", "app.kubernetes.io/instance", "app.kubernetes.io/component")
+_ISO_SUFFIX = "-ALERT"
+
+
 @router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/isolate")
 async def isolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict, user=Depends(require_operator)):
-    """Pod 隔离（R8）：把 app 标签改为 <原值>-ALERT，脱离 Service 流量、保留现场排查"""
+    """Pod 隔离（R8）：把可用的 app 类标签改为 <原值>-ALERT，脱离 Service 流量、保留现场排查。
+
+    兼容普通 `app` 与 k8s 推荐的 `app.kubernetes.io/name` 等标签键（按优先级取第一个存在的）。
+    """
     if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
         return denied
     r = await executor_client.acall(executor_client.get_pod_yaml, cluster_id, namespace, pod_name)
@@ -879,18 +887,48 @@ async def isolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: d
     except yaml.YAMLError as e:
         return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
     labels = (doc.get("metadata") or {}).get("labels") or {}
-    app = labels.get("app")
-    if not app:
-        return {"code": 400, "message": "Pod 无 app 标签，无法隔离", "data": None}
-    if str(app).endswith("-ALERT"):
-        return {"code": 400, "message": "Pod 已处于隔离状态", "data": None}
-    labels["app"] = str(app) + "-ALERT"
+    key = next((k for k in _ISO_LABEL_KEYS if labels.get(k)), None)
+    if not key:
+        return {"code": 400, "message": "Pod 无可用 app 标签（app / app.kubernetes.io/name 等），无法隔离", "data": None}
+    val = str(labels[key])
+    if val.endswith(_ISO_SUFFIX):
+        return {"code": 400, "message": f"Pod 已处于隔离状态（{key}={val}）", "data": None}
+    labels[key] = val + _ISO_SUFFIX
     doc.setdefault("metadata", {})["labels"] = labels
     new_yaml = yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
     r2 = await executor_client.acall(executor_client.apply_pod_yaml, cluster_id, namespace, new_yaml)
     if not r2.get("success"):
         return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
-    return {"code": 200, "message": "success", "data": {"pod": pod_name, "app": str(app) + "-ALERT"}}
+    return {"code": 200, "message": "success",
+            "data": {"pod": pod_name, "label": key, "old_value": val, "new_value": val + _ISO_SUFFIX}}
+
+
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/unisolate")
+async def unisolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: dict | None = None,
+                        user=Depends(require_operator)):
+    """取消 Pod 隔离：把带 -ALERT 后缀的 app 类标签恢复为原值（回到 Service 流量）。"""
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.get_pod_yaml, cluster_id, namespace, pod_name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "读取 Pod YAML 失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    labels = (doc.get("metadata") or {}).get("labels") or {}
+    key = next((k for k in _ISO_LABEL_KEYS if str(labels.get(k) or "").endswith(_ISO_SUFFIX)), None)
+    if not key:
+        return {"code": 400, "message": "Pod 未处于隔离状态", "data": None}
+    val = str(labels[key])
+    labels[key] = val[: -len(_ISO_SUFFIX)]
+    doc.setdefault("metadata", {})["labels"] = labels
+    new_yaml = yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    r2 = await executor_client.acall(executor_client.apply_pod_yaml, cluster_id, namespace, new_yaml)
+    if not r2.get("success"):
+        return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "success",
+            "data": {"pod": pod_name, "label": key, "restored": labels[key]}}
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/logs")
