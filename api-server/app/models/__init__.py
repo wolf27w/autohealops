@@ -7,6 +7,7 @@ from app.models.im_group import IMGroup
 from app.models.in_app_message import InAppMessage
 from app.models.resource_alert_rule import ResourceAlertRule
 from app.models.db_metric_snapshot import DBMetricSnapshot
+from app.models.host import Host
 from app.models.alert import Alert, AlertComment
 from app.models.alert_silence import AlertSilence
 from app.models.alert_policy import AlertPolicy

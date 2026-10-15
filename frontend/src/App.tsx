@@ -35,6 +35,7 @@ const Tickets = lazy(() => import('./pages/Tickets'))
 const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
 const AlertSilences = lazy(() => import('./pages/AlertSilences'))
 const NodeManagement = lazy(() => import('./pages/NodeManagement'))
+const HostManagement = lazy(() => import('./pages/HostManagement'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -103,6 +104,7 @@ export default function App() {
         <Route path="resource-governance" element={<RequireRole role="admin"><ResourceGovernance /></RequireRole>} />
         <Route path="alert-silences" element={<RequireRole role="admin"><AlertSilences /></RequireRole>} />
         <Route path="node-management" element={<RequireRole role="admin"><NodeManagement /></RequireRole>} />
+        <Route path="host-management" element={<RequireRole role="admin"><HostManagement /></RequireRole>} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
         <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />

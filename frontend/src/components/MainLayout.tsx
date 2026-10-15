@@ -11,7 +11,7 @@ import {
   SettingOutlined, LogoutOutlined, DownOutlined, MedicineBoxOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
-  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined,
+  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -74,6 +74,7 @@ const menuItems: NavItem[] = [
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
       { key: '/resource-governance', icon: <SettingOutlined />, label: '资源治理' },
       { key: '/node-management', icon: <ClusterOutlined />, label: '集群节点' },
+      { key: '/host-management', icon: <DesktopOutlined />, label: '主机/虚拟机' },
     ],
   },
   {
@@ -99,7 +100,7 @@ const menuItems: NavItem[] = [
 // admin 专属菜单项（viewer/operator 不可见；App.tsx 路由同样有 RequireRole 守卫）
 const ADMIN_ONLY_KEYS = new Set([
   '/strategy', '/notify-center', '/user-permission', '/log-sources',
-  '/ai-models', '/custom-tasks', '/settings', '/resource-governance', '/alert-silences', '/node-management',
+  '/ai-models', '/custom-tasks', '/settings', '/resource-governance', '/alert-silences', '/node-management', '/host-management',
 ])
 
 // 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（递归处理三级；空分组一并移除）

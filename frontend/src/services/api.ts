@@ -595,6 +595,20 @@ export const unisolatePod = (clusterId: number, ns: string, pod: string) =>
 export const getIsolatedPods = (clusterId: number, ns: string) =>
   http.get<{ pods: string[] }>(`/resources/clusters/${clusterId}/namespaces/${ns}/isolated`)
 
+// ============ 主机/虚拟机纳管（N11）============
+export interface HostItem {
+  id: number; name: string; address: string; ssh_port: number; ssh_user: string
+  has_password: boolean; ssh_key_path: string
+  process_paths: { name: string; path: string }[]
+  enabled: boolean; status: string; last_seen?: string | null
+}
+export interface HostCheckResult { online: boolean; error: string; paths: { name: string; path: string; running: boolean; pid_count: number; cpu_pct: number; mem_mb: number }[] }
+export const getHosts = () => http.get<HostItem[]>('/hosts')
+export const createHost = (d: Record<string, unknown>) => http.post<HostItem>('/hosts', d)
+export const updateHost = (id: number, d: Record<string, unknown>) => http.put<HostItem>(`/hosts/${id}`, d)
+export const deleteHost = (id: number) => http.delete<{ id: number }>(`/hosts/${id}`)
+export const checkHost = (id: number) => http.post<{ host: HostItem; check: HostCheckResult }>(`/hosts/${id}/check`)
+
 export interface AggLogPod { pod: string; phase: string; success: boolean; logs: string; error: string }
 export const getWorkloadLogs = (clusterId: number, namespace: string, kind: string, name: string, params?: { container?: string; tail?: number; previous?: boolean }) =>
   http.get<{ kind: string; name: string; tail: number; previous: boolean; pods: AggLogPod[] }>(

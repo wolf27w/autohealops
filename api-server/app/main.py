@@ -12,7 +12,7 @@ from app.api import (
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
     projects, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
-from app.api import jvm
+from app.api import hosts, jvm
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -262,6 +262,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("AI 用量异常巡检启动失败: %s", e)
 
+    # 主机/虚拟机进程监控（N11；每 60 秒，进程掉线/恢复通知闭环）
+    try:
+        from app.services.host_monitor_service import background_loop as host_monitor_loop
+        _host_monitor_task = asyncio.create_task(host_monitor_loop())
+        logger.info("主机/虚拟机进程监控已启动（每 60 秒）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("主机/虚拟机进程监控启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -433,4 +441,5 @@ app.include_router(diagnostic.router)
 app.include_router(fault_diagnosis.router)
 app.include_router(agent.router)
 app.include_router(terminal.router)
+app.include_router(hosts.router)
 app.include_router(mcp.router)
