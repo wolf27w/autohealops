@@ -119,14 +119,38 @@ async def _h_search_logs(args: dict, context: dict) -> dict:
     tail = args.get("tail", 50)
     if not isinstance(tail, int) or tail < 1:
         tail = 50
-    from app.services.es_client import es_client as api_es_client
+    # 口径（老板 2026-10-14）：诊断的日志**只用容器 stdout**（kubectl logs 等价），不走 ES；
+    # 优先取 --previous（上次被杀的实例，最接近崩溃/探针失败现场），再取当前实例。
+    from app.utils.pod_logs import fetch_pod_logs
     try:
-        logs = await api_es_client.search_logs(context["namespace"], context["pod_name"], tail=tail)
+        txt = await fetch_pod_logs(
+            context["cluster_id"], context["namespace"], context["pod_name"], tail=tail
+        )
     except Exception as e:  # noqa: BLE001
-        return {"success": False, "output": "", "error": f"日志查询异常: {e}"}
-    if not logs:
-        return {"success": True, "output": "(未查到日志，ES 可能未配置或无匹配日志)", "error": ""}
-    return {"success": True, "output": logs[:6000], "error": ""}
+        return {"success": False, "output": "", "error": f"容器日志拉取异常: {e}"}
+    if not txt:
+        return {"success": True, "output": "(未取到容器 stdout 日志：容器可能无日志输出，或需权限)", "error": ""}
+    return {"success": True, "output": txt[:8000], "error": ""}
+
+
+async def _h_jvm_diag(args: dict, context: dict) -> dict:
+    """对 Java 容器执行一个 JVM 诊断动作（复用 api/jvm.py 的 run_jvm_action）。"""
+    from app.api.jvm import run_jvm_action, _ACTIONS  # 延迟导入，避免加载顺序耦合
+    action = (args.get("action") or "").strip()
+    container = (args.get("container") or "").strip()
+    res = await run_jvm_action(
+        context["cluster_id"], context["namespace"], context["pod_name"],
+        container, action, None,
+    )
+    if res.get("code") != 200:
+        return {"success": False, "output": "", "error": res.get("message") or "JVM 诊断失败"}
+    data = res.get("data") or {}
+    label = (_ACTIONS.get(action) or {}).get("label", action)
+    out = data.get("output") or ""
+    header = f"【{label}】（后端：{data.get('backend')}）"
+    if data.get("file"):
+        header += f"  产物：{data.get('file_path')}"
+    return {"success": True, "output": f"{header}\n{out}"[:8000], "error": ""}
 
 
 async def _h_get_pod_metrics(args: dict, context: dict) -> dict:
@@ -344,8 +368,8 @@ _register({
 
 _register({
     "name": "search_logs",
-    "label": "应用日志查询",
-    "description": "查询应用日志（ES 数据源），按 namespace+pod 拉取最近 N 条日志，用于定位应用报错",
+    "label": "容器日志查询",
+    "description": "拉取容器 stdout 日志（kubectl logs 等价），**含上次崩溃/重启实例的日志（--previous）**，用于定位崩溃、探针失败、启动异常等真实原因；与当前实例日志一并返回",
     "args_schema": {
         "tail": {"type": "int", "required": False, "description": "返回日志条数，默认 50", "default": 50},
     },
@@ -423,6 +447,30 @@ _register({
     "permission": "readonly",
     "domain": "all",
     "handler": _h_query_metrics,
+})
+
+
+_register({
+    "name": "jvm_diag",
+    "label": "JVM 诊断",
+    "description": (
+        "对 Java 容器执行 JVM 诊断动作（只读为主，自动选 jcmd/jstack/jmap 或 jattach 后端，JRE 也能用）。"
+        "用于诊断 Java 应用的 CPU 飙高、内存高/泄漏、卡顿/无响应、线程池打满、死锁、"
+        "**探针失败（如 Full GC 停顿导致健康检查超时）**、频繁重启等。"
+        "动作：thread_dump（线程栈，查死锁/卡线程）/ heap_histo（堆直方图，查内存大户）/ "
+        "heap_info（各代堆容量用量，查 GC 压力）/ gc_class_histo（GC 后存活对象）/ "
+        "vm_flags（生效 JVM 参数，查 -Xmx/GC 策略）/ sys_props（系统属性）。"
+        "注意：heap_dump/jfr_start 为重操作（产生大文件 + 长停顿），一般不要自动调用。"
+    ),
+    "args_schema": {
+        "action": {"type": "string", "required": True, "description":
+                   "诊断动作：thread_dump/thread_print/heap_histo/heap_info/gc_class_histo/vm_flags/sys_props"},
+        "container": {"type": "string", "required": False,
+                      "description": "容器名（多容器 Pod 必填，从 describe_pod 获取）", "default": ""},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_jvm_diag,
 })
 
 

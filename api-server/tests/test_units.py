@@ -440,5 +440,70 @@ class TestTerminatingStuckForceDelete(unittest.TestCase):
         self.assertEqual(build_standard_steps(self._alert(ns="Bad NS")), [])
 
 
+class TestJvmDiagnosisInAppDiag(unittest.TestCase):
+    """应用诊断：Java 应用自动采集 JVM 证据 + 容器日志口径（2026-10-15）"""
+
+    def test_java_proc_regex(self):
+        from app.services.agent_service import _JAVA_PROC_RE
+        self.assertIsNotNone(_JAVA_PROC_RE.search("1234 /usr/lib/jvm/bin/java -Xmx2g -jar app.jar"))
+        self.assertIsNotNone(_JAVA_PROC_RE.search("java"))
+        self.assertIsNone(_JAVA_PROC_RE.search("1234 ps -eo pid,args"))
+        self.assertIsNone(_JAVA_PROC_RE.search("-javaagent:/opt/x.jar"))
+
+    def test_jvm_tool_registered(self):
+        from app.services import tool_registry
+        t = tool_registry.get_tool("jvm_diag")
+        self.assertIsNotNone(t)
+        self.assertEqual(t["domain"], "application")
+        self.assertEqual(t["permission"], "readonly")
+
+    def test_evidence_actions_are_valid(self):
+        from app.services.agent_service import JVM_EVIDENCE_ACTIONS
+        from app.api.jvm import _ACTIONS
+        self.assertTrue(JVM_EVIDENCE_ACTIONS)
+        for a in JVM_EVIDENCE_ACTIONS:
+            self.assertIn(a, _ACTIONS)
+        # 重操作不应出现在自动预采集里
+        self.assertNotIn("heap_dump", JVM_EVIDENCE_ACTIONS)
+        self.assertNotIn("jfr_start", JVM_EVIDENCE_ACTIONS)
+
+    def test_jvm_diag_handler_success(self):
+        import asyncio
+        from unittest import mock
+        from app.services import tool_registry
+        handler = tool_registry.get_tool("jvm_diag")["handler"]
+        fake = {"code": 200, "data": {"output": "VM flags: -Xmx2g", "backend": "jdk", "file": False}}
+        with mock.patch("app.api.jvm.run_jvm_action", new=mock.AsyncMock(return_value=fake)):
+            res = asyncio.run(handler({"action": "vm_flags"},
+                                      {"cluster_id": 1, "namespace": "ns", "pod_name": "p"}))
+        self.assertTrue(res["success"])
+        self.assertIn("-Xmx2g", res["output"])
+
+    def test_jvm_diag_handler_error(self):
+        import asyncio
+        from unittest import mock
+        from app.services import tool_registry
+        handler = tool_registry.get_tool("jvm_diag")["handler"]
+        fake = {"code": 500, "message": "容器无 JDK 工具", "data": None}
+        with mock.patch("app.api.jvm.run_jvm_action", new=mock.AsyncMock(return_value=fake)):
+            res = asyncio.run(handler({"action": "vm_flags"},
+                                      {"cluster_id": 1, "namespace": "ns", "pod_name": "p"}))
+        self.assertFalse(res["success"])
+        self.assertIn("JDK", res["error"])
+
+    def test_search_logs_uses_container_stdout(self):
+        """search_logs 应走容器 stdout（fetch_pod_logs），不再走 ES"""
+        import asyncio
+        from unittest import mock
+        from app.services import tool_registry
+        handler = tool_registry.get_tool("search_logs")["handler"]
+        with mock.patch("app.utils.pod_logs.fetch_pod_logs",
+                        new=mock.AsyncMock(return_value="【上次实例(--previous)】boom")):
+            res = asyncio.run(handler({"tail": 10},
+                                      {"cluster_id": 1, "namespace": "ns", "pod_name": "p"}))
+        self.assertTrue(res["success"])
+        self.assertIn("boom", res["output"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

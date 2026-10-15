@@ -9,6 +9,7 @@ LLM 决策在 ai-service 侧（agent_decide）。循环：
 """
 import asyncio
 import json
+import re
 
 from sqlalchemy import select
 
@@ -54,6 +55,16 @@ QUICK_EVIDENCE_TOOLS: list[tuple[str, dict]] = [
     # 容器真实内存（cgroup 限制/用量，字节），替代 free（free 读宿主机 /proc/meminfo 显示节点资源）
     ("exec_in_pod", {"command": "cat /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory/memory.usage_in_bytes"}),
 ]
+
+# ===== JVM 证据（诊断目标是 Java 应用时自动追加，让诊断数据更全）=====
+# 只读轻量动作，不产生大文件；heap_dump / jfr_start 为重操作（大文件 + 长停顿），
+# 不自动跑，留给 Agent 按需调 `jvm_diag`。老板 2026-10-15：诊断参数要“给全”才能分析全面。
+JVM_EVIDENCE_ACTIONS: list[str] = ["vm_flags", "heap_info", "gc_class_histo", "thread_dump"]
+# Java 进程探测命令（不依赖 JDK 工具，JRE 也能识别）；兼容裸 `java` 与完整路径 `/.../bin/java`
+_JAVA_DETECT_CMD = "ps -eo pid,args"
+_JAVA_PROC_RE = re.compile(r"(^|[\s/])java(w)?(\s|$)")
+# 无 JVM 诊断能力的错误特征（命中则不再继续后面的 JVM 动作，避免白等）
+_JVM_UNAVAILABLE_HINTS = ("jattach", "无 JDK", "JRE", "Java 进程")
 
 # 诊断工具集：由统一工具注册表提供（tool_registry.py，P0-1），此处不再硬编码
 # 应用诊断域工具 = list_tools(domain="application")
@@ -119,6 +130,46 @@ async def _kb_precheck(problem: str, session: DiagnosisSession) -> dict | None:
     }
 
 
+async def _collect_jvm_evidence(session: DiagnosisSession, start_step: int) -> tuple[list[str], list[dict]]:
+    """探测容器内是否有 Java 进程；有则自动采集 JVM 证据（只读）。
+
+    返回 (evidence_parts, steps)；非 Java 应用或探测失败返回空。
+    """
+    try:
+        det = await _execute_tool("exec_in_pod", {"command": _JAVA_DETECT_CMD}, session)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("JVM 探测失败（跳过 JVM 证据）: %s", e)
+        return [], []
+    if not det.get("success") or not _JAVA_PROC_RE.search(det.get("output") or ""):
+        return [], []  # 非 Java 应用（或容器内无 java 进程）
+
+    parts: list[str] = []
+    steps: list[dict] = []
+    for i, action in enumerate(JVM_EVIDENCE_ACTIONS):
+        args = {"action": action}
+        try:
+            res = await _execute_tool("jvm_diag", args, session)
+        except Exception as e:  # noqa: BLE001
+            res = {"success": False, "error": str(e)}
+        out = (res.get("output") or res.get("error") or "").strip()
+        await _persist_message(
+            session.id, "tool", tool_name="jvm_diag",
+            tool_args=json.dumps(args, ensure_ascii=False), tool_output=out[:6000],
+        )
+        if res.get("success") and out:
+            parts.append(f"### JVM 诊断·{action}\n{out}")
+        steps.append({
+            "step": start_step + i + 1, "tool": "jvm_diag",
+            "label": f"JVM 诊断·{action}", "args": args,
+            "success": res.get("success", False), "output": out[:2000],
+        })
+        # 容器无 JDK 且 jattach 不可用 → 后续动作也会同样失败，提前收手
+        if not res.get("success") and any(h in out for h in _JVM_UNAVAILABLE_HINTS):
+            logger.info("会话 %d 容器无可用 JVM 诊断能力，停止 JVM 证据采集", session.id)
+            break
+    return parts, steps
+
+
 async def _collect_quick_evidence(session: DiagnosisSession) -> tuple[str, list[dict]]:
     """单轮快速诊断：平台预采集只读证据（describe/日志/指标/容器内），拼接为证据文本。
 
@@ -149,6 +200,10 @@ async def _collect_quick_evidence(session: DiagnosisSession) -> tuple[str, list[
             "label": tool_registry.tool_label(tool_name), "args": args,
             "success": res.get("success", False), "output": out[:2000],
         })
+    # —— Java 应用：自动追加 JVM 证据（诊断数据更全）——
+    jvm_parts, jvm_steps = await _collect_jvm_evidence(session, start_step=len(steps))
+    parts.extend(jvm_parts)
+    steps.extend(jvm_steps)
     return "\n\n".join(parts), steps
 
 

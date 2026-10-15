@@ -92,8 +92,8 @@ _SAFE_PID = re.compile(r"^\d{1,7}$")
 _JCMD_LINE = re.compile(r"^(\d{1,7})\s+(.*)$")
 # ps -eo pid,args 输出行：<pid> <args...>
 _PS_LINE = re.compile(r"^\s*(\d{1,7})\s+(.*)$")
-# 独立出现的 java 可执行（排除 -javaagent: 之类的参数）
-_JAVA_PROC = re.compile(r"(^|\s)java(\s|$)")
+# 独立出现的 java 可执行（兼容裸 `java` 与 `/usr/lib/jvm/.../bin/java`；排除 -javaagent: 之类的参数）
+_JAVA_PROC = re.compile(r"(^|[\s/])java(w)?(\s|$)")
 
 
 async def _deny(user, cluster_id: int, namespace: str = "", required: str = "operate"):
@@ -341,20 +341,15 @@ async def list_java_processes(cluster_id: int, namespace: str, pod_name: str, co
     return {"code": 200, "message": "success", "data": data}
 
 
-@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/diagnose")
-async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: dict,
-                       user=Depends(require_operator)):
-    """对 Pod 内 Java 进程执行一个 JVM 诊断动作。
+async def run_jvm_action(cluster_id: int, namespace: str, pod_name: str,
+                         container: str, action: str, pid=None) -> dict:
+    """执行一个 JVM 诊断动作的核心实现（供 HTTP 接口与诊断工具 `jvm_diag` 复用）。
 
-    body: { container?: str, action: str, pid?: int }
     - 未传 pid 时自动定位容器内第一个 Java 进程。
     - 后端选择：容器有 JDK → 原生 jcmd/jstack/jmap；仅 JRE → 注入 jattach。
-    - 文件类动作返回 file_path，前端再调资源接口下载产物。
+    - 文件类动作返回 file_path。
+    返回 {"code", "message", "data"}（code=200 成功）。
     """
-    if denied := await _deny(user, cluster_id, namespace):
-        return denied
-    container = (payload.get("container") or "").strip()
-    action = (payload.get("action") or "").strip()
     spec = _ACTIONS.get(action)
     if not spec:
         return {"code": 400, "message": f"不支持的诊断动作：{action}（可选：{', '.join(_ACTIONS)}）", "data": None}
@@ -370,7 +365,6 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
             return {"code": 500, "message": f"动作 {action} 在 JRE 容器（无 JDK）下无等价实现", "data": None}
 
     # 解析 / 定位 pid
-    pid = payload.get("pid")
     pid_out = ""
     if spec["need_pid"]:
         if pid is not None:
@@ -408,6 +402,26 @@ async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: 
         data["file_path"] = _FILE_PATHS[action]
         data["hint"] = "产物已写入容器内路径，可点「下载产物」拉取"
     return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/diagnose")
+async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: dict,
+                       user=Depends(require_operator)):
+    """对 Pod 内 Java 进程执行一个 JVM 诊断动作。
+
+    body: { container?: str, action: str, pid?: int }
+    - 未传 pid 时自动定位容器内第一个 Java 进程。
+    - 后端选择：容器有 JDK → 原生 jcmd/jstack/jmap；仅 JRE → 注入 jattach。
+    - 文件类动作返回 file_path，前端再调资源接口下载产物。
+    """
+    if denied := await _deny(user, cluster_id, namespace):
+        return denied
+    return await run_jvm_action(
+        cluster_id, namespace, pod_name,
+        (payload.get("container") or "").strip(),
+        (payload.get("action") or "").strip(),
+        payload.get("pid"),
+    )
 
 
 # ============ R2.2 JVM 启动参数采集（只读） ============
