@@ -1,29 +1,71 @@
-# 每日备份 CronJob：mysqldump 到对象存储（备份包必须同时包含 ENCRYPTION_KEY）
+# 每日备份 CronJob（M11 备份/DR）
+# - mysqldump 一致快照 → gzip → 持久卷（PVC），保留 7 天
+# - 备份包必须与 ENCRYPTION_KEY 一起保存（否则 kubeconfig/密码等密文无法恢复）
+# - 异地：在 command 里追加 rclone/ossutil 上传（见注释），或另起 sidecar
+#
+# 依赖（部署前创建）：
+#   1) Secret apiops-backup-secret：
+#        kubectl -n api-ops create secret generic apiops-backup-secret \
+#          --from-literal=MYSQL_HOST=192.168.6.99 --from-literal=MYSQL_PORT=3306 \
+#          --from-literal=MYSQL_USER=root --from-literal=MYSQL_PASSWORD='<pw>' \
+#          --from-literal=MYSQL_DB=api_ops --from-literal=ENCRYPTION_KEY='<key>'
+#   2) PVC apiops-backup-pvc（见下）
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: apiops-backup-pvc
+  namespace: api-ops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: backup
+  name: apiops-db-backup
   namespace: api-ops
 spec:
-  schedule: "0 2 * * *"  # 每日 2:00
+  schedule: "0 2 * * *"          # 每日 2:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      backoffLimit: 2
       template:
         spec:
           restartPolicy: OnFailure
           containers:
             - name: backup
               image: mysql:8.0
+              envFrom:
+                - secretRef:
+                    name: apiops-backup-secret
               command:
                 - /bin/sh
                 - -c
                 - |
-                  mysqldump -h 192.168.6.99 -uroot -proot api_ops > /backup/api_ops-$(date +%Y%m%d).sql
-                  # TODO: 上传到对象存储（如 OSS/S3/COS）
-                  # 注意：ENCRYPTION_KEY 必须随备份一起保存，否则恢复后 kubeconfig 密文无法解密
+                  set -e
+                  TS=$(date +%Y%m%d-%H%M%S)
+                  OUT=/backup/${MYSQL_DB}-${TS}.sql.gz
+                  MYSQL_PWD="$MYSQL_PASSWORD" mysqldump \
+                    -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" \
+                    --single-transaction --routines --triggers --events --set-gtid-purged=OFF \
+                    "$MYSQL_DB" | gzip > "$OUT"
+                  echo "{\"db\":\"$MYSQL_DB\",\"time\":\"$TS\"}" > "$OUT.keyinfo.json"
+                  # 保留 7 天
+                  find /backup -maxdepth 1 -name "${MYSQL_DB}-*.sql.gz" -mtime +7 -delete
+                  find /backup -maxdepth 1 -name "${MYSQL_DB}-*.sql.gz.keyinfo.json" -mtime +7 -delete
+                  # 异地副本（可选）：镜像内无 rclone 时改用它法，如
+                  #   ossutil cp "$OUT" oss://your-bucket/apiops-backup/
+                  echo "backup done: $OUT"
               volumeMounts:
                 - name: backup
                   mountPath: /backup
           volumes:
             - name: backup
-              emptyDir: {}
+              persistentVolumeClaim:
+                claimName: apiops-backup-pvc
