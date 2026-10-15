@@ -101,6 +101,8 @@ export default function ClusterDetail() {
   const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)
   const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
+  // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
+  const [podList, setPodList] = useState<Array<{ namespace: string; name: string; phase?: string; ready?: boolean; restart_count?: number; created_at?: string; node_name?: string; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>([])
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
@@ -153,16 +155,24 @@ export default function ClusterDetail() {
 
   // 实时 Pod 信息（创建时间/重启/节点）：拉 k8s 实时列表，按 命名空间/名称 合并到容器组表
   // （DB 快照无创建时间；namespace 空=全部）
-  useEffect(() => {
+  const loadLivePods = () => {
     if (activeType !== 'pods') return
     getClusterPods(Number(id), activeNs === '_all_' ? '' : activeNs)
       .then((d) => {
-        const pods = (d as { pods?: Array<{ namespace: string; name: string; created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> }).pods || []
+        const pods = (d as { pods?: Array<{ namespace: string; name: string; phase?: string; created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> }).pods || []
         const m: Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> = {}
         for (const p of pods) m[`${p.namespace}-${p.name}`] = p
         setLivePods(m)
+        setPodList(pods)
       })
-      .catch(() => setLivePods({}))
+      .catch(() => { setLivePods({}); setPodList([]) })
+  }
+  useEffect(loadLivePods, [id, activeType, activeNs]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 容器组 Tab 实时刷新（5s）：创建过程/滚动更新增删即时可见
+  useEffect(() => {
+    if (activeType !== 'pods') return
+    const t = setInterval(loadLivePods, 5000)
+    return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, activeType, activeNs])
 
@@ -273,13 +283,19 @@ export default function ClusterDetail() {
     }
   }, [dataByType, statusFilter])
 
-  // 容器组行：合并实时信息（创建时间/重启/节点）
+  // 容器组行：以实时 Pod 列表为准（全 phase），补充快照里的资源 request/limit
   const podsRows = useMemo(
-    () => (finalData.pods || []).map((p) => {
-      const live = livePods[`${p.namespace}-${p.name}`]
-      return { ...p, created_at: live?.created_at, restart_count: live?.restart_count, node_name: live?.node_name, pod_ip: live?.pod_ip, containers: live?.containers, init_containers: live?.init_containers }
-    }),
-    [finalData.pods, livePods],
+    () => {
+      const snap: Record<string, Partial<ResourceItem>> = {}
+      for (const p of (dataByType.pods || [])) snap[`${p.namespace}-${p.name}`] = p
+      return podList.map((p) => {
+        const s = snap[`${p.namespace}-${p.name}`] || {}
+        return { ...p, status: p.phase || (p.ready ? 'Running' : 'Pending'),
+          cpu_request: s.cpu_request, memory_request: s.memory_request,
+          cpu_limit: s.cpu_limit, memory_limit: s.memory_limit }
+      })
+    },
+    [podList, dataByType.pods],
   )
 
   // 「状态」列表头：筛选图标放在文字前面（避免看着像挂在“更新时间”上）
@@ -378,6 +394,8 @@ export default function ClusterDetail() {
               <a onClick={() => setDetailPod({ clusterId: Number(id), namespace: r.namespace, name: r.name })}>{v}</a>
             ) },
             { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+            { title: '重启', dataIndex: 'restart_count', width: 70, render: (v: number) => (v ?? '-') },
+            { title: '节点', dataIndex: 'node_name', width: 160, render: (v: string) => v || '-' },
             { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
             { title: '资源（最小~最大）', render: (_: unknown, r: ResourceItem) => renderResources(r) || '-' },
             { title: '操作', width: 70, render: (_: unknown, r: ResourceItem) => (

@@ -304,8 +304,9 @@ export const applyWorkload = (clusterId: number, data: Payload) =>
 export const deleteWorkload = (clusterId: number, kind: string, ns: string, name: string) =>
   http.delete(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}`)
 // 集群 Pod 实时列表（含创建时间）：namespace 空=全部
+export interface ClusterPod { namespace: string; name: string; phase?: string; ready?: boolean; restart_count?: number; created_at?: string; node_name?: string; pod_ip?: string; containers?: string[]; init_containers?: string[] }
 export const getClusterPods = (clusterId: number, namespace = '') =>
-  http.get(`/resources/clusters/${clusterId}/pods`, { params: { namespace } })
+  http.get<{ pods: ClusterPod[] }>(`/resources/clusters/${clusterId}/pods`, { params: { namespace } })
 // 单个 Pod 的事件（k8s Event）
 export const getPodEvents = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/events`)

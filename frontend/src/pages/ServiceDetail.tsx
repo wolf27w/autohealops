@@ -10,7 +10,7 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers, getClusterPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 import type { AggLogPod, K8sNode } from '../services/api'
 
@@ -23,6 +23,8 @@ interface ServicePod {
   name: string
   namespace: string
   status?: string
+  phase?: string
+  ready?: boolean
   cpu_request?: string | number
   cpu_limit?: string | number
   memory_request?: string | number
@@ -102,19 +104,32 @@ export default function ServiceDetail() {
 
   // Pods 列表：从集群详情的 pod 数据里过滤出该服务（deployment_name 前缀匹配）
   const loadPods = () => {
-    getClusterDetail(clusterId).then((nsList) => {
-      const matched: ServicePod[] = []
-      for (const ns of (nsList || []) as NsPods[]) {
-        if (ns.namespace !== namespace) continue
-        for (const p of ns.pods || []) {
-          if (p.name.startsWith(name + '-')) matched.push({ ...p, namespace: ns.namespace })
+    // N3：以实时 Pod 列表为准（增删/创建过程即时反映），快照仅补资源 request/limit
+    getClusterPods(clusterId, namespace).then((d) => {
+      const live = (d?.pods || []).filter((p) => p.name === name || p.name.startsWith(name + '-'))
+      getClusterDetail(clusterId).then((nsList) => {
+        const snap: Record<string, Partial<ServicePod>> = {}
+        for (const ns of (nsList || []) as NsPods[]) {
+          if (ns.namespace !== namespace) continue
+          for (const p of ns.pods || []) snap[p.name] = p
         }
-      }
-      setPods(matched)
-    })
-    getIsolatedPods(clusterId, namespace).then((d) => setIsolated(new Set(d?.pods || []))).catch(() => {})
+        setPods(live.map((p) => {
+          const s = snap[p.name] || {}
+          return { ...p, status: p.phase || (p.ready ? 'Running' : 'Pending'),
+            cpu_request: s.cpu_request, memory_request: s.memory_request,
+            cpu_limit: s.cpu_limit, memory_limit: s.memory_limit }
+        }))
+      }).catch(() => setPods(live.map((p) => ({ ...p, status: p.phase || (p.ready ? 'Running' : 'Pending') }))))
+    }).catch(() => setPods([]))
+    getIsolatedPods(clusterId, namespace).then((dd) => setIsolated(new Set(dd?.pods || []))).catch(() => {})
   }
   useEffect(loadPods, [id, namespace, name])
+  // N3：Pods 实时刷新（5s），滚动更新增删即时可见
+  useEffect(() => {
+    const t = setInterval(loadPods, 5000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, namespace, name])
 
   // R6 实时状态推送：WS 订阅命名空间 Pod/Deployment 变化；变化即刷新 Pod 列表（节流），副本数实时更新
   const loadPodsRef = useRef(loadPods)
@@ -340,7 +355,7 @@ export default function ServiceDetail() {
             <Table rowKey="name" size="small" dataSource={pods} pagination={false}
               columns={[
                 { title: '名称', dataIndex: 'name', render: (v, r) => <a onClick={() => setDetailPod({ clusterId, namespace: r.namespace, name: r.name })}>{v}</a> },
-                { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'Running' ? 'green' : 'red'}>{s}</Tag> },
+                { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'Running' ? 'green' : s === 'Pending' ? 'orange' : 'red'}>{s}</Tag> },
                 { title: '资源（最小~最大）', render: (_, r) => {
                   const parts: string[] = []
                   if (r.cpu_request || r.cpu_limit) parts.push(`CPU ${r.cpu_request || '-'}~${r.cpu_limit || '-'}`)
