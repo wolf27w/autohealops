@@ -168,8 +168,11 @@ def _merge_hits(hits: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
-async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str) -> int:
-    """建巡检会话 + 跑快速诊断（含容器日志/JVM/指标预采集），返回会话 id。"""
+async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str, user_id: int = 0) -> int:
+    """建巡检会话 + 跑快速诊断（含容器日志/JVM/指标预采集），返回会话 id。
+
+    user_id：后台自动巡检=0（系统）；手动定向巡检=触发者（这样触发者自己能看/操作，admin 也能）。
+    """
     title = f"[巡检] {namespace}/{pod}: {reason}"[:200]
     problem = (
         f"平台主动巡检发现异常：{reason}。请全面诊断（结合资源趋势、容器 stdout 日志"
@@ -177,7 +180,7 @@ async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str) -> 
     )
     async with async_session() as s:
         sess = DiagnosisSession(
-            user_id=0, cluster_id=cluster.id, namespace=namespace, pod_name=pod,
+            user_id=user_id, cluster_id=cluster.id, namespace=namespace, pod_name=pod,
             title=title, status="active", source="proactive",
         )
         s.add(sess)
@@ -191,7 +194,8 @@ async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str) -> 
     return sid
 
 
-async def run_scan(cluster_id: int | None = None, namespace: str = "", kinds: list[str] | None = None) -> dict:
+async def run_scan(cluster_id: int | None = None, namespace: str = "", kinds: list[str] | None = None,
+                   user_id: int = 0) -> dict:
     """执行一轮巡检。
 
     - 无参数 → 全平台自动巡检（后台周期用）。
@@ -271,7 +275,7 @@ async def run_scan(cluster_id: int | None = None, namespace: str = "", kinds: li
                     summary["skipped_open_alert"] += 1
                     continue
                 try:
-                    sid = await _diagnose(c, ns, pod, h["reason"])
+                    sid = await _diagnose(c, ns, pod, h["reason"], user_id=user_id)
                     try:
                         await redis_pool.set(cd_key, str(sid), ex=cfg["cooldown_hours"] * 3600)
                     except Exception:  # noqa: BLE001

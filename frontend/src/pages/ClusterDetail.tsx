@@ -647,7 +647,7 @@ export default function ClusterDetail() {
         <span style={{ fontSize: 16, fontWeight: 700 }}>{clusterName || `集群 ${id}`}</span>
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
-        <Button size="small" onClick={() => navigate(`/node-management?cluster=${id}`)}>节点</Button>
+        <Button size="small" onClick={() => navigate(`/node-management?cluster=${id}`)}>集群节点</Button>
         <Button size="small" onClick={() => { setAiResult(null); setAiNs(activeNs && activeNs !== '_all_' ? activeNs : ''); setAiKinds([]); setAppInspectOpen(true) }}>应用巡检</Button>
         <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>集群巡检</Button>
       </div>

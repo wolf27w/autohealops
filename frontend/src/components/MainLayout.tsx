@@ -73,7 +73,7 @@ const menuItems: NavItem[] = [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
       { key: '/resource-governance', icon: <SettingOutlined />, label: '资源治理' },
-      { key: '/node-management', icon: <ClusterOutlined />, label: '节点管理' },
+      { key: '/node-management', icon: <ClusterOutlined />, label: '集群节点' },
     ],
   },
   {

@@ -159,6 +159,7 @@ async def proactive_scan(payload: dict | None = None, user=Depends(require_opera
         kinds = [kinds]
     summary = await pds.run_scan(
         cluster_id=int(cid) if cid else None, namespace=ns, kinds=[str(k) for k in kinds],
+        user_id=getattr(user, "id", 0),
     )
     return {"code": 200, "message": "success", "data": summary}
 
@@ -197,7 +198,7 @@ async def send_message(session_id: int, payload: dict, user=Depends(require_any_
 
     async with async_session() as s:
         sess = await s.get(DiagnosisSession, session_id)
-        if not sess or sess.user_id != user.id:
+        if not sess or (sess.user_id != user.id and getattr(user, "role", "") != "admin"):
             return {"code": 403, "message": "无该会话权限", "data": None}
         cluster_name = ""
         c = await s.get(Cluster, sess.cluster_id)
@@ -217,7 +218,7 @@ async def close_session(session_id: int, user=Depends(require_any_user)):
     """用户确认处理完成 → 闭环落盘知识库"""
     async with async_session() as s:
         sess = await s.get(DiagnosisSession, session_id)
-        if not sess or sess.user_id != user.id:
+        if not sess or (sess.user_id != user.id and getattr(user, "role", "") != "admin"):
             return {"code": 403, "message": "无该会话权限", "data": None}
 
     result = await agent_service.close_session_and_sink(sess)

@@ -85,7 +85,7 @@ export default function NodeManagement() {
 
   return (
     <div style={{ padding: 16 }}>
-      <Card size="small" title="节点管理"
+      <Card size="small" title="集群节点（K8s）"
         extra={
           <Space>
             <Select allowClear placeholder="选择集群" style={{ width: 180 }} value={clusterId}

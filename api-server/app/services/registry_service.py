@@ -112,6 +112,16 @@ async def _creds_from_cluster(cluster_id: int, namespace: str, host: str, kind: 
             doc = yaml.safe_load(r.get("yaml", "")) or {}
             ips = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("imagePullSecrets") or []
             names += [s.get("name") for s in ips if isinstance(s, dict) and s.get("name")]
+    # 并扫该命名空间下所有 docker-registry 类型 Secret（即便未挂到工作负载也能自动识别）
+    try:
+        mr = await executor_client.acall(executor_client.list_misc_resources, cluster_id, namespace)
+        for s in (mr.get("secrets") or []) if isinstance(mr, dict) else []:
+            t = str(s.get("type") or "")
+            if "dockerconfigjson" in t or "dockercfg" in t:
+                names.append(s.get("name"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("列命名空间 Secret 失败: %s", e)
+    names = [n for n in dict.fromkeys(names) if n]
     for sn in names:
         rs = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, "secret", namespace, sn)
         if not rs.get("success"):
