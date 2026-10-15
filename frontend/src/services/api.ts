@@ -588,6 +588,8 @@ export const isolatePod = (clusterId: number, ns: string, pod: string, data: Pay
   http.post<{ pod: string; label: string; old_value: string; new_value: string }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/isolate`, data)
 export const unisolatePod = (clusterId: number, ns: string, pod: string) =>
   http.post<{ pod: string; label: string; restored: string }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/unisolate`, {})
+export const getIsolatedPods = (clusterId: number, ns: string) =>
+  http.get<{ pods: string[] }>(`/resources/clusters/${clusterId}/namespaces/${ns}/isolated`)
 
 export interface AggLogPod { pod: string; phase: string; success: boolean; logs: string; error: string }
 export const getWorkloadLogs = (clusterId: number, namespace: string, kind: string, name: string, params?: { container?: string; tail?: number; previous?: boolean }) =>

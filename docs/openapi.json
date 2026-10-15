@@ -9865,6 +9865,58 @@
         "summary": "Deployments"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/isolated": {
+      "get": {
+        "description": "列出该命名空间下被平台标记为「已隔离」的 Pod（前端按状态切按钮用）。",
+        "operationId": "get_api_v1_resources_clusters_cluster_id_namespaces_namespace_isolated",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Isolated"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/pods": {
       "get": {
         "operationId": "get_api_v1_resources_clusters_cluster_id_namespaces_namespace_pods",

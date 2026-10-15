@@ -899,6 +899,10 @@ async def isolate_pod(cluster_id: int, namespace: str, pod_name: str, payload: d
     r2 = await executor_client.acall(executor_client.apply_pod_yaml, cluster_id, namespace, new_yaml)
     if not r2.get("success"):
         return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    try:
+        await redis_pool.sadd(_iso_key(cluster_id, namespace), pod_name)
+    except Exception:  # noqa: BLE001
+        pass
     return {"code": 200, "message": "success",
             "data": {"pod": pod_name, "label": key, "old_value": val, "new_value": val + _ISO_SUFFIX}}
 
@@ -927,8 +931,29 @@ async def unisolate_pod(cluster_id: int, namespace: str, pod_name: str, payload:
     r2 = await executor_client.acall(executor_client.apply_pod_yaml, cluster_id, namespace, new_yaml)
     if not r2.get("success"):
         return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    try:
+        await redis_pool.srem(_iso_key(cluster_id, namespace), pod_name)
+    except Exception:  # noqa: BLE001
+        pass
     return {"code": 200, "message": "success",
             "data": {"pod": pod_name, "label": key, "restored": labels[key]}}
+
+
+def _iso_key(cluster_id: int, namespace: str) -> str:
+    """平台侧隔离记录（Redis 集合，成员=Pod 名）——供前端按状态互斥显示隔离/取消隔离。"""
+    return f"isolate:{cluster_id}:{namespace}"
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/isolated")
+async def list_isolated(cluster_id: int, namespace: str, user=Depends(require_any_user)):
+    """列出该命名空间下被平台标记为「已隔离」的 Pod（前端按状态切按钮用）。"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    try:
+        members = await redis_pool.smembers(_iso_key(cluster_id, namespace))
+    except Exception:  # noqa: BLE001
+        members = set()
+    return {"code": 200, "message": "success", "data": {"pods": sorted(members or [])}}
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/logs")

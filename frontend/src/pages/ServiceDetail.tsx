@@ -10,7 +10,7 @@ import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 import type { AggLogPod, K8sNode } from '../services/api'
 
@@ -75,6 +75,7 @@ export default function ServiceDetail() {
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [podTab, setPodTab] = useState('pods')
   const [pods, setPods] = useState<ServicePod[]>([])
+  const [isolated, setIsolated] = useState<Set<string>>(new Set())
   const [liveWs, setLiveWs] = useState(false)
   const [events, setEvents] = useState<WorkloadEvent[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
@@ -110,6 +111,7 @@ export default function ServiceDetail() {
       }
       setPods(matched)
     })
+    getIsolatedPods(clusterId, namespace).then((d) => setIsolated(new Set(d?.pods || []))).catch(() => {})
   }
   useEffect(loadPods, [id, namespace, name])
 
@@ -338,12 +340,15 @@ export default function ServiceDetail() {
                     <Button size="small" type="link" onClick={() => setLogPod({ ...r, clusterId })}>日志</Button>
                     <Button size="small" type="link" onClick={() => setExecTarget({ ...r, clusterId })}>进容器</Button>
                     <Button size="small" type="link" onClick={() => setJvmPod({ ...r, clusterId })}>JVM诊断</Button>
-                    <Popconfirm title="隔离该 Pod？（app / app.kubernetes.io/name 等标签改为 xxx-ALERT，脱离 Service 流量）" onConfirm={async () => { await isolatePod(clusterId, r.namespace, r.name); message.success('已隔离'); loadPods() }}>
-                      <Button size="small" type="link">隔离</Button>
-                    </Popconfirm>
-                    <Popconfirm title="取消隔离？（还原标签，回到 Service 流量）" onConfirm={async () => { await unisolatePod(clusterId, r.namespace, r.name); message.success('已取消隔离'); loadPods() }}>
-                      <Button size="small" type="link">取消隔离</Button>
-                    </Popconfirm>
+                    {isolated.has(r.name) ? (
+                      <Popconfirm title="取消隔离？（还原标签，回到 Service 流量）" onConfirm={async () => { await unisolatePod(clusterId, r.namespace, r.name); message.success('已取消隔离'); loadPods() }}>
+                        <Button size="small" type="link">取消隔离</Button>
+                      </Popconfirm>
+                    ) : (
+                      <Popconfirm title="隔离该 Pod？（app / app.kubernetes.io/name 等标签改为 xxx-ALERT，脱离 Service 流量）" onConfirm={async () => { await isolatePod(clusterId, r.namespace, r.name); message.success('已隔离'); loadPods() }}>
+                        <Button size="small" type="link">隔离</Button>
+                      </Popconfirm>
+                    )}
                     <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId })}>YAML</Button>
                   </Space>
                 ) },
