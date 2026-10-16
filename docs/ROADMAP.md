@@ -21,6 +21,8 @@
 | A4 | **M2 下发 agent 开关的实际下发动作**（开关默认关） | 只做了开关字段/批量接入，下发未做 | 并入 A1 |
 | A5 | ~~JMX Exporter 集群侧安装~~ | ✅ **已取消（2026-10-16 老板：JMX 属监控，暂不装，用现有 Prometheus 展示）** | — |
 | A6 | **B3 平台自身生产部署** | M10/M11 已备，未上生产 | 部署类 |
+| A6.1 | **agent 镜像构建/推送**：`linux/amd64` 构建 `apiops-agent` → 推到目标集群能拉的仓库（填 `AGENT_IMAGE`）——否则 `install.yaml` 起的 pod 会 ImagePullBackOff | 无镜像 | 部署前置 |
+| A6.2 | **平台 agent 网关（9095）对外可达**：填 `AGENT_GATEWAY_PUBLIC_ADDR`；跨集群需 NodePort/LB 或 nginx/SamWaf TCP 四层转发（仅 ClusterIP 只集群内可达） | 仅本地 127.0.0.1 | 部署前置 |
 
 ### B. 🔴 待老板拍板（非开发）
 
