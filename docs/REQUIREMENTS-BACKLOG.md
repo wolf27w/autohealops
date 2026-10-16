@@ -648,3 +648,21 @@
 - **已取消**：Netdata 接入及依赖项（主机/Docker）
 
 > 2026-10-14 本轮开发（老板「继续开发」）：R1 下发（`b3c1d78`）、R5（`ed17fbe`）、R6（`e0bced3`）、R7（`4a22884`）、R4（`1912dc1`）；另修 `.env` COMMAND_WHITELIST 补 `cordon,uncordon`。
+
+---
+
+## 2026-10-16 Agent 接入（M3）落地 + 待部署前置
+
+**已完成**
+- **M3 Agent 接入闭环**：`clusters` 加 agent 令牌/状态/心跳/版本（迁移 `x1y2z3a4b5c6`）；`POST /clusters/agent-onboard`、`GET /clusters/{id}/agent/install.yaml`、`POST /clusters/{id}/agent/revoke`；gateway 按集群令牌校验 + 状态更新；前端「Agent 接入」向导 + 状态列。**测试环境真连验证通过**（经隧道 get nodes 返回 50 节点）。commit `9407401`。
+- 统一抽象/凭据治理/环境维度/C1 KPI/M2 批量/M4 日志保留 一并完成（详见 `ROADMAP.md` 与提交记录）。
+
+**待部署前置（归入「需求」，属平台部署线）**
+| # | 需求 | 说明 |
+|---|---|---|
+| A6.1 | **agent 镜像构建/推送** | `linux/amd64` 构建 `apiops-agent` → 推到目标集群能拉的仓库（填 `AGENT_IMAGE`）；否则 `install.yaml` 起的 pod 会 ImagePullBackOff |
+| A6.2 | **平台 agent 网关 9095 对外可达** | 填 `AGENT_GATEWAY_PUBLIC_ADDR`；跨集群需 NodePort/LB 或 nginx/SamWaf TCP 四层转发（ClusterIP 仅集群内可达） |
+
+**未做（影响集群/部署）**：A2 agent 托管更新、A3 M1 集群内自注册、A4 M2 下发动作、A6 平台生产部署。
+**已取消**：R2.3 / JMX Exporter（老板 2026-10-16）。
+**已核实暂缓**：M7 时区（全链路 CST 一致，无 bug）。
