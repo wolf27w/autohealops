@@ -73,6 +73,10 @@ export const replaceClusterKubeconfig = (id: number, kubeconfig: string) => http
 export const parseClusterKubeconfig = (kubeconfig: string) => http.post('/clusters/parse-kubeconfig', { kubeconfig })
 // 多 context 批量接入
 export const importMultiClusters = (data: { kubeconfig: string; contexts: string[]; env_tag: string }) => http.post('/clusters/import-multi', data)
+// Agent 接入（M3）：生成令牌 + 安装命令
+export const agentOnboardCluster = (data: { name: string; env_tag: string; description?: string }) => http.post('/clusters/agent-onboard', data)
+// 吊销 Agent 令牌
+export const revokeClusterAgent = (id: number) => http.post(`/clusters/${id}/agent/revoke`)
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })

@@ -1,9 +1,9 @@
 // 集群管理页：列表 + 添加（kubeconfig 上传落库）+ 健康检查 + 删除 + env_tag
 import { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown, Checkbox } from 'antd'
+import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown, Checkbox, Alert, Typography } from 'antd'
 import { PlusOutlined, ReloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters } from '../services/api'
+import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters, agentOnboardCluster } from '../services/api'
 import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
@@ -16,6 +16,9 @@ type ClusterWithExtra = Cluster & {
   source?: string
   cred_type?: string
   cred_expires_at?: string
+  agent_status?: string
+  agent_last_seen_at?: string
+  agent_version?: string
   description?: string
   rbac_status?: string
   version?: string
@@ -44,6 +47,11 @@ export default function ClusterList() {
   const [batchSel, setBatchSel] = useState<string[]>([])
   const [batchEnv, setBatchEnv] = useState('prod')
   const [batchBusy, setBatchBusy] = useState(false)
+  const [agentOpen, setAgentOpen] = useState(false)
+  const [agentName, setAgentName] = useState('')
+  const [agentEnv, setAgentEnv] = useState('prod')
+  const [agentResult, setAgentResult] = useState<{ id: number; token: string; install_command: string } | null>(null)
+  const [agentBusy, setAgentBusy] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -102,6 +110,16 @@ export default function ClusterList() {
     load()
   }
 
+  const handleAgentOnboard = async () => {
+    if (!agentName.trim()) { message.warning('请填集群名称'); return }
+    setAgentBusy(true)
+    try {
+      const d = await agentOnboardCluster({ name: agentName.trim(), env_tag: agentEnv }) as { id: number; token: string; install_command: string }
+      setAgentResult(d)
+      load()
+    } catch { /* 拦截器已提示 */ } finally { setAgentBusy(false) }
+  }
+
   const handleParseKc = async () => {
     if (!batchKc.trim()) { message.warning('请先粘贴 kubeconfig'); return }
     setBatchBusy(true)
@@ -132,6 +150,7 @@ export default function ClusterList() {
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加集群</Button>
         <Button onClick={() => { setBatchOpen(true); setBatchKc(''); setBatchCtxs([]); setBatchSel([]); setBatchEnv('prod') }}>批量接入（多 context）</Button>
+        <Button onClick={() => { setAgentOpen(true); setAgentName(''); setAgentEnv('prod'); setAgentResult(null) }}>Agent 接入</Button>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       </Space>
       <Table
@@ -166,6 +185,12 @@ export default function ClusterList() {
             if (days <= 7) return <Tag color="red">{days} 天后过期</Tag>
             if (days <= 30) return <Tag color="orange">{days} 天后过期</Tag>
             return <Tag>{String(v).slice(0, 10)}</Tag>
+          } },
+          { title: 'Agent 状态', dataIndex: 'agent_status', render: (v, r: ClusterWithExtra) => {
+            if (r.source !== 'agent') return '-'
+            const m: Record<string, { c: string; t: string }> = { pending: { c: 'orange', t: '等待连接' }, connected: { c: 'green', t: '已连接' }, disconnected: { c: 'red', t: '已断开' }, revoked: { c: 'default', t: '已吊销' } }
+            const x = m[v] || { c: 'default', t: v || '-' }
+            return <Tag color={x.c}>{x.t}</Tag>
           } },
           { title: '创建时间', dataIndex: 'created_at' },
           {
@@ -277,6 +302,30 @@ export default function ClusterList() {
             </Form.Item>
           )}
         </Form>
+      </Modal>
+
+      {/* Agent 接入向导 */}
+      <Modal title="Agent 接入（KubeSphere 风格）" open={agentOpen} onCancel={() => setAgentOpen(false)}
+        footer={null} width={680}>
+        {!agentResult ? (
+          <Form layout="vertical">
+            <Form.Item label="集群名称" required><Input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="如 uat-cluster-a" /></Form.Item>
+            <Form.Item label="环境标签">
+              <Select value={agentEnv} onChange={setAgentEnv} style={{ width: 180 }} options={[
+                { value: 'qa', label: 'qa（测试）' }, { value: 'release', label: 'release（预发）' }, { value: 'prod', label: 'prod（生产）' },
+              ]} />
+            </Form.Item>
+            <Button type="primary" loading={agentBusy} onClick={handleAgentOnboard}>生成接入令牌</Button>
+          </Form>
+        ) : (
+          <div>
+            <Alert type="success" showIcon style={{ marginBottom: 12 }} message="接入令牌已生成（令牌只显示这一次，请复制保存）" />
+            <Typography.Paragraph copyable code style={{ wordBreak: 'break-all', fontSize: 12 }}>{agentResult.install_command}</Typography.Paragraph>
+            <Alert type="info" showIcon style={{ marginTop: 8 }}
+              message="在目标集群执行上面命令（kubectl apply）→ agent 主动连回平台 → 列表状态变「已连接」。" />
+            <Button style={{ marginTop: 8 }} onClick={() => { setAgentOpen(false); setAgentResult(null) }}>完成</Button>
+          </div>
+        )}
       </Modal>
     </div>
   )

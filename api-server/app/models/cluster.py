@@ -29,6 +29,11 @@ class Cluster(Base):
     # 凭据类型/到期（凭据到期治理）：cert=客户端证书 / token / oidc / unknown
     cred_type: Mapped[str] = mapped_column(String(20), default="unknown", server_default="unknown")
     cred_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Agent 接入（M3）：令牌哈希（sha256，不存明文）+ 状态/心跳/版本
+    agent_token_hash: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    agent_status: Mapped[str] = mapped_column(String(20), default="", server_default="")  # '' / pending / connected / disconnected / revoked
+    agent_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    agent_version: Mapped[str] = mapped_column(String(50), default="", server_default="")
     # 维护窗口配置 JSON：{"enabled": true, "start": "02:00", "end": "04:00", "days": "1,2,3,4,5"}
     maintenance_window: Mapped[str] = mapped_column(Text, default="{}")
     # 云原生 RBAC（专项 B）：接入状态

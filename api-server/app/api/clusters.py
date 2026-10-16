@@ -148,6 +148,140 @@ async def import_multi(payload: dict, user=Depends(require_admin)):
     return {"code": 200, "message": "success", "data": {"created": created, "skipped": skipped}}
 
 
+def _hash_token(token: str) -> str:
+    import hashlib
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+def _new_agent_token() -> str:
+    import secrets
+    return secrets.token_urlsafe(32)
+
+
+def _public_base_url() -> str:
+    from app.core.config import settings
+    return (getattr(settings, "PLATFORM_PUBLIC_URL", "") or "").strip() or "http://localhost:8080"
+
+
+@router.post("/agent-onboard")
+async def agent_onboard(payload: dict, user=Depends(require_admin)):
+    """Agent 接入向导第 1 步：建一条 source=agent 的集群（pending）+ 生成接入令牌 + 返回安装命令"""
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return {"code": 400, "message": "集群名称必填", "data": None}
+    env_tag = payload.get("env_tag", "prod")
+    if env_tag not in ("qa", "release", "prod"):
+        env_tag = "prod"
+    token = _new_agent_token()
+    async with async_session() as session:
+        if (await session.execute(select(Cluster).where(Cluster.name == name))).scalar_one_or_none():
+            return {"code": 400, "message": "集群名称已存在", "data": None}
+        cl = Cluster(name=name, description=payload.get("description", ""),
+                     kubeconfig_encrypted=encrypt_aes256_gcm(""),
+                     env_tag=env_tag, source="agent", api_server_url="", cred_type="unknown",
+                     agent_token_hash=_hash_token(token), agent_status="pending", status="unknown")
+        session.add(cl)
+        await session.commit()
+        await session.refresh(cl)
+    base = _public_base_url().rstrip("/")
+    install_command = f"kubectl apply -f {base}/api/v1/clusters/{cl.id}/agent/install.yaml?token={token}"
+    return {"code": 200, "message": "success", "data": {
+        "id": cl.id, "name": cl.name, "token": token, "install_command": install_command}}
+
+
+@router.get("/{cluster_id}/agent/install.yaml")
+async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(require_admin)):
+    """Agent 接入向导：渲染一键安装清单（含令牌；仅 admin，校验 token 哈希后返回）"""
+    if not token:
+        return {"code": 400, "message": "token 必填", "data": None}
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+        if not c:
+            return {"code": 404, "message": "集群不存在", "data": None}
+        if not c.agent_token_hash or _hash_token(token) != c.agent_token_hash:
+            return {"code": 403, "message": "token 无效", "data": None}
+    from app.core.config import settings
+    gateway_addr = (getattr(settings, "AGENT_GATEWAY_PUBLIC_ADDR", "") or "").strip() or getattr(settings, "AGENT_GATEWAY_ADDR", "0.0.0.0:9095")
+    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "apiops-agent:latest"
+    # 多文档 YAML 直接拼字符串（避免 --- 序列化问题）
+    docs = f"""apiVersion: v1
+kind: Namespace
+metadata:
+  name: apiops-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: apiops-agent
+  namespace: apiops-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: apiops-agent
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: apiops-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: apiops-agent
+subjects:
+  - kind: ServiceAccount
+    name: apiops-agent
+    namespace: apiops-agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apiops-agent
+  namespace: apiops-agent
+  labels:
+    app: apiops-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apiops-agent
+  template:
+    metadata:
+      labels:
+        app: apiops-agent
+    spec:
+      serviceAccountName: apiops-agent
+      containers:
+        - name: agent
+          image: {image}
+          args:
+            - "-platform={gateway_addr}"
+            - "-cluster-id={cluster_id}"
+            - "-token={token}"
+          resources:
+            requests: {{ cpu: 100m, memory: 128Mi }}
+            limits: {{ cpu: 500m, memory: 256Mi }}
+"""
+    return {"code": 200, "message": "success", "data": {"yaml": docs}}
+
+
+@router.post("/{cluster_id}/agent/revoke")
+async def agent_revoke(cluster_id: int, user=Depends(require_admin)):
+    """吊销 Agent 接入令牌"""
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+        if not c:
+            return {"code": 404, "message": "集群不存在", "data": None}
+        c.agent_token_hash = ""
+        c.agent_status = "revoked"
+        await session.commit()
+    return {"code": 200, "message": "success", "data": {"status": "revoked"}}
+
+
 @router.post("")
 async def create_cluster(payload: dict, user=Depends(require_admin)):
     """添加集群（admin；加密存 kubeconfig + 环境标签 + 健康检查 + 启动 watch）"""
@@ -255,6 +389,9 @@ async def list_clusters(user=Depends(require_any_user)):
          "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
          "cred_type": c.cred_type or "unknown",
          "cred_expires_at": str(c.cred_expires_at) if c.cred_expires_at else "",
+         "agent_status": c.agent_status or "",
+         "agent_last_seen_at": str(c.agent_last_seen_at) if c.agent_last_seen_at else "",
+         "agent_version": c.agent_version or "",
          "created_at": str(c.created_at),
          "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
          "inspect_enabled": bool(c.inspect_enabled),
@@ -278,6 +415,9 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
         "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
         "cred_type": c.cred_type or "unknown",
         "cred_expires_at": str(c.cred_expires_at) if c.cred_expires_at else "",
+        "agent_status": c.agent_status or "",
+        "agent_last_seen_at": str(c.agent_last_seen_at) if c.agent_last_seen_at else "",
+        "agent_version": c.agent_version or "",
         "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",

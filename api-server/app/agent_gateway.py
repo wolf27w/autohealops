@@ -11,6 +11,7 @@ import queue
 import threading
 import time
 import uuid
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 import grpc
@@ -24,6 +25,43 @@ logger = get_logger("api-server.agent_gateway")
 _agents: dict[int, "_AgentConn"] = {}
 _agents_lock = threading.Lock()
 _server: grpc.Server | None = None
+_loop = None
+
+
+async def _verify_and_mark(cluster_id: int, token: str) -> str:
+    """校验 agent 令牌（按集群 sha256 哈希），通过则标记 connected + 心跳；返回空串=成功"""
+    import hashlib
+    from datetime import datetime
+    from app.core.database import async_session
+    from app.models import Cluster
+    try:
+        async with async_session() as s:
+            c = await s.get(Cluster, int(cluster_id))
+            if c is None:
+                return "集群不存在"
+            h = c.agent_token_hash or ""
+            if not h or hashlib.sha256((token or "").encode()).hexdigest() != h:
+                return "token 无效"
+            c.agent_status = "connected"
+            c.agent_last_seen_at = datetime.now()
+            await s.commit()
+        return ""
+    except Exception as e:  # noqa: BLE001
+        return f"验证异常: {e}"
+
+
+async def _mark_disconnected(cluster_id: int) -> None:
+    """agent 断开 → 标记 disconnected（best-effort）"""
+    from app.core.database import async_session
+    from app.models import Cluster
+    try:
+        async with async_session() as s:
+            c = await s.get(Cluster, int(cluster_id))
+            if c and c.agent_status == "connected":
+                c.agent_status = "disconnected"
+                await s.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class _AgentConn:
@@ -64,16 +102,25 @@ def call(cluster_id: int, method: str, payload: bytes, timeout: float = 30.0) ->
 
 class _Servicer(agent_pb2_grpc.AgentServiceServicer):
     def Tunnel(self, request_iterator, context):  # noqa: N802 (grpc 命名)
-        expected = (getattr(settings, "AGENT_ACCESS_TOKEN", "") or "").strip()
         state = {"a": None}
 
         def reader():
             try:
                 for f in request_iterator:
                     if f.type == "register":
-                        if expected and f.token != expected:
-                            logger.warning("agent 注册令牌无效 cluster=%s", f.cluster_id)
-                            context.abort(grpc.StatusCode.UNAUTHENTICATED, "token 无效")
+                        err = ""
+                        if _loop:
+                            try:
+                                err = asyncio.run_coroutine_threadsafe(
+                                    _verify_and_mark(f.cluster_id, f.token), _loop
+                                ).result(timeout=8)
+                            except Exception as e:  # noqa: BLE001
+                                err = f"验证异常: {e}"
+                        else:
+                            err = "网关未就绪"
+                        if err:
+                            logger.warning("agent 注册失败 cluster=%s: %s", f.cluster_id, err)
+                            context.abort(grpc.StatusCode.UNAUTHENTICATED, err)
                             return
                         a = _AgentConn(f.cluster_id)
                         state["a"] = a
@@ -114,13 +161,19 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
             with _agents_lock:
                 if _agents.get(a.cluster_id) is a:
                     _agents.pop(a.cluster_id, None)
+            if _loop:
+                asyncio.run_coroutine_threadsafe(_mark_disconnected(a.cluster_id), _loop)
             logger.info("agent 断开 cluster=%s", a.cluster_id)
 
 
 def start_server(addr: str) -> None:
-    global _server
+    global _server, _loop
     if _server is not None:
         return
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _loop = None
     _server = grpc.server(ThreadPoolExecutor(max_workers=20))
     agent_pb2_grpc.add_AgentServiceServicer_to_server(_Servicer(), _server)
     _server.add_insecure_port(addr)
