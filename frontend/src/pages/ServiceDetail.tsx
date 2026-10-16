@@ -9,6 +9,7 @@ import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYa
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
+import WorkloadMountsPanel from '../components/WorkloadMountsPanel'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers, getClusterPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
@@ -419,6 +420,9 @@ export default function ServiceDetail() {
                 />
               )}
             </div>
+          ) },
+          { key: 'mounts', label: '配置与存储', children: (
+            <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} />
           ) },
         ]} />
       </Card>

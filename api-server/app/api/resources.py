@@ -885,6 +885,168 @@ async def workload_mounts(cluster_id: int, kind: str, namespace: str, name: str,
     }}
 
 
+# 可挂载的数据源类型 → Pod 模板里的 volumes 字段名
+_MOUNT_SOURCE_KEYS = {"configMap": "configMap", "secret": "secret", "pvc": "persistentVolumeClaim"}
+_WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset"}
+
+
+def _k8s_dns_label(s: str) -> str:
+    """归一为 DNS-1123 label（volume 名用）"""
+    s = re.sub(r"[^a-z0-9-]", "-", (s or "").lower())
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return (s[:63].strip("-")) or "volume"
+
+
+def _build_volume_payload(src_type: str, src_name: str) -> dict:
+    if src_type == "configMap":
+        return {"configMap": {"name": src_name}}
+    if src_type == "secret":
+        return {"secret": {"secretName": src_name}}
+    return {"persistentVolumeClaim": {"claimName": src_name}}
+
+
+async def _load_workload_doc(cluster_id: int, kind: str, namespace: str, name: str):
+    """拉工作负载 YAML 并解析成 dict；返回 (doc, error_response)"""
+    if kind not in _WORKLOAD_KINDS:
+        return None, {"code": 400, "message": f"不支持的类型 {kind}（仅 deployment/statefulset/daemonset）", "data": None}
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return None, {"code": 500, "message": r.get("error", "读取工作负载失败"), "data": None}
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError as e:
+        return None, {"code": 500, "message": f"解析 YAML 失败：{e}", "data": None}
+    return doc, None
+
+
+@router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts")
+async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: str,
+                            payload: dict, user=Depends(require_operator)):
+    """给工作负载（Deployment/StatefulSet/DaemonSet）的 Pod 挂载 配置字典/密钥/PVC。
+
+    body: source_type=configMap|secret|pvc, source_name, mount_path, sub_path?, read_only?,
+          volume_name?(默认按来源名生成), containers?(空=全部业务容器)
+    实现：读工作负载 YAML → 在 spec.template.spec 追加 volume + 各容器 volumeMount → server-side apply。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    src_type = str(payload.get("source_type") or "").strip()
+    src_name = str(payload.get("source_name") or "").strip()
+    mount_path = str(payload.get("mount_path") or "").strip()
+    sub_path = str(payload.get("sub_path") or "").strip()
+    read_only = bool(payload.get("read_only", False))
+    volume_name = str(payload.get("volume_name") or "").strip()
+    containers = payload.get("containers") or []
+    if src_type not in _MOUNT_SOURCE_KEYS:
+        return {"code": 400, "message": "source_type 必填且需为 configMap/secret/pvc", "data": None}
+    if not src_name:
+        return {"code": 400, "message": "source_name 必填", "data": None}
+    if not mount_path.startswith("/"):
+        return {"code": 400, "message": "挂载路径必须是绝对路径（以 / 开头）", "data": None}
+    if sub_path.startswith("/"):
+        return {"code": 400, "message": "子路径不能以 / 开头", "data": None}
+
+    doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    tmpl = (((doc.get("spec") or {}).setdefault("template", {})).setdefault("spec", {}))
+    volumes = tmpl.setdefault("volumes", [])
+    ctrs = tmpl.get("containers") or []
+    if not ctrs:
+        return {"code": 400, "message": "该工作负载无业务容器", "data": None}
+
+    if not volume_name:
+        base = _k8s_dns_label(src_name)
+        existing_names = {v.get("name") for v in volumes}
+        volume_name = base
+        i = 2
+        while volume_name in existing_names:
+            volume_name = f"{base}-{i}"
+            i += 1
+
+    # 卷：不存在则新建；已存在则校验类型/来源一致（避免同名卷被误改）
+    existing = next((v for v in volumes if v.get("name") == volume_name), None)
+    if existing is None:
+        vol = {"name": volume_name}
+        vol.update(_build_volume_payload(src_type, src_name))
+        volumes.append(vol)
+    else:
+        key = _MOUNT_SOURCE_KEYS[src_type]
+        cur = existing.get(key) or {}
+        cur_name = cur.get("name") or cur.get("secretName") or cur.get("claimName")
+        if cur_name != src_name:
+            return {"code": 409, "message": f"卷名 {volume_name} 已被其它来源占用（{cur_name}），请换一个卷名", "data": None}
+
+    targets = [c for c in ctrs if (not containers or c.get("name") in containers)]
+    if not targets:
+        return {"code": 400, "message": "指定的容器不存在", "data": None}
+    added = 0
+    for c in targets:
+        vms = c.setdefault("volumeMounts", [])
+        dup = any((m.get("name") == volume_name and m.get("mountPath") == mount_path
+                   and (m.get("subPath") or "") == sub_path) for m in vms)
+        if dup:
+            continue
+        m = {"name": volume_name, "mountPath": mount_path}
+        if sub_path:
+            m["subPath"] = sub_path
+        if read_only:
+            m["readOnly"] = True
+        vms.append(m)
+        added += 1
+    if added == 0:
+        return {"code": 200, "message": "挂载已存在，无需变更", "data": {"volume_name": volume_name, "changed": False}}
+
+    new_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+    if not r2.get("success"):
+        return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "已挂载", "data": {"volume_name": volume_name, "changed": True}}
+
+
+@router.delete("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts")
+async def remove_workload_mount(cluster_id: int, kind: str, namespace: str, name: str,
+                                volume_name: str, container: str = "", mount_path: str = "",
+                                user=Depends(require_operator)):
+    """移除挂载：删掉各容器的 volumeMount；若再无容器引用该卷则一并删掉 volume。
+
+    volume_name 必填；container/mount_path 可选（限定只删某个容器的某个挂载）。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    if not volume_name:
+        return {"code": 400, "message": "volume_name 必填", "data": None}
+    doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    tmpl = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    all_ctrs = (tmpl.get("containers") or []) + (tmpl.get("initContainers") or [])
+    removed = 0
+    for c in all_ctrs:
+        if container and c.get("name") != container:
+            continue
+        vms = c.get("volumeMounts") or []
+        kept = [m for m in vms if not (m.get("name") == volume_name and (not mount_path or m.get("mountPath") == mount_path))]
+        removed += len(vms) - len(kept)
+        if kept:
+            c["volumeMounts"] = kept
+        elif "volumeMounts" in c:
+            del c["volumeMounts"]
+    if removed == 0:
+        return {"code": 404, "message": f"未找到卷 {volume_name} 的挂载", "data": None}
+    # 若已无任何容器引用该卷 → 删掉 volume 定义
+    still_used = any(m.get("name") == volume_name for c in all_ctrs for m in (c.get("volumeMounts") or []))
+    if not still_used:
+        tmpl["volumes"] = [v for v in (tmpl.get("volumes") or []) if v.get("name") != volume_name]
+        if not tmpl["volumes"]:
+            del tmpl["volumes"]
+    new_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+    if not r2.get("success"):
+        return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+    return {"code": 200, "message": "已移除挂载", "data": {"volume_name": volume_name, "removed_mounts": removed}}
+
+
 @router.get("/registry/tags")
 async def registry_tags(image: str, limit: int = 100, cluster_id: int = 0, namespace: str = "",
                        kind: str = "", name: str = "", user=Depends(require_any_user)):
