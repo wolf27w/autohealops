@@ -59,7 +59,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   const [volModal, setVolModal] = useState<{ open: boolean; edit?: VolumeInfo }>({ open: false })
   const [envFromModal, setEnvFromModal] = useState<{ open: boolean; edit?: EnvRef }>({ open: false })
   const [envEdit, setEnvEdit] = useState<{ open: boolean; container: string; rows: EnvRow[] }>({ open: false, container: '', rows: [] })
-  const [content, setContent] = useState<{ open: boolean; title: string; loading: boolean; rows: { key: string; value: string }[] }>({ open: false, title: '', loading: false, rows: [] })
+  const [content, setContent] = useState<{ open: boolean; title: string; loading: boolean; secret: boolean; rows: { key: string; value: string }[]; revealed: Record<string, boolean> }>({ open: false, title: '', loading: false, secret: false, rows: [], revealed: {} })
   const [volForm] = Form.useForm()
   const [envFromForm] = Form.useForm()
 
@@ -131,19 +131,23 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envFromModal.open, envFromModal.edit])
 
-  // 查看配置内容（配置字典/密钥的 key → value）
+  // 查看配置内容（配置字典/密钥的 key → value；密钥默认打码）
   const openContent = async (t: MountType, name: string) => {
     const kind = t === 'configMap' ? 'configmap' : 'secret'
-    setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: true, rows: [] })
+    const isSecret = t === 'secret'
+    setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: true, secret: isSecret, rows: [], revealed: {} })
     try {
       const d = await getObjectDetail(clusterId, kind, namespace, name)
       const data = ((d as { data?: Record<string, string> }).data) || {}
-      setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: false,
-        rows: Object.entries(data).map(([key, value]) => ({ key, value: String(value ?? '') })) })
+      setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: false, secret: isSecret,
+        rows: Object.entries(data).map(([key, value]) => ({ key, value: String(value ?? '') })), revealed: {} })
     } catch {
-      setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: false, rows: [] })
+      setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: false, secret: isSecret, rows: [], revealed: {} })
     }
   }
+  const closeContent = () => setContent({ open: false, title: '', loading: false, secret: false, rows: [], revealed: {} })
+  const toggleReveal = (key: string) => setContent((s) => ({ ...s, revealed: { ...s.revealed, [key]: !s.revealed[key] } }))
+  const allRevealed = !!content.rows.length && content.rows.every((r) => content.revealed[r.key])
 
   // ---------- 卷 ----------
   const openAddVol = () => { volForm.resetFields(); setVolModal({ open: true }) }
@@ -469,20 +473,38 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
       </Modal>
 
       {/* 查看配置内容 */}
-      <Modal title={content.title} open={content.open} onCancel={() => setContent({ open: false, title: '', loading: false, rows: [] })}
+      <Modal title={content.title} open={content.open} onCancel={closeContent}
         footer={null} width={760} forceRender>
         {content.loading ? (
           <div style={{ textAlign: 'center', padding: '24px 0' }}><Spin /></div>
         ) : content.rows.length === 0 ? (
           <Empty description="无数据项" />
         ) : (
-          <Table rowKey="key" size="small" pagination={false} dataSource={content.rows}
-            columns={[
-              { title: 'Key', dataIndex: 'key', width: 240 },
-              { title: 'Value', dataIndex: 'value', render: (v: string) => (
-                <Typography.Text style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>{v || '-'}</Typography.Text>
-              ) },
-            ]} />
+          <>
+            {content.secret && (
+              <div style={{ marginBottom: 8, textAlign: 'right' }}>
+                <Button size="small" onClick={() => setContent((s) => ({ ...s, revealed: Object.fromEntries(s.rows.map((r) => [r.key, !allRevealed])) }))}>
+                  {allRevealed ? '全部隐藏' : '全部显示'}
+                </Button>
+              </div>
+            )}
+            <Table rowKey="key" size="small" pagination={false} dataSource={content.rows}
+              columns={[
+                { title: 'Key', dataIndex: 'key', width: 240 },
+                { title: 'Value', dataIndex: 'value', render: (v: string, r: { key: string }) => {
+                  if (content.secret && !content.revealed[r.key]) {
+                    return <Space size={8}><Typography.Text type="secondary">{'••••••••'}</Typography.Text>
+                      <a onClick={() => toggleReveal(r.key)}>显示</a></Space>
+                  }
+                  return (
+                    <Space align="start" size={8}>
+                      <Typography.Text style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>{v || '-'}</Typography.Text>
+                      {content.secret && <a onClick={() => toggleReveal(r.key)}>隐藏</a>}
+                    </Space>
+                  )
+                } },
+              ]} />
+          </>
         )}
       </Modal>
 
