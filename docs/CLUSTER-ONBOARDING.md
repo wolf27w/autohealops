@@ -158,3 +158,39 @@
 **工时**：~1d（到期解析 + 列表展示 + 预警通知 + 一键替换）
 
 **老板建议**：**能给 agent 就给 agent**（免维护）；必须用 kubeconfig 的，做到「到期前预警 + 一键换」。
+
+---
+
+## 九、各方式「是否需要客户端」/ 前置条件
+
+> 别名（说话时用）：**M1 = 平台自托管（集群内）**｜**M2 = kubeconfig 直连**｜**M3 = Agent 接入**
+
+| 方式 | 被管集群侧要装什么 | 要 agent | 连接方向 | 凭据 |
+|---|---|---|---|---|
+| **M1 平台自托管** | 要——**部署平台本体**（`k8s/*.yaml`） | ❌ 不用单独 agent（**平台自己就是客户端**，in-cluster SA） | 平台 → 本集群 API | SA（kubelet 自动轮换，**免维护**） |
+| **M2 kubeconfig 直连** | **什么都不用装**（只需集群侧账号/RBAC + 一份 kubeconfig） | ❌ 不用 | 平台 → 集群 API **直连** | client cert/token（**会过期**，需手动换） |
+| **M3 Agent 接入** | 要——装 **agent**（Deployment + ClusterRole/Binding + 令牌 Secret） | ✅ **需要** | **agent → 平台**（主动外连/反向隧道） | 令牌只用于首连鉴权，之后用集群内 SA（**免维护**） |
+
+**权衡**：M2 不装但要求**平台→apiserver 入站可达** + 凭据会过期；M3 要装 agent 但**免入站** + 凭据免维护（生产多集群首选）；M1 是平台装进集群（自带客户端）。
+**M3 前置**：集群能拉 **agent 镜像** + 能访问**平台地址**（出站）。
+
+---
+
+## 十、平台自身的更新/升级（集群内 vs 集群外）
+
+> 关键：**平台升级 ≠ 被管集群升级**。平台升级只动平台自己，不影响被管业务集群；反之被管集群变更与平台无关（只需 API 版本兼容）。
+
+| 平台部署形态 | 升级方式 | 回滚 | 现状 |
+|---|---|---|---|
+| **集群内（M1）/ 独立机 + kubectl** | `scripts/release_platform.sh --version vX`（构建**带版本 tag** 镜像 → push → `kubectl set image` → 等 rollout；记录 `.deploy-history`） | `scripts/rollback_platform.sh`（Deployment revisionHistory 保留 5 版，零停机 + PDB） | ✅ M10 已完成 |
+| **集群外 · Docker/compose** | `git pull` → `install.sh --docker`（重建镜像 + 迁移 + 起容器） | ⬜ **缺**：无版本 tag / 无 `.deploy-history` / 无 `--rollback` | 🟡 待补（对齐 M10） |
+| **集群外 · 本地 nohup**（当前 Mac） | `git pull` → `install.sh --local --skip-deps`（或装依赖） → `alembic upgrade head` → `./scripts/dev-reload.sh` / `start.sh restart` | 回退代码 + 迁移降级（或备份恢复） | 🟡 手工 |
+
+**统一升级流程（两种形态都一样）**：
+```
+备份 DB（backup_mysql.sh）→ 上新版（镜像/代码）→ 执行迁移（alembic upgrade head）→ 重启服务 → 健康检查 /health → 失败则回滚上一版
+```
+
+**待补（并入本线）**：给集群外的 Docker/本地模式也加 **`install.sh --version <tag>` + `.deploy-history` + `--rollback`**，升级前自动 `backup_mysql.sh`；工时 ~0.5d。
+
+**有状态组件**：MySQL/Redis 一般用外部实例（当前外部 MySQL `192.168.6.99` / 本机），**升级平台不动它们**；但迁移只向前 → 回滚需靠备份（M11 已具备）。
