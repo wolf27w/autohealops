@@ -35,6 +35,57 @@ def strip_code_fence(text: str) -> str:
     return t.strip()
 
 
+def iter_json_objects(text: str):
+    """扫描文本，逐个产出**平衡的** JSON 对象子串（忽略字符串内的括号）。
+
+    用于模型输出里「文字 + 多个 JSON 对象」的情形（找首个/最后一个有效对象）。
+    """
+    s = text or ""
+    depth = 0
+    start = -1
+    instr = False
+    esc = False
+    for i, ch in enumerate(s):
+        if instr:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                instr = False
+            continue
+        if ch == '"':
+            instr = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield s[start:i + 1]
+                    start = -1
+
+
+def extract_json_prefer(text: str, prefer_key: str = "action", default=None):
+    """从模型输出里取 JSON 对象；优先返回**含 prefer_key** 的对象，多个时取**最后一个**
+    （模型常先写草稿再给出最终决策）。无则回退到 extract_json。
+    """
+    cands = list(iter_json_objects(strip_code_fence(text)))
+    parsed: list[dict] = []
+    for c in cands:
+        v = _loads_lenient(c)
+        if isinstance(v, dict):
+            parsed.append(v)
+    if parsed:
+        with_key = [v for v in parsed if prefer_key in v]
+        if with_key:
+            return with_key[-1]
+        return parsed[-1]
+    return extract_json(text, default=default)
+
+
 def extract_json(text: str, default=None):
     """从模型输出里健壮地提取 JSON 对象（dict）。
 

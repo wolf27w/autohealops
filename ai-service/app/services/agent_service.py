@@ -11,7 +11,7 @@
 import json
 
 from app.services.model_adapter import call_with_fallback
-from app.utils.json_util import extract_json
+from app.utils.json_util import extract_json, extract_json_prefer
 
 # 单轮决策允许的最大工具调用步数（由 api-server 编排循环控制，这里仅作提示上限）
 MAX_TOOL_STEPS = 12
@@ -69,8 +69,16 @@ SYSTEM_PROMPT_ONCE = """你是 Kubernetes 应用层故障诊断专家。
 
 
 def _parse_decision(content: str) -> dict:
-    """解析 LLM 返回的决策 JSON（容忍 markdown 包裹/多余文字）"""
-    return extract_json(content, default={"action": "final_answer", "root_cause": content, "suggestions": [], "handling_advice": ""})
+    """解析 LLM 返回的决策 JSON（容忍 markdown 包裹/多余文字/多个对象）
+
+    坑：模型有时先输出思考文字 + 多个 JSON（先 describe_pod 草稿再 exec_in_pod），
+    旧的 extract_json 取首{..}尾} 会跨对象拼接→非法 JSON→退化成 final_answer 直接回显原文。
+    改为优先取**最后一个含 action 的对象**。
+    """
+    return extract_json_prefer(
+        content, prefer_key="action",
+        default={"action": "final_answer", "root_cause": content, "suggestions": [], "handling_advice": ""},
+    )
 
 
 async def decide_next_step(
