@@ -245,16 +245,16 @@ export default function AgentChat() {
 
   const renderContent = (m: Msg) => {
     if (m.role === 'user') {
-      return <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{m.content}</Paragraph>
+      return <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 15, lineHeight: 1.7 }}>{m.content}</Paragraph>
     }
     if (m.role === 'tool') {
       return (
         <Collapse size="small" ghost style={{ background: '#fff' }}>
           <Collapse.Panel
-            header={<Space size={4}><ToolOutlined style={{ color: '#722ed1' }} /><Tag color="purple">{m.tool_name || '工具'}</Tag><Text type="secondary" style={{ fontSize: 12 }}>{m.tool_args}</Text></Space>}
+            header={<Space size={4}><ToolOutlined style={{ color: '#722ed1' }} /><Tag color="purple">{m.tool_name || '工具'}</Tag><Text type="secondary" style={{ fontSize: 13 }}>{m.tool_args}</Text></Space>}
             key="1"
           >
-            <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto' }}>{m.tool_output}</pre>
+            <pre style={{ margin: 0, fontSize: 13, whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto' }}>{m.tool_output}</pre>
           </Collapse.Panel>
         </Collapse>
       )
@@ -267,7 +267,7 @@ export default function AgentChat() {
           <Tag color="red">根因</Tag>
           {fa.kb_hit ? KB_HIT_TAG : null}
           {fa.model_used ? <Tag>{fa.model_used}</Tag> : null}
-          <Text strong>{fa.root_cause || '（未给出明确根因）'}</Text>
+          <Text strong style={{ fontSize: 15 }}>{fa.root_cause || '（未给出明确根因）'}</Text>
         </Space>
         {fa.suggestions && (Array.isArray(fa.suggestions) ? fa.suggestions.length > 0 : String(fa.suggestions).length > 0) && (
           <div style={{ marginBottom: 6 }}>
@@ -313,7 +313,7 @@ export default function AgentChat() {
               <div key={day} style={{ marginBottom: 4 }}>
                 <div
                   onClick={() => setOlderOpen((p) => ({ ...p, [day]: !open }))}
-                  style={{ fontSize: 12, color: '#8c8c8c', padding: '6px 6px', cursor: 'pointer',
+                  style={{ fontSize: 13, color: '#8c8c8c', padding: '6px 6px', cursor: 'pointer',
                            display: 'flex', justifyContent: 'space-between', userSelect: 'none' }}>
                   <span>{fmtDay(day)}</span>
                   <span>{open ? '收起' : `${items.length} 条`}</span>
@@ -325,7 +325,7 @@ export default function AgentChat() {
                     style={{ cursor: 'pointer', padding: '7px 10px', borderRadius: 6, marginBottom: 2,
                              background: s.id === activeId ? '#e6f4ff' : 'transparent',
                              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <Text ellipsis style={{ fontSize: 13, flex: 1, color: '#1f1f1f' }} title={sessionName(s)}>{sessionName(s)}</Text>
+                    <Text ellipsis style={{ fontSize: 14.5, flex: 1, color: '#1f1f1f' }} title={sessionName(s)}>{sessionName(s)}</Text>
                     <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
                       <DeleteOutlined style={{ color: '#ccc', fontSize: 12 }} onClick={(e) => e.stopPropagation()} />
                     </Popconfirm>
@@ -343,14 +343,14 @@ export default function AgentChat() {
           <>
             <div style={{ padding: '12px 0', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Space>
-                <Text strong>{sessionName(activeSession)}</Text>
+                <Text strong style={{ fontSize: 16 }}>{sessionName(activeSession)}</Text>
                 <Tag color="blue">{activeSession.cluster_id ? `集群 ${activeSession.cluster_id}` : ''}</Tag>
-                <Text type="secondary">{activeSession.namespace}/{activeSession.pod_name}</Text>
+                <Text type="secondary" style={{ fontSize: 14 }}>{activeSession.namespace}/{activeSession.pod_name}</Text>
               </Space>
               <Space>
                 <Tooltip title="针对该容器定时采集 JVM 等信息，自动追加到会话（默认关）">
                   <Space size={4}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>定时采集</Text>
+                    <Text type="secondary" style={{ fontSize: 13 }}>定时采集</Text>
                     <Switch size="small" checked={!!activeSession.collect_enabled} onChange={handleCollectToggle} />
                     <Select size="small" value={activeSession.collect_interval_min || 5} style={{ width: 96 }}
                       disabled={!activeSession.collect_enabled} onChange={handleCollectInterval}
@@ -360,7 +360,7 @@ export default function AgentChat() {
                 </Tooltip>
                 <Tooltip title="默认开启：AI 多轮自主取证直接给诊断结果；关闭 = 平台预采集证据单轮快出结论">
                   <Space size={4}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>深度诊断</Text>
+                    <Text type="secondary" style={{ fontSize: 13 }}>深度诊断</Text>
                     <Switch size="small" checked={deep} onChange={setDeep} />
                   </Space>
                 </Tooltip>
@@ -387,6 +387,7 @@ export default function AgentChat() {
                     <div style={{
                       maxWidth: '78%', padding: '10px 14px', borderRadius: 8,
                       background: '#fff', color: '#1f1f1f', border: '1px solid #f0f0f0',
+                      fontSize: 15, lineHeight: 1.7,
                     }}>
                       {renderContent(m)}
                     </div>
@@ -411,6 +412,7 @@ export default function AgentChat() {
                 placeholder="描述你遇到的问题，或继续追问（如：为什么内存一直在涨？）"
                 autoSize={{ minRows: 1, maxRows: 4 }}
                 onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); handleSend() } }}
+                style={{ fontSize: 15 }}
                 disabled={activeSession.status === 'closed'}
               />
               <Button type="primary" icon={<SendOutlined />} onClick={handleSend} loading={sending} disabled={activeSession.status === 'closed'}>
