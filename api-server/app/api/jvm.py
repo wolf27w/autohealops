@@ -444,6 +444,29 @@ def _extract_jvm_params(tokens: list) -> dict:
     return out
 
 
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/ai-analyze")
+async def jvm_ai_analyze(cluster_id: int, namespace: str, pod_name: str, payload: dict,
+                         user=Depends(require_operator)):
+    """把本次 JVM 诊断采集的证据发给 AI，做应用健康综合诊断（也可单独看原始输出）"""
+    if denied := await _deny(user, cluster_id, namespace):
+        return denied
+    evidence = str(payload.get("evidence") or "")
+    if not evidence.strip():
+        return {"code": 400, "message": "evidence 必填（JVM 采集结果拼成的文本）", "data": None}
+    from app.clients.ai_client import ai_client
+    alert_data = {
+        "fault_type": "application_diagnosis",
+        "severity": str(payload.get("severity") or "high"),
+        "namespace": namespace, "pod_name": pod_name, "resource_name": pod_name,
+        "container": str(payload.get("container") or ""), "cluster_name": str(cluster_id),
+    }
+    try:
+        data = await ai_client.jvm_analyze(alert_data, {"jvm_evidence": evidence}, "")
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"JVM 综合诊断失败: {e}", "data": None}
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/deployments/{name}/params")
 async def get_deployment_jvm_params(cluster_id: int, namespace: str, name: str, container: str = "",
                                     user=Depends(require_any_user)):

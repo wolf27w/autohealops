@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Modal, Button, Select, Space, Input, message, Spin, Empty, Tag, Alert, Tooltip, Collapse } from 'antd'
 import { ReloadOutlined, BugOutlined, CopyOutlined } from '@ant-design/icons'
-import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams } from '../services/api'
+import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams, jvmAiAnalyze, type JvmAiAnalysis } from '../services/api'
 import type { JvmAction, JvmProcess, JvmDiagResult, JvmParamsContainer } from '../services/api'
 
 interface JvmPod { clusterId: number; namespace: string; name: string }
@@ -21,10 +21,13 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
   const [err, setErr] = useState('')
   const [jvmNote, setJvmNote] = useState('')
   const [params, setParams] = useState<JvmParamsContainer[]>([])
+  const [evidence, setEvidence] = useState<{ action: string; output: string }[]>([])
+  const [aiResult, setAiResult] = useState<JvmAiAnalysis | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
 
   useEffect(() => {
     if (!pod) return
-    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote('')
+    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote(''); setEvidence([]); setAiResult(null)
     getJvmActions().then(setActions).catch(() => {})
     getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers((c as unknown as { containers?: string[] }).containers || [])).catch(() => {})
     if (deployment) {
@@ -53,9 +56,22 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
     if (!pod) return
     setRunning(a.action); setErr(''); setResult(null)
     jvmDiagnose(pod.clusterId, pod.namespace, pod.name, { action: a.action, container, pid })
-      .then((d) => setResult(d))
+      .then((d) => {
+        setResult(d)
+        const out = d?.output || (d?.file_path ? `产物文件：${d.file_path}` : '')
+        if (out) setEvidence((prev) => [...prev, { action: a.label || a.action, output: out }])
+      })
       .catch((e) => setErr(String(e?.message || e)))
       .finally(() => setRunning(''))
+  }
+
+  // 一键把本次采集的 JVM 证据发给 AI 做应用健康综合诊断
+  const runAi = () => {
+    if (!pod || evidence.length === 0) return
+    setAiLoading(true); setAiResult(null)
+    const text = evidence.map((e) => `### ${e.action}\n${e.output}`).join('\n\n')
+    jvmAiAnalyze(pod.clusterId, pod.namespace, pod.name, { evidence: text, container })
+      .then(setAiResult).catch(() => setAiResult(null)).finally(() => setAiLoading(false))
   }
 
   if (!pod) return null
@@ -110,6 +126,35 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
       </div>
 
       {running && <Spin tip="诊断执行中…（jmap/jfr 可能较慢）" style={{ display: 'block', margin: '12px 0' }}><div style={{ height: 40 }} /></Spin>}
+
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Button size="small" type="primary" loading={aiLoading} disabled={evidence.length === 0} onClick={runAi}>
+          AI 综合诊断（应用健康）
+        </Button>
+        <span style={{ color: '#999', fontSize: 12 }}>已采集 {evidence.length} 项证据{evidence.length === 0 ? '（先跑几个动作）' : '，发给 AI 综合判断'}</span>
+        {evidence.length > 0 && <Button size="small" type="link" onClick={() => { setEvidence([]); setAiResult(null) }}>清空证据</Button>}
+      </Space>
+
+      {aiResult && (
+        <div style={{ border: '1px solid #d9f7be', background: '#fcfffb', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+          <Space size={6} wrap style={{ marginBottom: 6 }}>
+            <Tag color="green">AI 诊断</Tag>
+            {aiResult.risk_level && <Tag color={aiResult.risk_level === 'critical' ? 'red' : aiResult.risk_level === 'high' ? 'orange' : 'blue'}>风险：{aiResult.risk_level}</Tag>}
+            {typeof aiResult.confidence === 'number' && <Tag>置信度：{(aiResult.confidence * 100).toFixed(0)}%</Tag>}
+            {aiResult.model_used && <span style={{ color: '#999', fontSize: 12 }}>{aiResult.model_used}</span>}
+          </Space>
+          <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+            <div><b>根因：</b>{aiResult.root_cause || '-'}</div>
+            {(aiResult.suggestions || []).length > 0 && (
+              <div style={{ marginTop: 4 }}><b>建议：</b>
+                <ol style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                  {(aiResult.suggestions || []).map((s, i) => <li key={i}>{s}</li>)}
+                </ol>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {result && (
         <div>

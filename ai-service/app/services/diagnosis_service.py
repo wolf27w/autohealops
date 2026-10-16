@@ -333,3 +333,38 @@ def _parse_diagnosis_json(content: str) -> dict:
     # 归一化根因层（A/B/C/D）
     parsed["root_cause_layer"] = _normalize_layer(parsed.get("root_cause_layer"))
     return parsed
+
+
+# ===== JVM 综合诊断（JVM 弹窗「一键发 AI 诊断应用健康」）=====
+_JVM_SYSTEM_PROMPT = (
+    "你是资深 JVM 性能与稳定性专家。用户会给你一组在容器内采集的 JVM 诊断证据"
+    "（可能包含 VM 参数、堆信息、GC 类直方图、线程堆、JFR/堆转储摘要等）。"
+    "请基于这些证据对【应用健康】做综合诊断，重点判断：内存/泄漏、GC 压力与停顿、"
+    "线程池/死锁/阻塞、参数配置是否合理，以及是否可能导致探针失败/容器重启。"
+    "严格只输出 JSON：{\"root_cause\": string, \"suggestions\": [string], "
+    "\"risk_level\": \"low|medium|high|critical\", \"confidence\": number(0-1)}。"
+    "证据不足时如实说明并列「下一步建议采集」。"
+)
+
+
+async def jvm_analyze(alert_data: dict, context_data: dict | None = None) -> dict:
+    """基于已采集的 JVM 证据做综合诊断（不跑工具，只分析给定证据）"""
+    ns = _sanitize_ident(alert_data.get("namespace", ""))
+    pod = _sanitize_ident(alert_data.get("pod_name") or alert_data.get("resource_name", ""))
+    container = _sanitize_ident(alert_data.get("container", ""))
+    evidence = _sanitize_external((context_data or {}).get("jvm_evidence", "") or alert_data.get("jvm_evidence", ""))
+    severity = alert_data.get("severity", "high")
+    user_prompt = (
+        f"目标：命名空间 {ns or '-'} / Pod {pod or '-'} / 容器 {container or '-'}\n"
+        f"JVM 诊断证据如下（逐项动作输出）：\n\n{evidence or '（无证据）'}\n\n"
+        "请给出应用健康综合诊断（JSON）。"
+    )
+    resp, model_used = await call_with_fallback(_JVM_SYSTEM_PROMPT + _INPUT_BOUNDARY_GUARD, user_prompt, "diagnosis", severity)
+    parsed = _parse_diagnosis_json(resp.content)
+    return {
+        "root_cause": parsed.get("root_cause", ""),
+        "suggestions": parsed.get("suggestions", []),
+        "risk_level": parsed.get("risk_level", "low"),
+        "confidence": parsed.get("confidence", 0.0),
+        "model_used": model_used,
+    }

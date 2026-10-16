@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from app.services.agent_service import decide_next_step, diagnose_once
-from app.services.diagnosis_service import diagnose_alert, multi_diagnose
+from app.services.diagnosis_service import diagnose_alert, multi_diagnose, jvm_analyze
 from app.services.plan_service import generate_plan
 from app.services.verification_service import verify_repair
 
@@ -18,6 +18,16 @@ async def diagnose(payload: dict):
         return {"code": 200, "message": "success", "data": data}
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"诊断失败: {e}", "data": None}
+
+
+@router.post("/jvm-analyze")
+async def jvm_analyze_endpoint(payload: dict):
+    """JVM 综合诊断（基于已采集的 JVM 证据）"""
+    try:
+        data = await jvm_analyze(payload.get("alert_data", {}), payload.get("context_data"))
+        return {"code": 200, "message": "success", "data": data}
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"JVM 诊断失败: {e}", "data": None}
 
 
 @router.post("/multi-diagnose")

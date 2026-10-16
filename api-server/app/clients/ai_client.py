@@ -33,6 +33,10 @@ class AIClient:
     async def diagnose(self, alert_id: int, alert_data: dict, context_data: dict = None, trace_id: str = "") -> dict:
         return await self._post("/api/v1/ai/diagnose", {"alert_id": alert_id, "alert_data": alert_data, "context_data": context_data}, trace_id)
 
+    async def jvm_analyze(self, alert_data: dict, context_data: dict = None, trace_id: str = "") -> dict:
+        """JVM 综合诊断（基于已采集的 JVM 证据，不跑工具）"""
+        return await self._post("/api/v1/ai/jvm-analyze", {"alert_data": alert_data, "context_data": context_data}, trace_id)
+
     async def multi_diagnose(self, alert_id: int, alert_data: dict, context_data: dict = None, trace_id: str = "") -> dict:
         return await self._post("/api/v1/ai/multi-diagnose", {"alert_id": alert_id, "alert_data": alert_data, "context_data": context_data}, trace_id)
 

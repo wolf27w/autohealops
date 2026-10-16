@@ -527,6 +527,10 @@ export const getJvmProcesses = (clusterId: number, ns: string, pod: string, cont
   http.get<{ raw: string; processes: JvmProcess[]; backend?: string; hint?: string }>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/processes`, { params: { container } })
 export const jvmDiagnose = (clusterId: number, ns: string, pod: string, payload: Payload) =>
   http.post<JvmDiagResult>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/diagnose`, payload)
+// JVM 综合诊断（把已采集的 JVM 证据发 AI 做应用健康诊断）
+export interface JvmAiAnalysis { root_cause?: string; suggestions?: string[]; risk_level?: string; confidence?: number; model_used?: string }
+export const jvmAiAnalyze = (clusterId: number, ns: string, pod: string, payload: { evidence: string; container?: string; severity?: string }) =>
+  http.post<JvmAiAnalysis>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/ai-analyze`, payload)
 
 export interface JvmParams { xms: string | null; xmx: string | null; xss: string | null; max_metaspace: string | null; others: string[] }
 export interface JvmParamsContainer { container: string; image: string; params: JvmParams; command: string[]; args: string[] }
