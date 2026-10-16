@@ -66,6 +66,88 @@ def _kubeconfig_credential(kubeconfig: str):
         return "unknown", None
 
 
+def _parse_kubeconfig_contexts(kubeconfig: str) -> list[dict]:
+    """解析 kubeconfig 里所有 context（name/cluster/server/user）"""
+    try:
+        import yaml as _yaml
+        doc = _yaml.safe_load(kubeconfig) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    clusters = {c.get("name"): c.get("cluster") or {} for c in (doc.get("clusters") or [])}
+    out = []
+    for ctx in doc.get("contexts") or []:
+        c = ctx.get("context") or {}
+        cn = c.get("cluster")
+        out.append({"name": ctx.get("name"), "cluster": cn,
+                    "server": (clusters.get(cn) or {}).get("server", ""), "user": c.get("user")})
+    return out
+
+
+def _synthesize_kubeconfig(kubeconfig: str, context_name: str) -> str:
+    """从整份 kubeconfig 抽出单个 context，生成单集群 kubeconfig（多 context 批量接入用）"""
+    try:
+        import yaml as _yaml
+        doc = _yaml.safe_load(kubeconfig) or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    ctx = next((c for c in (doc.get("contexts") or []) if c.get("name") == context_name), None)
+    if not ctx:
+        return ""
+    c = ctx.get("context") or {}
+    cn, un = c.get("cluster"), c.get("user")
+    clusters = [x for x in (doc.get("clusters") or []) if x.get("name") == cn]
+    users = [x for x in (doc.get("users") or []) if x.get("name") == un]
+    out = {"apiVersion": "v1", "kind": "Config", "clusters": clusters, "users": users,
+           "contexts": [ctx], "current-context": context_name}
+    return _yaml.safe_dump(out, allow_unicode=True, default_flow_style=False)
+
+
+@router.post("/parse-kubeconfig")
+async def parse_kubeconfig(payload: dict, user=Depends(require_admin)):
+    """解析 kubeconfig 的 context 列表（多集群批量接入前预览勾选用）"""
+    kc = payload.get("kubeconfig", "")
+    if not kc.strip():
+        return {"code": 400, "message": "kubeconfig 必填", "data": None}
+    ctxs = _parse_kubeconfig_contexts(kc)
+    return {"code": 200, "message": "success", "data": {"contexts": ctxs, "count": len(ctxs)}}
+
+
+@router.post("/import-multi")
+async def import_multi(payload: dict, user=Depends(require_admin)):
+    """多 context 批量接入：kubeconfig + 勾选的 context 名列表 → 每个 context 建一条 Cluster"""
+    kubeconfig = payload.get("kubeconfig", "")
+    ctx_names = [str(x) for x in (payload.get("contexts") or [])]
+    env_tag = payload.get("env_tag", "prod")
+    if env_tag not in ("qa", "release", "prod"):
+        env_tag = "prod"
+    if not kubeconfig.strip() or not ctx_names:
+        return {"code": 400, "message": "kubeconfig 与 contexts 必填", "data": None}
+    created, skipped = [], []
+    async with async_session() as session:
+        for ctx_name in ctx_names:
+            kc = _synthesize_kubeconfig(kubeconfig, ctx_name)
+            server_url = _kubeconfig_server(kc)
+            if server_url and (await session.execute(
+                select(Cluster).where(Cluster.api_server_url == server_url)
+            )).scalar_one_or_none():
+                skipped.append({"context": ctx_name, "reason": "已接入"})
+                continue
+            cred_type, cred_exp = _kubeconfig_credential(kc)
+            name = ctx_name
+            i = 2
+            while (await session.execute(select(Cluster).where(Cluster.name == name))).scalar_one_or_none():
+                name = f"{ctx_name}-{i}"
+                i += 1
+            cl = Cluster(name=name, description="", kubeconfig_encrypted=encrypt_aes256_gcm(kc),
+                         env_tag=env_tag, source="kubeconfig", api_server_url=server_url,
+                         cred_type=cred_type, cred_expires_at=cred_exp, status="unknown")
+            session.add(cl)
+            await session.flush()
+            created.append({"id": cl.id, "name": name})
+        await session.commit()
+    return {"code": 200, "message": "success", "data": {"created": created, "skipped": skipped}}
+
+
 @router.post("")
 async def create_cluster(payload: dict, user=Depends(require_admin)):
     """添加集群（admin；加密存 kubeconfig + 环境标签 + 健康检查 + 启动 watch）"""

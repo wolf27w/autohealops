@@ -1,9 +1,9 @@
 // 集群管理页：列表 + 添加（kubeconfig 上传落库）+ 健康检查 + 删除 + env_tag
 import { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown } from 'antd'
+import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown, Checkbox } from 'antd'
 import { PlusOutlined, ReloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig } from '../services/api'
+import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters } from '../services/api'
 import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
@@ -38,6 +38,12 @@ export default function ClusterList() {
   const [form] = Form.useForm()
   const [kubeconfig, setKubeconfig] = useState('')
   const [newKubeconfig, setNewKubeconfig] = useState('')
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchKc, setBatchKc] = useState('')
+  const [batchCtxs, setBatchCtxs] = useState<{ name: string; server: string }[]>([])
+  const [batchSel, setBatchSel] = useState<string[]>([])
+  const [batchEnv, setBatchEnv] = useState('prod')
+  const [batchBusy, setBatchBusy] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -96,10 +102,36 @@ export default function ClusterList() {
     load()
   }
 
+  const handleParseKc = async () => {
+    if (!batchKc.trim()) { message.warning('请先粘贴 kubeconfig'); return }
+    setBatchBusy(true)
+    try {
+      const d = await parseClusterKubeconfig(batchKc.trim()) as { contexts?: { name: string; server: string }[] }
+      setBatchCtxs(d.contexts || [])
+      setBatchSel([])
+      if (!(d.contexts || []).length) message.info('未解析到任何 context')
+    } catch { /* 拦截器已提示 */ } finally { setBatchBusy(false) }
+  }
+
+  const handleImportMulti = async () => {
+    if (batchSel.length === 0) { message.warning('请勾选要接入的 context'); return }
+    setBatchBusy(true)
+    try {
+      const d = await importMultiClusters({ kubeconfig: batchKc.trim(), contexts: batchSel, env_tag: batchEnv }) as { created?: unknown[]; skipped?: unknown[] }
+      const created = (d.created || []).length
+      const skipped = (d.skipped || []).length
+      message.success(`已接入 ${created} 个${skipped ? `，跳过 ${skipped} 个（已接入）` : ''}`)
+      setBatchOpen(false)
+      setBatchKc(''); setBatchCtxs([]); setBatchSel([])
+      load()
+    } catch { /* 拦截器已提示 */ } finally { setBatchBusy(false) }
+  }
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加集群</Button>
+        <Button onClick={() => { setBatchOpen(true); setBatchKc(''); setBatchCtxs([]); setBatchSel([]); setBatchEnv('prod') }}>批量接入（多 context）</Button>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       </Space>
       <Table
@@ -214,6 +246,34 @@ export default function ClusterList() {
               >
                 <Button icon={<PlusOutlined />}>选择 kubeconfig 文件</Button>
               </Upload>
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+
+      {/* 批量接入（多 context） */}
+      <Modal title="批量接入（kubeconfig 多 context）" open={batchOpen} onCancel={() => setBatchOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setBatchOpen(false)}>取消</Button>,
+          <Button key="import" type="primary" loading={batchBusy} disabled={batchSel.length === 0} onClick={handleImportMulti}>批量接入</Button>,
+        ]} width={640}>
+        <Form layout="vertical">
+          <Form.Item label="kubeconfig（粘贴）" required>
+            <Input.TextArea rows={6} style={{ fontFamily: 'monospace', fontSize: 12 }} value={batchKc} onChange={(e) => setBatchKc(e.target.value)} placeholder="粘贴整份 kubeconfig（可含多个 context）" />
+          </Form.Item>
+          <Space style={{ marginBottom: 8 }}>
+            <Button onClick={handleParseKc} loading={batchBusy}>解析 context</Button>
+            <Select value={batchEnv} onChange={setBatchEnv} style={{ width: 140 }} options={[
+              { value: 'qa', label: 'qa（测试）' }, { value: 'release', label: 'release（预发）' }, { value: 'prod', label: 'prod（生产）' },
+            ]} />
+          </Space>
+          {batchCtxs.length > 0 && (
+            <Form.Item label={`选择要接入的 context（共 ${batchCtxs.length} 个）`}>
+              <Checkbox.Group value={batchSel} onChange={(v) => setBatchSel(v as string[])} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {batchCtxs.map((c) => (
+                  <Checkbox key={c.name} value={c.name}>{c.name}<span style={{ color: '#999', fontSize: 12 }}>　{c.server || ''}</span></Checkbox>
+                ))}
+              </Checkbox.Group>
             </Form.Item>
           )}
         </Form>

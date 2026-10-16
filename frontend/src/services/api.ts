@@ -69,6 +69,10 @@ export const deleteCluster = (id: number) => http.delete(`/clusters/${id}`)
 export const healthCheckCluster = (id: number) => http.post(`/clusters/${id}/health-check`)
 // 一键更新凭据：粘贴新 kubeconfig 覆盖（不删集群不丢历史）
 export const replaceClusterKubeconfig = (id: number, kubeconfig: string) => http.put(`/clusters/${id}/kubeconfig`, { kubeconfig })
+// 解析 kubeconfig 的 context 列表（批量接入前预览）
+export const parseClusterKubeconfig = (kubeconfig: string) => http.post('/clusters/parse-kubeconfig', { kubeconfig })
+// 多 context 批量接入
+export const importMultiClusters = (data: { kubeconfig: string; contexts: string[]; env_tag: string }) => http.post('/clusters/import-multi', data)
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })
