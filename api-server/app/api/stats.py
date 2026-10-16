@@ -643,6 +643,9 @@ async def _compute_dashboard(
                                            Alert.status == "self_healed").limit(50000))
         )).scalars().all()
         auto_processed_24h = len(set(healed_1y_ids) | acted_alert_ids)
+        # C1 定稿（2026-10-16）：拆分「有动作」vs「无动作自愈」，便于对账与卡片展示
+        auto_processed_with_action = len(acted_alert_ids)
+        auto_healed_without_action = len(set(healed_1y_ids) - acted_alert_ids)
 
         timeline_rows = (await session.execute(
             _filter(exec_join.order_by(ExecutionLog.id.desc()).limit(6))
@@ -677,6 +680,8 @@ async def _compute_dashboard(
             "cluster_total": c_total,
             "alert_pending": active_filtered,
             "auto_processed_24h": auto_processed_24h,
+            "auto_processed_with_action": auto_processed_with_action,
+            "auto_healed_without_action": auto_healed_without_action,
             "manual_pending": manual_filtered,
             "db_abnormal": db_abnormal,
             "heal_rate": kpi_heal_rate,
@@ -1026,6 +1031,8 @@ async def _compute_dashboard(
         "abnormal_pods": abnormal_pods,
         "db_health": db_health,
         "action_stat": action_stat,
+        "action_alert_count": auto_processed_with_action,
+        "action_healed_without_action": auto_healed_without_action,
         "action_failed": action_failed,
         "action_timeline": action_timeline,
         "cluster_waterline": cluster_waterline,

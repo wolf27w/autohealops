@@ -164,6 +164,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const abnormalPods: AbnormalPod[] = data?.abnormal_pods ?? []
   const dbHealth: DbHealthItem[] = data?.db_health ?? []
   const actionStat = data?.action_stat ?? { self_heal: 0, restart: 0, scale: 0, rollback: 0 }
+  const actionAlertCount = (data?.action_alert_count as number | undefined) ?? 0
+  const actionHealedWithoutAction = (data?.action_healed_without_action as number | undefined) ?? 0
   const timeline: ActionTimelineItem[] = data?.action_timeline ?? []
   const waterline: ClusterWaterline[] = data?.cluster_waterline ?? []
 
@@ -453,7 +455,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
       {/* ===== 第 6 段 · 自动处理动作统计/时间线（1/2） + 集群资源水位 Top（1/2） ===== */}
       <Row gutter={[12, 12]} align="stretch">
         <Col xs={24} lg={12}>
-          <Card title="自动处理（最近 24 小时）" size="small" style={{ height: '100%' }}>
+          <Card title="自动处理动作（最近 24 小时）" size="small" style={{ height: '100%' }}>
             <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
               {actionItems.map((a) => (
                 <Col key={a.key} span={6}>
@@ -467,6 +469,10 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
                 </Col>
               ))}
             </Row>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 6, color: muted, fontSize: 12 }}>
+              <span>涉及告警 <b style={{ color: '#13c2c2' }}>{actionAlertCount}</b> 条</span>
+              <span>其中平台标记自愈（无动作）<b style={{ color: '#faad14' }}>{actionHealedWithoutAction}</b> 条</span>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: muted, fontSize: 12 }}>
               <ThunderboltOutlined /> 最近动作时间线（倒序）
             </div>
