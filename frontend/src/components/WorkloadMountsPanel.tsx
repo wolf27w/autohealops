@@ -4,7 +4,7 @@
 // props.onlySection 传 'storage' | 'env' 时只渲染单块，不传则内部用 Tabs
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Space, Table, Tag, Modal, Form, Select, Input, Switch, Popconfirm, message, Empty, Spin, Typography, Alert, Tabs, Radio, Divider } from 'antd'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons'
 import {
   getWorkloadMounts, addWorkloadMount, removeWorkloadMount, editWorkloadMount,
   replaceWorkloadEnv, deleteWorkloadEnv, getMiscResources, getObjectDetail, type AddMountPayload,
@@ -59,6 +59,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   const [volModal, setVolModal] = useState<{ open: boolean; edit?: VolumeInfo }>({ open: false })
   const [envFromModal, setEnvFromModal] = useState<{ open: boolean; edit?: EnvRef }>({ open: false })
   const [envEdit, setEnvEdit] = useState<{ open: boolean; container: string; rows: EnvRow[] }>({ open: false, container: '', rows: [] })
+  const [content, setContent] = useState<{ open: boolean; title: string; loading: boolean; rows: { key: string; value: string }[] }>({ open: false, title: '', loading: false, rows: [] })
   const [volForm] = Form.useForm()
   const [envFromForm] = Form.useForm()
 
@@ -129,6 +130,20 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
     else envFromForm.setFieldsValue({ env_type: 'configMap', containers: [] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envFromModal.open, envFromModal.edit])
+
+  // 查看配置内容（配置字典/密钥的 key → value）
+  const openContent = async (t: MountType, name: string) => {
+    const kind = t === 'configMap' ? 'configmap' : 'secret'
+    setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: true, rows: [] })
+    try {
+      const d = await getObjectDetail(clusterId, kind, namespace, name)
+      const data = ((d as { data?: Record<string, string> }).data) || {}
+      setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: false,
+        rows: Object.entries(data).map(([key, value]) => ({ key, value: String(value ?? '') })) })
+    } catch {
+      setContent({ open: true, title: `${typeLabel(t)}：${name}`, loading: false, rows: [] })
+    }
+  }
 
   // ---------- 卷 ----------
   const openAddVol = () => { volForm.resetFields(); setVolModal({ open: true }) }
@@ -370,6 +385,18 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
                         options={withCurrent(optionsFor(t), volModal.edit ? volModal.edit.source : undefined)} optionFilterProp="label" notFoundContent="该命名空间下没有可选资源" />
                     </Form.Item>
                   )}
+                  {(t === 'configMap' || t === 'secret') && (
+                    <Form.Item noStyle shouldUpdate={(p, c) => p.source_name !== c.source_name}>
+                      {({ getFieldValue }) => {
+                        const sn = getFieldValue('source_name') as string | undefined
+                        return sn ? (
+                          <div style={{ margin: '-14px 0 8px' }}>
+                            <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => openContent(t, sn)}>查看配置内容</Button>
+                          </div>
+                        ) : null
+                      }}
+                    </Form.Item>
+                  )}
                   <Form.Item name="mount_path" label="挂载路径（容器内）" rules={[{ required: true, message: '请填写容器内路径' }, { pattern: /^\//, message: '必须是绝对路径（以 / 开头）' }]}>
                     <Input placeholder="/data" />
                   </Form.Item>
@@ -439,6 +466,24 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           逐行编辑后点「保存」整份写入该容器的 env（空行忽略；同名会报错）。改单个 key 引用可直接改上面行的来源/key。
         </Typography.Text>
+      </Modal>
+
+      {/* 查看配置内容 */}
+      <Modal title={content.title} open={content.open} onCancel={() => setContent({ open: false, title: '', loading: false, rows: [] })}
+        footer={null} width={760} forceRender>
+        {content.loading ? (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}><Spin /></div>
+        ) : content.rows.length === 0 ? (
+          <Empty description="无数据项" />
+        ) : (
+          <Table rowKey="key" size="small" pagination={false} dataSource={content.rows}
+            columns={[
+              { title: 'Key', dataIndex: 'key', width: 240 },
+              { title: 'Value', dataIndex: 'value', render: (v: string) => (
+                <Typography.Text style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>{v || '-'}</Typography.Text>
+              ) },
+            ]} />
+        )}
       </Modal>
 
       {/* 注入/编辑 envFrom */}
