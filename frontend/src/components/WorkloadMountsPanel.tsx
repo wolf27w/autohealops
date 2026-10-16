@@ -100,18 +100,39 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   }
   const cmSecretOptions = (t: EnvType) => (t === 'configMap' ? misc.configmaps : misc.secrets).map((x) => ({ value: x.name, label: x.name }))
 
+  // 选项：把当前值也包进 options（否则值不在列表时 Select 可能显示空白）
+  const withCurrent = (opts: { value: string; label: string }[], cur?: string) =>
+    cur && !opts.some((o) => o.value === cur) ? [{ value: cur, label: cur }, ...opts] : opts
+
+  // 卷弹窗：打开后再回填（避免在字段挂载前 setFieldsValue 丢失值）
+  useEffect(() => {
+    if (!volModal.open) return
+    const v = volModal.edit
+    if (v) {
+      const rows = mountsOfVolume(v.name)
+      volForm.setFieldsValue({
+        type: volTypeToMount(v.type), source_name: v.type === 'emptyDir' ? undefined : v.source,
+        mount_path: rows[0]?.mount_path, sub_path: rows[0]?.sub_path, read_only: !!rows[0]?.read_only,
+        containers: containersOfVolume(v.name), volume_name: v.name,
+      })
+    } else {
+      volForm.setFieldsValue({ type: 'pvc', read_only: false, containers: [] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volModal.open, volModal.edit])
+
+  // envFrom 弹窗：打开后再回填
+  useEffect(() => {
+    if (!envFromModal.open) return
+    const e = envFromModal.edit
+    if (e) envFromForm.setFieldsValue({ env_type: e.source_type, source_name: e.source_name, prefix: e.prefix, containers: [e.container] })
+    else envFromForm.setFieldsValue({ env_type: 'configMap', containers: [] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [envFromModal.open, envFromModal.edit])
+
   // ---------- 卷 ----------
-  const openAddVol = () => { setVolModal({ open: true }); volForm.resetFields(); volForm.setFieldsValue({ type: 'pvc', read_only: false, containers: [] }) }
-  const openEditVol = (v: VolumeInfo) => {
-    const rows = mountsOfVolume(v.name)
-    setVolModal({ open: true, edit: v })
-    volForm.resetFields()
-    volForm.setFieldsValue({
-      type: volTypeToMount(v.type), source_name: v.type === 'emptyDir' ? undefined : v.source,
-      mount_path: rows[0]?.mount_path, sub_path: rows[0]?.sub_path, read_only: !!rows[0]?.read_only,
-      containers: containersOfVolume(v.name), volume_name: v.name,
-    })
-  }
+  const openAddVol = () => { volForm.resetFields(); setVolModal({ open: true }) }
+  const openEditVol = (v: VolumeInfo) => { volForm.resetFields(); setVolModal({ open: true, edit: v }) }
   const submitVol = async () => {
     const v = await volForm.validateFields()
     const t: MountType = v.type
@@ -211,8 +232,8 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   }
 
   // ---------- envFrom ----------
-  const openAddEnvFrom = () => { setEnvFromModal({ open: true }); envFromForm.resetFields(); envFromForm.setFieldsValue({ env_type: 'configMap', containers: [] }) }
-  const openEditEnvFrom = (e: EnvRef) => { setEnvFromModal({ open: true, edit: e }); envFromForm.resetFields(); envFromForm.setFieldsValue({ env_type: e.source_type, source_name: e.source_name, prefix: e.prefix, containers: [e.container] }) }
+  const openAddEnvFrom = () => { envFromForm.resetFields(); setEnvFromModal({ open: true }) }
+  const openEditEnvFrom = (e: EnvRef) => { envFromForm.resetFields(); setEnvFromModal({ open: true, edit: e }) }
   const submitEnvFrom = async () => {
     const v = await envFromForm.validateFields()
     setSubmitting(true)
@@ -346,7 +367,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
                   {t && t !== 'emptyDir' && (
                     <Form.Item name="source_name" label="来源" rules={[{ required: true, message: '请选择来源' }]}>
                       <Select showSearch placeholder={`选择命名空间 ${namespace} 下的${typeLabel(t)}`}
-                        options={optionsFor(t)} optionFilterProp="label" notFoundContent="该命名空间下没有可选资源" />
+                        options={withCurrent(optionsFor(t), volModal.edit ? volModal.edit.source : undefined)} optionFilterProp="label" notFoundContent="该命名空间下没有可选资源" />
                     </Form.Item>
                   )}
                   <Form.Item name="mount_path" label="挂载路径（容器内）" rules={[{ required: true, message: '请填写容器内路径' }, { pattern: /^\//, message: '必须是绝对路径（以 / 开头）' }]}>
@@ -434,7 +455,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
           <Form.Item noStyle shouldUpdate={(p, c) => p.env_type !== c.env_type}>
             {({ getFieldValue }) => (
               <Form.Item name="source_name" label="来源" rules={[{ required: true, message: '请选择来源' }]}>
-                <Select showSearch placeholder="选择来源" options={optionsFor(getFieldValue('env_type'))} optionFilterProp="label"
+                <Select showSearch placeholder="选择来源" options={withCurrent(optionsFor(getFieldValue('env_type')), envFromModal.edit?.source_name)} optionFilterProp="label"
                   notFoundContent="该命名空间下没有可选资源" disabled={!!envFromModal.edit} />
               </Form.Item>
             )}
