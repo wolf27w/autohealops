@@ -138,9 +138,18 @@ async def list_sessions(user=Depends(require_any_user)):
                 continue
             counts[k] = 0
         merged.append(x)
+    # 集群 id → (name, env_tag)
+    cids = {x.cluster_id for x in merged if x.cluster_id}
+    cluster_info: dict[int, tuple[str, str]] = {}
+    if cids:
+        async with async_session() as s2:
+            for c in (await s2.execute(select(Cluster).where(Cluster.id.in_(cids)))).scalars():
+                cluster_info[c.id] = (c.name, c.env_tag or "")
     return {"code": 200, "message": "success", "data": [
         {"id": x.id, "cluster_id": x.cluster_id, "namespace": x.namespace,
          "pod_name": x.pod_name, "title": x.title, "status": x.status,
+         "cluster_name": cluster_info.get(x.cluster_id, ("", ""))[0] if x.cluster_id else "",
+         "env_tag": cluster_info.get(x.cluster_id, ("", ""))[1] if x.cluster_id else "",
          "source": getattr(x, "source", "agent") or "agent",
          "merged_count": counts.get((x.cluster_id, x.namespace, x.pod_name), 0)
                           if (getattr(x, "source", "agent") or "agent") == "proactive" else 0,

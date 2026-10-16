@@ -170,6 +170,7 @@ export default function Tickets() {
       render: (v: string) => <Tag color={STATUS_COLOR[v]}>{STATUS_LABEL[v] ?? v}</Tag>,
     },
     { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v: string) => v || '-' },
+    { title: '环境', dataIndex: 'env_tag', width: 90, render: (v: string) => v ? <Tag color={v === 'qa' ? 'green' : v === 'release' ? 'orange' : 'red'}>{v}</Tag> : '-' },
     { title: '数据库', dataIndex: 'db_name', width: 130, render: (v: string) => v || '-' },
     { title: '资源', dataIndex: 'resource_name', width: 160, render: (v: string) => v || '-' },
     { title: '处理人', dataIndex: 'assignee_name', width: 100, render: (v: string) => v || '-' },

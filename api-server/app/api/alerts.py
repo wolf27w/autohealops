@@ -26,6 +26,7 @@ logger = get_logger("api-server.alerts")
 @router.get("")
 async def list_alerts(cluster_id: int | None = None, severity: str | None = None, status: str | None = None,
                       fault_type: str | None = None, manual_required: bool | None = None,
+                      env_tag: str | None = None,
                       page: int = 1, page_size: int = 20, with_total: bool = False,
                       group: bool = True,
                       user=Depends(require_any_user)):
@@ -53,6 +54,11 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             conditions.append(Alert.status == "pending")
         if fault_type:
             conditions.append(Alert.fault_type == fault_type)
+        if env_tag:
+            env_ids = [c.id for c in (await session.execute(
+                select(Cluster.id).where(Cluster.env_tag == env_tag)
+            )).scalars()]
+            conditions.append(Alert.cluster_id.in_(env_ids) if env_ids else Alert.cluster_id == -1)
         if manual_required is not None:
             conditions.append(Alert.manual_required == manual_required)
         if conditions:
@@ -84,8 +90,9 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             result = await session.execute(query.offset((page - 1) * page_size).limit(page_size))
             alerts = list(result.scalars())
         # 查集群名称（多集群区分）
-        cluster_result = await session.execute(select(Cluster))
-        cluster_names = {c.id: c.name for c in cluster_result.scalars()}
+        cluster_rows = list((await session.execute(select(Cluster))).scalars())
+        cluster_names = {c.id: c.name for c in cluster_rows}
+        cluster_envs = {c.id: c.env_tag for c in cluster_rows}
         # 审批状态（用于「已审核/已驳回」展示）：优先 alert_id 直连，其次经 repair_plans 关联
         ap_status_by_alert: dict[int, str] = {}
         if alerts:
@@ -106,6 +113,7 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
                     ap_status_by_alert[aid] = ap.status
     items = [
         {"id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
+         "env_tag": cluster_envs.get(a.cluster_id, ""),
          "resource_type": a.resource_type, "resource_name": a.resource_name,
          "namespace": a.namespace, "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
          "approval_status": ap_status_by_alert.get(a.id, ""),

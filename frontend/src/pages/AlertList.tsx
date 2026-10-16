@@ -15,6 +15,7 @@ const CONTAINER_FAULTS = ['CrashLoopBackOff', 'OOMKilled', 'ImagePullBackOff', '
 export default function AlertList() {
   const [severity, setSeverity] = useState<string>()
   const [status, setStatus] = useState<string>()
+  const [env, setEnv] = useState<string>()
   const [manualOnly, setManualOnly] = useState<boolean | undefined>()
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
@@ -35,8 +36,8 @@ export default function AlertList() {
 
   // react-query：告警列表查询（5s 轮询 + 缓存 + 筛选变化自动重查；服务端分页）
   const { data: alertsData, isLoading: loading, refetch } = useQuery({
-    queryKey: ['alerts', severity, status, manualOnly, page],
-    queryFn: () => getAlertsPaged({ severity, status, manual_required: manualOnly, page, page_size: PAGE_SIZE }),
+    queryKey: ['alerts', severity, status, env, manualOnly, page],
+    queryFn: () => getAlertsPaged({ severity, status, env_tag: env, manual_required: manualOnly, page, page_size: PAGE_SIZE }),
     refetchInterval: 5000,
   })
   const alerts = alertsData?.items ?? []
@@ -142,6 +143,8 @@ export default function AlertList() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
+        <Select placeholder="环境" allowClear style={{ width: 120 }} onChange={(v) => { setEnv(v); setPage(1) }}
+          options={[{ value: 'qa', label: 'qa' }, { value: 'release', label: 'release' }, { value: 'prod', label: 'prod' }]} />
         <Select placeholder="严重级别" allowClear style={{ width: 140 }} onChange={(v) => { setSeverity(v); setPage(1) }}
           options={['critical', 'high', 'medium', 'low'].map((s) => ({ value: s, label: s }))} />
         <Select placeholder="状态" allowClear style={{ width: 140 }} onChange={(v) => { setStatus(v); setPage(1) }}
@@ -174,6 +177,7 @@ export default function AlertList() {
         }}
         columns={[
           { title: '集群', dataIndex: 'cluster_name', render: (v) => v || '-' },
+          { title: '环境', dataIndex: 'env_tag', width: 90, render: (v) => v ? <Tag color={v === 'qa' ? 'green' : v === 'release' ? 'orange' : 'red'}>{v}</Tag> : '-' },
           { title: '资源', dataIndex: 'resource_name' },
           { title: '类型', dataIndex: 'resource_type' },
           { title: '命名空间', dataIndex: 'namespace' },

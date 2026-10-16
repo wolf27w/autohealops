@@ -59,10 +59,12 @@ async def generate_ticket_no() -> str:
 
 def _serialize_ticket(t: Ticket, user_map: dict[int, str] | None = None,
                       cluster_map: dict[int, str] | None = None,
-                      db_map: dict[int, str] | None = None) -> dict:
+                      db_map: dict[int, str] | None = None,
+                      env_map: dict[int, str] | None = None) -> dict:
     user_map = user_map or {}
     cluster_map = cluster_map or {}
     db_map = db_map or {}
+    env_map = env_map or {}
     return {
         "id": t.id,
         "ticket_no": t.ticket_no,
@@ -73,6 +75,7 @@ def _serialize_ticket(t: Ticket, user_map: dict[int, str] | None = None,
         "approval_id": t.approval_id,
         "cluster_id": t.cluster_id,
         "cluster_name": cluster_map.get(t.cluster_id, "") if t.cluster_id else "",
+        "env_tag": env_map.get(t.cluster_id, "") if t.cluster_id else "",
         "db_connection_id": t.db_connection_id,
         "db_name": db_map.get(t.db_connection_id, "") if t.db_connection_id else "",
         "namespace": t.namespace or "",
@@ -118,6 +121,15 @@ async def _resolve_cluster_names(cluster_ids: set[int]) -> dict[int, str]:
     async with async_session() as session:
         result = await session.execute(select(Cluster.id, Cluster.name).where(Cluster.id.in_(ids)))
         return {row[0]: row[1] for row in result.all()}
+
+
+async def _resolve_cluster_envs(cluster_ids: set[int]) -> dict[int, str]:
+    ids = {i for i in cluster_ids if i}
+    if not ids:
+        return {}
+    async with async_session() as session:
+        result = await session.execute(select(Cluster.id, Cluster.env_tag).where(Cluster.id.in_(ids)))
+        return {row[0]: row[1] or "" for row in result.all()}
 
 async def _resolve_db_names(db_ids: set[int]) -> dict[int, str]:
     """数据库连接 id → 名称（DB 类工单展示用）"""
@@ -881,8 +893,9 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
     db_ids = {t.db_connection_id for t in tickets}
     user_map = await _resolve_usernames(user_ids)
     cluster_map = await _resolve_cluster_names(cluster_ids)
+    env_map = await _resolve_cluster_envs(cluster_ids)
     db_map = await _resolve_db_names(db_ids)
-    items = [_serialize_ticket(t, user_map, cluster_map, db_map) for t in tickets]
+    items = [_serialize_ticket(t, user_map, cluster_map, db_map, env_map) for t in tickets]
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -956,9 +969,10 @@ async def get_ticket(ticket_id: int, user) -> dict | None:
     db_ids = {t.db_connection_id}
     user_map = await _resolve_usernames(user_ids)
     cluster_map = await _resolve_cluster_names(cluster_ids)
+    env_map = await _resolve_cluster_envs(cluster_ids)
     db_map = await _resolve_db_names(db_ids)
     return {
-        "ticket": _serialize_ticket(t, user_map, cluster_map, db_map),
+        "ticket": _serialize_ticket(t, user_map, cluster_map, db_map, env_map),
         "comments": [_serialize_comment(c) for c in comments],
     }
 
