@@ -8,9 +8,12 @@ import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
 const ENV_TAG_COLOR: Record<string, string> = { qa: 'green', release: 'orange', prod: 'red' }
+const SOURCE_LABEL: Record<string, string> = { kubeconfig: 'kubeconfig', 'in-cluster': '集群内', agent: 'Agent' }
+const SOURCE_COLOR: Record<string, string> = { kubeconfig: 'default', 'in-cluster': 'blue', agent: 'cyan' }
 
 type ClusterWithExtra = Cluster & {
   env_tag?: string
+  source?: string
   description?: string
   rbac_status?: string
   version?: string
@@ -100,6 +103,7 @@ export default function ClusterList() {
             </Tooltip>
           ) },
           { title: '环境', dataIndex: 'env_tag', render: (t) => <Tag color={ENV_TAG_COLOR[t] || 'default'}>{t}</Tag> },
+          { title: '接入方式', dataIndex: 'source', render: (s) => <Tag color={SOURCE_COLOR[s] || 'default'}>{SOURCE_LABEL[s] || s || 'kubeconfig'}</Tag> },
           { title: 'RBAC', dataIndex: 'rbac_mode', render: (m, record) => (
             <span title={record.rbac_status}>
               <Tag color={RBAC_MODE_COLOR[m] || 'default'}>{RBAC_MODE_LABEL[m] || m || '未接入'}</Tag>

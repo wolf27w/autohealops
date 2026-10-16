@@ -22,6 +22,10 @@ class Cluster(Base):
     version: Mapped[str] = mapped_column(String(50), default="")
     # 环境标签：qa(测试)/release(预生产)/prod(生产)，admin 创建/编辑集群时配置，一个集群一个环境
     env_tag: Mapped[str] = mapped_column(String(20), default="prod", index=True)
+    # 接入方式（集群接入三方式）：kubeconfig / in-cluster / agent
+    source: Mapped[str] = mapped_column(String(20), default="kubeconfig", server_default="kubeconfig")
+    # kubeconfig 首个 context 的 server URL（幂等键，空=未解析）
+    api_server_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
     # 维护窗口配置 JSON：{"enabled": true, "start": "02:00", "end": "04:00", "days": "1,2,3,4,5"}
     maintenance_window: Mapped[str] = mapped_column(Text, default="{}")
     # 云原生 RBAC（专项 B）：接入状态

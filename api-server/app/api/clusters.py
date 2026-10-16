@@ -14,6 +14,18 @@ router = APIRouter(prefix="/api/v1/clusters")
 
 
 
+def _kubeconfig_server(kubeconfig: str) -> str:
+    """解析 kubeconfig 首个 cluster 的 server URL（幂等键）；失败返回空串"""
+    if not kubeconfig.strip():
+        return ""
+    try:
+        import yaml as _yaml
+        doc = _yaml.safe_load(kubeconfig) or {}
+        return ((doc.get("clusters") or [{}])[0].get("cluster") or {}).get("server") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 @router.post("")
 async def create_cluster(payload: dict, user=Depends(require_admin)):
     """添加集群（admin；加密存 kubeconfig + 环境标签 + 健康检查 + 启动 watch）"""
@@ -21,6 +33,7 @@ async def create_cluster(payload: dict, user=Depends(require_admin)):
     description = payload.get("description", "")
     kubeconfig = payload.get("kubeconfig", "")
     env_tag = payload.get("env_tag", "prod")
+    server_url = _kubeconfig_server(kubeconfig)
     if env_tag not in ("qa", "release", "prod"):
         env_tag = "prod"
 
@@ -28,11 +41,18 @@ async def create_cluster(payload: dict, user=Depends(require_admin)):
         result = await session.execute(select(Cluster).where(Cluster.name == name))
         if result.scalar_one_or_none():
             return {"code": 400, "message": "集群名称已存在", "data": None}
+        # 幂等：同 server URL 视为同一集群（避免重复接入）
+        if server_url:
+            dup = await session.execute(
+                select(Cluster).where(Cluster.api_server_url == server_url)
+            )
+            if dup.scalar_one_or_none():
+                return {"code": 400, "message": f"该集群已接入（server: {server_url}）", "data": None}
 
         cluster = Cluster(
             name=name, description=description,
             kubeconfig_encrypted=encrypt_aes256_gcm(kubeconfig),
-            env_tag=env_tag,
+            env_tag=env_tag, source="kubeconfig", api_server_url=server_url,
             status="unknown",
             inspect_cron=(payload.get("inspect_cron") or "").strip(),
         )
@@ -77,7 +97,7 @@ async def list_clusters(user=Depends(require_any_user)):
         clusters = list(result.scalars())
     return {"code": 200, "message": "success", "data": [
         {"id": c.id, "name": c.name, "description": c.description, "status": c.status,
-         "version": c.version, "env_tag": c.env_tag, "created_at": str(c.created_at),
+         "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig", "created_at": str(c.created_at),
          "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
          "inspect_enabled": bool(c.inspect_enabled),
          "inspect_cron": c.inspect_cron or "",
@@ -97,7 +117,7 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
         return {"code": 404, "message": "集群不存在", "data": None}
     return {"code": 200, "message": "success", "data": {
         "id": c.id, "name": c.name, "description": c.description, "status": c.status,
-        "version": c.version, "env_tag": c.env_tag,
+        "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
         "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",
