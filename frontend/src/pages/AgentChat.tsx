@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Layout, Button, Input, Tag, Space, Empty, Modal, Form, Select, Spin,
-  Collapse, Typography, message, Switch, Tooltip, Popconfirm,
+  Collapse, Typography, message, Switch, Tooltip, Popconfirm, ConfigProvider,
 } from 'antd'
 import {
   PlusOutlined, SendOutlined, RobotOutlined, UserOutlined,
@@ -14,6 +14,7 @@ import {
   createAgentSession, sendAgentMessage, closeAgentSession, deleteAgentSession, updateSessionCollect,
 } from '../services/api'
 import type { Cluster } from '../types'
+import { buildTheme } from '../utils/theme'
 
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
@@ -292,6 +293,8 @@ export default function AgentChat() {
   }, [activeId, activeSession?.collect_enabled])
 
   return (
+    // 本页为浅色设计：固定浅色主题，避免深色模式下白底白字看不见
+    <ConfigProvider theme={buildTheme('light')}>
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
       <Sider width={260} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
@@ -440,5 +443,6 @@ export default function AgentChat() {
         </Form>
       </Modal>
     </Layout>
+    </ConfigProvider>
   )
 }
