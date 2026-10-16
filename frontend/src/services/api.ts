@@ -313,6 +313,16 @@ export const getPodEvents = (clusterId: number, ns: string, pod: string) =>
 // Pod 详情（含容器组内容）
 export const getPodDetail = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/detail`)
+// 工作负载挂载/环境变量编辑
+export interface EditMountPayload { volume_name: string; mount_path?: string; sub_path?: string; read_only?: boolean; containers?: string[]; source_type?: string; source_name?: string }
+export const editWorkloadMount = (clusterId: number, kind: string, ns: string, name: string, data: EditMountPayload) =>
+  http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/mounts`, data)
+// 单个环境变量新增/编辑
+export interface EnvPayload { container: string; name: string; old_name?: string; value?: string; value_from?: { type: 'configMap' | 'secret' | 'field' | 'resource'; name?: string; key?: string; field_path?: string; resource?: string } }
+export const upsertWorkloadEnv = (clusterId: number, kind: string, ns: string, name: string, data: EnvPayload) =>
+  http.post(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/env`, data)
+export const deleteWorkloadEnv = (clusterId: number, kind: string, ns: string, name: string, params: { container: string; var_name: string }) =>
+  http.delete(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/env`, { params })
 // 工作负载 Pod 模板的挂载配置（volumes + 各容器 volumeMounts）
 export const getWorkloadMounts = (clusterId: number, kind: string, ns: string, name: string) =>
   http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/mounts`)

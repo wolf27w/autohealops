@@ -942,6 +942,11 @@ def _envs_from_doc(doc: dict) -> list[dict]:
                 src = f"资源 {vf['resourceFieldRef'].get('resource')}"
             out.append({"container": c.get("name"), "name": e.get("name"),
                         "value": e.get("value"), "value_from": src,
+                        "vf_type": ("configMap" if vf.get("configMapKeyRef") else "secret" if vf.get("secretKeyRef") else "field" if vf.get("fieldRef") else "resource" if vf.get("resourceFieldRef") else ""),
+                        "vf_name": (vf.get("configMapKeyRef") or vf.get("secretKeyRef") or {}).get("name"),
+                        "vf_key": (vf.get("configMapKeyRef") or vf.get("secretKeyRef") or {}).get("key"),
+                        "vf_field_path": (vf.get("fieldRef") or {}).get("fieldPath"),
+                        "vf_resource": (vf.get("resourceFieldRef") or {}).get("resource"),
                         "is_init": c.get("name") in init_names})
     return out
 
@@ -1030,12 +1035,24 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
     # ---------- env 模式：envFrom 注入环境变量 ----------
     if mode == "env":
         ref_key = _ENV_REF_KEYS[src_type]
+        prefix = str(payload.get("prefix") or "")
         added = 0
         for c in targets:
             efs = c.setdefault("envFrom", [])
-            if any((e.get(ref_key) or {}).get("name") == src_name for e in efs):
+            found = next((e for e in efs if (e.get(ref_key) or {}).get("name") == src_name), None)
+            if found is not None:
+                cur_prefix = found.get("prefix") or ""
+                if cur_prefix != prefix:
+                    if prefix:
+                        found["prefix"] = prefix
+                    else:
+                        found.pop("prefix", None)
+                    added += 1
                 continue
-            efs.append({ref_key: {"name": src_name}})
+            e = {ref_key: {"name": src_name}}
+            if prefix:
+                e["prefix"] = prefix
+            efs.append(e)
             added += 1
         if added == 0:
             return {"code": 200, "message": "环境变量已存在，无需变更", "data": {"source_name": src_name, "changed": False}}
@@ -1171,6 +1188,182 @@ async def remove_workload_mount(cluster_id: int, kind: str, namespace: str, name
     if not r2.get("success"):
         return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
     return {"code": 200, "message": "已移除挂载", "data": {"volume_name": volume_name, "removed_mounts": removed}}
+
+
+async def _apply_doc(cluster_id: int, kind: str, namespace: str, name: str, doc: dict) -> dict | None:
+    """dump doc 并 server-side apply；成功返回 None，失败返回错误响应"""
+    new_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "应用失败"), "data": None}
+    return None
+
+
+def _find_container(tmpl: dict, cname: str):
+    for c in (tmpl.get("containers") or []) + (tmpl.get("initContainers") or []):
+        if c.get("name") == cname:
+            return c
+    return None
+
+
+@router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/env")
+async def upsert_env(cluster_id: int, kind: str, namespace: str, name: str,
+                    payload: dict, user=Depends(require_operator)):
+    """新增/编辑单个环境变量（env）。
+
+    body: container, name, old_name?(改名时传旧名), value?, value_from?{type:configMap|secret|field|resource, name?, key?, field_path?, resource?}
+    value 与 value_from 二选一；传 value_from 则覆盖 value。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    container = str(payload.get("container") or "").strip()
+    var_name = str(payload.get("name") or "").strip()
+    old_name = str(payload.get("old_name") or var_name).strip()
+    value = payload.get("value")
+    vf = payload.get("value_from") or None
+    if not container or not var_name:
+        return {"code": 400, "message": "container 与 name 必填", "data": None}
+    entry: dict = {"name": var_name}
+    if vf:
+        t = str(vf.get("type") or "").strip()
+        if t == "configMap":
+            entry["valueFrom"] = {"configMapKeyRef": {"name": vf.get("name"), "key": vf.get("key")}}
+        elif t == "secret":
+            entry["valueFrom"] = {"secretKeyRef": {"name": vf.get("name"), "key": vf.get("key")}}
+        elif t == "field":
+            entry["valueFrom"] = {"fieldRef": {"fieldPath": vf.get("field_path")}}
+        elif t == "resource":
+            entry["valueFrom"] = {"resourceFieldRef": {"resource": vf.get("resource")}}
+        else:
+            return {"code": 400, "message": "value_from.type 需为 configMap/secret/field/resource", "data": None}
+    else:
+        entry["value"] = "" if value is None else str(value)
+
+    doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    tmpl = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    c = _find_container(tmpl, container)
+    if c is None:
+        return {"code": 400, "message": f"容器 {container} 不存在", "data": None}
+    envs = c.setdefault("env", [])
+    idx = next((i for i, e in enumerate(envs) if e.get("name") == old_name), None)
+    if idx is None:
+        envs.append(entry)
+    else:
+        envs[idx] = entry
+    err2 = await _apply_doc(cluster_id, kind, namespace, name, doc)
+    if err2:
+        return err2
+    return {"code": 200, "message": "已保存环境变量", "data": {"container": container, "name": var_name}}
+
+
+@router.delete("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/env")
+async def delete_env(cluster_id: int, kind: str, namespace: str, name: str,
+                     container: str, var_name: str, user=Depends(require_operator)):
+    """删除单个环境变量（env）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    tmpl = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    c = _find_container(tmpl, container)
+    if c is None:
+        return {"code": 404, "message": f"容器 {container} 不存在", "data": None}
+    envs = c.get("env") or []
+    kept = [e for e in envs if e.get("name") != var_name]
+    if len(kept) == len(envs):
+        return {"code": 404, "message": f"未找到环境变量 {var_name}", "data": None}
+    if kept:
+        c["env"] = kept
+    else:
+        c.pop("env", None)
+    err2 = await _apply_doc(cluster_id, kind, namespace, name, doc)
+    if err2:
+        return err2
+    return {"code": 200, "message": "已删除环境变量", "data": {"container": container, "name": var_name}}
+
+
+@router.put("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts")
+async def edit_workload_mount(cluster_id: int, kind: str, namespace: str, name: str,
+                              payload: dict, user=Depends(require_operator)):
+    """编辑某个卷的挂载：容器内路径/子路径/只读/目标容器，或卷来源。
+
+    body: volume_name(必填), mount_path?, sub_path?(传空串=清除), read_only?,
+          containers?(给定=按此列表增/删挂载), source_type?+source_name?(改卷来源)
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    volume_name = str(payload.get("volume_name") or "").strip()
+    if not volume_name:
+        return {"code": 400, "message": "volume_name 必填", "data": None}
+    doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    tmpl = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    volumes = tmpl.get("volumes") or []
+    vol = next((v for v in volumes if v.get("name") == volume_name), None)
+    if vol is None:
+        return {"code": 404, "message": f"卷 {volume_name} 不存在", "data": None}
+
+    # 改卷来源
+    src_type = str(payload.get("source_type") or "").strip()
+    src_name = str(payload.get("source_name") or "").strip()
+    if src_type:
+        if src_type not in _MOUNT_SOURCE_KEYS:
+            return {"code": 400, "message": "source_type 非法", "data": None}
+        if src_type != "emptyDir" and not src_name:
+            return {"code": 400, "message": "source_name 必填", "data": None}
+        for k in ("configMap", "secret", "persistentVolumeClaim", "emptyDir"):
+            vol.pop(k, None)
+        vol.update(_build_volume_payload(src_type, src_name))
+
+    mount_path = payload.get("mount_path")
+    sub_path = payload.get("sub_path")  # None=不改；''=清除
+    read_only = payload.get("read_only")  # None=不改
+    containers = payload.get("containers")  # None=不改挂载集合
+    ctrs = tmpl.get("containers") or []
+    changed = 0
+    for c in ctrs:
+        vms = c.setdefault("volumeMounts", [])
+        has = any(m.get("name") == volume_name for m in vms)
+        if containers is not None:
+            if c.get("name") in containers and not has:
+                vms.append({"name": volume_name, "mountPath": mount_path or "/mnt"})
+                has = True
+                changed += 1
+            elif c.get("name") not in containers and has:
+                c["volumeMounts"] = [m for m in vms if m.get("name") != volume_name]
+                changed += 1
+                continue
+        if not has:
+            continue
+        for m in vms:
+            if m.get("name") != volume_name:
+                continue
+            if mount_path:
+                m["mountPath"] = mount_path
+                changed += 1
+            if sub_path is not None:
+                if sub_path:
+                    m["subPath"] = sub_path
+                else:
+                    m.pop("subPath", None)
+                changed += 1
+            if read_only is not None:
+                if read_only:
+                    m["readOnly"] = True
+                else:
+                    m.pop("readOnly", None)
+                changed += 1
+    for c in ctrs:
+        if not c.get("volumeMounts"):
+            c.pop("volumeMounts", None)
+    err2 = await _apply_doc(cluster_id, kind, namespace, name, doc)
+    if err2:
+        return err2
+    return {"code": 200, "message": "已保存", "data": {"volume_name": volume_name, "changed": changed}}
 
 
 @router.get("/registry/tags")
