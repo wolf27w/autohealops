@@ -55,15 +55,15 @@
 
 ### M2 集群外 + config 文件（含「**自动下发客户端**」开关）
 
-> 老板 2026-10-16 定：**平台部署到 k8s 后，用 kubeconfig 接入其他集群时，默认自动下发一个 agent 到目标集群，之后由平台托管更新**；新建集群时要有个**开关**——开了才下发，不开不下发；**默认开（不关闭）**。
+> 老板 2026-10-16 定：**平台部署到 k8s 后，用 kubeconfig 接入其他集群时，可选自动下发一个 agent 到目标集群，之后由平台托管更新**；新建集群时要有个**开关**——开了才下发，不开不下发；**默认关（关闭）**。
 
 - **平台侧**：添加集群弹窗支持「**解析 kubeconfig → 列出所有 context**」→ 勾选多个 → **批量接入**（每条 Cluster 一个 context，名称可改，默认取 context 名）。
-- **新增开关**：`自动下发客户端（Agent）` —— **默认 ✅ 开**（老板口径）；关掉则纯 kubeconfig 直连。
+- **新增开关**：`自动下发客户端（Agent）` —— **默认 ❌ 关**（老板 2026-10-16 修正：「默认是关闭，不是开」）；**开了才下发**，不开则纯 kubeconfig 直连。
   - **开关开**：用刚接入的 kubeconfig 去目标集群 **apply agent 清单**（ns/SA/ClusterRole+Binding/令牌 Secret/Deployment）→ 成功即**转为 agent 通道**（免入站、**凭据免维护**）；之后可停用/删除 kubeconfig（agent 已接管）。
-  - **开关关**：纯直连（凭据会过期，靠第八节到期预警 + 手动换）。
+  - **开关关（默认）**：纯直连（凭据会过期，靠第八节到期预警 + 手动换）。
   - **权限不足**（目标集群没权限建 ns/RBAC/Deployment）→ 退化为「**给命令人工安装**」（即 M3 的一键清单）。
-- **部署侧**：`install.sh` 增 `--import-kubeconfig <file>`（或 env `BOOTSTRAP_KUBECONFIG=/path/to/config`）→ 首次启动自动导入该文件里全部 context（同样遵从这个开关）。
-- 落点：`create_cluster` 支持 `contexts: []` 批量 + `deploy_agent: bool`（默认 true）；新增 `POST /clusters/{id}/agent/deploy`（幂等 server-side apply）；前端 kubeconfig 解析（js-yaml 只列 context）+ 开关；`install.sh` 参数。
+- **部署侧**：`install.sh` 增 `--import-kubeconfig <file>`（或 env `BOOTSTRAP_KUBECONFIG=/path/to/config`）→ 首次启动自动导入该文件里全部 context（同样遵从这个开关，默认不下发）。
+- 落点：`create_cluster` 支持 `contexts: []` 批量 + `deploy_agent: bool`（**默认 false**）；新增 `POST /clusters/{id}/agent/deploy`（幂等 server-side apply）；前端 kubeconfig 解析（js-yaml 只列 context）+ 开关（默认关）；`install.sh` 参数。
 
 ### Agent 托管更新（平台统一版本管理）
 
@@ -109,7 +109,7 @@
 | 批次 | 内容 | 工时 |
 |---|---|---|
 | 0 | 统一抽象：`clusters.source` + 幂等键 + 列表来源徽标（三方式共用） | ~0.5d |
-| 1 | **M2 增强**：多 context 批量接入 + **自动下发 agent 开关（默认开）** + **agent 托管更新** + `install.sh` 导入 | ~1.5d |
+| 1 | **M2 增强**：多 context 批量接入 + **自动下发 agent 开关（默认关）** + **agent 托管更新** + `install.sh` 导入 | ~1.5d |
 | 2 | **M3 Agent 接入闭环**：令牌签发/吊销 + 安装清单 + 首连自动登记 + 心跳/状态 + 向导（复用 R12 隧道） | ~3–4d |
 | 3 | **M1 集群内自注册**：executor in-cluster config + 启动 upsert + 「本集群」标记 | ~1.5–2d |
 

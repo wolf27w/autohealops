@@ -127,7 +127,7 @@
 | # | 需求 | 现状 | 缺口 | 工时 |
 |---|---|---|---|---|
 | **M1** | 平台部署在集群内 → **自动接入本集群** | ❌ 无（`k8s/*.yaml` 有部署清单） | executor in-cluster config + 启动 upsert + 「本集群」标记 | ~1.5–2d |
-| **M2** | 集群外 → **config 文件接入**（可选**自动下发 agent**，**默认开**） | 🟡 仅单份 kubeconfig | 多 context 批量接入 + 下发开关 + agent 托管更新 + `install.sh` 启动导入 | ~1.5d |
+| **M2** | 集群外 → **config 文件接入**（可选**自动下发 agent**，**默认关**） | 🟡 仅单份 kubeconfig | 多 context 批量接入 + 下发开关 + agent 托管更新 + `install.sh` 启动导入 | ~1.5d |
 | **M3** | **Agent 接入**（KubeSphere 风格：令牌+一键清单 → 主动外连） | 🟡 R12 隧道有、接入闭环无 | 令牌签发/吊销 + `install.yaml` + 首连自动登记 + 心跳/状态 + 向导 | ~3–4d |
 | — | 统一抽象（三方式共用） | ❌ | `clusters.source` + 幂等键（集群 UID）+ 列表来源徐标 | ~0.5d |
 
