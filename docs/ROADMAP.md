@@ -19,7 +19,7 @@
 | A2 | **Agent 托管更新**：平台升级时批量滚动升级各集群 agent（版本/暂停/回退） | 无 | ~1d |
 | A3 | **M1 集群内自托管 → 自动接入本集群**：executor in-cluster config + 启动 upsert + 「本集群」标记 | 无 | ~1.5–2d |
 | A4 | **M2 下发 agent 开关的实际下发动作**（开关默认关） | 只做了开关字段/批量接入，下发未做 | 并入 A1 |
-| A5 | **B2/R2.3 JMX Exporter 集群侧安装**（javaagent:9404 + Prometheus 采集） | 平台侧已就绪，缺数据源 | 集群侧配合 |
+| A5 | ~~JMX Exporter 集群侧安装~~ | ✅ **已取消（2026-10-16 老板：JMX 属监控，暂不装，用现有 Prometheus 展示）** | — |
 | A6 | **B3 平台自身生产部署** | M10/M11 已备，未上生产 | 部署类 |
 
 ### B. 🔴 待老板拍板（非开发）
@@ -91,7 +91,7 @@
 | # | 需求 | 缺口 | 前置条件 |
 |---|---|---|---|
 | **B1** | **R1 准入 server 在「被管集群内」落地** | 平台能下发 Service+MutatingWebhookConfiguration；但准入服务本体（executor `internal/admission`）需跑在集群内 | 部署拓扑决策：随集群部署 executor/admission Sidecar 或独立 Deployment |
-| **B2** | **R2.3 集群侧 JMX Exporter 安装** | 物料已备（`docs/jvm-exporter/`），无集群安装 → 无 `jvm_*` 指标（接口 `connected=false`） | 需在目标应用/集群挂 javaagent:9404 + Prometheus 采集 |
+| **B2** | ~~R2.3 集群侧 JMX Exporter 安装~~ | ✅ 已取消（老板 2026-10-16）：JVM 指标用现有 Prometheus 容器指标展示，不装 JMX Exporter | — |
 | **B3** | **平台自身生产部署** | 当前仅本地/测试验证 | 关联 M10（发布/回滚）、M11（备份/DR）|
 
 ### C. 🔴 待老板拍板口径（非开发，定了一并收口）

@@ -2,8 +2,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Modal, Button, Select, Space, Input, message, Spin, Empty, Tag, Alert, Tooltip, Collapse } from 'antd'
 import { ReloadOutlined, BugOutlined, CopyOutlined } from '@ant-design/icons'
-import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams, getJvmMetrics } from '../services/api'
-import type { JvmAction, JvmProcess, JvmDiagResult, JvmParamsContainer, JvmMetrics } from '../services/api'
+import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams } from '../services/api'
+import type { JvmAction, JvmProcess, JvmDiagResult, JvmParamsContainer } from '../services/api'
 
 interface JvmPod { clusterId: number; namespace: string; name: string }
 
@@ -21,12 +21,10 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
   const [err, setErr] = useState('')
   const [jvmNote, setJvmNote] = useState('')
   const [params, setParams] = useState<JvmParamsContainer[]>([])
-  const [jvmMetrics, setJvmMetrics] = useState<JvmMetrics | null>(null)
-  const [jvmLoading, setJvmLoading] = useState(false)
 
   useEffect(() => {
     if (!pod) return
-    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote(''); setJvmMetrics(null)
+    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote('')
     getJvmActions().then(setActions).catch(() => {})
     getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers((c as unknown as { containers?: string[] }).containers || [])).catch(() => {})
     if (deployment) {
@@ -34,13 +32,6 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
         .then((d) => setParams(d.containers || [])).catch(() => {})
     }
   }, [pod, deployment])
-
-  const loadJvmMetrics = () => {
-    if (!pod) return
-    setJvmLoading(true)
-    getJvmMetrics(pod.clusterId, pod.namespace, pod.name)
-      .then(setJvmMetrics).catch(() => setJvmMetrics(null)).finally(() => setJvmLoading(false))
-  }
 
   const refreshProcs = useCallback(() => {
     if (!pod) return
@@ -87,20 +78,8 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
       )}
       <div style={{ marginBottom: 12 }}>
         <Space size="small" wrap>
-          <Button size="small" icon={<ReloadOutlined />} onClick={loadJvmMetrics} loading={jvmLoading}>读取 JVM 指标（堆/GC）</Button>
-          {jvmMetrics && (jvmMetrics.connected ? <Tag color="green">已接入 JMX Exporter</Tag> : <Tag>未接入 JMX Exporter</Tag>)}
+          <span style={{ color: '#888', fontSize: 12 }}>JVM 资源趋势/监控见 Pod「监控」（现有 Prometheus 容器指标，无需 JMX Exporter）</span>
         </Space>
-        {jvmMetrics && jvmMetrics.connected && (
-          <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.9 }}>
-            {Object.entries(jvmMetrics.metrics).map(([k, m]) => (
-              <div key={k}>
-                <span style={{ color: '#888', display: 'inline-block', width: 90 }}>{m.label}</span>
-                {m.items.length ? m.items.map((it) => `${it.metric.pod || it.metric.instance || '-'}=${it.value}${m.unit}`).join('　') : '-'}
-              </div>
-            ))}
-          </div>
-        )}
-        {jvmMetrics && !jvmMetrics.connected && <div style={{ marginTop: 6, fontSize: 12, color: '#999' }}>{jvmMetrics.hint}</div>}
       </div>
       <Space style={{ marginBottom: 12 }} wrap>
         <span>容器：</span>
