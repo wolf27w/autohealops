@@ -2,6 +2,7 @@
 """AI 诊断助手 API：会话 CRUD + 对话 + 闭环落盘（按 user_id 隔离 + RBAC）"""
 import asyncio
 import json
+import re
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import delete, select
@@ -50,6 +51,18 @@ async def _run_turn(sid: int, content: str, cluster_name: str, deep: bool) -> No
         logger.warning("会话 %d 诊断失败（后台）: %s", sid, e)
 
 
+_POD_HASH_RE = re.compile(r"^(.+)-[a-z0-9]{5,10}-[a-z0-9]{5}$")
+
+
+def derive_service(pod_name: str) -> str:
+    """从 Pod 名推导工作负载名：`svc-7d9c8f-abcde` → `svc`；无法判定则原样返回。"""
+    p = (pod_name or "").strip()
+    if not p:
+        return ""
+    m = _POD_HASH_RE.match(p)
+    return m.group(1) if m else p
+
+
 @router.post("/sessions")
 async def create_session(payload: dict, user=Depends(require_any_user)):
     """创建诊断会话（校验集群权限 + RBAC 可见集群）"""
@@ -58,6 +71,9 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
     pod_name = payload.get("pod_name", "")
     problem = payload.get("problem", "")
     deep = bool(payload.get("deep", False))  # 深度诊断开关（默认关 = 快速单轮）
+    service = (payload.get("service") or "").strip() or derive_service(pod_name)
+    # 容器名：显式传入兼容 agent/channel/xxx
+    container = (payload.get("container") or "").strip()
 
     if not cluster_id or not pod_name:
         return {"code": 400, "message": "cluster_id 和 pod_name 必填", "data": None}
@@ -66,20 +82,50 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
     if not await user_permission_service.check_cluster_permission(user, cluster_id, namespace):
         return {"code": 403, "message": "无该集群/命名空间权限", "data": None}
 
-    # 取集群名（诊断上下文用）
+    # 取集群名 + 环境（诊断上下文 + 会话命名用）
     cluster_name = ""
+    env_tag = ""
     async with async_session() as s:
         c = await s.get(Cluster, cluster_id)
         if c:
             cluster_name = c.name
+            env_tag = c.env_tag or ""
 
+    # 会话名规范：环境/命名空间/服务[容器]
+    def _sess_name(pod: str) -> str:
+        base = "/".join([x for x in (env_tag, namespace, service or derive_service(pod)) if x]) or pod
+        return f"{base}[{container}]" if container else base
+
+    # 去重：同 (user, cluster, ns, service, container) 已有活跃/最近会话 → 复用，不新建
+    async with async_session() as s:
+        from sqlalchemy import and_
+        existing = (await s.execute(
+            select(DiagnosisSession).where(and_(
+                DiagnosisSession.user_id == user.id,
+                DiagnosisSession.cluster_id == cluster_id,
+                DiagnosisSession.namespace == namespace,
+                DiagnosisSession.service == service,
+                DiagnosisSession.container == container,
+            )).order_by(DiagnosisSession.id.desc())
+        )).scalars().first()
+        if existing is not None:
+            return {"code": 200, "message": "success", "data": {
+                "id": existing.id, "cluster_id": cluster_id, "namespace": namespace,
+                "pod_name": existing.pod_name, "title": existing.title, "status": existing.status,
+                "service": existing.service, "container": existing.container,
+                "diagnosing": False, "reused": True, "final_answer": None, "tool_steps": [],
+            }}
+
+    title = _sess_name(pod_name)
     async with async_session() as s:
         sess = DiagnosisSession(
             user_id=user.id,
             cluster_id=cluster_id,
             namespace=namespace,
             pod_name=pod_name,
-            title=(problem or pod_name)[:200],
+            service=service,
+            container=container,
+            title=title[:200],
             status="active",
         )
         s.add(sess)
@@ -100,12 +146,73 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
         "cluster_id": cluster_id,
         "namespace": namespace,
         "pod_name": pod_name,
-        "title": (problem or pod_name)[:200],
+        "title": title,
+        "service": service,
+        "container": container,
         "status": "active",
         "diagnosing": bool(problem),  # true = 首轮诊断后台执行中，前端可轮询 /messages
         "final_answer": None,
         "tool_steps": [],
     }}
+
+
+@router.post("/sessions/seed")
+async def seed_session(payload: dict, user=Depends(require_any_user)):
+    """用一段已有诊断结果（如 JVM 综合诊断）落一个会话（同目标复用）。
+
+    会话名规范：环境/命名空间/服务[容器]。用于「JVM 一键诊断 → 跳转到应用诊断」。
+    """
+    from sqlalchemy import and_
+    cluster_id = payload.get("cluster_id")
+    namespace = (payload.get("namespace") or "").strip()
+    pod_name = (payload.get("pod_name") or "").strip()
+    service = (payload.get("service") or "").strip() or derive_service(pod_name)
+    container = (payload.get("container") or "").strip()
+    user_text = payload.get("user_text") or ""
+    assistant_text = payload.get("assistant_text") or ""
+    if not cluster_id or not pod_name:
+        return {"code": 400, "message": "cluster_id 和 pod_name 必填", "data": None}
+    if not await user_permission_service.check_cluster_permission(user, cluster_id, namespace):
+        return {"code": 403, "message": "无该集群/命名空间权限", "data": None}
+    env_tag = ""
+    async with async_session() as s:
+        c = await s.get(Cluster, cluster_id)
+        if c:
+            env_tag = c.env_tag or ""
+    base = "/".join([x for x in (env_tag, namespace, service) if x]) or pod_name
+    title = f"{base}[{container}]" if container else base
+    created = False
+    async with async_session() as s:
+        existing = (await s.execute(
+            select(DiagnosisSession).where(and_(
+                DiagnosisSession.user_id == user.id,
+                DiagnosisSession.cluster_id == cluster_id,
+                DiagnosisSession.namespace == namespace,
+                DiagnosisSession.service == service,
+                DiagnosisSession.container == container,
+            )).order_by(DiagnosisSession.id.desc())
+        )).scalars().first()
+        if existing is not None:
+            sess = existing
+            sess.pod_name = pod_name
+            sess.title = title[:200]
+        else:
+            sess = DiagnosisSession(
+                user_id=user.id, cluster_id=cluster_id, namespace=namespace,
+                pod_name=pod_name, service=service, container=container,
+                title=title[:200], status="active",
+            )
+            s.add(sess)
+            await s.flush()
+            created = True
+        if user_text:
+            s.add(DiagnosisMessage(session_id=sess.id, role="user", content=user_text))
+        if assistant_text:
+            s.add(DiagnosisMessage(session_id=sess.id, role="assistant", content=assistant_text))
+        await s.commit()
+        await s.refresh(sess)
+        sid = sess.id
+    return {"code": 200, "message": "success", "data": {"id": sid, "title": title, "created": created}}
 
 
 @router.get("/sessions")
@@ -148,6 +255,8 @@ async def list_sessions(user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": [
         {"id": x.id, "cluster_id": x.cluster_id, "namespace": x.namespace,
          "pod_name": x.pod_name, "title": x.title, "status": x.status,
+         "service": getattr(x, "service", "") or derive_service(x.pod_name),
+         "container": getattr(x, "container", "") or "",
          "cluster_name": cluster_info.get(x.cluster_id, ("", ""))[0] if x.cluster_id else "",
          "env_tag": cluster_info.get(x.cluster_id, ("", ""))[1] if x.cluster_id else "",
          "source": getattr(x, "source", "agent") or "agent",

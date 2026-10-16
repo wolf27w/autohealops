@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Modal, Button, Select, Space, Input, message, Spin, Empty, Tag, Alert, Tooltip, Collapse } from 'antd'
 import { ReloadOutlined, BugOutlined, CopyOutlined } from '@ant-design/icons'
-import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams, jvmAiAnalyze, jvmAiAnalyzeAll, type JvmAiAnalysis, type JvmCollectItem } from '../services/api'
+import { useNavigate } from 'react-router-dom'
+import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams, jvmAiAnalyze, jvmAiAnalyzeAll, seedAgentSession, type JvmAiAnalysis, type JvmCollectItem } from '../services/api'
 import type { JvmAction, JvmProcess, JvmDiagResult, JvmParamsContainer } from '../services/api'
 
 interface JvmPod { clusterId: number; namespace: string; name: string }
@@ -25,6 +26,7 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
   const [aiResult, setAiResult] = useState<JvmAiAnalysis | null>(null)
   const [aiItems, setAiItems] = useState<JvmCollectItem[]>([])
   const [aiLoading, setAiLoading] = useState(false)
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (!pod) return
@@ -66,12 +68,34 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
       .finally(() => setRunning(''))
   }
 
-  // 一键：自动采集全部轻量动作（jstack/jmap/jcmd/jattach 文本类）→ 发 AI 综合诊断
+  // 一键：自动采集全部轻量动作（jstack/jmap/jcmd/jattach 文本类）→ 发 AI 综合诊断 → 落会话并跳转到应用诊断
   const runAiAll = () => {
     if (!pod) return
     setAiLoading(true); setAiResult(null); setAiItems([])
     jvmAiAnalyzeAll(pod.clusterId, pod.namespace, pod.name, { container, pid })
-      .then((d) => { setAiItems(d?.items || []); setAiResult(d?.analysis || null) })
+      .then(async (d) => {
+        const items = d?.items || []
+        const a = d?.analysis || null
+        setAiItems(items); setAiResult(a)
+        if (!a) return
+        const okCnt = items.filter((i) => i.ok).length
+        try {
+          const sess = await seedAgentSession({
+            cluster_id: pod.clusterId, namespace: pod.namespace, pod_name: pod.name, container,
+            user_text: `JVM 综合诊断（一键采集全部）：容器 ${container || '默认'}；已采集 ${okCnt}/${items.length} 项：`
+              + items.map((i) => `${i.action}${i.ok ? '' : '(失败)'}`).join('、'),
+            assistant_text: JSON.stringify({
+              root_cause: a.root_cause, suggestions: a.suggestions || [],
+              risk_level: a.risk_level, confidence: a.confidence, model_used: a.model_used,
+              handling_advice: '', kb_hit: false,
+            }),
+          })
+          onClose()
+          navigate(`/agent?session=${sess.id}`)
+        } catch {
+          // 落会话失败不阻断：原始结果仍在本弹窗展示
+        }
+      })
       .catch((e) => setErr(String(e?.message || e)))
       .finally(() => setAiLoading(false))
   }

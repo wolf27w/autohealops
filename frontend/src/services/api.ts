@@ -423,6 +423,8 @@ export const regenerateExternalToken = () => http.post('/external/tickets/token/
 
 // ============ AI 诊断助手（会话式 Agent）============
 export const createAgentSession = (data: Payload) => http.post('/agent/sessions', data)
+// 用已有诊断结果（如 JVM 综合诊断）落一个会话（同目标复用）
+export const seedAgentSession = (data: Payload) => http.post<{ id: number; title: string; created: boolean }>('/agent/sessions/seed', data)
 export const getAgentSessions = () => http.get('/agent/sessions')
 export interface ProactiveScanResult {
   skipped?: boolean; reason?: string; clusters?: number; scanned_workloads?: number

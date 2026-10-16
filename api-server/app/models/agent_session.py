@@ -18,6 +18,9 @@ class DiagnosisSession(Base):
     cluster_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     namespace: Mapped[str] = mapped_column(String(100), default="")
     pod_name: Mapped[str] = mapped_column(String(200), default="")
+    # 会话名规范（老板 2026-10-16）：环境/命名空间/服务[容器]；同目标不重复建会话
+    service: Mapped[str] = mapped_column(String(200), default="")
+    container: Mapped[str] = mapped_column(String(200), default="")
     title: Mapped[str] = mapped_column(String(200), default="")  # 会话标题（首条消息摘要）
     # 来源：agent=用户在诊断助手主动发起 / proactive=平台巡检自动发起（异常但未告警）
     source: Mapped[str] = mapped_column(String(20), default="agent", index=True)

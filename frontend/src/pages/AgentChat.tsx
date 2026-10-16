@@ -1,15 +1,16 @@
 // AI 诊断助手（会话式 Agent）对话页
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
-  Layout, Button, Input, List, Tag, Space, Empty, Modal, Form, Select, Spin,
-  Card, Collapse, Typography, message, Switch, Tooltip, Popconfirm,
+  Layout, Button, Input, Tag, Space, Empty, Modal, Form, Select, Spin,
+  Collapse, Typography, message, Switch, Tooltip, Popconfirm,
 } from 'antd'
 import {
   PlusOutlined, SendOutlined, RobotOutlined, UserOutlined,
   CheckCircleOutlined, ToolOutlined, ReloadOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import {
-  getClusters, getClusterNamespaces, getNamespacePods, getAgentSessions, getAgentMessages,
+  getClusters, getClusterNamespaces, getNamespacePods, getPodContainers, getAgentSessions, getAgentMessages,
   createAgentSession, sendAgentMessage, closeAgentSession, deleteAgentSession,
 } from '../services/api'
 import type { Cluster } from '../types'
@@ -17,9 +18,33 @@ import type { Cluster } from '../types'
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
 
-interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; merged_count?: number; updated_at: string; cluster_name?: string; env_tag?: string }
+interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string }
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
+
+// 会话显示名：环境/命名空间/服务[容器]（统一从字段拼，不再显示长标题）
+function sessionName(s: Session): string {
+  const svc = s.service || s.pod_name
+  const base = [s.env_tag, s.namespace, svc].filter(Boolean).join('/')
+  if (!base) return s.title || `会话 ${s.id}`
+  return s.container ? `${base}[${s.container}]` : base
+}
+
+const localDay = (iso?: string): string => {
+  if (!iso) return ''
+  const dt = new Date(String(iso).replace(' ', 'T'))
+  if (isNaN(dt.getTime())) return ''
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+}
+
+const fmtDay = (d: string): string => {
+  if (!d) return '未知日期'
+  const today = localDay(new Date().toString())
+  const y = localDay(new Date(Date.now() - 86400000).toString())
+  if (d === today) return '今天'
+  if (d === y) return '昨天'
+  return d
+}
 
 function parseFinalAnswer(content: string) {
   try {
@@ -46,6 +71,9 @@ export default function AgentChat() {
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [pods, setPods] = useState<PodOption[]>([])
+  const [containers, setContainers] = useState<string[]>([])
+  const [olderOpen, setOlderOpen] = useState<Record<string, boolean>>({})
+  const [searchParams] = useSearchParams()
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [deep, setDeep] = useState(true)  // 深度诊断开关（多轮工具取证，默认开：直接给结果）
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -63,6 +91,24 @@ export default function AgentChat() {
   }
 
   useEffect(() => { loadSessions() }, [])
+
+  // 支持从 JVM 诊断等入口带 ?session=<id> 直接打开会话
+  useEffect(() => {
+    const sid = Number(searchParams.get('session') || 0)
+    if (sid) openSession(sid)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 按天分组（新→旧），最近 2 天默认展开
+  const sessionGroups = useMemo(() => {
+    const m = new Map<string, Session[]>()
+    for (const s of sessions) {
+      const d = localDay(s.created_at || s.updated_at) || '0000-00-00'
+      if (!m.has(d)) m.set(d, [])
+      m.get(d)!.push(s)
+    }
+    return [...m.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
+  }, [sessions])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -111,10 +157,19 @@ export default function AgentChat() {
 
   const handleNamespaceChange = (ns: string) => {
     form.setFieldsValue({ pod_name: undefined })
+    setPods([]); setContainers([])
     const clusterId = form.getFieldValue('cluster_id')
     getNamespacePods(clusterId, ns).then((d) => {
       setPods(((d || []) as Array<{ name: string }>).map((p) => ({ label: p.name, value: p.name })))
     })
+  }
+
+  const handlePodChange = (pod: string) => {
+    form.setFieldsValue({ container: undefined })
+    setContainers([])
+    const clusterId = form.getFieldValue('cluster_id')
+    const ns = form.getFieldValue('namespace')
+    if (clusterId && ns && pod) getPodContainers(clusterId, ns, pod).then((d) => setContainers((d || []) as string[])).catch(() => {})
   }
 
   const handleCreate = async () => {
@@ -131,6 +186,7 @@ export default function AgentChat() {
       setModalOpen(false)
       form.resetFields()
       setPods([])
+      setContainers([])
       loadSessions()
       if (res?.id) {
         openSession(res.id)
@@ -211,37 +267,41 @@ export default function AgentChat() {
 
   return (
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
-      <Sider width={280} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden' }}>
+      <Sider width={260} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
           新建诊断会话
         </Button>
-        <List
-          style={{ marginTop: 12, overflowY: 'auto', maxHeight: 'calc(100% - 48px)' }}
-          dataSource={sessions}
-          locale={{ emptyText: <Empty description="暂无会话" /> }}
-          renderItem={(s) => (
-            <List.Item
-              onClick={() => openSession(s.id)}
-              style={{ cursor: 'pointer', padding: '8px 12px', borderRadius: 6, background: s.id === activeId ? '#e6f4ff' : 'transparent' }}
-            >
-              <div style={{ width: '100%' }}>
-                <Space size={4} style={{ width: '100%', justifyContent: 'space-between' }}>
-                  <Text ellipsis style={{ maxWidth: 150 }}>{s.title}</Text>
-                  <Space size={2}>
-                    {s.source === 'proactive' && <Tag color="orange">巡检</Tag>}
-                    {s.env_tag && <Tag color={s.env_tag === 'qa' ? 'green' : s.env_tag === 'release' ? 'orange' : 'red'}>{s.env_tag}</Tag>}
-                    {(s.merged_count || 0) > 0 && <Tag>合并 {s.merged_count}</Tag>}
-                    <Tag color={s.status === 'closed' ? 'green' : 'blue'}>{s.status === 'closed' ? '已闭环' : '进行中'}</Tag>
+        <div style={{ marginTop: 12, overflowY: 'auto', flex: 1 }}>
+          {sessions.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
+          {sessionGroups.map(([day, items], gi) => {
+            const isRecent = gi < 2  // 最近 2 天默认展开
+            const open = isRecent || !!olderOpen[day]
+            return (
+              <div key={day} style={{ marginBottom: 4 }}>
+                <div
+                  onClick={() => { if (!isRecent) setOlderOpen((p) => ({ ...p, [day]: !p[day] })) }}
+                  style={{ fontSize: 12, color: '#8c8c8c', padding: '6px 6px', cursor: isRecent ? 'default' : 'pointer',
+                           display: 'flex', justifyContent: 'space-between', userSelect: 'none' }}>
+                  <span>{fmtDay(day)}</span>
+                  {!isRecent && <span>{open ? '收起' : `${items.length} 条`}</span>}
+                </div>
+                {open && items.map((s) => (
+                  <div
+                    key={s.id}
+                    onClick={() => openSession(s.id)}
+                    style={{ cursor: 'pointer', padding: '7px 10px', borderRadius: 6, marginBottom: 2,
+                             background: s.id === activeId ? '#e6f4ff' : 'transparent',
+                             display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                    <Text ellipsis style={{ fontSize: 13, flex: 1 }} title={sessionName(s)}>{sessionName(s)}</Text>
                     <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
-                      <DeleteOutlined style={{ color: '#bbb' }} onClick={(e) => e.stopPropagation()} />
+                      <DeleteOutlined style={{ color: '#ccc', fontSize: 12 }} onClick={(e) => e.stopPropagation()} />
                     </Popconfirm>
-                  </Space>
-                </Space>
-                <div style={{ color: '#999', fontSize: 12 }}>{s.namespace}/{s.pod_name}</div>
+                  </div>
+                ))}
               </div>
-            </List.Item>
-          )}
-        />
+            )
+          })}
+        </div>
       </Sider>
       <Content style={{ display: 'flex', flexDirection: 'column', padding: '0 16px' }}>
         {!activeSession ? (
@@ -250,7 +310,7 @@ export default function AgentChat() {
           <>
             <div style={{ padding: '12px 0', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Space>
-                <Text strong>{activeSession.title}</Text>
+                <Text strong>{sessionName(activeSession)}</Text>
                 <Tag color="blue">{activeSession.cluster_id ? `集群 ${activeSession.cluster_id}` : ''}</Tag>
                 <Text type="secondary">{activeSession.namespace}/{activeSession.pod_name}</Text>
               </Space>
@@ -329,7 +389,11 @@ export default function AgentChat() {
               options={namespaces.map((n) => ({ label: n, value: n }))} />
           </Form.Item>
           <Form.Item name="pod_name" label="Pod" rules={[{ required: true, message: '请选择 Pod' }]}>
-            <Select placeholder="选择 Pod" showSearch optionFilterProp="label" disabled={!pods.length} options={pods} />
+            <Select placeholder="选择 Pod" showSearch optionFilterProp="label" disabled={!pods.length} options={pods} onChange={handlePodChange} />
+          </Form.Item>
+          <Form.Item name="container" label="容器（可选）" tooltip="会话名会变成 环境/命名空间/服务[容器]，便于区分同一 Pod 下不同容器">
+            <Select placeholder="默认容器" allowClear disabled={!containers.length}
+              options={containers.map((c) => ({ label: c, value: c }))} />
           </Form.Item>
           <Form.Item name="problem" label="问题描述">
             <Input.TextArea rows={3} placeholder="描述应用的问题现象，如：服务 502、内存泄漏、启动失败..." />
