@@ -249,7 +249,7 @@ export default function AgentChat() {
     }
     if (m.role === 'tool') {
       return (
-        <Collapse size="small" ghost style={{ background: '#fafafa' }}>
+        <Collapse size="small" ghost style={{ background: '#fff' }}>
           <Collapse.Panel
             header={<Space size={4}><ToolOutlined style={{ color: '#722ed1' }} /><Tag color="purple">{m.tool_name || '工具'}</Tag><Text type="secondary" style={{ fontSize: 12 }}>{m.tool_args}</Text></Space>}
             key="1"
@@ -278,7 +278,7 @@ export default function AgentChat() {
           </div>
         )}
         {fa.handling_advice && (
-          <Paragraph style={{ margin: '6px 0 0', background: '#fffbe6', padding: 8, borderRadius: 4 }}>
+          <Paragraph style={{ margin: '6px 0 0', background: '#fff', color: '#1f1f1f', border: '1px solid #f0f0f0', padding: 8, borderRadius: 4 }}>
             {fa.handling_advice}
           </Paragraph>
         )}
@@ -386,8 +386,7 @@ export default function AgentChat() {
                     )}
                     <div style={{
                       maxWidth: '78%', padding: '10px 14px', borderRadius: 8,
-                      background: m.role === 'user' ? '#1677ff' : m.role === 'tool' ? '#fafafa' : '#f5f5f5',
-                      color: m.role === 'user' ? '#fff' : 'inherit',
+                      background: '#fff', color: '#1f1f1f', border: '1px solid #f0f0f0',
                     }}>
                       {renderContent(m)}
                     </div>
