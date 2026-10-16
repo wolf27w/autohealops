@@ -78,6 +78,7 @@ export default function ServiceDetail() {
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
+  const [mountsOpen, setMountsOpen] = useState(false)
   const [podTab, setPodTab] = useState('pods')
   const [pods, setPods] = useState<ServicePod[]>([])
   const [isolated, setIsolated] = useState<Set<string>>(new Set())
@@ -320,6 +321,7 @@ export default function ServiceDetail() {
             menu={{
               items: [
                 { key: 'restart', label: '滚动重启' },
+                { key: 'mounts', label: '配置与存储' },
                 { key: 'yaml', label: '编辑 YAML（整个服务）' },
                 { key: 'image', label: '更新镜像' },
                 { key: 'schedule', label: '调度到节点' },
@@ -334,6 +336,7 @@ export default function ServiceDetail() {
               onClick: ({ key }) => {
                 if (key === 'restart') handleRollout('restart')
                 else if (key === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
+                else if (key === 'mounts') setMountsOpen(true)
                 else if (key === 'image') openImageModal()
                 else if (key === 'schedule') openSchedule()
                 else if (key === 'logs') loadAggLogs()
@@ -433,6 +436,9 @@ export default function ServiceDetail() {
       <JvmDiagModal pod={jvmPod} deployment={name} onClose={() => setJvmPod(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
+      <Modal title={`配置与存储：${namespace}/${name}`} open={mountsOpen} onCancel={() => setMountsOpen(false)} footer={null} width={960} destroyOnClose>
+        <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} />
+      </Modal>
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
 
       <Modal title={`更新镜像：${name}`} open={imageModal} onOk={handleImageUpdate} onCancel={() => setImageModal(false)} width={520}>

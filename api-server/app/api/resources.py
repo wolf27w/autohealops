@@ -882,11 +882,14 @@ async def workload_mounts(cluster_id: int, kind: str, namespace: str, name: str,
         "volumes": r.get("volumes", []),
         "containers": r.get("containers", []),
         "init_containers": r.get("init_containers", []),
+        "env_refs": await _extract_env_refs(cluster_id, kind, namespace, name),
     }}
 
 
 # 可挂载的数据源类型 → Pod 模板里的 volumes 字段名
 _MOUNT_SOURCE_KEYS = {"configMap": "configMap", "secret": "secret", "pvc": "persistentVolumeClaim"}
+# envFrom 引用字段名
+_ENV_REF_KEYS = {"configMap": "configMapRef", "secret": "secretRef"}
 _WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset"}
 
 
@@ -903,6 +906,38 @@ def _build_volume_payload(src_type: str, src_name: str) -> dict:
     if src_type == "secret":
         return {"secret": {"secretName": src_name}}
     return {"persistentVolumeClaim": {"claimName": src_name}}
+
+
+def _env_refs_from_doc(doc: dict) -> list[dict]:
+    """从工作负载 doc 解析 envFrom 引用（configMapRef / secretRef）"""
+    ts = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    out: list[dict] = []
+    for c in (ts.get("containers") or []) + (ts.get("initContainers") or []):
+        for ef in c.get("envFrom") or []:
+            cm, sec = ef.get("configMapRef"), ef.get("secretRef")
+            if cm:
+                out.append({"container": c.get("name"), "source_type": "configMap",
+                            "source_name": cm.get("name"), "prefix": ef.get("prefix") or "",
+                            "optional": bool(cm.get("optional"))})
+            elif sec:
+                out.append({"container": c.get("name"), "source_type": "secret",
+                            "source_name": sec.get("name"), "prefix": ef.get("prefix") or "",
+                            "optional": bool(sec.get("optional"))})
+    return out
+
+
+async def _extract_env_refs(cluster_id: int, kind: str, namespace: str, name: str) -> list[dict]:
+    """拉工作负载 YAML 并解析 envFrom 引用（失败时返回空表）"""
+    if kind not in _WORKLOAD_KINDS:
+        return []
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return []
+    try:
+        doc = yaml.safe_load(r.get("yaml", "")) or {}
+    except yaml.YAMLError:
+        return []
+    return _env_refs_from_doc(doc)
 
 
 async def _load_workload_doc(cluster_id: int, kind: str, namespace: str, name: str):
@@ -922,14 +957,17 @@ async def _load_workload_doc(cluster_id: int, kind: str, namespace: str, name: s
 @router.post("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts")
 async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: str,
                             payload: dict, user=Depends(require_operator)):
-    """给工作负载（Deployment/StatefulSet/DaemonSet）的 Pod 挂载 配置字典/密钥/PVC。
+    """给工作负载（Deployment/StatefulSet/DaemonSet）的 Pod 配置 配置字典/密钥/PVC。
 
-    body: source_type=configMap|secret|pvc, source_name, mount_path, sub_path?, read_only?,
-          volume_name?(默认按来源名生成), containers?(空=全部业务容器)
-    实现：读工作负载 YAML → 在 spec.template.spec 追加 volume + 各容器 volumeMount → server-side apply。
+    body: mode=volume|env（默认 volume）
+          volume 模式: source_type=configMap|secret|pvc, source_name, mount_path, sub_path?,
+                       read_only?, volume_name?(默认按来源名生成), containers?(空=全部业务容器)
+          env 模式(仅 cm/secret): source_type, source_name, containers?(空=全部业务容器)
+    实现：读工作负载 YAML → 改 spec.template.spec（volumes+volumeMounts 或 envFrom）→ server-side apply。
     """
     if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
         return denied
+    mode = str(payload.get("mode") or "volume").strip()
     src_type = str(payload.get("source_type") or "").strip()
     src_name = str(payload.get("source_name") or "").strip()
     mount_path = str(payload.get("mount_path") or "").strip()
@@ -937,24 +975,51 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
     read_only = bool(payload.get("read_only", False))
     volume_name = str(payload.get("volume_name") or "").strip()
     containers = payload.get("containers") or []
+    if mode not in ("volume", "env"):
+        return {"code": 400, "message": "mode 需为 volume 或 env", "data": None}
     if src_type not in _MOUNT_SOURCE_KEYS:
         return {"code": 400, "message": "source_type 必填且需为 configMap/secret/pvc", "data": None}
     if not src_name:
         return {"code": 400, "message": "source_name 必填", "data": None}
-    if not mount_path.startswith("/"):
-        return {"code": 400, "message": "挂载路径必须是绝对路径（以 / 开头）", "data": None}
-    if sub_path.startswith("/"):
-        return {"code": 400, "message": "子路径不能以 / 开头", "data": None}
+    if mode == "env" and src_type == "pvc":
+        return {"code": 400, "message": "PVC 只能挂载为数据卷，不能注入环境变量", "data": None}
+    if mode == "volume":
+        if not mount_path.startswith("/"):
+            return {"code": 400, "message": "挂载路径必须是绝对路径（以 / 开头）", "data": None}
+        if sub_path.startswith("/"):
+            return {"code": 400, "message": "子路径不能以 / 开头", "data": None}
 
     doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
     if err:
         return err
     tmpl = (((doc.get("spec") or {}).setdefault("template", {})).setdefault("spec", {}))
-    volumes = tmpl.setdefault("volumes", [])
     ctrs = tmpl.get("containers") or []
     if not ctrs:
         return {"code": 400, "message": "该工作负载无业务容器", "data": None}
+    targets = [c for c in ctrs if (not containers or c.get("name") in containers)]
+    if not targets:
+        return {"code": 400, "message": "指定的容器不存在", "data": None}
 
+    # ---------- env 模式：envFrom 注入环境变量 ----------
+    if mode == "env":
+        ref_key = _ENV_REF_KEYS[src_type]
+        added = 0
+        for c in targets:
+            efs = c.setdefault("envFrom", [])
+            if any((e.get(ref_key) or {}).get("name") == src_name for e in efs):
+                continue
+            efs.append({ref_key: {"name": src_name}})
+            added += 1
+        if added == 0:
+            return {"code": 200, "message": "环境变量已存在，无需变更", "data": {"source_name": src_name, "changed": False}}
+        new_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+        r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+        if not r2.get("success"):
+            return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+        return {"code": 200, "message": "已注入环境变量", "data": {"source_name": src_name, "changed": True}}
+
+    # ---------- volume 模式：挂载数据卷 ----------
+    volumes = tmpl.setdefault("volumes", [])
     if not volume_name:
         base = _k8s_dns_label(src_name)
         existing_names = {v.get("name") for v in volumes}
@@ -977,9 +1042,6 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
         if cur_name != src_name:
             return {"code": 409, "message": f"卷名 {volume_name} 已被其它来源占用（{cur_name}），请换一个卷名", "data": None}
 
-    targets = [c for c in ctrs if (not containers or c.get("name") in containers)]
-    if not targets:
-        return {"code": 400, "message": "指定的容器不存在", "data": None}
     added = 0
     for c in targets:
         vms = c.setdefault("volumeMounts", [])
@@ -1006,14 +1068,46 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
 
 @router.delete("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts")
 async def remove_workload_mount(cluster_id: int, kind: str, namespace: str, name: str,
-                                volume_name: str, container: str = "", mount_path: str = "",
+                                volume_name: str = "", source_name: str = "", mode: str = "volume",
+                                container: str = "", mount_path: str = "",
                                 user=Depends(require_operator)):
-    """移除挂载：删掉各容器的 volumeMount；若再无容器引用该卷则一并删掉 volume。
+    """移除挂载/环境变量注入。
 
-    volume_name 必填；container/mount_path 可选（限定只删某个容器的某个挂载）。
+    mode=volume（默认）：按 volume_name 删各容器 volumeMount；若无容器引用该卷则一并删掉 volume。
+    mode=env：按 source_name 删各容器 envFrom 里的 configMapRef/secretRef。
+    container/mount_path 可选（限定只删某个容器/某个路径）。
     """
     if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
         return denied
+    if mode == "env":
+        if not source_name:
+            return {"code": 400, "message": "source_name 必填", "data": None}
+        doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+        if err:
+            return err
+        tmpl = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+        all_ctrs = (tmpl.get("containers") or []) + (tmpl.get("initContainers") or [])
+        removed = 0
+        for c in all_ctrs:
+            if container and c.get("name") != container:
+                continue
+            efs = c.get("envFrom") or []
+            kept = [e for e in efs if not (
+                ((e.get("configMapRef") or {}).get("name") == source_name)
+                or ((e.get("secretRef") or {}).get("name") == source_name))]
+            removed += len(efs) - len(kept)
+            if kept:
+                c["envFrom"] = kept
+            elif "envFrom" in c:
+                del c["envFrom"]
+        if removed == 0:
+            return {"code": 404, "message": f"未找到 {source_name} 的环境变量注入", "data": None}
+        new_yaml = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+        r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, kind, namespace, name, new_yaml)
+        if not r2.get("success"):
+            return {"code": 500, "message": r2.get("error", "应用失败"), "data": None}
+        return {"code": 200, "message": "已移除环境变量注入", "data": {"source_name": source_name, "removed": removed}}
+
     if not volume_name:
         return {"code": 400, "message": "volume_name 必填", "data": None}
     doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
