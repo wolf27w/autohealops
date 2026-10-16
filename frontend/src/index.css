@@ -57,6 +57,11 @@ body {
   background: linear-gradient(180deg, #0f2a20 0%, #0b211a 100%) !important;
   border-right: 1px solid #0a1d16;
 }
+/* 应用诊断页的内层会话栏：不受上面全局深绿侧栏影响，保持浅色（否则深底+深字看不见） */
+.ant-layout-sider.agentchat-sider {
+  background: #ffffff !important;
+  border-right: 1px solid #f0f0f0 !important;
+}
 .ant-layout-sider .ant-layout-sider-children {
   display: flex;
   flex-direction: column;
@@ -178,6 +183,11 @@ html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
 html[data-theme='dark'] .ant-layout-sider {
   background: linear-gradient(180deg, #0d1b2e 0%, #0a1424 100%) !important;
   border-right: 1px solid #16253a;
+}
+/* 应用诊断页内层会话栏：浅色模式/深色模式都保持白底（不受上面全局深色侧栏影响） */
+html[data-theme='dark'] .ant-layout-sider.agentchat-sider {
+  background: #ffffff !important;
+  border-right: 1px solid #f0f0f0 !important;
 }
 
 /* 顶栏：深色玻璃 */

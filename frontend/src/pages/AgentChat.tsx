@@ -296,7 +296,7 @@ export default function AgentChat() {
     // 本页为浅色设计：固定浅色主题，避免深色模式下白底白字看不见
     <ConfigProvider theme={buildTheme('light')}>
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
-      <Sider width={260} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Sider width={260} theme="light" className="agentchat-sider" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
           新建诊断会话
         </Button>
