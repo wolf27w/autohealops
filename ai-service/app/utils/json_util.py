@@ -11,6 +11,20 @@ import re
 _FENCE_LEAD_RE = re.compile(r"^```[a-zA-Z0-9_+-]*\s*")
 # 结尾围栏：```（可带前后空白）
 _FENCE_TAIL_RE = re.compile(r"\s*```\s*$")
+# 非法转义：反斜杠后面不是合法 JSON 转义字符（如 Windows 路径 C:\Users、正则 \d、\P 等）
+_INVALID_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
+
+
+def _loads_lenient(s: str):
+    """json.loads，失败时把「非法转义反斜杠」补成双反斜杠再试（模型常输错转义导致解析失败）"""
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        return json.loads(_INVALID_ESCAPE_RE.sub(r"\\\\", s))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
 
 
 def strip_code_fence(text: str) -> str:
@@ -33,22 +47,14 @@ def extract_json(text: str, default=None):
     t = strip_code_fence(text)
     if not t:
         return default
-    try:
-        v = json.loads(t)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        v = None
-    else:
-        if isinstance(v, dict):
-            return v
+    v = _loads_lenient(t)
+    if isinstance(v, dict):
+        return v
     # 兜底：取第一个 { 到最后一个 }
     start = t.find("{")
     end = t.rfind("}")
     if start >= 0 and end > start:
-        try:
-            v = json.loads(t[start:end + 1])
-        except (json.JSONDecodeError, TypeError, ValueError):
-            v = None
-        else:
-            if isinstance(v, dict):
-                return v
+        v = _loads_lenient(t[start:end + 1])
+        if isinstance(v, dict):
+            return v
     return default

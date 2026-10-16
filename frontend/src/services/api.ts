@@ -531,6 +531,11 @@ export const jvmDiagnose = (clusterId: number, ns: string, pod: string, payload:
 export interface JvmAiAnalysis { root_cause?: string; suggestions?: string[]; risk_level?: string; confidence?: number; model_used?: string }
 export const jvmAiAnalyze = (clusterId: number, ns: string, pod: string, payload: { evidence: string; container?: string; severity?: string }) =>
   http.post<JvmAiAnalysis>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/ai-analyze`, payload)
+export interface JvmCollectItem { action: string; label: string; ok: boolean; output: string; message?: string }
+export interface JvmAiAnalyzeAll { items: JvmCollectItem[]; analysis: JvmAiAnalysis | null }
+// 一键：自动跑完所有轻量 JVM 动作 → 汇总证据发 AI 综合诊断
+export const jvmAiAnalyzeAll = (clusterId: number, ns: string, pod: string, payload: { container?: string; pid?: string | number; severity?: string }) =>
+  http.post<JvmAiAnalyzeAll>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/ai-analyze-all`, payload)
 
 export interface JvmParams { xms: string | null; xmx: string | null; xss: string | null; max_metaspace: string | null; others: string[] }
 export interface JvmParamsContainer { container: string; image: string; params: JvmParams; command: string[]; args: string[] }

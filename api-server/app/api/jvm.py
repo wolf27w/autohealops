@@ -33,6 +33,13 @@ from app.middleware.permission import require_any_user, require_operator
 from app.services.user_permission_service import check_cluster_permission
 
 router = APIRouter(prefix="/api/v1/jvm")
+
+# 「一键 AI 综合诊断」自动采集的轻量只读动作（文本类；排除 heap_dump/jfr_start 重文件操作）
+_AI_COLLECT_ACTIONS = ["thread_dump", "heap_histo", "heap_info", "gc_class_histo", "vm_flags", "sys_props"]
+# 单个动作输出进 prompt 的上限（避免超长；超出追加截断标记）
+_AI_EVIDENCE_LIMIT = 20000
+# 全部证据总上限（字符）
+_AI_EVIDENCE_TOTAL = 100000
 logger = get_logger("api-server.jvm")
 
 
@@ -465,6 +472,57 @@ async def jvm_ai_analyze(cluster_id: int, namespace: str, pod_name: str, payload
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"JVM 综合诊断失败: {e}", "data": None}
     return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/ai-analyze-all")
+async def jvm_ai_analyze_all(cluster_id: int, namespace: str, pod_name: str, payload: dict,
+                             user=Depends(require_operator)):
+    """一键：自动跑完所有轻量 JVM 动作（jstack/jmap/jcmd/jattach 文本类）→ 汇总证据发 AI 综合诊断。
+
+    - 重文件操作（heap_dump / jfr_start）不自动跑，避免大文件与长停顿；仍需手动单独执行。
+    - 返回 items（每个动作的原始输出，可单独看）+ analysis（AI 诊断结论）。
+    """
+    if denied := await _deny(user, cluster_id, namespace):
+        return denied
+    container = str(payload.get("container") or "")
+    pid = payload.get("pid")
+    items: list[dict] = []
+    for action in _AI_COLLECT_ACTIONS:
+        r = await run_jvm_action(cluster_id, namespace, pod_name, container, action, pid)
+        d = r.get("data") or {}
+        ok = r.get("code") == 200
+        raw = (d.get("output") or "") if ok else ""
+        truncated = len(raw) > _AI_EVIDENCE_LIMIT
+        items.append({
+            "action": action,
+            "label": _ACTIONS[action]["label"],
+            "ok": ok,
+            "output": raw[:_AI_EVIDENCE_LIMIT] + ("\n…[输出过长已截断]" if truncated else "") if ok else "",
+            "message": "" if ok else str(r.get("message") or "执行失败"),
+        })
+    if not any(i["ok"] for i in items):
+        return {"code": 500, "message": "所有 JVM 动作均失败（容器内可能无 JDK/jattach，或未定位到 Java 进程）：" + (items[0]["message"] if items else ""), "data": None}
+    parts: list[str] = []
+    total = 0
+    for i in items:
+        seg = f"### {i['label']} ({i['action']})\n" + (i["output"] or f"[采集失败] {i['message']}")
+        if total + len(seg) > _AI_EVIDENCE_TOTAL:
+            seg = seg[: max(0, _AI_EVIDENCE_TOTAL - total)] + "\n[总证据超限已截断]"
+        parts.append(seg)
+        total += len(seg)
+    evidence = "\n\n".join(parts)
+    from app.clients.ai_client import ai_client
+    alert_data = {
+        "fault_type": "application_diagnosis",
+        "severity": str(payload.get("severity") or "high"),
+        "namespace": namespace, "pod_name": pod_name, "resource_name": pod_name,
+        "container": container, "cluster_name": str(cluster_id),
+    }
+    try:
+        analysis = await ai_client.jvm_analyze(alert_data, {"jvm_evidence": evidence}, "")
+    except Exception as e:  # noqa: BLE001
+        return {"code": 200, "message": f"采集成功但 AI 诊断失败: {e}", "data": {"items": items, "analysis": None}}
+    return {"code": 200, "message": "success", "data": {"items": items, "analysis": analysis}}
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/deployments/{name}/params")

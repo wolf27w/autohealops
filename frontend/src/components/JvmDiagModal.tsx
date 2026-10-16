@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Modal, Button, Select, Space, Input, message, Spin, Empty, Tag, Alert, Tooltip, Collapse } from 'antd'
 import { ReloadOutlined, BugOutlined, CopyOutlined } from '@ant-design/icons'
-import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams, jvmAiAnalyze, type JvmAiAnalysis } from '../services/api'
+import { getJvmActions, getJvmProcesses, jvmDiagnose, getPodContainers, getJvmParams, jvmAiAnalyze, jvmAiAnalyzeAll, type JvmAiAnalysis, type JvmCollectItem } from '../services/api'
 import type { JvmAction, JvmProcess, JvmDiagResult, JvmParamsContainer } from '../services/api'
 
 interface JvmPod { clusterId: number; namespace: string; name: string }
@@ -23,11 +23,12 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
   const [params, setParams] = useState<JvmParamsContainer[]>([])
   const [evidence, setEvidence] = useState<{ action: string; output: string }[]>([])
   const [aiResult, setAiResult] = useState<JvmAiAnalysis | null>(null)
+  const [aiItems, setAiItems] = useState<JvmCollectItem[]>([])
   const [aiLoading, setAiLoading] = useState(false)
 
   useEffect(() => {
     if (!pod) return
-    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote(''); setEvidence([]); setAiResult(null)
+    setContainer(''); setProcs([]); setPid(undefined); setResult(null); setErr(''); setParams([]); setJvmNote(''); setEvidence([]); setAiResult(null); setAiItems([])
     getJvmActions().then(setActions).catch(() => {})
     getPodContainers(pod.clusterId, pod.namespace, pod.name).then((c) => setContainers((c as unknown as { containers?: string[] }).containers || [])).catch(() => {})
     if (deployment) {
@@ -65,7 +66,17 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
       .finally(() => setRunning(''))
   }
 
-  // 一键把本次采集的 JVM 证据发给 AI 做应用健康综合诊断
+  // 一键：自动采集全部轻量动作（jstack/jmap/jcmd/jattach 文本类）→ 发 AI 综合诊断
+  const runAiAll = () => {
+    if (!pod) return
+    setAiLoading(true); setAiResult(null); setAiItems([])
+    jvmAiAnalyzeAll(pod.clusterId, pod.namespace, pod.name, { container, pid })
+      .then((d) => { setAiItems(d?.items || []); setAiResult(d?.analysis || null) })
+      .catch((e) => setErr(String(e?.message || e)))
+      .finally(() => setAiLoading(false))
+  }
+
+  // 仅用「已手动采集的证据」发 AI 综合诊断
   const runAi = () => {
     if (!pod || evidence.length === 0) return
     setAiLoading(true); setAiResult(null)
@@ -127,13 +138,31 @@ export default function JvmDiagModal({ pod, deployment, onClose }: Props) {
 
       {running && <Spin tip="诊断执行中…（jmap/jfr 可能较慢）" style={{ display: 'block', margin: '12px 0' }}><div style={{ height: 40 }} /></Spin>}
 
-      <Space style={{ marginBottom: 12 }} wrap>
-        <Button size="small" type="primary" loading={aiLoading} disabled={evidence.length === 0} onClick={runAi}>
-          AI 综合诊断（应用健康）
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Button size="small" type="primary" loading={aiLoading} disabled={!pod} onClick={runAiAll}>
+          一键采集全部 + AI 综合诊断
         </Button>
-        <span style={{ color: '#999', fontSize: 12 }}>已采集 {evidence.length} 项证据{evidence.length === 0 ? '（先跑几个动作）' : '，发给 AI 综合判断'}</span>
+        {evidence.length > 0 && (
+          <Button size="small" loading={aiLoading} onClick={runAi}>发 AI（仅用已采集 {evidence.length} 项）</Button>
+        )}
         {evidence.length > 0 && <Button size="small" type="link" onClick={() => { setEvidence([]); setAiResult(null) }}>清空证据</Button>}
       </Space>
+      <div style={{ color: '#999', fontSize: 12, marginBottom: 12 }}>
+        一键自动采集 thread_dump / heap_histo / heap_info / gc_class_histo / vm_flags / sys_props 后再发 AI；
+        重操作（heap dump / JFR）需手动单独执行。
+      </div>
+
+      {aiItems.length > 0 && (
+        <Collapse size="small" style={{ marginBottom: 12 }}
+          items={aiItems.map((it) => ({
+            key: it.action,
+            label: <span>{it.label} {it.ok ? <Tag color="green">OK</Tag> : <Tag color="red">失败</Tag>}</span>,
+            children: (
+              <Input.TextArea readOnly value={it.ok ? (it.output || '(无输出)') : (it.message || '(采集失败)')}
+                autoSize={{ minRows: 4, maxRows: 18 }} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            ),
+          }))} />
+      )}
 
       {aiResult && (
         <div style={{ border: '1px solid #d9f7be', background: '#fcfffb', borderRadius: 6, padding: 10, marginBottom: 12 }}>
