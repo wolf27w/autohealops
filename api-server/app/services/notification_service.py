@@ -361,11 +361,12 @@ async def _alert_in_silence(alert: Alert, policy: dict) -> bool:
     return False
 
 
-def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: str, cluster_name: str) -> str:
+def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: str, cluster_name: str, env: str = "") -> str:
     """按渠道渲染告警内容：im_template（按渠道）优先，缺失/渲染失败退回内置默认"""
     ctx = {
         "project": project_name or "",
         "cluster": cluster_name or str(alert.cluster_id or "-"),
+        "env": env or "",
         "namespace": alert.namespace or "-",
         "resource": f"{alert.resource_type}/{alert.resource_name}",
         "fault_type": alert.fault_type,
@@ -387,17 +388,17 @@ def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: s
             return tmpl.format(**ctx)
         except (KeyError, IndexError, ValueError):
             pass  # 模板占位符非法 → 退回内置默认
-    return format_alert_message(alert, project_name, cluster_name)
+    return format_alert_message(alert, project_name, cluster_name, env)
 
 
-async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: str) -> None:
+async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: str, env: str = "") -> None:
     """站内消息渠道（平台内置）：告警写入站内消息中心，给所有启用中的管理员。"""
     from app.models import User
     async with async_session() as session:
         admins = (await session.execute(
             select(User).where(User.role == "admin", User.is_active.is_(True))
         )).scalars().all()
-    content = format_alert_message(alert, project_name, cluster_name)
+    content = format_alert_message(alert, project_name, cluster_name, env)
     title = f"告警：{alert.fault_type or '未知类型'}"
     for a in admins:
         await write_in_app_message(a.id, title, content, kind="alert", link="/alert-handling")
@@ -429,7 +430,7 @@ def _send_email_sync(host: str, port: int, username: str, password: str, sender:
             pass
 
 
-async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str) -> None:
+async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str, env: str = "") -> None:
     """邮件渠道：告警邮件发给所有启用中的管理员（配好 SMTP 才发；未配静默跳过）"""
     from app.models import User
     from app.services.system_setting_service import get_setting
@@ -455,7 +456,7 @@ async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str
         return
 
     subject = f"[API-OPS 告警] {alert.fault_type or '未知类型'} - {alert.resource_name or ''}"
-    body = format_alert_message(alert, project_name, cluster_name)
+    body = format_alert_message(alert, project_name, cluster_name, env)
     try:
         await asyncio.to_thread(_send_email_sync, host, port, username, password,
                                 sender, recipients, subject, body, use_ssl)
@@ -562,7 +563,8 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
                 return {"sent": 0, "reason": "storm_suppressed"}
             _pcfg, _pname = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
             _cname = await _cluster_name(alert.cluster_id)
-            _content = _render_alert_content(rcfg, alert, _pname, _cname)
+            _env = await _cluster_env(alert.cluster_id)
+            _content = _render_alert_content(rcfg, alert, _pname, _cname, _env)
             if dry_run:
                 return {"sent": 1, "reason": "rule_route"}
             await _send_webhook_with_retry(rcfg, _content, alert.id, at_all=at_all, receiver="规则指定渠道")
@@ -582,18 +584,19 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
 
     project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
     cluster_name = await _cluster_name(alert.cluster_id)
+    cluster_env = await _cluster_env(alert.cluster_id)
     sent = 0
 
     # 站内消息渠道（平台内置，非 IM webhook）：告警同时写入站内消息中心（给所有管理员）
     if "in_app" in allowed:
         if not dry_run:
-            await _notify_alert_in_app(alert, project_name, cluster_name)
+            await _notify_alert_in_app(alert, project_name, cluster_name, cluster_env)
         sent += 1
 
     # 邮件渠道：告警邮件发给所有管理员（配好 SMTP 才发；未配静默跳过）
     if "email" in allowed:
         if not dry_run:
-            await _notify_alert_email(alert, project_name, cluster_name)
+            await _notify_alert_email(alert, project_name, cluster_name, cluster_env)
         sent += 1
 
     async def _dispatch(cfg: NotificationConfig, receiver: str) -> None:
@@ -602,7 +605,7 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
             return
         if not _source_match(cfg, alert.resource_type):
             return  # 告警来源不匹配（配置了 sources 时）
-        content = _render_alert_content(cfg, alert, project_name, cluster_name)
+        content = _render_alert_content(cfg, alert, project_name, cluster_name, cluster_env)
         if dry_run:
             sent += 1
             return
@@ -676,14 +679,26 @@ async def _cluster_name(cluster_id: int) -> str:
     return c.name if c else str(cluster_id)
 
 
-def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str = "") -> str:
-    """格式化告警消息（带项目名、集群名称）"""
+async def _cluster_env(cluster_id: int) -> str:
+    """取集群环境标签（通知模板 {env} 占位符用）"""
+    if not cluster_id:
+        return ""
+    from app.models import Cluster
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+    return (c.env_tag or "") if c else ""
+
+
+def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str = "", env: str = "") -> str:
+    """格式化告警消息（带项目名、集群名称、环境）"""
     proj = f"项目: {project_name}\n" if project_name else ""
     cluster = cluster_name or str(alert.cluster_id)
+    env_line = f"环境: {env}\n" if env else ""
     return (
         f"【API-OPS 告警】\n"
         f"{proj}"
         f"集群: {cluster}\n"
+        f"{env_line}"
         f"资源: {alert.resource_type}/{alert.resource_name}\n"
         f"命名空间: {alert.namespace or '-'}\n"
         f"故障类型: {alert.fault_type}\n"
