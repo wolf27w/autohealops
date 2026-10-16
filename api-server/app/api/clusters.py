@@ -26,6 +26,46 @@ def _kubeconfig_server(kubeconfig: str) -> str:
         return ""
 
 
+def _kubeconfig_credential(kubeconfig: str):
+    """解析 kubeconfig 凭据类型与到期：返回 (cred_type, expires_at|None)。
+
+    cred_type: cert=客户端证书 / token=静态或 JWT token / oidc=auth-provider·exec / unknown
+    """
+    try:
+        import base64
+        import yaml as _yaml
+        from datetime import datetime, timezone
+        doc = _yaml.safe_load(kubeconfig) or {}
+        user = (doc.get("users") or [{}])[0].get("user") or {}
+        cert_b64 = user.get("client-certificate-data") or user.get("client-certificate")
+        if cert_b64:
+            try:
+                from cryptography import x509
+                raw = base64.b64decode(cert_b64) if user.get("client-certificate-data") else cert_b64.encode()
+                cert = x509.load_pem_x509_certificate(raw)
+                na = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
+                if na.tzinfo is None:
+                    na = na.replace(tzinfo=timezone.utc)
+                return "cert", na.replace(tzinfo=None)
+            except Exception:  # noqa: BLE001
+                return "cert", None
+        tok = user.get("token")
+        if tok:
+            try:
+                from jose import jwt
+                exp = jwt.get_unverified_claims(tok).get("exp")
+                if exp:
+                    return "token", datetime.utcfromtimestamp(int(exp))
+            except Exception:  # noqa: BLE001
+                pass
+            return "token", None  # 长期 SA token 无 exp
+        if user.get("auth-provider") or user.get("exec"):
+            return "oidc", None
+        return "unknown", None
+    except Exception:  # noqa: BLE001
+        return "unknown", None
+
+
 @router.post("")
 async def create_cluster(payload: dict, user=Depends(require_admin)):
     """添加集群（admin；加密存 kubeconfig + 环境标签 + 健康检查 + 启动 watch）"""
@@ -34,6 +74,7 @@ async def create_cluster(payload: dict, user=Depends(require_admin)):
     kubeconfig = payload.get("kubeconfig", "")
     env_tag = payload.get("env_tag", "prod")
     server_url = _kubeconfig_server(kubeconfig)
+    cred_type, cred_expires_at = _kubeconfig_credential(kubeconfig)
     if env_tag not in ("qa", "release", "prod"):
         env_tag = "prod"
 
@@ -53,6 +94,7 @@ async def create_cluster(payload: dict, user=Depends(require_admin)):
             name=name, description=description,
             kubeconfig_encrypted=encrypt_aes256_gcm(kubeconfig),
             env_tag=env_tag, source="kubeconfig", api_server_url=server_url,
+            cred_type=cred_type, cred_expires_at=cred_expires_at,
             status="unknown",
             inspect_cron=(payload.get("inspect_cron") or "").strip(),
         )
@@ -83,6 +125,37 @@ async def create_cluster(payload: dict, user=Depends(require_admin)):
     return {"code": 200, "message": "success", "data": {"id": cluster_id, "status": hc.get("status", "unreachable")}}
 
 
+@router.put("/{cluster_id}/kubeconfig")
+async def replace_kubeconfig(cluster_id: int, payload: dict, user=Depends(require_admin)):
+    """一键更新凭据：粘贴新 kubeconfig 覆盖（不删集群、不丢历史告警/工单），重解析 server/凭据 + 健康检查"""
+    if not await user_permission_service.check_cluster_permission(user, cluster_id):
+        return {"code": 403, "message": "无权限访问该集群", "data": None}
+    kubeconfig = payload.get("kubeconfig", "")
+    if not kubeconfig.strip():
+        return {"code": 400, "message": "kubeconfig 必填", "data": None}
+    server_url = _kubeconfig_server(kubeconfig)
+    cred_type, cred_expires_at = _kubeconfig_credential(kubeconfig)
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+        if not c:
+            return {"code": 404, "message": "集群不存在", "data": None}
+        c.kubeconfig_encrypted = encrypt_aes256_gcm(kubeconfig)
+        c.api_server_url = server_url
+        c.cred_type = cred_type
+        c.cred_expires_at = cred_expires_at
+        await session.commit()
+    hc = await executor_client.acall(executor_client.health_check, cluster_id)
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+        c.status = "healthy" if hc["success"] else "unreachable"
+        if hc["success"]:
+            c.version = hc["version"]
+        await session.commit()
+    return {"code": 200, "message": "success", "data": {
+        "status": hc.get("status", "unreachable"), "cred_type": cred_type,
+        "cred_expires_at": str(cred_expires_at) if cred_expires_at else ""}}
+
+
 @router.get("")
 async def list_clusters(user=Depends(require_any_user)):
     """集群列表（admin 全量，其他按授权过滤）"""
@@ -97,7 +170,10 @@ async def list_clusters(user=Depends(require_any_user)):
         clusters = list(result.scalars())
     return {"code": 200, "message": "success", "data": [
         {"id": c.id, "name": c.name, "description": c.description, "status": c.status,
-         "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig", "created_at": str(c.created_at),
+         "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
+         "cred_type": c.cred_type or "unknown",
+         "cred_expires_at": str(c.cred_expires_at) if c.cred_expires_at else "",
+         "created_at": str(c.created_at),
          "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
          "inspect_enabled": bool(c.inspect_enabled),
          "inspect_cron": c.inspect_cron or "",
@@ -118,6 +194,8 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": {
         "id": c.id, "name": c.name, "description": c.description, "status": c.status,
         "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
+        "cred_type": c.cred_type or "unknown",
+        "cred_expires_at": str(c.cred_expires_at) if c.cred_expires_at else "",
         "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",

@@ -67,6 +67,8 @@ export const createCluster = (data: Payload) => http.post<Cluster>('/clusters', 
 export const updateCluster = (id: number, data: Payload) => http.put<Cluster>(`/clusters/${id}`, data)
 export const deleteCluster = (id: number) => http.delete(`/clusters/${id}`)
 export const healthCheckCluster = (id: number) => http.post(`/clusters/${id}/health-check`)
+// 一键更新凭据：粘贴新 kubeconfig 覆盖（不删集群不丢历史）
+export const replaceClusterKubeconfig = (id: number, kubeconfig: string) => http.put(`/clusters/${id}/kubeconfig`, { kubeconfig })
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })

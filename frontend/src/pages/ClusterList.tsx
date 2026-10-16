@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown } from 'antd'
 import { PlusOutlined, ReloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster } from '../services/api'
+import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig } from '../services/api'
 import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
@@ -14,6 +14,8 @@ const SOURCE_COLOR: Record<string, string> = { kubeconfig: 'default', 'in-cluste
 type ClusterWithExtra = Cluster & {
   env_tag?: string
   source?: string
+  cred_type?: string
+  cred_expires_at?: string
   description?: string
   rbac_status?: string
   version?: string
@@ -35,6 +37,7 @@ export default function ClusterList() {
   const [editing, setEditing] = useState<ClusterWithExtra | null>(null)
   const [form] = Form.useForm()
   const [kubeconfig, setKubeconfig] = useState('')
+  const [newKubeconfig, setNewKubeconfig] = useState('')
 
   const load = () => {
     setLoading(true)
@@ -48,6 +51,7 @@ export default function ClusterList() {
     form.resetFields()
     form.setFieldsValue({ env_tag: 'prod', inspect_enabled: true, inspect_cron: '' })
     setKubeconfig('')
+    setNewKubeconfig('')
     setModalOpen(true)
   }
 
@@ -69,7 +73,12 @@ export default function ClusterList() {
         days: values.mw_days || '1,2,3,4,5',
       }
       await updateCluster(editing.id, { description: values.description, env_tag: values.env_tag, maintenance_window: mw, inspect_enabled: values.inspect_enabled ?? true, inspect_cron: values.inspect_cron || '' })
-      message.success('已更新')
+      if (newKubeconfig.trim()) {
+        await replaceClusterKubeconfig(editing.id, newKubeconfig.trim())
+        message.success('已更新（凭据已替换）')
+      } else {
+        message.success('已更新')
+      }
     } else {
       await createCluster({ ...values, kubeconfig })
       message.success('集群已添加')
@@ -77,6 +86,7 @@ export default function ClusterList() {
     setModalOpen(false)
     form.resetFields()
     setKubeconfig('')
+    setNewKubeconfig('')
     load()
   }
 
@@ -115,6 +125,16 @@ export default function ClusterList() {
             </Tooltip>
           ) },
           { title: '版本', dataIndex: 'version' },
+          { title: '凭据有效期', dataIndex: 'cred_expires_at', render: (v, r: ClusterWithExtra) => {
+            if (r.source === 'in-cluster' || r.source === 'agent') return <Tag color="blue">免维护</Tag>
+            if (r.cred_type === 'unknown') return <Tag>未知</Tag>
+            if (!v) return <Tag color={r.cred_type === 'token' ? 'orange' : 'default'}>{r.cred_type === 'token' ? '长期 token' : '未解析'}</Tag>
+            const days = Math.ceil((new Date(String(v)).getTime() - Date.now()) / 86400000)
+            if (days < 0) return <Tag color="red">已过期</Tag>
+            if (days <= 7) return <Tag color="red">{days} 天后过期</Tag>
+            if (days <= 30) return <Tag color="orange">{days} 天后过期</Tag>
+            return <Tag>{String(v).slice(0, 10)}</Tag>
+          } },
           { title: '创建时间', dataIndex: 'created_at' },
           {
             title: '操作', width: 70, render: (_, record) => (
@@ -175,6 +195,11 @@ export default function ClusterList() {
               </Space>
               <div style={{ fontSize: 12, color: '#999', marginTop: -8 }}>维护窗口内该集群不告警（1-7 表示周一到周日；跨天如 23:00-02:00 支持）。与「通知配置」里的全平台静默窗口任一命中即静默</div>
             </>
+          )}
+          {editing && (
+            <Form.Item label="更新凭据（粘贴新 kubeconfig，可选）" tooltip="证书/Token 过期时在此粘贴新文件替换，不删集群、不丢历史告警/工单；留空=不更新">
+              <Input.TextArea rows={4} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder="粘贴新 kubeconfig（留空=不更新凭据）" onChange={(e) => setNewKubeconfig(e.target.value)} />
+            </Form.Item>
           )}
           {!editing && (
             <Form.Item label="kubeconfig（上传文件）" required>

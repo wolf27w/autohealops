@@ -26,6 +26,9 @@ class Cluster(Base):
     source: Mapped[str] = mapped_column(String(20), default="kubeconfig", server_default="kubeconfig")
     # kubeconfig 首个 context 的 server URL（幂等键，空=未解析）
     api_server_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    # 凭据类型/到期（凭据到期治理）：cert=客户端证书 / token / oidc / unknown
+    cred_type: Mapped[str] = mapped_column(String(20), default="unknown", server_default="unknown")
+    cred_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 维护窗口配置 JSON：{"enabled": true, "start": "02:00", "end": "04:00", "days": "1,2,3,4,5"}
     maintenance_window: Mapped[str] = mapped_column(Text, default="{}")
     # 云原生 RBAC（专项 B）：接入状态
