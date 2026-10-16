@@ -299,17 +299,16 @@ export default function AgentChat() {
         </Button>
         <div style={{ marginTop: 12, overflowY: 'auto', flex: 1 }}>
           {sessions.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
-          {sessionGroups.map(([day, items], gi) => {
-            const isRecent = gi < 2  // 最近 2 天默认展开
-            const open = isRecent || !!olderOpen[day]
+          {sessionGroups.map(([day, items]) => {
+            const open = olderOpen[day] !== false  // 默认全部展开（不点也能看到标题）
             return (
               <div key={day} style={{ marginBottom: 4 }}>
                 <div
-                  onClick={() => { if (!isRecent) setOlderOpen((p) => ({ ...p, [day]: !p[day] })) }}
-                  style={{ fontSize: 12, color: '#8c8c8c', padding: '6px 6px', cursor: isRecent ? 'default' : 'pointer',
+                  onClick={() => setOlderOpen((p) => ({ ...p, [day]: open }))}
+                  style={{ fontSize: 12, color: '#8c8c8c', padding: '6px 6px', cursor: 'pointer',
                            display: 'flex', justifyContent: 'space-between', userSelect: 'none' }}>
                   <span>{fmtDay(day)}</span>
-                  {!isRecent && <span>{open ? '收起' : `${items.length} 条`}</span>}
+                  <span>{open ? '收起' : `${items.length} 条`}</span>
                 </div>
                 {open && items.map((s) => (
                   <div
@@ -318,7 +317,7 @@ export default function AgentChat() {
                     style={{ cursor: 'pointer', padding: '7px 10px', borderRadius: 6, marginBottom: 2,
                              background: s.id === activeId ? '#e6f4ff' : 'transparent',
                              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <Text ellipsis style={{ fontSize: 13, flex: 1 }} title={sessionName(s)}>{sessionName(s)}</Text>
+                    <Text ellipsis style={{ fontSize: 13, flex: 1, color: '#1f1f1f' }} title={sessionName(s)}>{sessionName(s)}</Text>
                     <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
                       <DeleteOutlined style={{ color: '#ccc', fontSize: 12 }} onClick={(e) => e.stopPropagation()} />
                     </Popconfirm>
