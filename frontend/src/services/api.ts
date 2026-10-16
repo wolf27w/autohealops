@@ -235,6 +235,8 @@ export interface DashboardParams {
   cluster_id?: number
   /** 后端仍支持，但仪表盘按老板口径只按集群维度，不再传项目 */
   project_id?: number
+  /** 环境筛选（qa/release/prod），按该环境的集群过滤 */
+  env_tag?: string
   /** AI 诊断结果分布窗口：24h / 7d / 30d / follow(跟随上方时间筛选，默认) */
   ai_range?: string
 }

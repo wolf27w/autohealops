@@ -70,6 +70,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     ? (screen ? '实时（最近 7 天，自动刷新）' : '实时（最近 24 小时，自动刷新）')
     : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
+  const [env, setEnv] = useState<string | undefined>(undefined)
   const [fullscreen, setFullscreen] = useState(false)
 
   // 大屏实时时钟（仅 /screen 需要）
@@ -119,14 +120,14 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   // 仪表盘主数据（5s 轮询：后端缓存键内嵌代次，告警/工单/审批变更即时失效 → 解决后 ≤5s 反映）
   // placeholderData: keepPreviousData → 切筛选/回页面时先展示上一次数据，不再短暂空白
   const { data, isFetching, refetch } = useQuery<DashboardData>({
-    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId],
+    queryKey: ['dashboard-v2', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId, env],
     queryFn: () => (!live && customRange
       ? getDashboard({
           start: customRange[0].format('YYYY-MM-DD HH:mm:ss'),
           end: customRange[1].format('YYYY-MM-DD HH:mm:ss'),
-          cluster_id: clusterId, ai_range: AI_RANGE,
+          cluster_id: clusterId, env_tag: env, ai_range: AI_RANGE,
         })
-      : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, ai_range: AI_RANGE })),
+      : getDashboard({ range: LIVE_RANGE, cluster_id: clusterId, env_tag: env, ai_range: AI_RANGE })),
     placeholderData: keepPreviousData,
     refetchInterval: 5000,
   })
@@ -231,6 +232,12 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <span style={{ fontSize: 16, fontWeight: 600, marginRight: 4 }}>仪表盘</span>
           <Space size={8} wrap>
+            <Select
+              allowClear placeholder="全部环境" style={{ width: 120 }}
+              value={env}
+              onChange={(v) => setEnv(v)}
+              options={[{ value: 'qa', label: 'qa' }, { value: 'release', label: 'release' }, { value: 'prod', label: 'prod' }]}
+            />
             <Select
               allowClear placeholder="全部集群" style={{ width: 160 }}
               value={clusterId}

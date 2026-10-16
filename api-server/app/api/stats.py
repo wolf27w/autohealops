@@ -147,17 +147,19 @@ _DASH_WAIT_TICKS = 15         # 抢不到锁时的等待轮次（每轮 0.2s →
 
 
 async def _dashboard_cache_key(range_: str, start: str, end: str,
-                               cluster_id: int | None, project_id: int | None, ai_range: str) -> str:
+                               cluster_id: int | None, project_id: int | None, ai_range: str,
+                               env_tag: str | None) -> str:
     """仪表盘缓存键（默认实时视图走裸键，其余按筛选参数拼键）
 
     键内嵌「缓存代次」gen：告警/工单/审批/任务任一变更 → gen+1（见 app/core/orm_hooks.py），
     旧键立即不可达（无需 SCAN 删除，靠 TTL 自然回收）→ 下次取数即重算，解决后即时刷新。
     """
     gen = await get_dashboard_generation()
-    if range_ != "24h" or cluster_id is not None or project_id is not None or start or end or ai_range:
+    if range_ != "24h" or cluster_id is not None or project_id is not None or env_tag or start or end or ai_range:
         return (f"cache:dashboard:v4:{gen}:{range_}:{start}:{end}:"
                 f"{cluster_id if cluster_id is not None else '-'}:"
-                f"{project_id if project_id is not None else '-'}:{ai_range or '-'}")
+                f"{project_id if project_id is not None else '-'}:"
+                f"{ai_range or '-'}:{env_tag or '-'}")
     return f"cache:dashboard:v4:{gen}"
 
 
@@ -176,6 +178,7 @@ async def _compute_dashboard(
     end: str = "",
     cluster_id: int | None = None,
     project_id: int | None = None,
+    env_tag: str | None = None,
     ai_range: str = "",
     _force: bool = False,
     _user=None,
@@ -256,6 +259,12 @@ async def _compute_dashboard(
         if cluster_id is not None:
             filter_cluster_ids = {cluster_id}
             alert_filter_conds.append(Alert.cluster_id == cluster_id)
+        if env_tag:
+            env_ids = {int(c.id) for c in (await session.execute(
+                select(Cluster.id).where(Cluster.env_tag == env_tag)
+            )).scalars()}
+            filter_cluster_ids = env_ids if filter_cluster_ids is None else (filter_cluster_ids & env_ids)
+            alert_filter_conds.append(Alert.cluster_id.in_(env_ids) if env_ids else text("1=0"))
         if project_id is not None:
             pns_rows = (await session.execute(
                 select(ProjectClusterNS.cluster_id, ProjectClusterNS.namespace)
@@ -1049,9 +1058,9 @@ async def _compute_dashboard(
 
 
 async def dashboard_cached(range_: str, start: str, end: str, cluster_id: int | None,
-                           project_id: int | None, ai_range: str) -> dict:
+                           project_id: int | None, ai_range: str, env_tag: str | None = None) -> dict:
     """带缓存 + 单飞锁的仪表盘取数（路由与后台预热共用；返回 payload，不含 code/message 包装）"""
-    cache_key = await _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range)
+    cache_key = await _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range, env_tag)
     payload = await _cache_get(cache_key)
     if payload is not None:
         return payload
@@ -1061,7 +1070,7 @@ async def dashboard_cached(range_: str, start: str, end: str, cluster_id: int | 
         lock_val = await acquire_lock(redis_pool, lock_key, timeout_ms=_DASH_CACHE_TTL * 2 * 1000)
     except Exception as e:  # noqa: BLE001  Redis 不可用 → 不锁不等，直接计算
         logger.warning("仪表盘缓存锁不可用，直接计算: %s", e)
-        return (await _compute_dashboard(range_, start, end, cluster_id, project_id, ai_range, True))["data"]
+        return (await _compute_dashboard(range_, start, end, cluster_id, project_id, env_tag, ai_range, True))["data"]
 
     if lock_val is None:
         # 已有请求在计算：等它写 fresh；等不到则回 last-good 旧值；两者都没有才自己算
@@ -1073,10 +1082,10 @@ async def dashboard_cached(range_: str, start: str, end: str, cluster_id: int | 
         payload = await _cache_get(cache_key + ":last")
         if payload is not None:
             return payload
-        return (await _compute_dashboard(range_, start, end, cluster_id, project_id, ai_range, True))["data"]
+        return (await _compute_dashboard(range_, start, end, cluster_id, project_id, env_tag, ai_range, True))["data"]
 
     try:
-        return (await _compute_dashboard(range_, start, end, cluster_id, project_id, ai_range, True))["data"]
+        return (await _compute_dashboard(range_, start, end, cluster_id, project_id, env_tag, ai_range, True))["data"]
     finally:
         try:
             await release_lock(redis_pool, lock_key, lock_val)
@@ -1091,11 +1100,12 @@ async def dashboard(
     end: str = Query("", description="自定义结束时间（YYYY-MM-DD HH:mm[:ss]）"),
     cluster_id: int | None = Query(None),
     project_id: int | None = Query(None),
+    env_tag: str | None = Query(None),
     ai_range: str = Query("", description="AI 诊断结果分布窗口：24h/7d/30d；空或 follow=跟随上方时间筛选"),
     user=Depends(require_any_user),
 ):
     """仪表盘 / 大屏聚合数据（fresh 缓存 45s + 单飞锁 + last-good 兜底 + 后台 10s 预热）"""
-    payload = await dashboard_cached(range_, start, end, cluster_id, project_id, ai_range)
+    payload = await dashboard_cached(range_, start, end, cluster_id, project_id, ai_range, env_tag)
     return {"code": 200, "message": "success", "data": payload}
 
 
@@ -1161,7 +1171,7 @@ async def prewarm_dashboard() -> None:
     让对外请求绝大多数命中缓存，消除冷路径抖动。
     """
     try:
-        await _compute_dashboard("24h", "", "", None, None, "24h", True)
+        await _compute_dashboard("24h", "", "", None, None, None, "24h", True)
     except Exception as e:  # noqa: BLE001
         logger.warning("仪表盘预热失败: %s", e)
 
