@@ -28,7 +28,7 @@ const lightTheme: ThemeConfig = {
     colorTextSecondary: '#5a7368',
     colorBorder: '#d9e6de',
     colorBorderSecondary: '#eaf2ec',
-    fontSize: 13,
+    fontSize: 15,
     fontFamily: FONT_FAMILY,
   },
   components: {
@@ -86,7 +86,7 @@ const darkTheme: ThemeConfig = {
     colorTextSecondary: '#94a3b8',
     colorBorder: '#1e293b',
     colorBorderSecondary: '#273449',
-    fontSize: 13,
+    fontSize: 15,
     fontFamily: FONT_FAMILY,
   },
   components: {

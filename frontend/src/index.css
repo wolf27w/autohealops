@@ -78,7 +78,7 @@ body {
 .ant-menu-dark .ant-menu-submenu-title {
   color: #cfe3d7 !important;
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 14px;
   letter-spacing: 0.3px;
   margin-inline: 8px;
   border-radius: 8px;
@@ -142,7 +142,7 @@ body {
 
 /* ---------- 表格 ---------- */
 .ant-table-wrapper .ant-table {
-  font-size: 12.5px;
+  font-size: 15px;
 }
 .ant-table-thead > tr > th {
   font-weight: 600 !important;
