@@ -376,8 +376,11 @@ async def recovery_notify_alert(alert_id: int, request: Request):
 @router.get("/{alert_id}/diagnosis")
 async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
     async with async_session() as session:
-        result = await session.execute(select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert_id))
-        d = result.scalar_one_or_none()
+        result = await session.execute(
+            select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert_id)
+            .order_by(AIDiagnosisResult.id.desc())
+        )
+        d = result.scalars().first()
     if not d:
         return {"code": 404, "message": "无诊断结果", "data": None}
     return {"code": 200, "message": "success", "data": {
