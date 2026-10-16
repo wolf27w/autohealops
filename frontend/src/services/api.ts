@@ -317,7 +317,7 @@ export const getPodDetail = (clusterId: number, ns: string, pod: string) =>
 export const getWorkloadMounts = (clusterId: number, kind: string, ns: string, name: string) =>
   http.get(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/mounts`)
 // 给工作负载挂载 配置字典/密钥/PVC（mode=volume 挂载为卷；mode=env 注入环境变量 envFrom）
-export interface AddMountPayload { mode?: 'volume' | 'env'; source_type: 'configMap' | 'secret' | 'pvc'; source_name: string; mount_path?: string; sub_path?: string; read_only?: boolean; volume_name?: string; containers?: string[] }
+export interface AddMountPayload { mode?: 'volume' | 'env'; source_type: 'configMap' | 'secret' | 'pvc' | 'emptyDir'; source_name?: string; mount_path?: string; sub_path?: string; read_only?: boolean; volume_name?: string; containers?: string[] }
 export const addWorkloadMount = (clusterId: number, kind: string, ns: string, name: string, data: AddMountPayload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/mounts`, data)
 // 移除工作负载挂载/环境变量注入

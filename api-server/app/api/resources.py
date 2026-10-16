@@ -878,16 +878,27 @@ async def workload_mounts(cluster_id: int, kind: str, namespace: str, name: str,
     r = await executor_client.acall(executor_client.get_workload_mounts, cluster_id, kind, namespace, name)
     if not r.get("success"):
         return {"code": 500, "message": r.get("error", "挂载配置获取失败"), "data": None}
+    # 环境变量（env + envFrom）从工作负载 YAML 解析
+    env_refs, envs = [], []
+    ry = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+    if ry.get("success"):
+        try:
+            doc = yaml.safe_load(ry.get("yaml", "")) or {}
+            env_refs = _env_refs_from_doc(doc)
+            envs = _envs_from_doc(doc)
+        except yaml.YAMLError:
+            pass
     return {"code": 200, "message": "success", "data": {
         "volumes": r.get("volumes", []),
         "containers": r.get("containers", []),
         "init_containers": r.get("init_containers", []),
-        "env_refs": await _extract_env_refs(cluster_id, kind, namespace, name),
+        "env_refs": env_refs,
+        "envs": envs,
     }}
 
 
 # 可挂载的数据源类型 → Pod 模板里的 volumes 字段名
-_MOUNT_SOURCE_KEYS = {"configMap": "configMap", "secret": "secret", "pvc": "persistentVolumeClaim"}
+_MOUNT_SOURCE_KEYS = {"configMap": "configMap", "secret": "secret", "pvc": "persistentVolumeClaim", "emptyDir": "emptyDir"}
 # envFrom 引用字段名
 _ENV_REF_KEYS = {"configMap": "configMapRef", "secret": "secretRef"}
 _WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset"}
@@ -905,7 +916,34 @@ def _build_volume_payload(src_type: str, src_name: str) -> dict:
         return {"configMap": {"name": src_name}}
     if src_type == "secret":
         return {"secret": {"secretName": src_name}}
+    if src_type == "emptyDir":
+        return {"emptyDir": {}}
     return {"persistentVolumeClaim": {"claimName": src_name}}
+
+
+def _envs_from_doc(doc: dict) -> list[dict]:
+    """从工作负载 doc 解析容器环境变量（env，含字面量与 valueFrom）"""
+    ts = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    out: list[dict] = []
+    init_names = {c.get("name") for c in (ts.get("initContainers") or [])}
+    for c in (ts.get("containers") or []) + (ts.get("initContainers") or []):
+        for e in c.get("env") or []:
+            vf = e.get("valueFrom") or {}
+            src = ""
+            if vf.get("configMapKeyRef"):
+                rr = vf["configMapKeyRef"]
+                src = f"配置字典 {rr.get('name')} / {rr.get('key')}"
+            elif vf.get("secretKeyRef"):
+                rr = vf["secretKeyRef"]
+                src = f"密钥 {rr.get('name')} / {rr.get('key')}"
+            elif vf.get("fieldRef"):
+                src = f"字段 {vf['fieldRef'].get('fieldPath')}"
+            elif vf.get("resourceFieldRef"):
+                src = f"资源 {vf['resourceFieldRef'].get('resource')}"
+            out.append({"container": c.get("name"), "name": e.get("name"),
+                        "value": e.get("value"), "value_from": src,
+                        "is_init": c.get("name") in init_names})
+    return out
 
 
 def _env_refs_from_doc(doc: dict) -> list[dict]:
@@ -924,20 +962,6 @@ def _env_refs_from_doc(doc: dict) -> list[dict]:
                             "source_name": sec.get("name"), "prefix": ef.get("prefix") or "",
                             "optional": bool(sec.get("optional"))})
     return out
-
-
-async def _extract_env_refs(cluster_id: int, kind: str, namespace: str, name: str) -> list[dict]:
-    """拉工作负载 YAML 并解析 envFrom 引用（失败时返回空表）"""
-    if kind not in _WORKLOAD_KINDS:
-        return []
-    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
-    if not r.get("success"):
-        return []
-    try:
-        doc = yaml.safe_load(r.get("yaml", "")) or {}
-    except yaml.YAMLError:
-        return []
-    return _env_refs_from_doc(doc)
 
 
 async def _load_workload_doc(cluster_id: int, kind: str, namespace: str, name: str):
@@ -978,11 +1002,14 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
     if mode not in ("volume", "env"):
         return {"code": 400, "message": "mode 需为 volume 或 env", "data": None}
     if src_type not in _MOUNT_SOURCE_KEYS:
-        return {"code": 400, "message": "source_type 必填且需为 configMap/secret/pvc", "data": None}
-    if not src_name:
+        return {"code": 400, "message": "source_type 必填且需为 configMap/secret/pvc/emptyDir", "data": None}
+    if mode == "env" and src_type in ("pvc", "emptyDir"):
+        return {"code": 400, "message": "只有配置字典/密钥可以注入环境变量", "data": None}
+    if src_type == "emptyDir":
+        if mode != "volume":
+            return {"code": 400, "message": "临时卷(emptyDir) 只能挂载为数据卷", "data": None}
+    elif not src_name:
         return {"code": 400, "message": "source_name 必填", "data": None}
-    if mode == "env" and src_type == "pvc":
-        return {"code": 400, "message": "PVC 只能挂载为数据卷，不能注入环境变量", "data": None}
     if mode == "volume":
         if not mount_path.startswith("/"):
             return {"code": 400, "message": "挂载路径必须是绝对路径（以 / 开头）", "data": None}
@@ -1021,7 +1048,7 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
     # ---------- volume 模式：挂载数据卷 ----------
     volumes = tmpl.setdefault("volumes", [])
     if not volume_name:
-        base = _k8s_dns_label(src_name)
+        base = _k8s_dns_label(src_name) if src_type != "emptyDir" else "emptydir"
         existing_names = {v.get("name") for v in volumes}
         volume_name = base
         i = 2
@@ -1036,11 +1063,16 @@ async def add_workload_mount(cluster_id: int, kind: str, namespace: str, name: s
         vol.update(_build_volume_payload(src_type, src_name))
         volumes.append(vol)
     else:
-        key = _MOUNT_SOURCE_KEYS[src_type]
-        cur = existing.get(key) or {}
-        cur_name = cur.get("name") or cur.get("secretName") or cur.get("claimName")
-        if cur_name != src_name:
-            return {"code": 409, "message": f"卷名 {volume_name} 已被其它来源占用（{cur_name}），请换一个卷名", "data": None}
+        want_key = _MOUNT_SOURCE_KEYS[src_type]
+        have_key = next((k for k in ("configMap", "secret", "persistentVolumeClaim", "emptyDir",
+                                     "hostPath", "projected", "nfs", "csi") if k in existing), "other")
+        if have_key != want_key:
+            return {"code": 409, "message": f"卷名 {volume_name} 已被其它类型占用（{have_key}），请换一个卷名", "data": None}
+        if src_type != "emptyDir":
+            cur = existing.get(want_key) or {}
+            cur_name = cur.get("name") or cur.get("secretName") or cur.get("claimName")
+            if cur_name != src_name:
+                return {"code": 409, "message": f"卷名 {volume_name} 已被其它来源占用（{cur_name}），请换一个卷名", "data": None}
 
     added = 0
     for c in targets:
