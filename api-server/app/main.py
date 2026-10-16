@@ -119,6 +119,19 @@ async def _maintenance_loop() -> None:
                     logger.info("巡检报告清理完成：删除 %d 条超过保留期的报告", n)
             except Exception as e:  # noqa: BLE001
                 logger.warning("巡检报告清理 异常: %s", e)
+            # 日志类数据保留期（可配，默认 30 天；审计永久保留不删）
+            try:
+                from app.services.data_retention_service import cleanup_logs
+                from app.services.system_setting_service import get_setting
+                try:
+                    _log_days = int(await get_setting("log_retention_days", "30") or 30)
+                except (TypeError, ValueError):
+                    _log_days = 30
+                r = await cleanup_logs(max(1, _log_days))
+                if any(r.values()):
+                    logger.info("日志保留清理完成：%s", r)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("日志保留清理 异常: %s", e)
 
 
 # 后台循环 task（模块级引用，防 GC）

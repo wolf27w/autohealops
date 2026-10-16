@@ -105,6 +105,7 @@ export default function PlatformSettings() {
                   <Space wrap>
                     <Form.Item name="snapshot_retention_days" label="快照/指标保留(天)"><InputNumber min={1} max={365} /></Form.Item>
                     <Form.Item name="inspection_retention_days" label="巡检报告保留(天)"><InputNumber min={1} max={365} /></Form.Item>
+                    <Form.Item name="log_retention_days" label="日志保留(天)"><InputNumber min={1} max={365} /></Form.Item>
                   </Space>
                   <Divider orientation="left">镜像仓库（列标签 / 更新镜像）</Divider>
                   <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
