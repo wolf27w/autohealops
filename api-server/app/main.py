@@ -288,6 +288,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("主机/虚拟机进程监控启动失败: %s", e)
 
+    # 会话定时采集（应用诊断：针对绑定的容器周期采集信息追加到会话；默认全关，按会话开关）
+    try:
+        from app.services.session_collect_service import background_loop as session_collect_loop
+        _session_collect_task = asyncio.create_task(session_collect_loop())
+        logger.info("会话定时采集已启动（每 60 秒巡检到期会话）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("会话定时采集启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

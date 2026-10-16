@@ -215,6 +215,40 @@ async def seed_session(payload: dict, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": {"id": sid, "title": title, "created": created}}
 
 
+@router.put("/sessions/{session_id}/collect")
+async def set_session_collect(session_id: int, payload: dict, user=Depends(require_any_user)):
+    """设置会话的定时采集开关（针对绑定的容器周期采集信息追加到会话）。"""
+    async with async_session() as s:
+        sess = await s.get(DiagnosisSession, session_id)
+        if not sess:
+            return {"code": 404, "message": "会话不存在", "data": None}
+        if sess.user_id != user.id and getattr(user, "role", "") != "admin":
+            return {"code": 403, "message": "无权限", "data": None}
+        if not await user_permission_service.check_cluster_permission(user, sess.cluster_id, sess.namespace):
+            return {"code": 403, "message": "无该集群/命名空间权限", "data": None}
+        if "enabled" in payload:
+            sess.collect_enabled = bool(payload.get("enabled"))
+        if "interval_min" in payload:
+            try:
+                sess.collect_interval_min = max(1, int(payload.get("interval_min") or 5))
+            except (TypeError, ValueError):
+                return {"code": 400, "message": "interval_min 非法", "data": None}
+        if "items" in payload:
+            items = payload.get("items")
+            if isinstance(items, (list, tuple)):
+                items = ",".join([str(x).strip() for x in items if str(x).strip()])
+            sess.collect_items = (str(items or "jvm"))[:100]
+        await s.commit()
+        await s.refresh(sess)
+        data = {
+            "id": sess.id, "collect_enabled": sess.collect_enabled,
+            "collect_interval_min": sess.collect_interval_min,
+            "collect_items": sess.collect_items or "",
+            "collect_last_at": str(sess.collect_last_at) if sess.collect_last_at else None,
+        }
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.get("/sessions")
 async def list_sessions(user=Depends(require_any_user)):
     """我的诊断会话列表（user_id 隔离）。
@@ -262,7 +296,11 @@ async def list_sessions(user=Depends(require_any_user)):
          "source": getattr(x, "source", "agent") or "agent",
          "merged_count": counts.get((x.cluster_id, x.namespace, x.pod_name), 0)
                           if (getattr(x, "source", "agent") or "agent") == "proactive" else 0,
-         "created_at": str(x.created_at), "updated_at": str(x.updated_at)}
+         "created_at": str(x.created_at), "updated_at": str(x.updated_at),
+         "collect_enabled": bool(getattr(x, "collect_enabled", False)),
+         "collect_interval_min": getattr(x, "collect_interval_min", 5),
+         "collect_items": getattr(x, "collect_items", "") or "",
+         "collect_last_at": str(x.collect_last_at) if getattr(x, "collect_last_at", None) else None}
         for x in merged
     ]}
 

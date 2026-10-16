@@ -11,14 +11,14 @@ import {
 } from '@ant-design/icons'
 import {
   getClusters, getClusterNamespaces, getNamespacePods, getPodContainers, getAgentSessions, getAgentMessages,
-  createAgentSession, sendAgentMessage, closeAgentSession, deleteAgentSession,
+  createAgentSession, sendAgentMessage, closeAgentSession, deleteAgentSession, updateSessionCollect,
 } from '../services/api'
 import type { Cluster } from '../types'
 
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
 
-interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string }
+interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string; collect_enabled?: boolean; collect_interval_min?: number; collect_items?: string; collect_last_at?: string | null }
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
@@ -210,6 +210,23 @@ export default function AgentChat() {
     }
   }
 
+  const handleCollectToggle = async (v: boolean) => {
+    if (!activeId) return
+    try {
+      await updateSessionCollect(activeId, { enabled: v })
+      message.success(v ? '已开启定时采集' : '已关闭定时采集')
+      loadSessions()
+    } catch { /* 拦截器已提示 */ }
+  }
+
+  const handleCollectInterval = async (v: number) => {
+    if (!activeId) return
+    try {
+      await updateSessionCollect(activeId, { interval_min: v })
+      loadSessions()
+    } catch { /* 拦截器已提示 */ }
+  }
+
   const handleClose = async () => {
     if (!activeId) return
     const res = (await closeAgentSession(activeId)) as { sunk?: boolean; closed?: boolean; reason?: string }
@@ -265,6 +282,14 @@ export default function AgentChat() {
 
   const activeSession = sessions.find((s) => s.id === activeId)
 
+  // 开启定时采集时，自动轮询刷新会话消息
+  useEffect(() => {
+    if (!activeId || !activeSession?.collect_enabled) return
+    const t = setInterval(() => { if (activeIdRef.current === activeId) loadMessages(activeId) }, 60000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, activeSession?.collect_enabled])
+
   return (
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
       <Sider width={260} theme="light" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -315,6 +340,16 @@ export default function AgentChat() {
                 <Text type="secondary">{activeSession.namespace}/{activeSession.pod_name}</Text>
               </Space>
               <Space>
+                <Tooltip title="针对该容器定时采集 JVM 等信息，自动追加到会话（默认关）">
+                  <Space size={4}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>定时采集</Text>
+                    <Switch size="small" checked={!!activeSession.collect_enabled} onChange={handleCollectToggle} />
+                    <Select size="small" value={activeSession.collect_interval_min || 5} style={{ width: 96 }}
+                      disabled={!activeSession.collect_enabled} onChange={handleCollectInterval}
+                      options={[{ label: '5 分钟', value: 5 }, { label: '10 分钟', value: 10 }, { label: '30 分钟', value: 30 }, { label: '60 分钟', value: 60 }]} />
+                    {activeSession.collect_last_at && <Text type="secondary" style={{ fontSize: 12 }}>上次：{String(activeSession.collect_last_at).slice(5, 16)}</Text>}
+                  </Space>
+                </Tooltip>
                 <Tooltip title="默认开启：AI 多轮自主取证直接给诊断结果；关闭 = 平台预采集证据单轮快出结论">
                   <Space size={4}>
                     <Text type="secondary" style={{ fontSize: 12 }}>深度诊断</Text>

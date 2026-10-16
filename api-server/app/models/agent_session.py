@@ -2,7 +2,7 @@
 """AI 诊断助手（会话式 Agent）模型：会话 + 消息"""
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -26,6 +26,11 @@ class DiagnosisSession(Base):
     source: Mapped[str] = mapped_column(String(20), default="agent", index=True)
     # active=进行中 / closed=已闭环（处理完成，落盘知识库）
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    # 定时采集（针对该会话目标容器周期采集信息，追加到会话）
+    collect_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    collect_interval_min: Mapped[int] = mapped_column(Integer, default=5)
+    collect_items: Mapped[str] = mapped_column(String(100), default="jvm")  # CSV: jvm,logs,...
+    collect_last_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

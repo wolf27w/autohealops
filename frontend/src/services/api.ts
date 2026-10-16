@@ -444,6 +444,9 @@ export const setMonitoringSource = (cluster_id: number, url: string) =>
 export const getAgentMessages = (id: number) => http.get(`/agent/sessions/${id}/messages`)
 export const sendAgentMessage = (id: number, content: string, deep = false) => http.post(`/agent/sessions/${id}/messages`, { content, deep })
 export const closeAgentSession = (id: number) => http.post(`/agent/sessions/${id}/close`)
+// 会话定时采集开关（针对绑定的容器周期采集信息追加到会话）
+export const updateSessionCollect = (id: number, data: Payload) =>
+  http.put<{ id: number; collect_enabled: boolean; collect_interval_min: number; collect_items: string; collect_last_at: string | null }>(`/agent/sessions/${id}/collect`, data)
 export const deleteAgentSession = (id: number) => http.delete<{ id: number }>(`/agent/sessions/${id}`)
 
 // ============ 诊断中心（任务/报告）============

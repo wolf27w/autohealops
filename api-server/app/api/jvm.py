@@ -474,18 +474,12 @@ async def jvm_ai_analyze(cluster_id: int, namespace: str, pod_name: str, payload
     return {"code": 200, "message": "success", "data": data}
 
 
-@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/ai-analyze-all")
-async def jvm_ai_analyze_all(cluster_id: int, namespace: str, pod_name: str, payload: dict,
-                             user=Depends(require_operator)):
-    """一键：自动跑完所有轻量 JVM 动作（jstack/jmap/jcmd/jattach 文本类）→ 汇总证据发 AI 综合诊断。
+async def collect_and_analyze(cluster_id: int, namespace: str, pod_name: str,
+                             container: str = "", pid=None, severity: str = "high") -> dict:
+    """采集全部轻量 JVM 动作 → 汇总证据发 AI 综合诊断。供 HTTP 与定时采集复用。
 
-    - 重文件操作（heap_dump / jfr_start）不自动跑，避免大文件与长停顿；仍需手动单独执行。
-    - 返回 items（每个动作的原始输出，可单独看）+ analysis（AI 诊断结论）。
+    返回 {"items", "analysis", "evidence", "message"}。
     """
-    if denied := await _deny(user, cluster_id, namespace):
-        return denied
-    container = str(payload.get("container") or "")
-    pid = payload.get("pid")
     items: list[dict] = []
     for action in _AI_COLLECT_ACTIONS:
         r = await run_jvm_action(cluster_id, namespace, pod_name, container, action, pid)
@@ -501,7 +495,8 @@ async def jvm_ai_analyze_all(cluster_id: int, namespace: str, pod_name: str, pay
             "message": "" if ok else str(r.get("message") or "执行失败"),
         })
     if not any(i["ok"] for i in items):
-        return {"code": 500, "message": "所有 JVM 动作均失败（容器内可能无 JDK/jattach，或未定位到 Java 进程）：" + (items[0]["message"] if items else ""), "data": None}
+        return {"items": items, "analysis": None, "evidence": "",
+                "message": "所有 JVM 动作均失败（容器内可能无 JDK/jattach，或未定位到 Java 进程）：" + (items[0]["message"] if items else "")}
     parts: list[str] = []
     total = 0
     for i in items:
@@ -513,16 +508,35 @@ async def jvm_ai_analyze_all(cluster_id: int, namespace: str, pod_name: str, pay
     evidence = "\n\n".join(parts)
     from app.clients.ai_client import ai_client
     alert_data = {
-        "fault_type": "application_diagnosis",
-        "severity": str(payload.get("severity") or "high"),
+        "fault_type": "application_diagnosis", "severity": severity,
         "namespace": namespace, "pod_name": pod_name, "resource_name": pod_name,
         "container": container, "cluster_name": str(cluster_id),
     }
     try:
         analysis = await ai_client.jvm_analyze(alert_data, {"jvm_evidence": evidence}, "")
     except Exception as e:  # noqa: BLE001
-        return {"code": 200, "message": f"采集成功但 AI 诊断失败: {e}", "data": {"items": items, "analysis": None}}
-    return {"code": 200, "message": "success", "data": {"items": items, "analysis": analysis}}
+        return {"items": items, "analysis": None, "evidence": evidence, "message": f"采集成功但 AI 诊断失败: {e}"}
+    return {"items": items, "analysis": analysis, "evidence": evidence, "message": "success"}
+
+
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/ai-analyze-all")
+async def jvm_ai_analyze_all(cluster_id: int, namespace: str, pod_name: str, payload: dict,
+                             user=Depends(require_operator)):
+    """一键：自动跑完所有轻量 JVM 动作（jstack/jmap/jcmd/jattach 文本类）→ 汇总证据发 AI 综合诊断。
+
+    - 重文件操作（heap_dump / jfr_start）不自动跑，避免大文件与长停顿；仍需手动单独执行。
+    - 返回 items（每个动作的原始输出，可单独看）+ analysis（AI 诊断结论）。
+    """
+    if denied := await _deny(user, cluster_id, namespace):
+        return denied
+    container = str(payload.get("container") or "")
+    res = await collect_and_analyze(cluster_id, namespace, pod_name, container,
+                                    payload.get("pid"), str(payload.get("severity") or "high"))
+    if res["analysis"] is None and not any(i["ok"] for i in res["items"]):
+        return {"code": 500, "message": res["message"], "data": None}
+    if res["analysis"] is None:
+        return {"code": 200, "message": res["message"], "data": {"items": res["items"], "analysis": None}}
+    return {"code": 200, "message": "success", "data": {"items": res["items"], "analysis": res["analysis"]}}
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/deployments/{name}/params")
