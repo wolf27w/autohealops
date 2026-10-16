@@ -35,6 +35,8 @@ spec:
           image: api-ops/api-server:latest
           ports:
             - containerPort: 8080
+            - containerPort: 9095
+              name: agent-gateway
           envFrom:
             - configMapRef:
                 name: api-server-config
