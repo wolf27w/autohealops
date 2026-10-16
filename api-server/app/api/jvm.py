@@ -22,6 +22,7 @@
   前端再调用现有 `/resources/.../pods/.../file` 接口下载。
 """
 import re
+import time
 
 import yaml
 from fastapi import APIRouter, Depends
@@ -33,6 +34,21 @@ from app.middleware.permission import require_any_user, require_operator
 from app.services.user_permission_service import check_cluster_permission
 
 router = APIRouter(prefix="/api/v1/jvm")
+
+# JDK/jattach 解析结果缓存（同一 Pod 容器多次动作不再重复安装/下载；TTL 10 分钟）
+_resolve_cache: dict[tuple, tuple[float, object]] = {}
+_RESOLVE_TTL = 600
+
+
+def _cache_get(key: tuple):
+    v = _resolve_cache.get(key)
+    if v and time.time() - v[0] < _RESOLVE_TTL:
+        return v[1]
+    return None
+
+
+def _cache_set(key: tuple, val: object) -> None:
+    _resolve_cache[key] = (time.time(), val)
 
 # 「一键 AI 综合诊断」自动采集的轻量只读动作（文本类；排除 heap_dump/jfr_start 重文件操作）
 _AI_COLLECT_ACTIONS = ["thread_dump", "heap_histo", "heap_info", "gc_class_histo", "vm_flags", "sys_props"]
@@ -212,6 +228,10 @@ async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container:
     loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
     if loc is not None:
         return loc, ""
+    ck = ("jdk", cluster_id, namespace, pod, container)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
     notes: list[str] = []
     for pm, cmds in _JDK_INSTALL.items():
         probe = await _exec(cluster_id, namespace, pod, f"which {pm}", container)
@@ -226,35 +246,56 @@ async def _resolve_jdk_bin(cluster_id: int, namespace: str, pod: str, container:
                 notes.append(f"[{c}] {detail[:300]}")
         loc = await _locate_jdk_bin(cluster_id, namespace, pod, container)
         if loc is not None:
+            _cache_set(ck, (loc, ""))
             return loc, ""
         if not notes:
             notes.append(f"{pm} 安装执行完毕但仍未找到 jcmd")
         break
-    return None, " ; ".join(notes)
+    result = (None, " ; ".join(notes))
+    _cache_set(ck, result)
+    return result
 
 
 async def _ensure_jattach(cluster_id: int, namespace: str, pod: str, container: str) -> str | None:
-    """确保容器内有 jattach：返回其路径，失败返回 None。
+    """确保容器内有 jattach：返回**可执行**的路径，失败返回 None。
 
     用于 JRE 镜像（无 JDK 工具）：jattach 是单文件静态二进制（~63KB），走 JVM
     attach socket，可做 threaddump / inspectheap / dumpheap / jcmd 子命令。
-    优先已存在（/tmp 可能被复用），否则从 settings.JVM_JATTACH_URL 下载并 chmod。
+    ⚠️ 有些容器的 /tmp 被挂成 **noexec**（chmod +x 后仍 permission denied）→
+    依次尝试多个可写目录，并实际探测可执行性后再采用。
     """
-    path = getattr(settings, "JVM_JATTACH_PATH", "/tmp/.apiops-jattach") or "/tmp/.apiops-jattach"
-    if (await _exec(cluster_id, namespace, pod, f"ls {path}", container)).get("success"):
-        return path
+    base = (getattr(settings, "JVM_JATTACH_PATH", "/tmp/.apiops-jattach") or "/tmp/.apiops-jattach")
     url = (getattr(settings, "JVM_JATTACH_URL", "") or "").strip()
-    if not url:
-        return None
-    logger.info("JVM 诊断：容器无 JDK，尝试注入 jattach（%s）", url)
-    dl = await _exec(cluster_id, namespace, pod, f"curl -sSL -m 25 -o {path} {url}", container)
-    if not dl.get("success"):
-        dl = await _exec(cluster_id, namespace, pod, f"wget -q -O {path} {url}", container)
-    if not dl.get("success"):
-        logger.warning("JVM 诊断：jattach 下载失败：%s", (dl.get("error") or "")[:200])
-        return None
-    await _exec(cluster_id, namespace, pod, f"chmod +x {path}", container)
-    if (await _exec(cluster_id, namespace, pod, f"ls {path}", container)).get("success"):
+    ck = ("jattach", cluster_id, namespace, pod, container)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+    cands: list[str] = [base]
+    for d in ("/var/tmp", "/dev/shm", "/usr/local/bin", "/opt", "/root", "/app", "/home"):
+        p = f"{d}/.apiops-jattach"
+        if p not in cands:
+            cands.append(p)
+    for path in cands:
+        exists = (await _exec(cluster_id, namespace, pod, f"ls {path}", container)).get("success")
+        if not exists:
+            if not url:
+                return None
+            dl = await _exec(cluster_id, namespace, pod, f"curl -sSL -m 25 -o {path} {url}", container)
+            if not dl.get("success"):
+                dl = await _exec(cluster_id, namespace, pod, f"wget -q -O {path} {url}", container)
+            if not dl.get("success"):
+                logger.warning("JVM 诊断：jattach 下载失败(%s)：%s", path, (dl.get("error") or "")[:160])
+                continue
+        await _exec(cluster_id, namespace, pod, f"chmod +x {path}", container)
+        # 实际探测可执行性（noexec 挂载会 permission denied）
+        probe = await _exec(cluster_id, namespace, pod, path, container)
+        err = (probe.get("error") or "").lower()
+        if "permission denied" in err:
+            logger.info("JVM 诊断：jattach 路径 %s 不可执行（可能 noexec），尝试其他目录", path)
+            continue
+        if "no such file" in err:
+            continue
+        _cache_set(ck, path)
         return path
     return None
 
