@@ -353,9 +353,9 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
       {body}
 
       {/* 添加/编辑卷 */}
-      <Modal title={volModal.edit ? `编辑卷：${volModal.edit.name}` : '添加卷'} open={volModal.open}
-        onCancel={() => setVolModal({ open: false })} onOk={submitVol} confirmLoading={submitting} okText="确定" destroyOnClose>
-        <Form form={volForm} layout="vertical" preserve={false}>
+      <Modal title={volModal.edit ? `编辑卷：${volModal.edit.name}` : '添加卷'} open={volModal.open} forceRender
+        onCancel={() => setVolModal({ open: false })} onOk={submitVol} confirmLoading={submitting} okText="确定">
+        <Form form={volForm} layout="vertical">
           <Form.Item name="type" label="卷类型" rules={[{ required: true }]}>
             <Select options={ADD_TYPES} disabled={!!volModal.edit} />
           </Form.Item>
@@ -395,8 +395,8 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
       </Modal>
 
       {/* 环境变量批量编辑（KubeSphere 风格：逐行编辑，整份保存） */}
-      <Modal title="编辑环境变量" open={envEdit.open} onCancel={() => setEnvEdit({ open: false, container: '', rows: [] })}
-        onOk={submitEnvEdit} confirmLoading={submitting} okText="保存" width={900} destroyOnClose>
+      <Modal title="编辑环境变量" open={envEdit.open} forceRender onCancel={() => setEnvEdit({ open: false, container: '', rows: [] })}
+        onOk={submitEnvEdit} confirmLoading={submitting} okText="保存" width={900}>
         <Space style={{ marginBottom: 10 }} wrap>
           <span>容器</span>
           <Select size="small" style={{ width: 200 }} value={envEdit.container} onChange={switchEnvContainer}
@@ -442,10 +442,10 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
       </Modal>
 
       {/* 注入/编辑 envFrom */}
-      <Modal title={envFromModal.edit ? '编辑环境变量注入' : '注入配置字典/密钥'} open={envFromModal.open}
-        onCancel={() => setEnvFromModal({ open: false })} onOk={submitEnvFrom} confirmLoading={submitting} okText="确定" destroyOnClose>
+      <Modal title={envFromModal.edit ? '编辑环境变量注入' : '注入配置字典/密钥'} open={envFromModal.open} forceRender
+        onCancel={() => setEnvFromModal({ open: false })} onOk={submitEnvFrom} confirmLoading={submitting} okText="确定">
         <Alert type="info" showIcon style={{ marginBottom: 12 }} message="把整份配置字典/密钥注入为环境变量（envFrom）。改来源=先移除再注入。" />
-        <Form form={envFromForm} layout="vertical" preserve={false}>
+        <Form form={envFromForm} layout="vertical">
           <Form.Item name="env_type" label="类型" rules={[{ required: true }]}>
             <Radio.Group disabled={!!envFromModal.edit}>
               <Radio.Button value="configMap">配置字典</Radio.Button>
