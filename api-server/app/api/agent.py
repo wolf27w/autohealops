@@ -91,10 +91,11 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
             cluster_name = c.name
             env_tag = c.env_tag or ""
 
-    # 会话名规范：环境/命名空间/服务[容器]
+    # 会话名规范：集群环境-namespace-容器名
     def _sess_name(pod: str) -> str:
-        base = "/".join([x for x in (env_tag, namespace, service or derive_service(pod)) if x]) or pod
-        return f"{base}[{container}]" if container else base
+        label = env_tag or cluster_name
+        last = container or service or derive_service(pod) or pod
+        return "-".join([x for x in (label, namespace, last) if x])
 
     # 去重：同 (user, cluster, ns, service, container) 已有活跃/最近会话 → 复用，不新建
     async with async_session() as s:
@@ -175,12 +176,15 @@ async def seed_session(payload: dict, user=Depends(require_any_user)):
     if not await user_permission_service.check_cluster_permission(user, cluster_id, namespace):
         return {"code": 403, "message": "无该集群/命名空间权限", "data": None}
     env_tag = ""
+    cluster_name = ""
     async with async_session() as s:
         c = await s.get(Cluster, cluster_id)
         if c:
             env_tag = c.env_tag or ""
-    base = "/".join([x for x in (env_tag, namespace, service) if x]) or pod_name
-    title = f"{base}[{container}]" if container else base
+            cluster_name = c.name or ""
+    label = env_tag or cluster_name
+    last = container or service or pod_name
+    title = "-".join([x for x in (label, namespace, last) if x])
     created = False
     async with async_session() as s:
         existing = (await s.execute(

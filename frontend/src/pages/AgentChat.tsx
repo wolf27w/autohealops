@@ -23,26 +23,27 @@ interface Session { id: number; cluster_id: number; namespace: string; pod_name:
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
-// 会话显示名：优先显示标题（标题为空时回退到 环境/命名空间/服务[容器]）
+// 会话显示名：集群环境-namespace-容器名（老板 2026-10-16）
 function sessionName(s: Session): string {
-  if (s.title && s.title.trim()) return s.title
-  const svc = s.service || s.pod_name
-  const base = [s.env_tag, s.namespace, svc].filter(Boolean).join('/')
-  if (!base) return `会话 ${s.id}`
-  return s.container ? `${base}[${s.container}]` : base
+  const label = s.env_tag || s.cluster_name || ''
+  const last = s.container || s.service || s.pod_name
+  const parts = [label, s.namespace, last].filter(Boolean)
+  if (parts.length) return parts.join('-')
+  return s.title || `会话 ${s.id}`
 }
 
-const localDay = (iso?: string): string => {
+const localDay = (iso?: string | Date): string => {
   if (!iso) return ''
-  const dt = new Date(String(iso).replace(' ', 'T'))
+  let dt = iso instanceof Date ? iso : new Date(String(iso))
+  if (isNaN(dt.getTime())) dt = new Date(String(iso).replace(' ', 'T'))
   if (isNaN(dt.getTime())) return ''
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
 }
 
 const fmtDay = (d: string): string => {
   if (!d) return '未知日期'
-  const today = localDay(new Date().toString())
-  const y = localDay(new Date(Date.now() - 86400000).toString())
+  const today = localDay(new Date())
+  const y = localDay(new Date(Date.now() - 86400000))
   if (d === today) return '今天'
   if (d === y) return '昨天'
   return d
@@ -100,6 +101,9 @@ export default function AgentChat() {
     if (sid) openSession(sid)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 最近 7 天（含今天）默认展开，更早按日期折叠
+  const recentDay = localDay(new Date(Date.now() - 6 * 86400000))
 
   // 按天分组（新→旧），最近 2 天默认展开
   const sessionGroups = useMemo(() => {
@@ -296,18 +300,19 @@ export default function AgentChat() {
     // 本页为浅色设计：固定浅色主题，避免深色模式下白底白字看不见
     <ConfigProvider theme={buildTheme('light')}>
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
-      <Sider width={260} theme="light" className="agentchat-sider" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Sider width={320} theme="light" className="agentchat-sider" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
           新建诊断会话
         </Button>
         <div style={{ marginTop: 12, overflowY: 'auto', flex: 1 }}>
           {sessions.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
           {sessionGroups.map(([day, items]) => {
-            const open = olderOpen[day] !== false  // 默认全部展开（不点也能看到标题）
+            const isRecent = day >= recentDay  // 最近 7 天默认展开
+            const open = olderOpen[day] !== undefined ? olderOpen[day] : isRecent
             return (
               <div key={day} style={{ marginBottom: 4 }}>
                 <div
-                  onClick={() => setOlderOpen((p) => ({ ...p, [day]: open }))}
+                  onClick={() => setOlderOpen((p) => ({ ...p, [day]: !open }))}
                   style={{ fontSize: 12, color: '#8c8c8c', padding: '6px 6px', cursor: 'pointer',
                            display: 'flex', justifyContent: 'space-between', userSelect: 'none' }}>
                   <span>{fmtDay(day)}</span>
