@@ -22,11 +22,12 @@ interface Session { id: number; cluster_id: number; namespace: string; pod_name:
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
-// 会话显示名：环境/命名空间/服务[容器]（统一从字段拼，不再显示长标题）
+// 会话显示名：优先显示标题（标题为空时回退到 环境/命名空间/服务[容器]）
 function sessionName(s: Session): string {
+  if (s.title && s.title.trim()) return s.title
   const svc = s.service || s.pod_name
   const base = [s.env_tag, s.namespace, svc].filter(Boolean).join('/')
-  if (!base) return s.title || `会话 ${s.id}`
+  if (!base) return `会话 ${s.id}`
   return s.container ? `${base}[${s.container}]` : base
 }
 
