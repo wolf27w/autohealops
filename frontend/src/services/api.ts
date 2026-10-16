@@ -206,7 +206,7 @@ export const getResourceOverview = (clusterId: number) => http.get(`/resources/c
 export const getClusterDetail = (clusterId: number) => http.get(`/resources/clusters/${clusterId}/detail`)
 export const getClusterNamespaces = (clusterId: number) => http.get<string[]>(`/resources/clusters/${clusterId}/namespace-list`)
 export const getNamespacePods = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods`)
-export const getPodContainers = (clusterId: number, ns: string, pod: string) => http.get<string[]>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/containers`)
+export const getPodContainers = (clusterId: number, ns: string, pod: string) => http.get<{ containers: string[] }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/containers`)
 export const getWorkloadEvents = (clusterId: number, params?: PageParams) => http.get(`/resources/clusters/${clusterId}/workload-events`, { params })
 export const getNamespaces = (clusterId: number) => http.get(`/resources/clusters/${clusterId}/namespaces`)
 export const getNamespaceDeployments = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/deployments`)

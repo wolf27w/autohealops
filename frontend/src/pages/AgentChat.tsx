@@ -175,7 +175,7 @@ export default function AgentChat() {
     setContainers([])
     const clusterId = form.getFieldValue('cluster_id')
     const ns = form.getFieldValue('namespace')
-    if (clusterId && ns && pod) getPodContainers(clusterId, ns, pod).then((d) => setContainers((d || []) as string[])).catch(() => {})
+    if (clusterId && ns && pod) getPodContainers(clusterId, ns, pod).then((d) => setContainers((d as unknown as { containers?: string[] })?.containers || [])).catch(() => setContainers([]))
   }
 
   const handleCreate = async () => {
