@@ -1,16 +1,17 @@
 // 工作负载「配置」面板（KubeSphere 风格）：
 //   存储     —— 统一的卷列表（配置字典/密钥/PVC/临时卷），每卷显示挂载点（容器 → 路径），可添加/编辑/移除
-//   环境变量 —— 已配置的 env + envFrom 列表，可新增/编辑/删除/注入/移除
+//   环境变量 —— env 批量编辑器（KubeSphere 风格：逐行填/删，整份保存）+ envFrom 注入
 // props.onlySection 传 'storage' | 'env' 时只渲染单块，不传则内部用 Tabs
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Space, Table, Tag, Modal, Form, Select, Input, Switch, Popconfirm, message, Empty, Spin, Typography, Alert, Tabs, Radio } from 'antd'
+import { Button, Space, Table, Tag, Modal, Form, Select, Input, Switch, Popconfirm, message, Empty, Spin, Typography, Alert, Tabs, Radio, Divider } from 'antd'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import {
   getWorkloadMounts, addWorkloadMount, removeWorkloadMount, editWorkloadMount,
-  upsertWorkloadEnv, deleteWorkloadEnv, getMiscResources, type AddMountPayload,
+  replaceWorkloadEnv, deleteWorkloadEnv, getMiscResources, getObjectDetail, type AddMountPayload,
 } from '../services/api'
 
 type MountType = 'configMap' | 'secret' | 'pvc' | 'emptyDir'
+type EnvType = 'value' | 'configMap' | 'secret' | 'field' | 'resource'
 
 interface VolumeMountInfo { name: string; mount_path: string; sub_path?: string; read_only?: boolean }
 interface VolumeInfo { name: string; type: string; source: string; read_only?: boolean }
@@ -23,6 +24,8 @@ interface EnvVar {
 interface WorkloadMounts { volumes: VolumeInfo[]; containers: ContainerMounts[]; init_containers: ContainerMounts[]; env_refs?: EnvRef[]; envs?: EnvVar[] }
 interface MiscRow { namespace: string; name: string; [key: string]: unknown }
 
+interface EnvRow { name: string; type: EnvType; value: string; refName: string; refKey: string; fieldPath: string; resource: string }
+
 const TYPE_LABEL: Record<string, string> = {
   configMap: '配置字典', secret: '密钥', pvc: '持久卷声明(PVC)', emptyDir: '临时卷',
   persistentVolumeClaim: '持久卷声明(PVC)', hostPath: 'hostPath', projected: 'projected', nfs: 'NFS', csi: 'CSI',
@@ -34,9 +37,16 @@ const ADD_TYPES: { value: MountType; label: string }[] = [
   { value: 'secret', label: '密钥' },
   { value: 'emptyDir', label: '临时卷' },
 ]
+const ENV_TYPES: { value: EnvType; label: string }[] = [
+  { value: 'value', label: '直接填值' },
+  { value: 'configMap', label: '配置字典(某 key)' },
+  { value: 'secret', label: '密钥(某 key)' },
+  { value: 'field', label: '字段 fieldRef' },
+  { value: 'resource', label: '资源 resourceFieldRef' },
+]
 const typeLabel = (t: string) => TYPE_LABEL[t] || t || '-'
-// 卷类型显示值 → 添加/编辑用的 MountType
 const volTypeToMount = (t: string): MountType => (t === 'persistentVolumeClaim' ? 'pvc' : (t as MountType))
+const emptyRow = (): EnvRow => ({ name: '', type: 'value', value: '', refName: '', refKey: '', fieldPath: '', resource: '' })
 
 export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, onlySection }: {
   clusterId: number; kind: string; namespace: string; name: string; onlySection?: 'storage' | 'env'
@@ -47,10 +57,9 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   const [misc, setMisc] = useState<{ configmaps: MiscRow[]; secrets: MiscRow[]; pvcs: MiscRow[] }>({ configmaps: [], secrets: [], pvcs: [] })
 
   const [volModal, setVolModal] = useState<{ open: boolean; edit?: VolumeInfo }>({ open: false })
-  const [envModal, setEnvModal] = useState<{ open: boolean; edit?: EnvVar }>({ open: false })
   const [envFromModal, setEnvFromModal] = useState<{ open: boolean; edit?: EnvRef }>({ open: false })
+  const [envEdit, setEnvEdit] = useState<{ open: boolean; container: string; rows: EnvRow[] }>({ open: false, container: '', rows: [] })
   const [volForm] = Form.useForm()
-  const [envForm] = Form.useForm()
   const [envFromForm] = Form.useForm()
 
   const load = useCallback(() => {
@@ -89,8 +98,9 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
     const list = t === 'configMap' ? misc.configmaps : t === 'secret' ? misc.secrets : t === 'pvc' ? misc.pvcs : []
     return list.map((x) => ({ value: x.name, label: x.name }))
   }
+  const cmSecretOptions = (t: EnvType) => (t === 'configMap' ? misc.configmaps : misc.secrets).map((x) => ({ value: x.name, label: x.name }))
 
-  // ---------- 卷：添加/编辑 ----------
+  // ---------- 卷 ----------
   const openAddVol = () => { setVolModal({ open: true }); volForm.resetFields(); volForm.setFieldsValue({ type: 'pvc', read_only: false, containers: [] }) }
   const openEditVol = (v: VolumeInfo) => {
     const rows = mountsOfVolume(v.name)
@@ -128,33 +138,67 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
       load()
     } catch { /* 拦截器已提示 */ } finally { setSubmitting(false) }
   }
-
-  // ---------- env：新增/编辑 ----------
-  const openAddEnv = () => { setEnvModal({ open: true }); envForm.resetFields(); envForm.setFieldsValue({ container: containerNames[0], vf_type: 'literal' }) }
-  const openEditEnv = (e: EnvVar) => {
-    setEnvModal({ open: true, edit: e })
-    envForm.resetFields()
-    envForm.setFieldsValue({
-      container: e.container, name: e.name,
-      vf_type: e.vf_type || 'literal', vf_name: e.vf_name, vf_key: e.vf_key,
-      vf_field_path: e.vf_field_path, vf_resource: e.vf_resource, value: e.value,
-    })
+  const doRemoveVol = async (volumeName: string) => {
+    try { await removeWorkloadMount(clusterId, kind, namespace, name, { mode: 'volume', volume_name: volumeName }); message.success('已移除，正在滚动更新 Pod'); load() } catch { /* */ }
   }
-  const submitEnv = async () => {
-    const v = await envForm.validateFields()
+
+  // ---------- 环境变量（批量编辑） ----------
+  const envRowsOf = (container: string): EnvRow[] => {
+    const list = (data?.envs || []).filter((e) => e.container === container)
+    if (list.length === 0) return [emptyRow()]
+    return list.map((e) => ({
+      name: e.name,
+      type: (e.vf_type || 'value') as EnvType,
+      value: e.value ?? '',
+      refName: e.vf_name ?? '', refKey: e.vf_key ?? '',
+      fieldPath: e.vf_field_path ?? '', resource: e.vf_resource ?? '',
+    }))
+  }
+  const openEnvEdit = (container?: string) => {
+    const c = container || containerNames[0] || ''
+    setEnvEdit({ open: true, container: c, rows: envRowsOf(c) })
+  }
+  const switchEnvContainer = (c: string) => setEnvEdit((s) => ({ ...s, container: c, rows: envRowsOf(c) }))
+  const setRow = (i: number, patch: Partial<EnvRow>) =>
+    setEnvEdit((s) => ({ ...s, rows: s.rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }))
+  const addRow = () => setEnvEdit((s) => ({ ...s, rows: [...s.rows, emptyRow()] }))
+  const delRow = (i: number) => setEnvEdit((s) => ({ ...s, rows: s.rows.filter((_, idx) => idx !== i) }))
+  // 引用整个配置字典/密钥：读出所有 key，逐行加为 valueFrom
+  const importKeys = async (t: EnvType, resName: string) => {
+    if (!resName) return
+    try {
+      const d = await getObjectDetail(clusterId, t === 'configMap' ? 'configmap' : 'secret', namespace, resName)
+      const keys = Object.keys(((d as { data?: Record<string, string> }).data) || {})
+      if (keys.length === 0) { message.info('该来源没有数据项'); return }
+      setEnvEdit((s) => ({
+        ...s,
+        rows: [...s.rows.filter((r) => r.name || r.refKey || r.value), ...keys.map((k) => ({ ...emptyRow(), name: k, type: t, refName: resName, refKey: k }))],
+      }))
+    } catch { /* 拦截器已提示 */ }
+  }
+  const submitEnvEdit = async () => {
+    const rows = envEdit.rows.filter((r) => r.name.trim())
+    for (const r of rows) {
+      if ((r.type === 'configMap' || r.type === 'secret') && (!r.refName || !r.refKey)) { message.error(`「${r.name}」请选择来源与 key`); return }
+      if (r.type === 'field' && !r.fieldPath) { message.error(`「${r.name}」请填字段路径`); return }
+      if (r.type === 'resource' && !r.resource) { message.error(`「${r.name}」请填资源`); return }
+    }
+    const seen = new Set<string>()
+    for (const r of rows) { if (seen.has(r.name)) { message.error(`变量名重复：${r.name}`); return } seen.add(r.name) }
     setSubmitting(true)
     try {
-      const t = v.vf_type || 'literal'
-      const value_from = t === 'literal' ? undefined
-        : t === 'field' ? { type: 'field' as const, field_path: v.vf_field_path }
-          : t === 'resource' ? { type: 'resource' as const, resource: v.vf_resource }
-            : { type: t as 'configMap' | 'secret', name: v.vf_name, key: v.vf_key }
-      await upsertWorkloadEnv(clusterId, kind, namespace, name, {
-        container: v.container, name: v.name, old_name: envModal.edit?.name || v.name,
-        value: t === 'literal' ? (v.value ?? '') : undefined, value_from,
+      await replaceWorkloadEnv(clusterId, kind, namespace, name, {
+        container: envEdit.container,
+        envs: rows.map((r) => ({
+          name: r.name.trim(),
+          ...(r.type === 'value' ? { value: r.value }
+            : r.type === 'field' ? { value_from: { type: 'field' as const, field_path: r.fieldPath } }
+              : r.type === 'resource' ? { value_from: { type: 'resource' as const, resource: r.resource } }
+                : { value_from: { type: r.type as 'configMap' | 'secret', name: r.refName, key: r.refKey } }),
+        })),
       })
-      message.success('已保存，正在滚动更新 Pod')
-      setEnvModal({ open: false })
+      message.success('已保存环境变量，正在滚动更新 Pod')
+      setEnvEdit({ open: false, container: '', rows: [] })
       load()
     } catch { /* 拦截器已提示 */ } finally { setSubmitting(false) }
   }
@@ -166,7 +210,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
     } catch { /* 拦截器已提示 */ }
   }
 
-  // ---------- envFrom：注入/编辑（前缀） ----------
+  // ---------- envFrom ----------
   const openAddEnvFrom = () => { setEnvFromModal({ open: true }); envFromForm.resetFields(); envFromForm.setFieldsValue({ env_type: 'configMap', containers: [] }) }
   const openEditEnvFrom = (e: EnvRef) => { setEnvFromModal({ open: true, edit: e }); envFromForm.resetFields(); envFromForm.setFieldsValue({ env_type: e.source_type, source_name: e.source_name, prefix: e.prefix, containers: [e.container] }) }
   const submitEnvFrom = async () => {
@@ -180,10 +224,6 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
       setEnvFromModal({ open: false })
       load()
     } catch { /* 拦截器已提示 */ } finally { setSubmitting(false) }
-  }
-
-  const doRemoveVol = async (volumeName: string) => {
-    try { await removeWorkloadMount(clusterId, kind, namespace, name, { mode: 'volume', volume_name: volumeName }); message.success('已移除，正在滚动更新 Pod'); load() } catch { /* */ }
   }
   const doRemoveEnvFrom = async (sourceName: string, container: string) => {
     try { await removeWorkloadMount(clusterId, kind, namespace, name, { mode: 'env', source_name: sourceName, container }); message.success('已移除，正在滚动更新 Pod'); load() } catch { /* */ }
@@ -235,7 +275,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   const envPane = (
     <div>
       <Space style={{ marginBottom: 10 }}>
-        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAddEnv}>添加环境变量</Button>
+        <Button size="small" type="primary" icon={<EditOutlined />} onClick={() => openEnvEdit()}>编辑环境变量</Button>
         <Button size="small" icon={<PlusOutlined />} onClick={openAddEnvFrom}>注入配置字典/密钥（envFrom）</Button>
         <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       </Space>
@@ -248,14 +288,14 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
           { title: '来源（valueFrom）', dataIndex: 'value_from', render: (v: string) => v || '-' },
           { title: '操作', width: 140, render: (_: unknown, r: EnvVar) => (
             <Space size={0}>
-              {btn('编辑', () => openEditEnv(r))}
+              {btn('编辑', () => openEnvEdit(r.container))}
               <Popconfirm title={`删除环境变量 ${r.name}？`} okButtonProps={{ danger: true }} onConfirm={() => doDeleteEnv(r)}>
                 {btn('删除', () => { /* confirm */ }, true, <DeleteOutlined />)}
               </Popconfirm>
             </Space>
           ) },
         ]}
-        locale={{ emptyText: '暂无环境变量' }} />
+        locale={{ emptyText: '暂无环境变量（点「编辑环境变量」添加）' }} />
 
       <Typography.Text strong style={{ display: 'inline-block', margin: '16px 0 6px' }}>环境变量注入（envFrom，整份配置字典/密钥）</Typography.Text>
       <Table rowKey={(r) => `${r.container}-${r.source_name}`} size="small" pagination={false} dataSource={data?.env_refs || []}
@@ -288,7 +328,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   return (
     <div>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="存储：挂载为数据卷（volumes + volumeMounts）；环境变量：env 单变量 / 配置字典·密钥整份 envFrom 注入。均写入该工作负载 Pod 模板并触发滚动更新。" />
+        message="存储：挂载为数据卷（volumes + volumeMounts）；环境变量：env 逐行批量编辑 + 配置字典/密钥整份 envFrom 注入。均写入该工作负载 Pod 模板并触发滚动更新。" />
       {body}
 
       {/* 添加/编辑卷 */}
@@ -333,42 +373,51 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
         </Form>
       </Modal>
 
-      {/* 添加/编辑单个环境变量 */}
-      <Modal title={envModal.edit ? `编辑环境变量：${envModal.edit.name}` : '添加环境变量'} open={envModal.open}
-        onCancel={() => setEnvModal({ open: false })} onOk={submitEnv} confirmLoading={submitting} okText="确定" destroyOnClose>
-        <Form form={envForm} layout="vertical" preserve={false}>
-          <Form.Item name="container" label="容器" rules={[{ required: true, message: '请选择容器' }]}>
-            <Select options={allContainers.map((c) => ({ value: c.name, label: c.name }))} />
-          </Form.Item>
-          <Form.Item name="name" label="变量名" rules={[{ required: true, message: '请填写变量名' }]}>
-            <Input placeholder="如 LOG_LEVEL" />
-          </Form.Item>
-          <Form.Item name="vf_type" label="值来源" rules={[{ required: true }]}>
-            <Select options={[
-              { value: 'literal', label: '直接填值' },
-              { value: 'configMap', label: '配置字典（某 key）' },
-              { value: 'secret', label: '密钥（某 key）' },
-              { value: 'field', label: 'Pod 字段（fieldRef）' },
-              { value: 'resource', label: '容器资源（resourceFieldRef）' },
-            ]} />
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(p, c) => p.vf_type !== c.vf_type}>
-            {({ getFieldValue }) => {
-              const t = getFieldValue('vf_type')
-              if (t === 'literal') return <Form.Item name="value" label="值"><Input placeholder="值" /></Form.Item>
-              if (t === 'field') return <Form.Item name="vf_field_path" label="字段路径" rules={[{ required: true, message: '如 metadata.name / status.podIP' }]}><Input placeholder="metadata.name" /></Form.Item>
-              if (t === 'resource') return <Form.Item name="vf_resource" label="资源" rules={[{ required: true, message: '如 limits.cpu / requests.memory' }]}><Input placeholder="limits.cpu" /></Form.Item>
-              return (
+      {/* 环境变量批量编辑（KubeSphere 风格：逐行编辑，整份保存） */}
+      <Modal title="编辑环境变量" open={envEdit.open} onCancel={() => setEnvEdit({ open: false, container: '', rows: [] })}
+        onOk={submitEnvEdit} confirmLoading={submitting} okText="保存" width={900} destroyOnClose>
+        <Space style={{ marginBottom: 10 }} wrap>
+          <span>容器</span>
+          <Select size="small" style={{ width: 200 }} value={envEdit.container} onChange={switchEnvContainer}
+            options={allContainers.map((c) => ({ value: c.name, label: c.name }))} />
+          <Button size="small" icon={<PlusOutlined />} onClick={addRow}>添加变量</Button>
+          <Select size="small" style={{ width: 190 }} placeholder="引用配置字典（导入所有 key）" value={undefined} showSearch optionFilterProp="label"
+            options={(misc.configmaps || []).map((x) => ({ value: x.name, label: x.name }))}
+            onChange={(v) => importKeys('configMap', String(v))} />
+          <Select size="small" style={{ width: 190 }} placeholder="引用密钥（导入所有 key）" value={undefined} showSearch optionFilterProp="label"
+            options={(misc.secrets || []).map((x) => ({ value: x.name, label: x.name }))}
+            onChange={(v) => importKeys('secret', String(v))} />
+        </Space>
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 8, maxHeight: 420, overflow: 'auto' }}>
+          {envEdit.rows.length === 0 && <Empty description="暂无环境变量，点「添加变量」" />}
+          {envEdit.rows.map((r, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+              <Input style={{ width: 190 }} placeholder="变量名" value={r.name} onChange={(e) => setRow(i, { name: e.target.value })} />
+              <Select style={{ width: 150 }} value={r.type} onChange={(v) => setRow(i, { type: v })} options={ENV_TYPES} />
+              {r.type === 'value' && (
+                <Input style={{ flex: 1 }} placeholder="值" value={r.value} onChange={(e) => setRow(i, { value: e.target.value })} />
+              )}
+              {(r.type === 'configMap' || r.type === 'secret') && (
                 <>
-                  <Form.Item name="vf_name" label={t === 'configMap' ? '配置字典' : '密钥'} rules={[{ required: true, message: '请选择' }]}>
-                    <Select showSearch options={optionsFor(t === 'configMap' ? 'configMap' : 'secret')} optionFilterProp="label" notFoundContent="该命名空间下没有可选资源" />
-                  </Form.Item>
-                  <Form.Item name="vf_key" label="键（key）" rules={[{ required: true, message: '请填写 key' }]}><Input placeholder="如 application.yml" /></Form.Item>
+                  <Select style={{ width: 200 }} showSearch optionFilterProp="label" placeholder={r.type === 'configMap' ? '选择配置字典' : '选择密钥'}
+                    value={r.refName || undefined} options={cmSecretOptions(r.type)} onChange={(v) => setRow(i, { refName: String(v) })} />
+                  <Input style={{ width: 160 }} placeholder="key" value={r.refKey} onChange={(e) => setRow(i, { refKey: e.target.value })} />
                 </>
-              )
-            }}
-          </Form.Item>
-        </Form>
+              )}
+              {r.type === 'field' && (
+                <Input style={{ flex: 1 }} placeholder="如 metadata.name" value={r.fieldPath} onChange={(e) => setRow(i, { fieldPath: e.target.value })} />
+              )}
+              {r.type === 'resource' && (
+                <Input style={{ flex: 1 }} placeholder="如 limits.cpu" value={r.resource} onChange={(e) => setRow(i, { resource: e.target.value })} />
+              )}
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => delRow(i)} />
+            </div>
+          ))}
+        </div>
+        <Divider style={{ margin: '10px 0 0' }} />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          逐行编辑后点「保存」整份写入该容器的 env（空行忽略；同名会报错）。改单个 key 引用可直接改上面行的来源/key。
+        </Typography.Text>
       </Modal>
 
       {/* 注入/编辑 envFrom */}

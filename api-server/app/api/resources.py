@@ -1258,6 +1258,66 @@ async def upsert_env(cluster_id: int, kind: str, namespace: str, name: str,
     return {"code": 200, "message": "已保存环境变量", "data": {"container": container, "name": var_name}}
 
 
+@router.put("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/env")
+async def replace_env(cluster_id: int, kind: str, namespace: str, name: str,
+                      payload: dict, user=Depends(require_operator)):
+    """批量替换某容器的环境变量（KubeSphere 风格批量编辑器用）。
+
+    body: container, envs:[{name, value?, value_from?{type,name,key,field_path,resource}}]
+    envs 为该容器**完整**的 env 列表（逐行编辑后整份保存）；空数组=清空。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    container = str(payload.get("container") or "").strip()
+    envs_in = payload.get("envs")
+    if not container or not isinstance(envs_in, list):
+        return {"code": 400, "message": "container 与 envs([]) 必填", "data": None}
+    built: list[dict] = []
+    seen: set[str] = set()
+    for i, e in enumerate(envs_in):
+        if not isinstance(e, dict):
+            return {"code": 400, "message": f"第 {i + 1} 行格式错误", "data": None}
+        vn = str(e.get("name") or "").strip()
+        if not vn:
+            return {"code": 400, "message": f"第 {i + 1} 行变量名不能为空", "data": None}
+        if vn in seen:
+            return {"code": 400, "message": f"变量名重复：{vn}", "data": None}
+        seen.add(vn)
+        item: dict = {"name": vn}
+        vf = e.get("value_from") or None
+        if vf:
+            t = str(vf.get("type") or "").strip()
+            if t == "configMap":
+                item["valueFrom"] = {"configMapKeyRef": {"name": vf.get("name"), "key": vf.get("key")}}
+            elif t == "secret":
+                item["valueFrom"] = {"secretKeyRef": {"name": vf.get("name"), "key": vf.get("key")}}
+            elif t == "field":
+                item["valueFrom"] = {"fieldRef": {"fieldPath": vf.get("field_path")}}
+            elif t == "resource":
+                item["valueFrom"] = {"resourceFieldRef": {"resource": vf.get("resource")}}
+            else:
+                return {"code": 400, "message": f"第 {i + 1} 行 value_from.type 非法", "data": None}
+        else:
+            item["value"] = "" if e.get("value") is None else str(e.get("value"))
+        built.append(item)
+
+    doc, err = await _load_workload_doc(cluster_id, kind, namespace, name)
+    if err:
+        return err
+    tmpl = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+    c = _find_container(tmpl, container)
+    if c is None:
+        return {"code": 400, "message": f"容器 {container} 不存在", "data": None}
+    if built:
+        c["env"] = built
+    else:
+        c.pop("env", None)
+    err2 = await _apply_doc(cluster_id, kind, namespace, name, doc)
+    if err2:
+        return err2
+    return {"code": 200, "message": "已保存环境变量", "data": {"container": container, "count": len(built)}}
+
+
 @router.delete("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/env")
 async def delete_env(cluster_id: int, kind: str, namespace: str, name: str,
                      container: str, var_name: str, user=Depends(require_operator)):
