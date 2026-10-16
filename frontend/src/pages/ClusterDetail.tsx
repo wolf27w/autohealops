@@ -6,7 +6,7 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers } from '../services/api'
 import type { ClusterPod } from '../services/api'
 import type { ProactiveScanResult } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
@@ -945,6 +945,7 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
   const [logs, setLogs] = useState('')
   const [loading, setLoading] = useState(false)
   const [container, setContainer] = useState('')
+  const [containers, setContainers] = useState<string[]>([])
   const [streamOpen, setStreamOpen] = useState(false)
 
   const load = () => {
@@ -955,13 +956,28 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
       .catch(() => setLogs('日志获取失败'))
       .finally(() => setLoading(false))
   }
-  useEffect(() => { setContainer(''); load() }, [pod])
+  useEffect(() => { setContainer(''); setContainers([]); load() }, [pod])
+
+  // 打开时拉取容器列表（默认选第一个）
+  useEffect(() => {
+    if (!pod) return
+    getPodContainers(pod.clusterId, pod.namespace, pod.name)
+      .then((d) => {
+        const list = (d as unknown as { containers?: string[] })?.containers || []
+        setContainers(list)
+        if (list.length) setContainer((c) => c || list[0])
+      })
+      .catch(() => setContainers([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pod])
 
   if (!pod) return null
   return (
     <Drawer title={`容器日志：${pod.name}`} open={!!pod} onClose={onClose} width={900}>
       <Space style={{ marginBottom: 12 }}>
-        <Input placeholder="容器名（空=第一个）" value={container} onChange={(e) => setContainer(e.target.value)} style={{ width: 220 }} />
+        <Select placeholder="容器（默认第一个）" value={container || undefined} onChange={(v) => setContainer(v || '')}
+          style={{ width: 220 }} allowClear
+          options={containers.map((c) => ({ label: c, value: c }))} />
         <Button type="primary" onClick={load}>查询</Button>
         <Button onClick={() => setStreamOpen(true)}>实时跟随</Button>
       </Space>
@@ -979,6 +995,7 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
 function ExecPodModal({ pod, onClose }: { pod: PodTarget | null; onClose: () => void }) {
   const [command, setCommand] = useState('')
   const [container, setContainer] = useState('')
+  const [containers, setContainers] = useState<string[]>([])
   const [output, setOutput] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -994,13 +1011,28 @@ function ExecPodModal({ pod, onClose }: { pod: PodTarget | null; onClose: () => 
       setLoading(false)
     }
   }
-  useEffect(() => { setCommand(''); setContainer(''); setOutput('') }, [pod])
+  useEffect(() => { setCommand(''); setContainer(''); setOutput(''); setContainers([]) }, [pod])
+
+  // 打开时拉取容器列表（默认选第一个），避免“看不到容器”
+  useEffect(() => {
+    if (!pod) return
+    getPodContainers(pod.clusterId, pod.namespace, pod.name)
+      .then((d) => {
+        const list = (d as unknown as { containers?: string[] })?.containers || []
+        setContainers(list)
+        if (list.length) setContainer((c) => c || list[0])
+      })
+      .catch(() => setContainers([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pod])
 
   if (!pod) return null
   return (
     <Modal title={`进入容器：${pod.name}`} open={!!pod} onCancel={onClose} footer={null} width={820}>
       <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
-        <Input placeholder="容器名（空=第一个）" value={container} onChange={(e) => setContainer(e.target.value)} style={{ width: 200 }} />
+        <Select placeholder="容器（默认第一个）" value={container || undefined} onChange={(v) => setContainer(v || '')}
+          style={{ width: 220 }} allowClear
+          options={containers.map((c) => ({ label: c, value: c }))} />
         <Input placeholder="只读命令：ps aux / env / df -h / free -m / ls / cat 等" value={command}
           onChange={(e) => setCommand(e.target.value)} onPressEnter={run} />
         <Button type="primary" onClick={run} loading={loading}>执行</Button>
