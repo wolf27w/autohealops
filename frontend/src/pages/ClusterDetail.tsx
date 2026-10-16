@@ -92,6 +92,7 @@ export default function ClusterDetail() {
   const [detailPod, setDetailPod] = useState<PodTarget | null>(null)
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [mountTarget, setMountTarget] = useState<WorkloadTarget | null>(null)
+  const [mountTypes, setMountTypes] = useState<Array<'configMap' | 'secret' | 'pvc'>>(['configMap'])
   const [misc, setMisc] = useState<MiscData>({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] })
   const [configObj, setConfigObj] = useState<ConfigObjectTarget | null>(null)
   const [infoObj, setInfoObj] = useState<ConfigObjectTarget | null>(null)
@@ -337,13 +338,19 @@ export default function ClusterDetail() {
       render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
     { title: '操作', key: 'actions', width: 70, render: (_: unknown, r: ResourceItem) => (
       <Dropdown trigger={['click']} menu={{ items: [
-        { key: 'mounts', label: '配置与存储' },
+        { key: 'cm', label: '配置字典' },
+        { key: 'secret', label: '配置密钥' },
+        { key: 'pvc', label: '配置 PVC' },
+        { type: 'divider' as const },
         { key: 'yaml', label: '编辑 YAML' },
         { type: 'divider' as const },
         { key: 'delete', label: '删除', danger: true },
       ], onClick: ({ key }) => {
-        if (key === 'mounts') setMountTarget({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })
-        else if (key === 'yaml') setWlYaml({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })
+        const tgt = { clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name }
+        if (key === 'cm') { setMountTypes(['configMap']); setMountTarget(tgt) }
+        else if (key === 'secret') { setMountTypes(['secret']); setMountTarget(tgt) }
+        else if (key === 'pvc') { setMountTypes(['pvc']); setMountTarget(tgt) }
+        else if (key === 'yaml') setWlYaml(tgt)
         else if (key === 'delete') Modal.confirm({
           title: `删除 ${tabKind(r)} ${r.namespace}/${r.name}？`,
           content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
@@ -733,11 +740,11 @@ export default function ClusterDetail() {
       <IngressSettingsModal target={ingObj} onClose={() => setIngObj(null)} onSaved={reloadMisc} />
       <PvcCreateModal target={pvcObj} onClose={() => setPvcObj(null)} onSaved={reloadMisc} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
-      <Modal title={mountTarget ? `配置与存储：${mountTarget.namespace}/${mountTarget.name}` : ''}
+      <Modal title={mountTarget ? `${mountTypes.map((t) => ({ configMap: '配置字典', secret: '配置密钥', pvc: 'PVC' } as const)[t]).join(' / ')}：${mountTarget.namespace}/${mountTarget.name}` : ''}
         open={!!mountTarget} onCancel={() => setMountTarget(null)} footer={null} width={960} destroyOnClose>
         {mountTarget && (
           <WorkloadMountsPanel clusterId={mountTarget.clusterId} kind={mountTarget.kind}
-            namespace={mountTarget.namespace} name={mountTarget.name} />
+            namespace={mountTarget.namespace} name={mountTarget.name} types={mountTypes} />
         )}
       </Modal>
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
