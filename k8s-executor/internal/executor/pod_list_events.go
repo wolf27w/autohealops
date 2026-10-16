@@ -20,16 +20,103 @@ import (
 
 // PodBriefInfo Pod 简况（含创建时间，集群管理「容器组」列表用）
 type PodBriefInfo struct {
-	Namespace      string
-	Name           string
-	Phase          string
-	Ready          bool
-	RestartCount   int32
-	CreatedAt      string // RFC3339
-	NodeName       string
-	PodIP          string
-	Containers     []string // 业务容器（含 sidecar）
-	InitContainers []string
+	Namespace       string
+	Name            string
+	Phase           string
+	Ready           bool
+	RestartCount    int32
+	CreatedAt       string // RFC3339
+	NodeName        string
+	PodIP           string
+	Containers      []string // 业务容器（含 sidecar）
+	InitContainers  []string
+	Status          string // kubectl 风格展示状态（Running/CrashLoopBackOff/Terminating/Completed/Init:0/1...）
+	ReadyContainers int32  // 就绪的业务容器数（READY 列分子）
+	TotalContainers int32  // 业务容器总数（READY 列分母）
+}
+
+// podDisplayStatus 计算 kubectl 风格的展示状态（等价 `kubectl get pods` 的 STATUS 列）。
+// 比 Pod phase 细得多：合并 init 容器与业务容器的 state/reason，
+// 能反映 CrashLoopBackOff / ImagePullBackOff / Terminating / Completed / Init:0/1 等真实运行态。
+func podDisplayStatus(p *corev1.Pod) string {
+	reason := string(p.Status.Phase)
+	if p.Status.Reason != "" {
+		reason = p.Status.Reason
+	}
+
+	initializing := false
+	for i := range p.Status.InitContainerStatuses {
+		cs := p.Status.InitContainerStatuses[i]
+		switch {
+		case cs.State.Terminated != nil && cs.State.Terminated.ExitCode == 0:
+			continue
+		case cs.State.Terminated != nil:
+			if cs.State.Terminated.Reason == "" {
+				if cs.State.Terminated.Signal != 0 {
+					reason = fmt.Sprintf("Init:Signal:%d", cs.State.Terminated.Signal)
+				} else {
+					reason = fmt.Sprintf("Init:ExitCode:%d", cs.State.Terminated.ExitCode)
+				}
+			} else {
+				reason = "Init:" + cs.State.Terminated.Reason
+			}
+			initializing = true
+		case cs.State.Waiting != nil && cs.State.Waiting.Reason != "" && cs.State.Waiting.Reason != "PodInitializing":
+			reason = "Init:" + cs.State.Waiting.Reason
+			initializing = true
+		default:
+			reason = fmt.Sprintf("Init:%d/%d", i, len(p.Spec.InitContainers))
+			initializing = true
+		}
+		break
+	}
+
+	if !initializing {
+		hasRunning := false
+		for i := len(p.Status.ContainerStatuses) - 1; i >= 0; i-- {
+			cs := p.Status.ContainerStatuses[i]
+			switch {
+			case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
+				reason = cs.State.Waiting.Reason
+			case cs.State.Terminated != nil && cs.State.Terminated.Reason != "":
+				reason = cs.State.Terminated.Reason
+			case cs.State.Terminated != nil:
+				if cs.State.Terminated.Signal != 0 {
+					reason = fmt.Sprintf("Signal:%d", cs.State.Terminated.Signal)
+				} else {
+					reason = fmt.Sprintf("ExitCode:%d", cs.State.Terminated.ExitCode)
+				}
+			case cs.Ready && cs.State.Running != nil:
+				hasRunning = true
+			}
+		}
+		// 至少一个容器仍在 Running，则不显示 Completed（回退为 Running/NotReady）
+		if reason == "Completed" && hasRunning {
+			if hasPodReadyCondition(p.Status.Conditions) {
+				reason = "Running"
+			} else {
+				reason = "NotReady"
+			}
+		}
+	}
+
+	if p.DeletionTimestamp != nil {
+		if p.Status.Reason == "NodeLost" {
+			reason = "Unknown"
+		} else {
+			reason = "Terminating"
+		}
+	}
+	return reason
+}
+
+func hasPodReadyCondition(conds []corev1.PodCondition) bool {
+	for _, c := range conds {
+		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // ListPods 列出 namespace（空=全部）下的 Pod，带创建时间/就绪/重启次数
@@ -46,10 +133,12 @@ func (e *Executor) ListPods(ctx context.Context, namespace string) ([]PodBriefIn
 		p := &list.Items[i]
 		// Ready = phase Running 且所有容器 Ready
 		ready := p.Status.Phase == corev1.PodRunning
-		var restarts int32
+		var restarts, readyCnt int32
 		for _, cs := range p.Status.ContainerStatuses {
 			restarts += cs.RestartCount
-			if !cs.Ready {
+			if cs.Ready {
+				readyCnt++
+			} else {
 				ready = false
 			}
 		}
@@ -66,16 +155,19 @@ func (e *Executor) ListPods(ctx context.Context, namespace string) ([]PodBriefIn
 			inits = append(inits, c.Name)
 		}
 		out = append(out, PodBriefInfo{
-			Namespace:      p.Namespace,
-			Name:           p.Name,
-			Phase:          string(p.Status.Phase),
-			Ready:          ready,
-			RestartCount:   restarts,
-			CreatedAt:      created,
-			NodeName:       p.Spec.NodeName,
-			PodIP:          p.Status.PodIP,
-			Containers:     containers,
-			InitContainers: inits,
+			Namespace:       p.Namespace,
+			Name:            p.Name,
+			Phase:           string(p.Status.Phase),
+			Ready:           ready,
+			RestartCount:    restarts,
+			CreatedAt:       created,
+			NodeName:        p.Spec.NodeName,
+			PodIP:           p.Status.PodIP,
+			Containers:      containers,
+			InitContainers:  inits,
+			Status:          podDisplayStatus(p),
+			ReadyContainers: readyCnt,
+			TotalContainers: int32(len(p.Spec.Containers)),
 		})
 	}
 	return out, nil

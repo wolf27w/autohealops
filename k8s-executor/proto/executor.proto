@@ -367,6 +367,9 @@ message PodBriefInfo {
   string pod_ip = 8;
   repeated string containers = 9;       // 所有业务容器名（含 sidecar，按 spec 顺序）
   repeated string init_containers = 10; // init 容器名
+  string status = 11;          // kubectl 风格展示状态（Running/CrashLoopBackOff/ImagePullBackOff/Terminating/Completed/Init:0/1...）
+  int32 ready_containers = 12; // 就绪的业务容器数（READY 列的分子）
+  int32 total_containers = 13; // 业务容器总数（READY 列的分母）
 }
 message ListPodsResponse {
   bool success = 1;

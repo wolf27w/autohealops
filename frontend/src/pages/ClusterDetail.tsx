@@ -7,6 +7,7 @@ import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/ico
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan } from '../services/api'
+import type { ClusterPod } from '../services/api'
 import type { ProactiveScanResult } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
@@ -19,10 +20,7 @@ import IngressSettingsModal from '../components/IngressSettingsModal'
 import PvcCreateModal from '../components/PvcCreateModal'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../components/WorkloadCreateModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
-
-const POD_STATUS_COLOR: Record<string, string> = {
-  Running: 'green', Pending: 'orange', Failed: 'red', Succeeded: 'blue', Unknown: 'gray',
-}
+import { podStatusColor, podReadyText } from '../utils/podStatus'
 
 interface ResourceItem {
   name: string
@@ -100,9 +98,9 @@ export default function ClusterDetail() {
   const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
   const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)
   const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
-  const [livePods, setLivePods] = useState<Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>({})
+  const [livePods, setLivePods] = useState<Record<string, ClusterPod>>({})
   // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
-  const [podList, setPodList] = useState<Array<{ namespace: string; name: string; phase?: string; ready?: boolean; restart_count?: number; created_at?: string; node_name?: string; pod_ip?: string; containers?: string[]; init_containers?: string[] }>>([])
+  const [podList, setPodList] = useState<ClusterPod[]>([])
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [inspectOpen, setInspectOpen] = useState(false)
@@ -159,8 +157,8 @@ export default function ClusterDetail() {
     if (activeType !== 'pods') return
     getClusterPods(Number(id), activeNs === '_all_' ? '' : activeNs)
       .then((d) => {
-        const pods = (d as { pods?: Array<{ namespace: string; name: string; phase?: string; created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> }).pods || []
-        const m: Record<string, { created_at?: string; restart_count?: number; node_name?: string; ready?: boolean; pod_ip?: string; containers?: string[]; init_containers?: string[] }> = {}
+        const pods = (d as { pods?: ClusterPod[] }).pods || []
+        const m: Record<string, ClusterPod> = {}
         for (const p of pods) m[`${p.namespace}-${p.name}`] = p
         setLivePods(m)
         setPodList(pods)
@@ -290,7 +288,7 @@ export default function ClusterDetail() {
       for (const p of (dataByType.pods || [])) snap[`${p.namespace}-${p.name}`] = p
       return podList.map((p) => {
         const s = snap[`${p.namespace}-${p.name}`] || {}
-        return { ...p, status: p.phase || (p.ready ? 'Running' : 'Pending'),
+        return { ...p, status: p.status || p.phase || (p.ready ? 'Running' : 'Pending'),
           cpu_request: s.cpu_request, memory_request: s.memory_request,
           cpu_limit: s.cpu_limit, memory_limit: s.memory_limit }
       })
@@ -393,7 +391,8 @@ export default function ClusterDetail() {
             { title: '名称', dataIndex: 'name', render: (v: string, r: ResourceItem) => (
               <a onClick={() => setDetailPod({ clusterId: Number(id), namespace: r.namespace, name: r.name })}>{v}</a>
             ) },
-            { title: '状态', dataIndex: 'status', width: 120, render: (s: string) => <Tag color={POD_STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+            { title: '状态', dataIndex: 'status', width: 150, render: (s: string) => <Tag color={podStatusColor(s)}>{s}</Tag> },
+            { title: '就绪', key: 'ready', width: 70, render: (_: unknown, r: ResourceItem) => podReadyText(r.ready_containers, r.total_containers) },
             { title: '重启', dataIndex: 'restart_count', width: 70, render: (v: number) => (v ?? '-') },
             { title: '节点', dataIndex: 'node_name', width: 160, render: (v: string) => v || '-' },
             { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
@@ -632,7 +631,7 @@ export default function ClusterDetail() {
 
   // 标签页分组：10 个类型 → 6 个标签（工作负载/容器组/定时任务/网络/配置/存储），降低密集度
   const GROUPS = [
-    { key: 'workloads', label: '工作负载', types: ['deployments', 'statefulsets', 'daemonsets'], names: { deployments: '无状态', statefulsets: '有状态', daemonsets: '守护集' } as Record<string, string> },
+    { key: 'workloads', label: '工作负载', types: ['deployments', 'statefulsets', 'daemonsets', 'pods'], names: { deployments: '无状态', statefulsets: '有状态', daemonsets: '守护集', pods: '容器组' } as Record<string, string> },
     { key: 'cronjobs', label: '定时任务', types: ['cronjobs'] },
     { key: 'network', label: '网络', types: ['services', 'ingresses'], names: { services: '服务', ingresses: '路由' } as Record<string, string> },
     { key: 'config', label: '配置', types: ['configmaps', 'secrets'], names: { configmaps: '配置字典', secrets: '保密字典' } as Record<string, string> },

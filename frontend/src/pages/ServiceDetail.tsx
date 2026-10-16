@@ -12,6 +12,7 @@ import PodLogStreamModal from '../components/PodLogStreamModal'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers, getClusterPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
+import { podStatusColor, podReadyText } from '../utils/podStatus'
 import type { AggLogPod, K8sNode } from '../services/api'
 
 const KIND_LABEL: Record<string, string> = {
@@ -115,11 +116,11 @@ export default function ServiceDetail() {
         }
         setPods(live.map((p) => {
           const s = snap[p.name] || {}
-          return { ...p, status: p.phase || (p.ready ? 'Running' : 'Pending'),
+          return { ...p, status: p.status || p.phase || (p.ready ? 'Running' : 'Pending'),
             cpu_request: s.cpu_request, memory_request: s.memory_request,
             cpu_limit: s.cpu_limit, memory_limit: s.memory_limit }
         }))
-      }).catch(() => setPods(live.map((p) => ({ ...p, status: p.phase || (p.ready ? 'Running' : 'Pending') }))))
+      }).catch(() => setPods(live.map((p) => ({ ...p, status: p.status || p.phase || (p.ready ? 'Running' : 'Pending') }))))
     }).catch(() => setPods([]))
     getIsolatedPods(clusterId, namespace).then((dd) => setIsolated(new Set(dd?.pods || []))).catch(() => {})
   }
@@ -355,7 +356,12 @@ export default function ServiceDetail() {
             <Table rowKey="name" size="small" dataSource={pods} pagination={false}
               columns={[
                 { title: '名称', dataIndex: 'name', render: (v, r) => <a onClick={() => setDetailPod({ clusterId, namespace: r.namespace, name: r.name })}>{v}</a> },
-                { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'Running' ? 'green' : s === 'Pending' ? 'orange' : 'red'}>{s}</Tag> },
+                { title: '状态', dataIndex: 'status', width: 150, render: (s: string) => <Tag color={podStatusColor(s)}>{s}</Tag> },
+                { title: '就绪', key: 'ready', width: 70, render: (_: unknown, r: ServicePod) => podReadyText(r.ready_containers, r.total_containers) },
+                { title: '重启', dataIndex: 'restart_count', width: 70, render: (v: unknown) => (v == null ? '-' : String(v)) },
+                { title: '节点', dataIndex: 'node_name', width: 160, render: (v: unknown) => (v ? String(v) : '-') },
+                { title: 'Pod IP', dataIndex: 'pod_ip', width: 130, render: (v: unknown) => (v ? String(v) : '-') },
+                { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
                 { title: '资源（最小~最大）', render: (_, r) => {
                   const parts: string[] = []
                   if (r.cpu_request || r.cpu_limit) parts.push(`CPU ${r.cpu_request || '-'}~${r.cpu_limit || '-'}`)
