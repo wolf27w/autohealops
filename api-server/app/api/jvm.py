@@ -147,6 +147,7 @@ def _no_jdk_msg(note: str = "") -> str:
     msg = (
         "容器内没有 JDK 诊断工具（jcmd/jstack/jmap），且 jattach 注入失败；"
         "该镜像疑似仅含 JRE，无法执行 JVM 诊断。"
+        "（常见原因：/tmp 等可写目录被挂成 noexec 无法执行注入的二进制，或镜像只读/无网络）"
         "建议改用基于 JDK 的基础镜像，或在镜像内预装 JDK 工具。"
     )
     if note:
