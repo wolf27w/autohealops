@@ -50,6 +50,8 @@ service ExecutorService {
   rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
   // Pod 详情（含容器组内各容器：镜像/状态/就绪/重启；点击 Pod 展开用）
   rpc GetPodDetail(GetPodDetailRequest) returns (GetPodDetailResponse);
+  // 工作负载（Deployment/StatefulSet/DaemonSet）Pod 模板的挂载配置（volumes + 容器 volumeMounts）
+  rpc GetWorkloadMounts(GetWorkloadMountsRequest) returns (GetWorkloadMountsResponse);
   // 集群管理其它资源：服务/路由(Ingress)/ConfigMap/Secret/存储(PVC)
   rpc ListMiscResources(ListMiscResourcesRequest) returns (ListMiscResourcesResponse);
   // 单个 Pod 的事件（k8s Event）
@@ -393,6 +395,28 @@ message ContainerDetail {
   string started_at = 7;       // RFC3339
   string finished_at = 8;      // RFC3339
   bool is_init = 9;            // 是否 init 容器
+  repeated VolumeMountInfo mounts = 10; // 该容器的挂载（volumeMounts）
+}
+// VolumeMountInfo 容器挂载项（container.volumeMounts）
+message VolumeMountInfo {
+  string name = 1;             // 对应 volume 名
+  string mount_path = 2;       // 挂载路径
+  string sub_path = 3;         // 子路径
+  bool read_only = 4;          // 是否只读
+  string sub_path_expr = 5;    // 子路径表达式（env 展开）
+  string propagation = 6;      // 挂载传播（None/HostToContainer/...）
+}
+// VolumeInfo Pod/工作负载的数据卷（volumes）
+message VolumeInfo {
+  string name = 1;
+  string type = 2;             // configMap/secret/persistentVolumeClaim/hostPath/emptyDir/nfs/projected/downwardAPI/...
+  string source = 3;           // 来源摘要，如 configMap 名 / hostPath 路径 / PVC 名
+  bool read_only = 4;
+}
+// ContainerMounts 容器名 + 其挂载列表
+message ContainerMounts {
+  string name = 1;
+  repeated VolumeMountInfo mounts = 2;
 }
 message GetPodDetailResponse {
   bool success = 1;
@@ -408,6 +432,25 @@ message GetPodDetailResponse {
   repeated ContainerDetail containers = 11;
   repeated ContainerDetail init_containers = 12;
   string error = 13;
+  repeated VolumeInfo volumes = 14; // Pod 数据卷（volumes）
+  string owner_kind = 15;      // 所属工作负载 Kind（Deployment/StatefulSet/DaemonSet/...；Deployment 已由 ReplicaSet 回溯）
+  string owner_name = 16;      // 所属工作负载名
+  string owner_namespace = 17; // 所属工作负载命名空间
+}
+
+// ---------- GetWorkloadMounts（工作负载 Pod 模板挂载配置） ----------
+message GetWorkloadMountsRequest {
+  int64 cluster_id = 1;
+  string kind = 2;      // deployment/statefulset/daemonset
+  string namespace = 3;
+  string name = 4;
+}
+message GetWorkloadMountsResponse {
+  bool success = 1;
+  string error = 2;
+  repeated VolumeInfo volumes = 3;
+  repeated ContainerMounts containers = 4;
+  repeated ContainerMounts init_containers = 5;
 }
 
 // ---------- ListMiscResources（集群管理：服务/路由/ConfigMap/Secret/存储） ----------

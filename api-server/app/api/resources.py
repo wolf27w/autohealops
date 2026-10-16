@@ -869,6 +869,22 @@ async def workload_containers(cluster_id: int, kind: str, namespace: str, name: 
         "containers": [{"name": c.get("name"), "image": c.get("image")} for c in ctrs]}}
 
 
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts")
+async def workload_mounts(cluster_id: int, kind: str, namespace: str, name: str,
+                         user=Depends(require_any_user)):
+    """工作负载 Pod 模板的挂载配置（volumes + 各容器 volumeMounts）——用于 Pod 详情/工作负载详情展示。"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_workload_mounts, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "挂载配置获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {
+        "volumes": r.get("volumes", []),
+        "containers": r.get("containers", []),
+        "init_containers": r.get("init_containers", []),
+    }}
+
+
 @router.get("/registry/tags")
 async def registry_tags(image: str, limit: int = 100, cluster_id: int = 0, namespace: str = "",
                        kind: str = "", name: str = "", user=Depends(require_any_user)):

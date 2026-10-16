@@ -422,7 +422,15 @@ func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) 
 				Name: c.Name, Image: c.Image, State: c.State, Ready: c.Ready,
 				RestartCount: c.RestartCount, Reason: c.Reason,
 				StartedAt: c.StartedAt, FinishedAt: c.FinishedAt, IsInit: c.IsInit,
+				Mounts: convMounts(c.Mounts),
 			})
+		}
+		return out
+	}
+	convVols := func(in []executor.VolumeInfo) []*pb.VolumeInfo {
+		out := make([]*pb.VolumeInfo, 0, len(in))
+		for _, v := range in {
+			out = append(out, &pb.VolumeInfo{Name: v.Name, Type: v.Type, Source: v.Source, ReadOnly: v.ReadOnly})
 		}
 		return out
 	}
@@ -431,6 +439,47 @@ func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) 
 		Ready: d.Ready, RestartCount: d.RestartCount, CreatedAt: d.CreatedAt,
 		NodeName: d.NodeName, PodIp: d.PodIP, HostIp: d.HostIP,
 		Containers: conv(d.Containers), InitContainers: conv(d.InitContainers),
+		Volumes: convVols(d.Volumes),
+		OwnerKind: d.OwnerKind, OwnerName: d.OwnerName, OwnerNamespace: d.OwnerNamespace,
+	}, nil
+}
+
+// convMounts 容器挂载转换
+func convMounts(in []executor.VolumeMountInfo) []*pb.VolumeMountInfo {
+	out := make([]*pb.VolumeMountInfo, 0, len(in))
+	for _, m := range in {
+		out = append(out, &pb.VolumeMountInfo{
+			Name: m.Name, MountPath: m.MountPath, SubPath: m.SubPath,
+			ReadOnly: m.ReadOnly, SubPathExpr: m.SubPathExpr, Propagation: m.Propagation,
+		})
+	}
+	return out
+}
+
+// GetWorkloadMounts 工作负载 Pod 模板的挂载配置
+func (s *Server) GetWorkloadMounts(ctx context.Context, req *pb.GetWorkloadMountsRequest) (*pb.GetWorkloadMountsResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetWorkloadMountsResponse{Success: false, Error: err.Error()}, nil
+	}
+	m, err := ex.GetWorkloadMounts(ctx, req.Kind, req.Namespace, req.Name)
+	if err != nil {
+		return &pb.GetWorkloadMountsResponse{Success: false, Error: err.Error()}, nil
+	}
+	vols := make([]*pb.VolumeInfo, 0, len(m.Volumes))
+	for _, v := range m.Volumes {
+		vols = append(vols, &pb.VolumeInfo{Name: v.Name, Type: v.Type, Source: v.Source, ReadOnly: v.ReadOnly})
+	}
+	conv := func(in []executor.ContainerMounts) []*pb.ContainerMounts {
+		out := make([]*pb.ContainerMounts, 0, len(in))
+		for _, c := range in {
+			out = append(out, &pb.ContainerMounts{Name: c.Name, Mounts: convMounts(c.Mounts)})
+		}
+		return out
+	}
+	return &pb.GetWorkloadMountsResponse{
+		Success: true, Volumes: vols,
+		Containers: conv(m.Containers), InitContainers: conv(m.InitContainers),
 	}, nil
 }
 

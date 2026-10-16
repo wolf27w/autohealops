@@ -42,6 +42,7 @@ const (
 	ExecutorService_ApplyPodYaml_FullMethodName          = "/executor.ExecutorService/ApplyPodYaml"
 	ExecutorService_ListPods_FullMethodName              = "/executor.ExecutorService/ListPods"
 	ExecutorService_GetPodDetail_FullMethodName          = "/executor.ExecutorService/GetPodDetail"
+	ExecutorService_GetWorkloadMounts_FullMethodName     = "/executor.ExecutorService/GetWorkloadMounts"
 	ExecutorService_ListMiscResources_FullMethodName     = "/executor.ExecutorService/ListMiscResources"
 	ExecutorService_GetPodEvents_FullMethodName          = "/executor.ExecutorService/GetPodEvents"
 	ExecutorService_GetWorkloadYaml_FullMethodName       = "/executor.ExecutorService/GetWorkloadYaml"
@@ -105,6 +106,8 @@ type ExecutorServiceClient interface {
 	ListPods(ctx context.Context, in *ListPodsRequest, opts ...grpc.CallOption) (*ListPodsResponse, error)
 	// Pod 详情（含容器组内各容器：镜像/状态/就绪/重启；点击 Pod 展开用）
 	GetPodDetail(ctx context.Context, in *GetPodDetailRequest, opts ...grpc.CallOption) (*GetPodDetailResponse, error)
+	// 工作负载（Deployment/StatefulSet/DaemonSet）Pod 模板的挂载配置（volumes + 容器 volumeMounts）
+	GetWorkloadMounts(ctx context.Context, in *GetWorkloadMountsRequest, opts ...grpc.CallOption) (*GetWorkloadMountsResponse, error)
 	// 集群管理其它资源：服务/路由(Ingress)/ConfigMap/Secret/存储(PVC)
 	ListMiscResources(ctx context.Context, in *ListMiscResourcesRequest, opts ...grpc.CallOption) (*ListMiscResourcesResponse, error)
 	// 单个 Pod 的事件（k8s Event）
@@ -366,6 +369,16 @@ func (c *executorServiceClient) GetPodDetail(ctx context.Context, in *GetPodDeta
 	return out, nil
 }
 
+func (c *executorServiceClient) GetWorkloadMounts(ctx context.Context, in *GetWorkloadMountsRequest, opts ...grpc.CallOption) (*GetWorkloadMountsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWorkloadMountsResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_GetWorkloadMounts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) ListMiscResources(ctx context.Context, in *ListMiscResourcesRequest, opts ...grpc.CallOption) (*ListMiscResourcesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListMiscResourcesResponse)
@@ -556,6 +569,8 @@ type ExecutorServiceServer interface {
 	ListPods(context.Context, *ListPodsRequest) (*ListPodsResponse, error)
 	// Pod 详情（含容器组内各容器：镜像/状态/就绪/重启；点击 Pod 展开用）
 	GetPodDetail(context.Context, *GetPodDetailRequest) (*GetPodDetailResponse, error)
+	// 工作负载（Deployment/StatefulSet/DaemonSet）Pod 模板的挂载配置（volumes + 容器 volumeMounts）
+	GetWorkloadMounts(context.Context, *GetWorkloadMountsRequest) (*GetWorkloadMountsResponse, error)
 	// 集群管理其它资源：服务/路由(Ingress)/ConfigMap/Secret/存储(PVC)
 	ListMiscResources(context.Context, *ListMiscResourcesRequest) (*ListMiscResourcesResponse, error)
 	// 单个 Pod 的事件（k8s Event）
@@ -651,6 +666,9 @@ func (UnimplementedExecutorServiceServer) ListPods(context.Context, *ListPodsReq
 }
 func (UnimplementedExecutorServiceServer) GetPodDetail(context.Context, *GetPodDetailRequest) (*GetPodDetailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPodDetail not implemented")
+}
+func (UnimplementedExecutorServiceServer) GetWorkloadMounts(context.Context, *GetWorkloadMountsRequest) (*GetWorkloadMountsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkloadMounts not implemented")
 }
 func (UnimplementedExecutorServiceServer) ListMiscResources(context.Context, *ListMiscResourcesRequest) (*ListMiscResourcesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMiscResources not implemented")
@@ -1079,6 +1097,24 @@ func _ExecutorService_GetPodDetail_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_GetWorkloadMounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkloadMountsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).GetWorkloadMounts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_GetWorkloadMounts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).GetWorkloadMounts(ctx, req.(*GetWorkloadMountsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_ListMiscResources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListMiscResourcesRequest)
 	if err := dec(in); err != nil {
@@ -1402,6 +1438,10 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPodDetail",
 			Handler:    _ExecutorService_GetPodDetail_Handler,
+		},
+		{
+			MethodName: "GetWorkloadMounts",
+			Handler:    _ExecutorService_GetWorkloadMounts_Handler,
 		},
 		{
 			MethodName: "ListMiscResources",

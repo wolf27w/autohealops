@@ -36,14 +36,20 @@ type PodBriefInfo struct {
 }
 
 // podDisplayStatus 计算 kubectl 风格的展示状态（等价 `kubectl get pods` 的 STATUS 列）。
-// 比 Pod phase 细得多：合并 init 容器与业务容器的 state/reason，
-// 能反映 CrashLoopBackOff / ImagePullBackOff / Terminating / Completed / Init:0/1 等真实运行态。
+// 比 Pod phase 细得多：合并 init 容器与业务容器的 state/reason。
+// 口径：**只有全部业务容器都已启动成功（全部 Ready）才返回 Running**；
+// sidecar / 多容器场景同理（还有容器未上报 → ContainerCreating；都跑起来但未全部就绪 → NotReady）。
 func podDisplayStatus(p *corev1.Pod) string {
-	reason := string(p.Status.Phase)
-	if p.Status.Reason != "" {
-		reason = p.Status.Reason
+	// 删除中
+	if p.DeletionTimestamp != nil {
+		if p.Status.Reason == "NodeLost" {
+			return "Unknown"
+		}
+		return "Terminating"
 	}
 
+	// init 容器阶段
+	initReason := ""
 	initializing := false
 	for i := range p.Status.InitContainerStatuses {
 		cs := p.Status.InitContainerStatuses[i]
@@ -53,61 +59,67 @@ func podDisplayStatus(p *corev1.Pod) string {
 		case cs.State.Terminated != nil:
 			if cs.State.Terminated.Reason == "" {
 				if cs.State.Terminated.Signal != 0 {
-					reason = fmt.Sprintf("Init:Signal:%d", cs.State.Terminated.Signal)
+					initReason = fmt.Sprintf("Init:Signal:%d", cs.State.Terminated.Signal)
 				} else {
-					reason = fmt.Sprintf("Init:ExitCode:%d", cs.State.Terminated.ExitCode)
+					initReason = fmt.Sprintf("Init:ExitCode:%d", cs.State.Terminated.ExitCode)
 				}
 			} else {
-				reason = "Init:" + cs.State.Terminated.Reason
+				initReason = "Init:" + cs.State.Terminated.Reason
 			}
 			initializing = true
 		case cs.State.Waiting != nil && cs.State.Waiting.Reason != "" && cs.State.Waiting.Reason != "PodInitializing":
-			reason = "Init:" + cs.State.Waiting.Reason
+			initReason = "Init:" + cs.State.Waiting.Reason
 			initializing = true
 		default:
-			reason = fmt.Sprintf("Init:%d/%d", i, len(p.Spec.InitContainers))
+			initReason = fmt.Sprintf("Init:%d/%d", i, len(p.Spec.InitContainers))
 			initializing = true
 		}
 		break
 	}
-
-	if !initializing {
-		hasRunning := false
-		for i := len(p.Status.ContainerStatuses) - 1; i >= 0; i-- {
-			cs := p.Status.ContainerStatuses[i]
-			switch {
-			case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
-				reason = cs.State.Waiting.Reason
-			case cs.State.Terminated != nil && cs.State.Terminated.Reason != "":
-				reason = cs.State.Terminated.Reason
-			case cs.State.Terminated != nil:
-				if cs.State.Terminated.Signal != 0 {
-					reason = fmt.Sprintf("Signal:%d", cs.State.Terminated.Signal)
-				} else {
-					reason = fmt.Sprintf("ExitCode:%d", cs.State.Terminated.ExitCode)
-				}
-			case cs.Ready && cs.State.Running != nil:
-				hasRunning = true
-			}
-		}
-		// 至少一个容器仍在 Running，则不显示 Completed（回退为 Running/NotReady）
-		if reason == "Completed" && hasRunning {
-			if hasPodReadyCondition(p.Status.Conditions) {
-				reason = "Running"
-			} else {
-				reason = "NotReady"
-			}
-		}
+	if initializing {
+		return initReason
 	}
 
-	if p.DeletionTimestamp != nil {
-		if p.Status.Reason == "NodeLost" {
-			reason = "Unknown"
-		} else {
-			reason = "Terminating"
+	// 业务容器：必须全部启动成功才算 Running
+	total := len(p.Spec.Containers)
+	reported := len(p.Status.ContainerStatuses)
+	ready := 0
+	waitingReason := ""
+	terminatedReason := ""
+	hasRunning := false
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.Ready {
+			ready++
+		}
+		switch {
+		case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
+			if waitingReason == "" {
+				waitingReason = cs.State.Waiting.Reason
+			}
+		case cs.State.Terminated != nil && cs.State.Terminated.Reason != "":
+			if terminatedReason == "" {
+				terminatedReason = cs.State.Terminated.Reason
+			}
+		case cs.State.Running != nil:
+			hasRunning = true
 		}
 	}
-	return reason
+	switch {
+	case waitingReason != "":
+		return waitingReason
+	case terminatedReason != "":
+		return terminatedReason
+	case reported < total:
+		return "ContainerCreating" // 仍有容器未上报（如 sidecar 尚未创建）
+	case total > 0 && ready == total:
+		return "Running" // 全部容器启动成功
+	case hasRunning:
+		return "NotReady" // 容器都跑起来但未全部就绪
+	case p.Status.Reason != "":
+		return p.Status.Reason
+	default:
+		return string(p.Status.Phase)
+	}
 }
 
 func hasPodReadyCondition(conds []corev1.PodCondition) bool {
@@ -142,6 +154,9 @@ func (e *Executor) ListPods(ctx context.Context, namespace string) ([]PodBriefIn
 				ready = false
 			}
 		}
+		if len(p.Status.ContainerStatuses) < len(p.Spec.Containers) {
+			ready = false // 仍有业务容器未上报（如 sidecar 未创建）
+		}
 		created := ""
 		if !p.CreationTimestamp.IsZero() {
 			created = p.CreationTimestamp.Time.Format(time.RFC3339)
@@ -173,7 +188,7 @@ func (e *Executor) ListPods(ctx context.Context, namespace string) ([]PodBriefIn
 	return out, nil
 }
 
-// ContainerDetail 容器详情（含镜像/状态）
+// ContainerDetail 容器详情（含镜像/状态/挂载）
 type ContainerDetail struct {
 	Name         string
 	Image        string
@@ -184,9 +199,10 @@ type ContainerDetail struct {
 	StartedAt    string // RFC3339
 	FinishedAt   string // RFC3339
 	IsInit       bool
+	Mounts       []VolumeMountInfo
 }
 
-// PodDetail Pod 详情（含容器组内容）
+// PodDetail Pod 详情（含容器组内容/挂载/所属工作负载）
 type PodDetail struct {
 	Name           string
 	Namespace      string
@@ -199,6 +215,10 @@ type PodDetail struct {
 	HostIP         string
 	Containers     []ContainerDetail
 	InitContainers []ContainerDetail
+	Volumes        []VolumeInfo
+	OwnerKind      string
+	OwnerName      string
+	OwnerNamespace string
 }
 
 // GetPodDetail 获取 Pod 详情：基本信息 + 容器组内各容器（镜像/状态/就绪/重启）
@@ -214,13 +234,16 @@ func (e *Executor) GetPodDetail(ctx context.Context, namespace, podName string) 
 	if !p.CreationTimestamp.IsZero() {
 		d.CreatedAt = p.CreationTimestamp.Time.Format(time.RFC3339)
 	}
-	// 镜像：spec 里按名字建索引（status 只给状态，不给镜像）
+	// 镜像 + 挂载：spec 里按名字建索引（status 只给状态，不给镜像/挂载）
 	imgMap := map[string]string{}
+	mountMap := map[string][]corev1.VolumeMount{}
 	for _, c := range p.Spec.Containers {
 		imgMap[c.Name] = c.Image
+		mountMap[c.Name] = c.VolumeMounts
 	}
 	for _, c := range p.Spec.InitContainers {
 		imgMap[c.Name] = c.Image
+		mountMap[c.Name] = c.VolumeMounts
 	}
 
 	totalRestart := int32(0)
@@ -230,19 +253,46 @@ func (e *Executor) GetPodDetail(ctx context.Context, namespace, podName string) 
 		if !cs.Ready {
 			allReady = false
 		}
-		d.Containers = append(d.Containers, buildContainerDetail(cs, imgMap[cs.Name], false))
+		d.Containers = append(d.Containers, buildContainerDetail(cs, imgMap[cs.Name], mountMap[cs.Name], false))
+	}
+	if len(p.Status.ContainerStatuses) < len(p.Spec.Containers) {
+		allReady = false // 仍有业务容器未上报 → 视为未就绪
 	}
 	for _, cs := range p.Status.InitContainerStatuses {
 		totalRestart += cs.RestartCount
-		d.InitContainers = append(d.InitContainers, buildContainerDetail(cs, imgMap[cs.Name], true))
+		d.InitContainers = append(d.InitContainers, buildContainerDetail(cs, imgMap[cs.Name], mountMap[cs.Name], true))
 	}
 	d.RestartCount = totalRestart
 	d.Ready = allReady && p.Status.Phase == corev1.PodRunning
+	d.Volumes = buildVolumes(p.Spec.Volumes)
+	d.OwnerKind, d.OwnerName, d.OwnerNamespace = e.resolvePodOwner(ctx, p)
 	return d, nil
 }
 
-func buildContainerDetail(cs corev1.ContainerStatus, image string, isInit bool) ContainerDetail {
-	cd := ContainerDetail{Name: cs.Name, Image: image, Ready: cs.Ready, RestartCount: cs.RestartCount, IsInit: isInit}
+// resolvePodOwner 回溯 Pod 的所属工作负载（Deployment 经 ReplicaSet 回溯），供前端展示挂载配置
+func (e *Executor) resolvePodOwner(ctx context.Context, p *corev1.Pod) (kind, name, namespace string) {
+	for _, ref := range p.OwnerReferences {
+		switch ref.Kind {
+		case "ReplicaSet":
+			rs, err := e.clientset.AppsV1().ReplicaSets(p.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+			if err == nil {
+				for _, r2 := range rs.OwnerReferences {
+					if r2.Kind == "Deployment" {
+						return "Deployment", r2.Name, p.Namespace
+					}
+				}
+			}
+			return "ReplicaSet", ref.Name, p.Namespace
+		case "StatefulSet", "DaemonSet", "Job", "CronJob":
+			return ref.Kind, ref.Name, p.Namespace
+		}
+	}
+	return "", "", ""
+}
+
+func buildContainerDetail(cs corev1.ContainerStatus, image string, mounts []corev1.VolumeMount, isInit bool) ContainerDetail {
+	cd := ContainerDetail{Name: cs.Name, Image: image, Ready: cs.Ready, RestartCount: cs.RestartCount, IsInit: isInit,
+		Mounts: buildVolumeMounts(mounts)}
 	switch {
 	case cs.State.Running != nil:
 		cd.State = "running"

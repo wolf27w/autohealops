@@ -140,6 +140,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.GetPodDetailRequest.SerializeToString,
                 response_deserializer=executor__pb2.GetPodDetailResponse.FromString,
                 _registered_method=True)
+        self.GetWorkloadMounts = channel.unary_unary(
+                '/executor.ExecutorService/GetWorkloadMounts',
+                request_serializer=executor__pb2.GetWorkloadMountsRequest.SerializeToString,
+                response_deserializer=executor__pb2.GetWorkloadMountsResponse.FromString,
+                _registered_method=True)
         self.ListMiscResources = channel.unary_unary(
                 '/executor.ExecutorService/ListMiscResources',
                 request_serializer=executor__pb2.ListMiscResourcesRequest.SerializeToString,
@@ -362,6 +367,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetWorkloadMounts(self, request, context):
+        """工作负载（Deployment/StatefulSet/DaemonSet）Pod 模板的挂载配置（volumes + 容器 volumeMounts）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListMiscResources(self, request, context):
         """集群管理其它资源：服务/路由(Ingress)/ConfigMap/Secret/存储(PVC)
         """
@@ -562,6 +574,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.GetPodDetail,
                     request_deserializer=executor__pb2.GetPodDetailRequest.FromString,
                     response_serializer=executor__pb2.GetPodDetailResponse.SerializeToString,
+            ),
+            'GetWorkloadMounts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetWorkloadMounts,
+                    request_deserializer=executor__pb2.GetWorkloadMountsRequest.FromString,
+                    response_serializer=executor__pb2.GetWorkloadMountsResponse.SerializeToString,
             ),
             'ListMiscResources': grpc.unary_unary_rpc_method_handler(
                     servicer.ListMiscResources,
@@ -1202,6 +1219,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/GetPodDetail',
             executor__pb2.GetPodDetailRequest.SerializeToString,
             executor__pb2.GetPodDetailResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetWorkloadMounts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetWorkloadMounts',
+            executor__pb2.GetWorkloadMountsRequest.SerializeToString,
+            executor__pb2.GetWorkloadMountsResponse.FromString,
             options,
             channel_credentials,
             insecure,

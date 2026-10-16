@@ -31,6 +31,18 @@ async def acall(fn, *args, **kwargs):
         return await asyncio.to_thread(fn, *args, **kwargs)
 
 
+def _conv_mount(m) -> dict:
+    """gRPC VolumeMountInfo → dict"""
+    return {"name": m.name, "mount_path": m.mount_path, "sub_path": m.sub_path,
+            "read_only": m.read_only, "sub_path_expr": m.sub_path_expr,
+            "propagation": m.propagation}
+
+
+def _conv_vol(v) -> dict:
+    """gRPC VolumeInfo → dict"""
+    return {"name": v.name, "type": v.type, "source": v.source, "read_only": v.read_only}
+
+
 def _get_stub():
     """懒初始化 gRPC stub"""
     global _channel, _stub
@@ -423,7 +435,8 @@ class ExecutorClient:
             def _conv(cs):
                 return {"name": cs.name, "image": cs.image, "state": cs.state, "ready": cs.ready,
                         "restart_count": cs.restart_count, "reason": cs.reason,
-                        "started_at": cs.started_at, "finished_at": cs.finished_at, "is_init": cs.is_init}
+                        "started_at": cs.started_at, "finished_at": cs.finished_at, "is_init": cs.is_init,
+                        "mounts": [_conv_mount(m) for m in cs.mounts]}
 
             return {"success": True, "detail": {
                 "name": resp.name, "namespace": resp.namespace, "phase": resp.phase,
@@ -432,10 +445,35 @@ class ExecutorClient:
                 "pod_ip": resp.pod_ip, "host_ip": resp.host_ip,
                 "containers": [_conv(c) for c in resp.containers],
                 "init_containers": [_conv(c) for c in resp.init_containers],
+                "volumes": [_conv_vol(v) for v in resp.volumes],
+                "owner_kind": resp.owner_kind, "owner_name": resp.owner_name,
+                "owner_namespace": resp.owner_namespace,
             }, "error": resp.error}
         except Exception as e:  # noqa: BLE001
             logger.error("get_pod_detail 失败: %s", e)
             return {"success": False, "detail": None, "error": str(e)}
+
+    def get_workload_mounts(self, cluster_id: int, kind: str, namespace: str, name: str, trace_id: str = "") -> dict:
+        """工作负载 Pod 模板挂载配置（volumes + 容器 volumeMounts）→ 返回 {success, volumes, containers, init_containers, error}"""
+        try:
+            resp = _get_stub().GetWorkloadMounts(
+                executor_pb2.GetWorkloadMountsRequest(cluster_id=cluster_id, kind=kind, namespace=namespace, name=name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            if not resp.success:
+                return {"success": False, "volumes": [], "containers": [], "init_containers": [], "error": resp.error}
+
+            def _conv_cm(c):
+                return {"name": c.name, "mounts": [_conv_mount(m) for m in c.mounts]}
+
+            return {"success": True, "error": resp.error,
+                    "volumes": [_conv_vol(v) for v in resp.volumes],
+                    "containers": [_conv_cm(c) for c in resp.containers],
+                    "init_containers": [_conv_cm(c) for c in resp.init_containers]}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_workload_mounts 失败: %s", e)
+            return {"success": False, "volumes": [], "containers": [], "init_containers": [], "error": str(e)}
 
     def list_misc_resources(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> dict:
         """集群管理其它资源（服务/路由/ConfigMap/Secret/PVC）→ 返回 {success, services, ingresses, configmaps, secrets, pvcs, error}"""
