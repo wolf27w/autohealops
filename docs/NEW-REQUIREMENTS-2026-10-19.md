@@ -55,6 +55,7 @@
 - **图表实例池 `chartPool`**：同 id 只 `init` 一次，刷新 `setOption(opt,{notMerge:false,lazyUpdate:true,replaceMerge:['series']})`；`clearCharts()` 不再 dispose。
 - **刷新节奏**：总览 5s、集群/容器监控 3s、趋势 range 30s（缓存，避免 range 查询打爆 Prometheus）；`_refreshing` 防重入；后台标签暂停。
 - 大屏 iframe 版本 `?v=5 → v=6`（强制刷新缓存）。
+- 说明：大屏当前走**轮询**（总览 5s / 监控 3s）；SSE 即时推送仅口径预留给告警类变更，本次未接（如需秒级可后续补，复用 `/stats/dashboard/stream`）。
 
 **验证**：headless Chrome + `?selftest=1|cluster` 自检（连续刷新后比较节点引用）：
 `dom_reused=true chart_dom_reused=true cbody_reused=true charts=1(or 4)`，canvas 保留；`ci_check.sh` 全绿；`npm run build` 通过。
