@@ -180,6 +180,10 @@ C1 KPI 口径（`231913a`）｜M2 多 context 批量接入｜M4 分区维护机�
   - 切换即重查（同一范围/容器 30s 内复用缓存）。
 - **一键看某个容器 3 天**：容器实例表 / Pod×容器明细表每行加「历史」按钮 → 选中该容器、范围切 3 天，并滚动定位到曲线。
 - **查询粒度**（minutes/step）：1h→60s、6h→300s、24h→900s、3d→1800s、7d→3600s。
+- **单容器曲线全部为该容器维度**（老板 2026-10-19 13:41 澄清：要容器监控，不是 Pod 监控）：
+  - 展示 **CPU / 内存 / 重启次数**（`container_cpu_usage_seconds_total`、`container_memory_working_set_bytes`、`kube_pod_container_status_restarts_total`，均带 `container` 标签）；
+  - 网络是 Pod 维度（cAdvisor 不按容器拆）、磁盘/限流指标该集群 cAdvisor 未提供 → 不展示（避免把 Pod 数据当容器数据）；
+  - 图表标题直接标出容器名（如「CPU 趋势（core · 3天 · filebeat）」）。
 - **后端硬限制**：`/monitoring/clusters/{id}/range` 与 `/metrics/{metric}/range` 增加校验 `minutes ≤ 10080`（7 天）、`step ≤ 86400`，超出返回 400。
 - 数据源仍是**集群 Prometheus**（不落平台库）；超出保留期的点自动缺失，UI 已加提示；网络指标为 Pod 维度（cAdvisor 限制），选单容器时仍显示整 Pod。
 

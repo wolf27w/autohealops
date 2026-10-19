@@ -24,6 +24,8 @@
     font-family:"PingFang SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
   a{color:inherit;text-decoration:none;cursor:pointer}
   #app{padding:16px;max-width:2200px;margin:0 auto}
+  .pane{padding:0 16px;max-width:2200px;margin:0 auto}
+  .pane:empty{display:none}
   .row{display:flex;gap:18px;margin-bottom:20px}
   .col{flex:1;min-width:0}
   .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:18px 20px}
@@ -105,6 +107,8 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="svc-panel" class="pane"></div>
+<div id="node-panel" class="pane"></div>
 <div id="topbar">
   <div id="clock" class="clockbadge"></div>
   <div id="mode" class="modebadge demo">数据：演示</div>
@@ -296,11 +300,14 @@ function _patchNode(cur, next){
   _patchAttrs(cur, next);
   // 图表容器：子节点由 ECharts 接管（canvas），模板里是空 div，不能按模板清空
   if(cur.classList && cur.classList.contains('chart')) return;
+  // 异步填充容器（#svcbody/#nodebody）：内容由各自 render 负责，刷新时保留，避免闪回「加载中」
+  if(cur.hasAttribute && cur.hasAttribute('data-keep')) return;
   // 表单控件：保留用户当前选择（否则下拉框会在刷新时被重置/闪动）
   if(cur.tagName==='SELECT'){ const v=cur.value; _patchChildren(cur,next); if([...cur.options].some(o=>o.value===v)) cur.value=v; return; }
   if(cur.tagName==='INPUT' || cur.tagName==='TEXTAREA'){ const v=cur.value; _patchChildren(cur,next); if(cur.value!==v) cur.value=v; return; }
   _patchChildren(cur, next);
 }
+function clearPanes(){ const a=$('#svc-panel'), b=$('#node-panel'); if(a) a.innerHTML=''; if(b) b.innerHTML=''; }
 function patchHTML(el, html){
   if(!el) return;
   _tpl.innerHTML = html;
@@ -340,6 +347,7 @@ function lineOpt(x, seriesArr, colors, yName){
 function renderOverview(){
   VIEW.page='overview';
   clearCharts();
+  clearPanes();
   const k = OVERVIEW.kpi;
   const maxType = Math.max(...OVERVIEW.alertTypes.map(t=>t.count),1);
   patchHTML($('#app'), `
@@ -504,8 +512,10 @@ function renderOverview(){
 /* ---------- 渲染：单集群详情 ---------- */
 let CV = {}; // cluster view state
 function renderCluster(){
+  const prevPage=VIEW.page;
   VIEW.page='cluster';
   clearCharts();
+  if(prevPage!=='cluster') clearPanes();   // 仅从总览进入时清空，同页刷新保留容器面板
   const c = CLUSTERS.find(x=>String(x.id)===String(CV.cluster)) || CLUSTERS[0];
   const banner = CV.from ? `
     <div class="banner">
@@ -620,8 +630,10 @@ function renderService(){
         <select onchange="setSvc(this.value)">${list.length?list.map(w=>`<option value="${w.name}" ${w.name===svc?'selected':''}>${w.name}${(w.ready_replicas||0)<(w.replicas||0)?' ⚠️':''}</option>`).join(''):'<option value="">（该类型下暂无服务）</option>'}</select></div>
     </div>
   </div>
-  <div id="svcbody"><div class="empty">加载中…</div></div>`);
-  if(svc) renderServiceBody(); else $('#svcbody').innerHTML = `<div class="empty">该命名空间 / 类型下暂无服务</div>`;
+`); 
+  const pane=$('#svc-panel');
+  if(pane && !pane.childElementCount) pane.innerHTML='<div class="empty">加载中…</div>';
+  if(svc) renderServiceBody(); else if(pane) pane.innerHTML = '<div class="empty">该命名空间 / 类型下暂无服务</div>';
 }
 function setNs(n){ CV.ns=n; CV.svc=null; CV.pod=0; renderService(); }
 function setType(t){ CV.type=t; CV.svc=null; CV.pod=0; renderService(); }
@@ -663,23 +675,24 @@ async function renderServiceBody(){
   const cSel = CV.histContainer ? `,container="${CV.histContainer}"` : '';
   const R2 = R + cSel;
   const tKey = [cid,ns,svc,CV.histRange||'3d',CV.histContainer||''].join('|');
-  let rcpu, rmem, rnx;
+  let rcpu, rmem, rrst;
   if(!CV.trendCache || CV.trendCache.key!==tKey || (Date.now()-CV.trendCache.at)>REFRESH_MS_TREND){
-    [rcpu,rmem,rnx]=await Promise.all([
+    [rcpu,rmem,rrst]=await Promise.all([
       promRange(cid,`sum by(container)(rate(container_cpu_usage_seconds_total{${R2}}[5m]))`,hMin,hStep),
       promRange(cid,`sum by(container)(container_memory_working_set_bytes{${R2}})`,hMin,hStep),
-      promRange(cid,`sum by(container)(rate(container_network_receive_bytes_total{namespace="${ns}",pod=~"${svc}-.*"}[5m]))`,hMin,hStep),
+      // 容器级重启次数（累计 counter）
+      promRange(cid,`sum by(container)(kube_pod_container_status_restarts_total{${R2}})`,hMin,hStep),
     ]);
-    CV.trendCache = { key:tKey, at:Date.now(), rcpu, rmem, rnx };
+    CV.trendCache = { key:tKey, at:Date.now(), rcpu, rmem, rrst };
   } else {
-    ({ rcpu, rmem, rnx } = CV.trendCache);
+    ({ rcpu, rmem, rrst } = CV.trendCache);
   }
   const capCpu=cpuLim*podCount, capMem=memLim*podCount;
   // 容器粒度：每个容器一条线（不再工作负载聚合）
-  const cnames=[...new Set([...(rcpu||[]),...(rmem||[]),...(rnx||[])].map(s=>(s.metric&&s.metric.container)||'').filter(Boolean))].sort();
+  const cnames=[...new Set([...(rcpu||[]),...(rmem||[]),...(rrst||[])].map(s=>(s.metric&&s.metric.container)||'').filter(Boolean))].sort();
   const X=(rcpu&&rcpu[0])?rcpu[0].values.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):times(24);
   const sOf=(rr,f)=>cnames.map(cn=>{const s=(rr||[]).find(x=>x.metric&&x.metric.container===cn); return {name:cn,data:s?s.values.map(v=>+f(v[1]).toFixed(2)):[]};});
-  const cpuSeries=sOf(rcpu,v=>v), memSeries=sOf(rmem,v=>v/1048576), netSeries=sOf(rnx,v=>v/1024);
+  const cpuSeries=sOf(rcpu,v=>v), memSeries=sOf(rmem,v=>v/1048576), rstSeries=sOf(rrst,v=>Math.round(v));
   const PAL=['#3b82f6','#22d3ee','#a855f7','#22c55e','#f59e0b','#ef4444','#14b8a6','#eab308','#f472b6','#60a5fa'];
   const ready=wl.ready_replicas||0, desired=wl.replicas||0, abnormal=ready<desired;
   const rowOf=cn=>{
@@ -729,7 +742,9 @@ async function renderServiceBody(){
   const curCpu=sumObj(CCPU), curMem=sumObj(CMEM);
   const cpuPct=capCpu?Math.min(999,Math.round(curCpu*1000/capCpu*100)):null;
   const memPct=capMem?Math.min(999,Math.round(curMem/capMem*100)):null;
-  patchHTML($('#svcbody'), `
+  // 迟到结果保护：查询期间用户已切走页面/服务 → 丢弃，避免把旧内容写回面板
+  if(VIEW.page!=='cluster' || CV.tab!=='service' || CV.svc!==svc || CV.ns!==ns) return;
+  patchHTML($('#svc-panel'), `
   <div class="panel" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <span style="font-size:18px;font-weight:700">${svc}</span>
@@ -766,19 +781,19 @@ async function renderServiceBody(){
         <option value="">全部容器</option>
         ${names.map(n=>`<option value="${n}" ${CV.histContainer===n?'selected':''}>${n}${isSidecar(n)?'（sidecar）':''}</option>`).join('')}
       </select>
-      <span class="xs dim">数据来自集群 Prometheus；超出保留期的点会自动缺失。注：网络指标为 Pod 维度，单容器选择时仍显示整个 Pod</span>
+      <span class="xs dim">全部曲线均为「该容器」维度（CPU / 内存 / 重启次数）；数据来自集群 Prometheus，超出保留期的点会自动缺失。网络是 Pod 维度、磁盘/限流指标该集群 cAdvisor 未提供，故不展示。</span>
     </div>
   </div>
   <div class="row" style="margin-bottom:16px">
-    <div class="col panel"><h3>容器 CPU 趋势（core · ${histDef()[1]}）</h3><div id="ch-svc-res" class="chart" style="height:250px"></div></div>
-    <div class="col panel"><h3>容器内存趋势（MiB · ${histDef()[1]}）</h3><div id="ch-svc-mem" class="chart" style="height:250px"></div></div>
+    <div class="col panel"><h3>容器 CPU 趋势（core · ${histDef()[1]}${CV.histContainer?' · '+CV.histContainer:' · 全部容器'}）</h3><div id="ch-svc-res" class="chart" style="height:250px"></div></div>
+    <div class="col panel"><h3>容器内存趋势（MiB · ${histDef()[1]}${CV.histContainer?' · '+CV.histContainer:' · 全部容器'}）</h3><div id="ch-svc-mem" class="chart" style="height:250px"></div></div>
   </div>
   <div class="row">
-    <div class="col panel"><h3>容器网络入站趋势（KiB/s · ${histDef()[1]}）</h3><div id="ch-svc-net" class="chart" style="height:250px"></div></div>
+    <div class="col panel"><h3>容器重启次数趋势（累计）</h3><div id="ch-svc-rst" class="chart" style="height:250px"></div></div>
   </div>`);
   mkChart('ch-svc-res', lineOpt(X,cpuSeries,PAL,'core'));
   mkChart('ch-svc-mem', lineOpt(X,memSeries,PAL,'MiB'));
-  mkChart('ch-svc-net', lineOpt(X,netSeries,PAL,'KiB/s'));
+  mkChart('ch-svc-rst', lineOpt(X,rstSeries,PAL,'次'));
 }
 function setPod(i){ CV.pod=i; renderService(); }
 function gotoNode(n){ CV.tab='node'; CV.node=n; CV.from=`节点 ${n}`; renderCluster(); }
@@ -800,7 +815,9 @@ function renderNode(){
   }).join('');
   patchHTML($('#cbody'), `<div class="panel" style="margin-bottom:16px"><h3>节点卡片 <span class="sub">点击选中，下方联动</span></h3>
     <div class="grid-cards" style="grid-template-columns:repeat(4,1fr)">${cards||'<div class="empty">无节点</div>'}</div></div>
-    <div id="nodebody"><div class="empty">加载中…</div></div>`);
+`); 
+  const nPane=$('#node-panel');
+  if(nPane && !nPane.childElementCount) nPane.innerHTML='<div class="empty">加载中…</div>';
   if(sel) renderNodeDetail();
 }
 async function renderNodeDetail(){
@@ -839,7 +856,8 @@ async function renderNodeDetail(){
   }
   const mk=(s)=>s&&s[0]?s[0].values.map(v=>+Number(v[1]).toFixed(1)):[];
   const X=(tcpu[0]&&tcpu[0].values.length)?tcpu[0].values.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):times(24);
-  patchHTML($('#nodebody'), `<div class="panel" style="margin-bottom:16px"><h3>${node} · 节点详情 <span class="sub">${n.ready||''} ${n.roles||''}</span></h3>
+  if(VIEW.page!=='cluster' || CV.tab!=='node' || CV.node!==node) return;
+  patchHTML($('#node-panel'), `<div class="panel" style="margin-bottom:16px"><h3>${node} · 节点详情 <span class="sub">${n.ready||''} ${n.roles||''}</span></h3>
     <div class="row" style="margin-bottom:14px">
       ${[['CPU 使用率',Math.round(n.cpu_pct||0)+'%',`可分配 ${dash(n.cpu_allocatable)} 核`,n.cpu_pct||0],
          ['内存使用率',Math.round(n.mem_pct||0)+'%',`可分配 ${dash(n.mem_allocatable)}`,n.mem_pct||0],
@@ -888,7 +906,16 @@ const REFRESH_MS_OVERVIEW = 5000;
 const REFRESH_MS_CLUSTER  = 3000;
 const REFRESH_MS_TREND    = 30000;
 const TOK=()=> localStorage.getItem('token') || new URLSearchParams(location.search).get('token') || '';
-async function apiGet(path){ const r=await fetch(API+path,{headers:{Authorization:'Bearer '+TOK()}}); if(!r.ok) throw new Error(path+' '+r.status); const j=await r.json(); return (j&&j.data!==undefined)?j.data:j; }
+async function apiGet(path, timeoutMs=12000){
+  // 超时保护：个别 Prometheus 慢查询不拖死整页（超时按失败处理，页面保留上次可用数据）
+  const ctl=new AbortController(); const timer=setTimeout(()=>ctl.abort(), timeoutMs);
+  try{
+    const r=await fetch(API+path,{headers:{Authorization:'Bearer '+TOK()}, signal:ctl.signal});
+    if(!r.ok) throw new Error(path+' '+r.status);
+    const j=await r.json();
+    return (j&&j.data!==undefined)?j.data:j;
+  } finally { clearTimeout(timer); }
+}
 function setMode(m){ const el=$('#mode'); if(!el) return; el.textContent = m==='real'?'数据：实时':'数据：演示'; el.className='modebadge '+(m==='real'?'ok':'demo'); }
 const sevDot = s => (s==='critical'||s==='high')?'red':(s==='medium'?'yellow':'gray');
 const HEAL_MAP = {pending:'pending',awaiting_approval:'healing',ticketed:'healing',resolved:'healed',self_healed:'healed',closed:'healed'};
@@ -945,8 +972,8 @@ async function loadOverviewReal(){
   const cnt={}; rl.forEach(r=>{ if(r.resource_name) cnt[r.resource_name]=(cnt[r.resource_name]||0)+1; });
   OVERVIEW.heal.stubborn = Object.entries(cnt).filter(([,c])=>c>=2).sort((a,b)=>b[1]-a[1]).slice(0,3)
     .map(([rn,c])=>({ svc:((rl.find(r=>r.resource_name===rn)||{}).namespace||'')+'/'+rn, fails:c, range:'近期重复故障' }));
-  // N13：容器 Top（跨集群，30s 缓存）
-  await loadContainerTop();
+  // N13：容器 Top（跨集群，30s 缓存）—— 不阻塞总览首屏（生产 Prometheus topk 可能较慢）
+  loadContainerTop().catch(()=>{});
 }
 
 function tickClock(){ const el=document.getElementById('clock'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
@@ -962,8 +989,12 @@ async function refreshView(){
   if(document.hidden || _refreshing) return;    // 后台标签不刷新；避免慢查询叠套
   _refreshing = true;
   try{
-    if(VIEW.page==='cluster'){ await openCluster(); }
-    else { await loadOverviewReal(); setMode('real'); renderOverview(); }
+    if(VIEW.page==='cluster'){
+      // 只刷新数据（patch 增量），不重建结构；workloads 列表 30s 同步一次
+      if(CV.tab==='node'){ await renderNodeDetail(); }
+      else { await renderServiceBody(); }
+      if(Date.now()-(CV.wlAt||0) > 30000){ CV.wlAt=Date.now(); await openCluster(); }
+    } else { await loadOverviewReal(); setMode('real'); renderOverview(); }
     markUpdated();
   }catch(e){ /* 失败保留上次的「最后可用」数据，不清屏 */ }
   finally{
@@ -984,13 +1015,14 @@ const ST = new URLSearchParams(location.search).get('selftest');
 if(ST){
   if(ST==='cluster') setTimeout(()=>{ const c=CLUSTERS[0]; if(c&&c.id!=null) navCluster(c.id); }, 1200);
   if(ST==='svc'){ const qs=new URLSearchParams(location.search);
-    setTimeout(()=>navCluster(Number(qs.get('cid')), {ns:qs.get('ns'), svc:qs.get('svc')}), 1200); }
+    setTimeout(()=>navCluster(Number(qs.get('cid')), {ns:qs.get('ns'), svc:qs.get('svc')}), 2500);
+    const h=qs.get('hist'); if(h) setTimeout(()=>openContainerHistory(h), 6000); }
   // 等视图稳定后再取样，再等一轮刷新比较（集群模式 3s/次）
   const start = ()=>setTimeout(()=>{
     const before=$('#app').firstElementChild, cbody=$('#cbody');
     setTimeout(()=>{
       const el=document.createElement('div'); el.id='selftest';
-      const rows=document.querySelectorAll('#svcbody table tbody tr').length;
+      const rows=document.querySelectorAll('#svc-panel table tbody tr').length;
       el.textContent='selftest page='+VIEW.page
         +' dom_reused='+(before===$('#app').firstElementChild)
         +' cbody_reused='+(cbody===$('#cbody'))
@@ -998,7 +1030,7 @@ if(ST){
         +' mode='+(($('#mode')||{}).textContent||'');
       document.body.appendChild(el);
     }, ST==='cluster'?9000:6000);
-  }, ST==='cluster'?9000:(ST==='svc'?7000:200));
+  }, ST==='cluster'?9000:(ST==='svc'?9000:200));
   start();
 }
 </script>
