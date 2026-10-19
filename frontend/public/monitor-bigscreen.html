@@ -146,6 +146,9 @@ const TYPES = [{k:'deployment',n:'无状态'},{k:'statefulset',n:'有状态'},{k
 const OVERVIEW = {
   kpi:{
     activeAlerts:{v:22, delta:+5, deltaLabel:'较 1 小时前'},
+    approvalPending:{v:2},
+    mttr:{v:8.4},
+    abnormal:{v:1, total:5},
     healing:{v:6, avgMin:8.4},
     healedToday:{v:184, rate:0.94},
     failed:{v:3, abnormalClusters:1}
@@ -359,19 +362,19 @@ function renderOverview(){
       <div class="kpi-sub">${k.activeAlerts.deltaLabel}</div>
     </div>
     <div class="col panel">
-      <div class="kpi-label"><span>自愈中</span></div>
-      <div class="big warn">${k.healing.v}</div>
-      <div class="kpi-sub">平均处理时长 ${k.healing.avgMin} 分钟</div>
+      <div class="kpi-label"><span>待审批</span>${k.approvalPending.v>0?'<span class="tag yellow">待处理</span>':''}</div>
+      <div class="big warn">${k.approvalPending.v}</div>
+      <div class="kpi-sub">高风险操作等待人工放行</div>
     </div>
     <div class="col panel">
-      <div class="kpi-label"><span>自愈成功（今日）</span></div>
-      <div class="big down">${k.healedToday.v}</div>
-      <div class="kpi-sub">成功率 ${(k.healedToday.rate*100).toFixed(0)}%</div>
+      <div class="kpi-label"><span>平均修复时长</span></div>
+      <div class="big">${Number(k.mttr.v||0).toFixed(1)}<span class="dim" style="font-size:16px"> 分钟</span></div>
+      <div class="kpi-sub">最近 24 小时 · MTTR</div>
     </div>
     <div class="col panel">
-      <div class="kpi-label"><span>自愈失败 / 异常集群</span><span class="tag yellow">需人工介入</span></div>
-      <div class="big"><span class="up">${k.failed.v}</span> <span class="dim" style="font-size:18px">/ ${k.failed.abnormalClusters}</span></div>
-      <div class="kpi-sub">存在反复自愈失败，请人工排查</div>
+      <div class="kpi-label"><span>异常集群</span>${k.abnormal.v>0?'<span class="tag red">需关注</span>':''}</div>
+      <div class="big"><span class="${k.abnormal.v>0?'up':'down'}">${k.abnormal.v}</span> <span class="dim" style="font-size:18px">/ ${k.abnormal.total}</span></div>
+      <div class="kpi-sub">集群总数 ${k.abnormal.total}</div>
     </div>
   </div>
 
@@ -438,11 +441,10 @@ function renderOverview(){
   <!-- 第四行 -->
   <div class="row" style="margin-bottom:16px">
     <div class="col panel">
-      <h3>自愈效果 <span class="sub">平均自愈时长 ${OVERVIEW.heal.avgMin??0} 分钟</span></h3>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+      <h3>自愈效果 <span class="sub">最近 24 小时（顶部概况不重复统计）</span></h3>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
         <div class="cnt-box"><div class="n down">${OVERVIEW.heal.success}</div><div class="l">成功</div></div>
         <div class="cnt-box"><div class="n up">${OVERVIEW.heal.failed}</div><div class="l">失败</div></div>
-        <div class="cnt-box"><div class="n warn">${OVERVIEW.heal.processing}</div><div class="l">处理中</div></div>
         <div class="cnt-box"><div class="n">${(OVERVIEW.heal.rate*100).toFixed(0)}%</div><div class="l">成功率</div></div>
       </div>
       <div class="sep"></div>
@@ -969,6 +971,9 @@ async function loadOverviewReal(){
   OVERVIEW.kpi.healing = {v: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), avgMin: core.mttr_minutes??0};
   OVERVIEW.kpi.healedToday = {v: core.today_resolved??0, rate: core.heal_rate??0};
   OVERVIEW.kpi.failed = {v: core.manual_pending??0, abnormalClusters: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0))};
+  OVERVIEW.kpi.approvalPending = {v: core.approval_pending??0};
+  OVERVIEW.kpi.mttr = {v: core.mttr_minutes??0};
+  OVERVIEW.kpi.abnormal = {v: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0)), total: core.cluster_total||0};
   OVERVIEW.heal = { success: core.today_resolved??0, failed: core.manual_pending??0,
     processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), rate: core.heal_rate??0, avgMin: core.mttr_minutes??0 };
   OVERVIEW.waterline = [
