@@ -362,6 +362,11 @@ function renderOverview(){
       <div class="kpi-sub">${k.activeAlerts.deltaLabel}</div>
     </div>
     <div class="col panel">
+      <div class="kpi-label"><span>处理中</span></div>
+      <div class="big warn">${k.healing.v}</div>
+      <div class="kpi-sub">自愈计划未完成（累计总数）</div>
+    </div>
+    <div class="col panel">
       <div class="kpi-label"><span>待审批</span>${k.approvalPending.v>0?'<span class="tag yellow">待处理</span>':''}</div>
       <div class="big warn">${k.approvalPending.v}</div>
       <div class="kpi-sub">高风险操作等待人工放行</div>
