@@ -184,6 +184,7 @@ C1 KPI 口径（`231913a`）｜M2 多 context 批量接入｜M4 分区维护机�
   - 展示 **CPU / 内存 / 重启次数**（`container_cpu_usage_seconds_total`、`container_memory_working_set_bytes`、`kube_pod_container_status_restarts_total`，均带 `container` 标签）；
   - 网络是 Pod 维度（cAdvisor 不按容器拆）、磁盘/限流指标该集群 cAdvisor 未提供 → 不展示（避免把 Pod 数据当容器数据）；
   - 图表标题直接标出容器名（如「CPU 趋势（core · 3天 · filebeat）」）。
+- **容器切换**（老板 2026-10-19 14:51）：容器名做成 chip 按钮（`全部容器 / filebeat（sidecar） / 业务容器`），点哪个看哪个；趋势区整体上移到服务标题下方（原来在页面底部，需滚动很久才看到）。
 - **后端硬限制**：`/monitoring/clusters/{id}/range` 与 `/metrics/{metric}/range` 增加校验 `minutes ≤ 10080`（7 天）、`step ≤ 86400`，超出返回 400。
 - 数据源仍是**集群 Prometheus**（不落平台库）；超出保留期的点自动缺失，UI 已加提示；网络指标为 Pod 维度（cAdvisor 限制），选单容器时仍显示整 Pod。
 

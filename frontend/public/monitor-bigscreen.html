@@ -754,6 +754,27 @@ async function renderServiceBody(){
       <span class="sm dim">Pod ${podCount} · 容器 ${names.length}（聚合统计）</span>
     </div>
   </div>
+  <div id="trend-block">
+  <div class="panel" style="margin-bottom:16px">
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <span class="xs dim">历史范围（最多 7 天）</span>
+      <div class="tabs">${HIST_RANGES.map(([k,l])=>`<div class="tab ${(CV.histRange||'3d')===k?'sel':''}" onclick="setHistRange('${k}')">${l}</div>`).join('')}</div>
+      <span class="xs dim">容器（点击切换）</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="chip ${!CV.histContainer?'sel':''}" onclick="setHistContainer('')">全部容器</span>
+        ${names.map(n=>`<span class="chip ${CV.histContainer===n?'sel':''}" onclick='setHistContainer(${JSON.stringify(n)})'>${n}${isSidecar(n)?'（sidecar）':''}</span>`).join('')}
+      </div>
+      <span class="xs dim">全部曲线均为「该容器」维度（CPU / 内存 / 重启次数）；数据来自集群 Prometheus，超出保留期的点会自动缺失。网络是 Pod 维度、磁盘/限流指标该集群 cAdvisor 未提供，故不展示。</span>
+    </div>
+  </div>
+  <div class="row" style="margin-bottom:16px">
+    <div class="col panel"><h3>容器 CPU 趋势（core · ${histDef()[1]}${CV.histContainer?' · '+CV.histContainer:' · 全部容器'}）</h3><div id="ch-svc-res" class="chart" style="height:250px"></div></div>
+    <div class="col panel"><h3>容器内存趋势（MiB · ${histDef()[1]}${CV.histContainer?' · '+CV.histContainer:' · 全部容器'}）</h3><div id="ch-svc-mem" class="chart" style="height:250px"></div></div>
+  </div>
+  <div class="row">
+    <div class="col panel"><h3>容器重启次数趋势（累计）</h3><div id="ch-svc-rst" class="chart" style="height:250px"></div></div>
+  </div>
+  </div>
   <div class="panel" style="margin-bottom:16px"><h3>容器实例 <span class="sub">按容器名聚合（跨 ${podCount} 个 Pod，含重启合并）</span></h3>
     <table><thead><tr><th>容器</th><th>类型</th><th>镜像</th><th>CPU(总)</th><th>内存(总)</th><th>重启(总)</th><th>OOMKilled</th><th>Throttled</th><th>磁盘读</th><th>磁盘写</th><th>历史</th></tr></thead>
     <tbody>${rows||'<tr><td colspan="9" class="dim">无容器数据（该集群可能无 cadvisor/kube-state-metrics）</td></tr>'}</tbody></table></div>
@@ -772,25 +793,7 @@ async function renderServiceBody(){
        ['CPU Throttled(总)',sumObj(THR).toFixed(1)+'s/s',sumObj(THR)>0],['网络错误(总/s)',sumObj(NERR).toFixed(2),sumObj(NERR)>0]]
       .map(([l,v,b])=>`<div class="col cnt-box"><div class="n" style="color:${b?'var(--red)':'var(--green)'}">${v}</div><div class="l">${l}</div></div>`).join('')}
   </div>
-  <div class="panel" style="margin-bottom:16px">
-    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-      <span class="xs dim">历史范围（最多 7 天）</span>
-      <div class="tabs">${HIST_RANGES.map(([k,l])=>`<div class="tab ${(CV.histRange||'3d')===k?'sel':''}" onclick="setHistRange('${k}')">${l}</div>`).join('')}</div>
-      <span class="xs dim">容器</span>
-      <select style="min-width:240px" onchange="setHistContainer(this.value)">
-        <option value="">全部容器</option>
-        ${names.map(n=>`<option value="${n}" ${CV.histContainer===n?'selected':''}>${n}${isSidecar(n)?'（sidecar）':''}</option>`).join('')}
-      </select>
-      <span class="xs dim">全部曲线均为「该容器」维度（CPU / 内存 / 重启次数）；数据来自集群 Prometheus，超出保留期的点会自动缺失。网络是 Pod 维度、磁盘/限流指标该集群 cAdvisor 未提供，故不展示。</span>
-    </div>
-  </div>
-  <div class="row" style="margin-bottom:16px">
-    <div class="col panel"><h3>容器 CPU 趋势（core · ${histDef()[1]}${CV.histContainer?' · '+CV.histContainer:' · 全部容器'}）</h3><div id="ch-svc-res" class="chart" style="height:250px"></div></div>
-    <div class="col panel"><h3>容器内存趋势（MiB · ${histDef()[1]}${CV.histContainer?' · '+CV.histContainer:' · 全部容器'}）</h3><div id="ch-svc-mem" class="chart" style="height:250px"></div></div>
-  </div>
-  <div class="row">
-    <div class="col panel"><h3>容器重启次数趋势（累计）</h3><div id="ch-svc-rst" class="chart" style="height:250px"></div></div>
-  </div>`);
+`);
   mkChart('ch-svc-res', lineOpt(X,cpuSeries,PAL,'core'));
   mkChart('ch-svc-mem', lineOpt(X,memSeries,PAL,'MiB'));
   mkChart('ch-svc-rst', lineOpt(X,rstSeries,PAL,'次'));
