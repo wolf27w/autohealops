@@ -1,6 +1,6 @@
 # 新增需求（老板 2026-10-19 11:14）
 
-> **状态：⏸ 已登记，暂不开发**（老板明确「把这两个需求加入到需求开发里，暂时不开发」）
+> **状态：✅ 已开发完成（2026-10-19 12:33–13:00）**（老板 11:14 登记，12:33 开工）
 > 编号延续 `NEW-REQUIREMENTS-2026-10-15.md` 的 N1–N11 → 本批 **N12 / N13**。
 > 现状描述均按 2026-10-19 代码核实（HEAD `eb196b8`）。
 
@@ -48,6 +48,17 @@
 
 **刷新频率（老板 2026-10-19 定）**：**3–5s**。落地口径：告警/状态类走 SSE 即时推送；监控数值 5s 轮询兜底，指标突变/图表推进按 3s 取（取数走 Redis 短缓存，避免给 Prometheus 加压）。
 
+### ✅ 实现（2026-10-19）
+
+- **增量渲染 `patchHTML()`**：模板字符串解析后与现有 DOM 逐节点 diff，只改差异（文本/属性/子节点增删）；节点复用 → 不闪、不丢焦点、不重置下拉框。
+  - 图表容器（`.chart`）跳过子节点 diff（canvas 由 ECharts 管理）；`select`/`input` 保留当前值。
+- **图表实例池 `chartPool`**：同 id 只 `init` 一次，刷新 `setOption(opt,{notMerge:false,lazyUpdate:true,replaceMerge:['series']})`；`clearCharts()` 不再 dispose。
+- **刷新节奏**：总览 5s、集群/容器监控 3s、趋势 range 30s（缓存，避免 range 查询打爆 Prometheus）；`_refreshing` 防重入；后台标签暂停。
+- 大屏 iframe 版本 `?v=5 → v=6`（强制刷新缓存）。
+
+**验证**：headless Chrome + `?selftest=1|cluster` 自检（连续刷新后比较节点引用）：
+`dom_reused=true chart_dom_reused=true cbody_reused=true charts=1(or 4)`，canvas 保留；`ci_check.sh` 全绿；`npm run build` 通过。
+
 ---
 
 ## N13 🏗️ 监控内容要到「容器级别」
@@ -91,6 +102,16 @@
 - 页面刷新不闪（与 N12 同批验收）。
 
 **工时**：~2–2.5d（前端 2d + 指标补充 0.5d；自采集改造已按老板口径取消）。
+
+### ✅ 实现（2026-10-19）
+
+- **总览新增「容器 CPU / 内存 Top 10」**（跨集群）：遍历各集群调 `container_cpu_top` / `container_mem_top`，合并排序取前 10；30s 缓存（`CTOP`）。
+- **服务详情新增「Pod × 容器明细」表**：逐 Pod 逐容器列 状态 / CPU / 内存 / CPU 限额 / 内存限额 / 重启 / 上次终止原因。
+  - 数据全部走 Prometheus：`container_cpu_usage_seconds_total`、`container_memory_working_set_bytes`、`kube_pod_container_status_restarts_total`、`kube_pod_container_resource_limits`、`kube_pod_container_status_waiting_reason`、`kube_pod_container_status_last_terminated_reason`。
+  - 状态判定：Waiting 原因优先，其次 Last terminated reason，否则用 Pod status；重启>0 或异常状态行标红。
+- 原「容器实例」聚合表保留（跨 Pod 按容器名汇总），与新表互补。
+
+**验证（真实数据，2026-10-19）**：总览容器 Top 出实际集群/命名空间/容器（如 `0.46 core`、`9265.6 MiB`）；Pod×容器明细出现 `Running` / `Last:Error`、`1.00 core / 200.0MiB` 限额、重启数。
 
 ---
 
