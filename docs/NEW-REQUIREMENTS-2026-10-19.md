@@ -194,3 +194,14 @@ C1 KPI 口径（`231913a`）｜M2 多 context 批量接入｜M4 分区维护机�
 - 接口实测：1h=61 点、24h=97 点、3d=49 点、7d=25 点；`minutes=10081` → 400「最多 7 天」。
 - 页面实测（headless）：控制条/按钮渲染正常，3 天查询实发 `minutes=4320&step=1800`，刷新后 `dom_reused=true cbody_reused=true`、无 NaN/undefined。
 - ⚠️ **测试集群 Prometheus 实际只保留约 24 小时**（3 天范围只返回 49 个点）：若要真正看 3–7 天，需要调集群 Prometheus 的 `--storage.tsdb.retention.time`（例如 `7d`）。
+
+
+---
+
+## N15 ✅ 大屏异常项跳转改为「集群管理」—— 老板 2026-10-19 16:44
+
+- 「优先处理 Top 5」的「处理 →」与「实时故障告警」的跳转按钮，原来跳到**大屏集群监控视图**（`navCluster`），改为跳到**平台集群管理**：
+  - 服务类告警 → `/clusters/{id}/workloads/{kind}/{ns}/{svc}`（按命名空间查一次 workload 拿真实 kind，查不到回退 deployment）；
+  - 节点类告警 → `/clusters/{id}`；
+  - 在 iframe（/screen）里用 `window.top.location` 跳转，整页进入集群管理，不会只换 iframe。
+- 验证：点击「处理 →」实测跳转 `http://localhost:5173/clusters/1/workloads/deployment/qa-ca/eal-module-odf`（服务确为 deployment）。
