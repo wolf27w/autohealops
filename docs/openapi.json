@@ -195,6 +195,49 @@
         "summary": "Create Session"
       }
     },
+    "/api/v1/agent/sessions/seed": {
+      "post": {
+        "description": "用一段已有诊断结果（如 JVM 综合诊断）落一个会话（同目标复用）。\n\n会话名规范：环境/命名空间/服务[容器]。用于「JVM 一键诊断 → 跳转到应用诊断」。",
+        "operationId": "post_api_v1_agent_sessions_seed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Seed Session"
+      }
+    },
     "/api/v1/agent/sessions/{session_id}": {
       "delete": {
         "description": "删除诊断会话（含消息）——本人才可删；admin 可删巡检会话。",
@@ -279,6 +322,60 @@
           }
         ],
         "summary": "Close Session"
+      }
+    },
+    "/api/v1/agent/sessions/{session_id}/collect": {
+      "put": {
+        "description": "设置会话的定时采集开关（针对绑定的容器周期采集信息追加到会话）。",
+        "operationId": "put_api_v1_agent_sessions_session_id_collect",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Session Collect"
       }
     },
     "/api/v1/agent/sessions/{session_id}/messages": {
@@ -925,6 +1022,22 @@
                 }
               ],
               "title": "Manual Required"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env_tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Tag"
             }
           },
           {
@@ -2687,6 +2800,135 @@
         "summary": "Create Cluster"
       }
     },
+    "/api/v1/clusters/agent-onboard": {
+      "post": {
+        "description": "Agent 接入向导第 1 步：建一条 source=agent 的集群（pending）+ 生成接入令牌 + 返回安装命令",
+        "operationId": "post_api_v1_clusters_agent_onboard",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agent Onboard"
+      }
+    },
+    "/api/v1/clusters/import-multi": {
+      "post": {
+        "description": "多 context 批量接入：kubeconfig + 勾选的 context 名列表 → 每个 context 建一条 Cluster",
+        "operationId": "post_api_v1_clusters_import_multi",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Multi"
+      }
+    },
+    "/api/v1/clusters/parse-kubeconfig": {
+      "post": {
+        "description": "解析 kubeconfig 的 context 列表（多集群批量接入前预览勾选用）",
+        "operationId": "post_api_v1_clusters_parse_kubeconfig",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Parse Kubeconfig"
+      }
+    },
     "/api/v1/clusters/{cluster_id}": {
       "delete": {
         "operationId": "delete_api_v1_clusters_cluster_id",
@@ -2819,6 +3061,102 @@
           }
         ],
         "summary": "Update Cluster"
+      }
+    },
+    "/api/v1/clusters/{cluster_id}/agent/install.yaml": {
+      "get": {
+        "description": "Agent 接入向导：渲染一键安装清单（含令牌；仅 admin，校验 token 哈希后返回）",
+        "operationId": "get_api_v1_clusters_cluster_id_agent_install_yaml",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agent Install Yaml"
+      }
+    },
+    "/api/v1/clusters/{cluster_id}/agent/revoke": {
+      "post": {
+        "description": "吊销 Agent 接入令牌",
+        "operationId": "post_api_v1_clusters_cluster_id_agent_revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agent Revoke"
       }
     },
     "/api/v1/clusters/{cluster_id}/health-check": {
@@ -3000,6 +3338,60 @@
           }
         ],
         "summary": "List Inspection Reports"
+      }
+    },
+    "/api/v1/clusters/{cluster_id}/kubeconfig": {
+      "put": {
+        "description": "一键更新凭据：粘贴新 kubeconfig 覆盖（不删集群、不丢历史告警/工单），重解析 server/凭据 + 健康检查",
+        "operationId": "put_api_v1_clusters_cluster_id_kubeconfig",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace Kubeconfig"
       }
     },
     "/api/v1/clusters/{cluster_id}/setup-rbac": {
@@ -5684,6 +6076,150 @@
           }
         ],
         "summary": "Get Deployment Jvm Params"
+      }
+    },
+    "/api/v1/jvm/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/ai-analyze": {
+      "post": {
+        "description": "把本次 JVM 诊断采集的证据发给 AI，做应用健康综合诊断（也可单独看原始输出）",
+        "operationId": "post_api_v1_jvm_clusters_cluster_id_namespaces_namespace_pods_pod_name_ai_analyze",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pod_name",
+            "required": true,
+            "schema": {
+              "title": "Pod Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Jvm Ai Analyze"
+      }
+    },
+    "/api/v1/jvm/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/ai-analyze-all": {
+      "post": {
+        "description": "一键：自动跑完所有轻量 JVM 动作（jstack/jmap/jcmd/jattach 文本类）→ 汇总证据发 AI 综合诊断。\n\n- 重文件操作（heap_dump / jfr_start）不自动跑，避免大文件与长停顿；仍需手动单独执行。\n- 返回 items（每个动作的原始输出，可单独看）+ analysis（AI 诊断结论）。",
+        "operationId": "post_api_v1_jvm_clusters_cluster_id_namespaces_namespace_pods_pod_name_ai_analyze_all",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pod_name",
+            "required": true,
+            "schema": {
+              "title": "Pod Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Jvm Ai Analyze All"
       }
     },
     "/api/v1/jvm/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/diagnose": {
@@ -12423,6 +12959,252 @@
         "summary": "Workload Containers"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/env": {
+      "delete": {
+        "description": "删除单个环境变量（env）",
+        "operationId": "delete_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_env",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "container",
+            "required": true,
+            "schema": {
+              "title": "Container",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "var_name",
+            "required": true,
+            "schema": {
+              "title": "Var Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Env"
+      },
+      "post": {
+        "description": "新增/编辑单个环境变量（env）。\n\nbody: container, name, old_name?(改名时传旧名), value?, value_from?{type:configMap|secret|field|resource, name?, key?, field_path?, resource?}\nvalue 与 value_from 二选一；传 value_from 则覆盖 value。",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_env",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert Env"
+      },
+      "put": {
+        "description": "批量替换某容器的环境变量（KubeSphere 风格批量编辑器用）。\n\nbody: container, envs:[{name, value?, value_from?{type,name,key,field_path,resource}}]\nenvs 为该容器**完整**的 env 列表（逐行编辑后整份保存）；空数组=清空。",
+        "operationId": "put_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_env",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace Env"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/image": {
       "post": {
         "description": "更新工作负载容器镜像（R3 镜像更新核心）：取 YAML → 改 image → apply",
@@ -12502,6 +13284,352 @@
           }
         ],
         "summary": "Update Workload Image"
+      }
+    },
+    "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/mounts": {
+      "delete": {
+        "description": "移除挂载/环境变量注入。\n\nmode=volume（默认）：按 volume_name 删各容器 volumeMount；若无容器引用该卷则一并删掉 volume。\nmode=env：按 source_name 删各容器 envFrom 里的 configMapRef/secretRef。\ncontainer/mount_path 可选（限定只删某个容器/某个路径）。",
+        "operationId": "delete_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_mounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "volume_name",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Volume Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_name",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Source Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "default": "volume",
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "container",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Container",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mount_path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Mount Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove Workload Mount"
+      },
+      "get": {
+        "description": "工作负载 Pod 模板的挂载配置（volumes + 各容器 volumeMounts）——用于 Pod 详情/工作负载详情展示。",
+        "operationId": "get_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_mounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Workload Mounts"
+      },
+      "post": {
+        "description": "给工作负载（Deployment/StatefulSet/DaemonSet）的 Pod 配置 配置字典/密钥/PVC。\n\nbody: mode=volume|env（默认 volume）\n      volume 模式: source_type=configMap|secret|pvc, source_name, mount_path, sub_path?,\n                   read_only?, volume_name?(默认按来源名生成), containers?(空=全部业务容器)\n      env 模式(仅 cm/secret): source_type, source_name, containers?(空=全部业务容器)\n实现：读工作负载 YAML → 改 spec.template.spec（volumes+volumeMounts 或 envFrom）→ server-side apply。",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_mounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Workload Mount"
+      },
+      "put": {
+        "description": "编辑某个卷的挂载：容器内路径/子路径/只读/目标容器，或卷来源。\n\nbody: volume_name(必填), mount_path?, sub_path?(传空串=清除), read_only?,\n      containers?(给定=按此列表增/删挂载), source_type?+source_name?(改卷来源)",
+        "operationId": "put_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_mounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Workload Mount"
       }
     },
     "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/schedule": {
@@ -13446,6 +14574,22 @@
                 }
               ],
               "title": "Project Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env_tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Tag"
             }
           },
           {
