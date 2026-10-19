@@ -7377,7 +7377,7 @@
     },
     "/api/v1/monitoring/clusters/{cluster_id}/metrics/{metric}/range": {
       "get": {
-        "description": "预置指标的趋势曲线（range）；container_* 支持 namespace/pod/container 细分过滤。",
+        "description": "预置指标的趋势曲线（range）；container_* 支持 namespace/pod/container 细分过滤。\n\nminutes 上限 10080（7 天）：平台按老板口径最多查询/保留 7 天；更早依赖集群 Prometheus retention。",
         "operationId": "get_api_v1_monitoring_clusters_cluster_id_metrics_metric_range",
         "parameters": [
           {
@@ -7531,7 +7531,7 @@
     },
     "/api/v1/monitoring/clusters/{cluster_id}/range": {
       "get": {
-        "description": "自定义 PromQL 趋势曲线（range）。",
+        "description": "自定义 PromQL 趋势曲线（range；minutes 上限 7 天）。",
         "operationId": "get_api_v1_monitoring_clusters_cluster_id_range",
         "parameters": [
           {

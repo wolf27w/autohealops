@@ -111,7 +111,14 @@ async def _range_series(cluster_id: int, promql: str, minutes: int, step: int) -
 async def cluster_metric_range(cluster_id: int, metric: str, minutes: int = 30, step: int = 60,
                                namespace: str = "", pod: str = "", container: str = "",
                                user=Depends(require_any_user)):
-    """预置指标的趋势曲线（range）；container_* 支持 namespace/pod/container 细分过滤。"""
+    """预置指标的趋势曲线（range）；container_* 支持 namespace/pod/container 细分过滤。
+
+    minutes 上限 10080（7 天）：平台按老板口径最多查询/保留 7 天；更早依赖集群 Prometheus retention。
+    """
+    if minutes <= 0 or minutes > 10080:
+        return {"code": 400, "message": "minutes 取值范围 1–10080（最多 7 天）", "data": None}
+    if step <= 0 or step > 86400:
+        return {"code": 400, "message": "step 取值范围 1–86400 秒", "data": None}
     if not await user_permission_service.check_cluster_permission(user, cluster_id):
         return {"code": 403, "message": "无权限访问该集群", "data": None}
     spec = prometheus_service.METRIC_QUERIES.get(metric)
@@ -128,7 +135,11 @@ async def cluster_metric_range(cluster_id: int, metric: str, minutes: int = 30, 
 @router.get("/clusters/{cluster_id}/range")
 async def cluster_range(cluster_id: int, promql: str, minutes: int = 30, step: int = 60,
                         user=Depends(require_any_user)):
-    """自定义 PromQL 趋势曲线（range）。"""
+    """自定义 PromQL 趋势曲线（range；minutes 上限 7 天）。"""
+    if minutes <= 0 or minutes > 10080:
+        return {"code": 400, "message": "minutes 取值范围 1–10080（最多 7 天）", "data": None}
+    if step <= 0 or step > 86400:
+        return {"code": 400, "message": "step 取值范围 1–86400 秒", "data": None}
     if not await user_permission_service.check_cluster_permission(user, cluster_id):
         return {"code": 403, "message": "无权限访问该集群", "data": None}
     r = await _range_series(cluster_id, promql, minutes, step)
