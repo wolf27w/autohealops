@@ -732,6 +732,22 @@ async def rollout_workload(cluster_id: int, payload: dict, user=Depends(require_
     return {"code": 200, "message": "success", "data": {"message": r.get("message")}}
 
 
+@router.post("/clusters/{cluster_id}/workloads/recreate")
+async def recreate_workload(cluster_id: int, payload: dict, user=Depends(require_operator)):
+    """重新创建服务（deployment=先建新后删旧；statefulset/daemonset=滚动重启）"""
+    kind = payload.get("kind", "")
+    namespace = payload.get("namespace", "")
+    name = payload.get("name", "")
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    if not kind or not namespace or not name:
+        return {"code": 400, "message": "kind/namespace/name 必填", "data": None}
+    r = await executor_client.acall(executor_client.recreate_workload, cluster_id, kind, namespace, name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "重新创建失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message")}}
+
+
 @router.get("/clusters/{cluster_id}/workloads/{namespace}/{name}/history")
 async def rollout_history(cluster_id: int, namespace: str, name: str, user=Depends(require_any_user)):
     """回滚历史（deployment revision 列表）"""

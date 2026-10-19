@@ -12711,6 +12711,60 @@
         "summary": "Update Probe"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/workloads/recreate": {
+      "post": {
+        "description": "重新创建服务（deployment=先建新后删旧；statefulset/daemonset=滚动重启）",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_workloads_recreate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Recreate Workload"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/workloads/rollout": {
       "post": {
         "description": "回滚/重启（action=restart|undo，revision 用于 undo）",
