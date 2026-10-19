@@ -20,6 +20,7 @@
 | `ALERT-SUPPRESSION.md` | 告警抑制/静默设计 |
 | `ACCESS-CONTROL.md` / `SECURITY-TASKS.md` | 权限与安全任务 |
 | `MESSAGING.md` / `MIDDLEWARE-MONITORING.md` | 消息通道 / 中间件监控 |
+| `NEW-REQUIREMENTS-2026-10-19.md` | **新增需求 N12/N13**（监控无闪烁实时 + 容器级监控）—— ⏸ 已登记，暂不开发 |
 | `ENCRYPTION.md` | 跨语言加密约定（Python ⇄ Go，CI 有互测） |
 | `MIDDLEWARE-MONITORING.md` | 中间件监控 |
 
