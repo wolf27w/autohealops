@@ -558,12 +558,28 @@ const WL_STRIP=/(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+|-[0-9a-f]{5,10})$/;
 /* 历史监控范围：最多 7 天（老板 2026-10-19）；容器历史走集群 Prometheus */
 const HIST_RANGES=[['1h','1小时',60,60],['6h','6小时',360,300],['24h','24小时',1440,900],['3d','3天',4320,1800],['7d','7天',10080,3600]];
 const histDef = ()=> HIST_RANGES.find(r=>r[0]===(CV.histRange||'3d')) || HIST_RANGES[3];
-function setHistRange(r){ CV.histRange=r; CV.trendCache=null; renderServiceBody(); }
-function setHistContainer(c){ CV.histContainer=c; CV.trendCache=null; renderServiceBody(); }
-function openContainerHistory(cn){
-  CV.histContainer=cn||''; CV.histRange='3d'; CV.trendCache=null;
-  renderServiceBody().then(()=>{ const el=$('#ch-svc-res'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'center'}); });
+function trendBusy(on, text){
+  const tb=$('#trend-block'); if(!tb) return;
+  let m=tb.querySelector('.trend-busy');
+  if(on){
+    tb.style.position='relative';
+    if(!m){ m=document.createElement('div'); m.className='trend-busy';
+      m.style.cssText='position:absolute;right:16px;top:14px;font-size:12px;color:var(--text-3);background:var(--panel);padding:2px 8px;border-radius:6px';
+      tb.appendChild(m); }
+    m.textContent=text||'加载中…';
+  } else if(m) m.remove();
 }
+function switchTrend(c, r){
+  if(c!==undefined) CV.histContainer=c;
+  if(r!==undefined) CV.histRange=r;
+  CV.trendCache=null;
+  trendBusy(true);
+  renderServiceBody(true).catch(()=>{}).finally(()=>trendBusy(false));
+  const tb=$('#trend-block'); if(tb) tb.scrollIntoView({behavior:'smooth', block:'start'});
+}
+function setHistRange(r){ switchTrend(undefined, r); }
+function setHistContainer(c){ switchTrend(c); }
+function openContainerHistory(cn){ switchTrend(cn||'', '3d'); }
 
 /* ---- N13：跨集群容器 Top（CPU/内存）；低频（30s）缓存 ---- */
 const CTOP = { cpu:[], mem:[], at:0 };
@@ -639,15 +655,27 @@ function setNs(n){ CV.ns=n; CV.svc=null; CV.pod=0; renderService(); }
 function setType(t){ CV.type=t; CV.svc=null; CV.pod=0; renderService(); }
 function setSvc(s){ CV.svc=s; CV.pod=0; renderService(); }
 
-async function renderServiceBody(){
+async function renderServiceBody(skipInstant=false){
   const cid=CV.cluster, ns=CV.ns, svc=CV.svc;
   const wl=(CV.workloads||[]).find(w=>w.namespace===ns&&w.name===svc)||{name:svc,kind:CV.type,replicas:0,ready_replicas:0};
-  const pods=(await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods').catch(()=>[]))||[];
-  const mine=pods.filter(p=>p.name===svc||p.name.startsWith(svc+'-'));
-  const podCount=mine.length||(wl.replicas||0)||1;
-  const cpuLim=parseCpuMilli((mine[0]||{}).cpu_limit), memLim=parseMemBytes((mine[0]||{}).memory_limit);
+  const instKey=[cid,ns,svc].join('|');
+  let mine, podCount, cpuLim, memLim;
+  if(skipInstant && CV.instCache && CV.instCache.key===instKey){
+    ({ mine, podCount, cpuLim, memLim } = CV.instCache);
+  } else {
+    const pods=(await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods').catch(()=>[]))||[];
+    mine=pods.filter(p=>p.name===svc||p.name.startsWith(svc+'-'));
+    podCount=mine.length||(wl.replicas||0)||1;
+    cpuLim=parseCpuMilli((mine[0]||{}).cpu_limit); memLim=parseMemBytes((mine[0]||{}).memory_limit);
+    CV.instCache={ key:instKey, mine, podCount, cpuLim, memLim };
+  }
   const R=`namespace="${ns}",pod=~"${svc}-.*",container!=""`;
-  const [a,b,c,d,e,f,g,h,i2,jpc,jpm,jpr,jpl,jpw,jpt]=await Promise.all([
+  let INST;
+  if(skipInstant && CV.instCache && CV.instCache.key===instKey && CV.instCache.rows){
+    INST=CV.instCache.rows;
+  } else {
+    if(!CV.instCache) CV.instCache={key:instKey};
+    const [a,b,c,d,e,f,g,h,i2,jpc,jpm,jpr,jpl,jpw,jpt]=await Promise.all([
     promInstant(cid,`sum by(container)(rate(container_cpu_usage_seconds_total{${R}}[5m]))`),
     promInstant(cid,`sum by(container)(container_memory_working_set_bytes{${R}})`),
     promInstant(cid,`sum by(container)(kube_pod_container_status_restarts_total{namespace="${ns}",pod=~"${svc}-.*"})`),
@@ -664,7 +692,11 @@ async function renderServiceBody(){
     promInstant(cid,`kube_pod_container_resource_limits{namespace="${ns}",pod=~"${svc}-.*"}`),
     promInstant(cid,`kube_pod_container_status_waiting_reason{namespace="${ns}",pod=~"${svc}-.*"} == 1`),
     promInstant(cid,`kube_pod_container_status_last_terminated_reason{namespace="${ns}",pod=~"${svc}-.*"} == 1`),
-  ]);
+    ]);
+    INST={a,b,c,d,e,f,g,h,i2,jpc,jpm,jpr,jpl,jpw,jpt};
+    CV.instCache.rows=INST;
+  }
+  const {a,b,c,d,e,f,g,h,i2,jpc,jpm,jpr,jpl,jpw,jpt}=INST;
   const CCPU=mapBy(a,'container'),CMEM=mapBy(b,'container'),RST=mapBy(c,'container'),OOM=mapBy(d,'container'),THR=mapBy(e,'container'),RD=mapBy(f,'container'),WR=mapBy(g,'container'),NERR=mapBy(h,'container'),NETT=mapBy(i2,'container');
   const names=[...new Set([...Object.keys(CCPU),...Object.keys(CMEM),...Object.keys(RST),...Object.keys(OOM),...Object.keys(THR),...Object.keys(RD)])].sort();
   const imgMap={};
