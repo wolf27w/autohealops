@@ -189,7 +189,7 @@ async def _compute_dashboard(
     db_health/action_stat/action_timeline/cluster_waterline 区块。
     range/cluster_id/project_id 仅作用于新增区块与趋势，不影响原有 core/ai_runtime/trend_* 兜底统计。
     """
-    cache_key = await _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range)
+    cache_key = await _dashboard_cache_key(range_, start, end, cluster_id, project_id, ai_range, env_tag)
     if not _force:
         cached = await _cache_get(cache_key)
         if cached is not None:
