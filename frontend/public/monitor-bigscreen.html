@@ -417,12 +417,12 @@ function renderOverview(){
   <div class="row" style="margin-bottom:16px;align-items:flex-start">
     <div class="col panel">
       <h3>容器 CPU Top 10 <span class="sub">跨集群 · 单位 core</span></h3>
-      <table><thead><tr><th>#</th><th>集群</th><th>容器（命名空间 / Pod）</th><th>CPU</th></tr></thead>
+      <table><thead><tr><th>#</th><th>集群</th><th>容器（命名空间 / Pod）</th><th>类型</th><th>CPU</th></tr></thead>
       <tbody>${containerTopRows(CTOP.cpu, v=>v.toFixed(3)+' core')}</tbody></table>
     </div>
     <div class="col panel">
       <h3>容器内存 Top 10 <span class="sub">跨集群 · 单位 MiB</span></h3>
-      <table><thead><tr><th>#</th><th>集群</th><th>容器（命名空间 / Pod）</th><th>内存</th></tr></thead>
+      <table><thead><tr><th>#</th><th>集群</th><th>容器（命名空间 / Pod）</th><th>类型</th><th>内存</th></tr></thead>
       <tbody>${containerTopRows(CTOP.mem, v=>(v/1048576).toFixed(1)+' MiB')}</tbody></table>
     </div>
   </div>
@@ -540,6 +540,10 @@ function parseMemBytes(v){ if(!v) return 0; v=''+v; const u={Ki:1024,Mi:1048576,
 function fmtBytes(n){ if(n==null||isNaN(n))return '-'; const u=['B','KiB','MiB','GiB','TiB']; let x=n,i=0; while(x>=1024&&i<u.length-1){x/=1024;i++;} return x.toFixed(i?1:0)+u[i]; }
 function dash(v){ return (v==null||v==='')?'-':v; }
 function podDot(s){ return s==='Running'?'green':(s==='Pending'?'yellow':'red'); }
+/* 业务容器 / Sidecar 区分（容器监控分组展示） */
+const SIDECAR_RE=/(^istio-|^envoy|^linkerd-|^filebeat|^logtail|^fluent|^otel-|^jaeger-|^skywalking|^node-exporter$|^prometheus$|^exporter$|sidecar)/i;
+const isSidecar = n => SIDECAR_RE.test(String(n||''));
+const ctTypeTag = n => isSidecar(n) ? '<span class="tag gray">Sidecar</span>' : '<span class="tag green">业务</span>';
 const WL_STRIP=/(-[0-9a-f]{5,10}-[0-9a-z]{5}|-[0-9]+|-[0-9a-f]{5,10})$/;
 
 /* ---- N13：跨集群容器 Top（CPU/内存）；低频（30s）缓存 ---- */
@@ -564,10 +568,10 @@ async function loadContainerTop(){
   CTOP.cpu=cpuRows.slice(0,10); CTOP.mem=memRows.slice(0,10); CTOP.at=Date.now();
 }
 function containerTopRows(rows, fmt){
-  if(!rows.length) return '<tr><td colspan="4" class="dim">暂无容器级数据（需集群 Prometheus + cAdvisor）</td></tr>';
+  if(!rows.length) return '<tr><td colspan="5" class="dim">暂无容器级数据（需集群 Prometheus + cAdvisor）</td></tr>';
   return rows.map((r,i)=>`<tr><td class="dim">${i+1}</td><td>${r.cluster}</td>
     <td><div class="sm">${r.c}</div><div class="xs dim ell">${r.ns} / ${r.pod}</div></td>
-    <td style="font-weight:600">${fmt(r.v)}</td></tr>`).join('');
+    <td>${ctTypeTag(r.c)}</td><td style="font-weight:600">${fmt(r.v)}</td></tr>`).join('');
 }
 
 async function openCluster(){
@@ -665,15 +669,21 @@ async function renderServiceBody(){
   const cpuSeries=sOf(rcpu,v=>v), memSeries=sOf(rmem,v=>v/1048576), netSeries=sOf(rnx,v=>v/1024);
   const PAL=['#3b82f6','#22d3ee','#a855f7','#22c55e','#f59e0b','#ef4444','#14b8a6','#eab308','#f472b6','#60a5fa'];
   const ready=wl.ready_replicas||0, desired=wl.replicas||0, abnormal=ready<desired;
-  const rows=names.map(cn=>{
+  const rowOf=cn=>{
     const bad=(RST[cn]||0)>0||(OOM[cn]||0)>0;
-    return `<tr class="${bad?'bad':''}"><td>${cn}</td><td class="dim">${imgMap[cn]||'-'}</td>
+    return `<tr class="${bad?'bad':''}"><td>${cn}</td><td>${ctTypeTag(cn)}</td><td class="dim">${imgMap[cn]||'-'}</td>
       <td>${CCPU[cn]!=null?CCPU[cn].toFixed(3)+' core':'-'}</td><td>${CMEM[cn]!=null?fmtBytes(CMEM[cn]):'-'}</td>
       <td style="color:${(RST[cn]||0)>0?'var(--red)':''}">${Math.round(RST[cn]||0)}</td>
       <td style="color:${(OOM[cn]||0)>0?'var(--red)':''}">${Math.round(OOM[cn]||0)}</td>
       <td style="color:${(THR[cn]||0)>0?'var(--yellow)':''}">${THR[cn]?(THR[cn]).toFixed(2)+'s/s':'-'}</td>
       <td>${RD[cn]?fmtBytes(RD[cn])+'/s':'-'}</td><td>${WR[cn]?fmtBytes(WR[cn])+'/s':'-'}</td></tr>`;
-  }).join('');
+  };
+  const bizNames=names.filter(n=>!isSidecar(n)).sort(), sideNames=names.filter(n=>isSidecar(n)).sort();
+  const rows=[
+    ...bizNames.map(rowOf),
+    ...(sideNames.length?[`<tr><td colspan="10" class="xs dim" style="background:var(--fill)">Sidecar / 辅助容器（filebeat、istio-proxy 等，不计入业务资源）</td></tr>`]:[]),
+    ...sideNames.map(rowOf),
+  ].join('');
   // ---- N13：Pod × 容器明细（逐 Pod 逐容器：状态/CPU/内存/limits/重启）----
   const pk=(p,c)=>p+'|'+c;
   const PCD={};
@@ -684,11 +694,15 @@ async function renderServiceBody(){
   (jpl||[]).forEach(x=>{ const r=ensure(x.metric); if(x.metric.resource==='cpu') r.cpuLim=+x.value; else if(x.metric.resource==='memory') r.memLim=+x.value; });
   (jpw||[]).forEach(x=>{ const r=ensure(x.metric); if(+x.value===1) r.state='Waiting:'+((x.metric.reason)||''); });
   (jpt||[]).forEach(x=>{ const r=ensure(x.metric); if(+x.value===1 && !r.state) r.state='Last:'+((x.metric.reason)||''); });
-  const pcRows=Object.values(PCD).sort((a,b)=>(a.pod<b.pod?-1:a.pod>b.pod?1:(a.container<b.container?-1:1)));
+  const pcRows=Object.values(PCD).sort((a,b)=>{
+    const sa=isSidecar(a.container)?1:0, sb=isSidecar(b.container)?1:0;
+    if(sa!==sb) return sa-sb;                      // 业务容器在前，sidecar 在后
+    return a.pod<b.pod?-1:a.pod>b.pod?1:(a.container<b.container?-1:1);
+  });
   const pcHtml=pcRows.map(r=>{
     const st=r.state || ((mine.find(p=>p.name===r.pod)||{}).status || 'Running');
     const bad=r.restarts>0 || /Waiting|Last|Crash|Error|OOM/.test(st);
-    return `<tr class="${bad?'bad':''}"><td>${r.pod}</td><td>${r.container}</td>
+    return `<tr class="${bad?'bad':''}"><td>${r.pod}</td><td>${r.container}</td><td>${ctTypeTag(r.container)}</td>
       <td><span class="tag ${bad?'red':'green'}">${st}</span></td>
       <td>${r.cpu!=null?r.cpu.toFixed(3)+' core':'-'}</td>
       <td>${r.mem!=null?fmtBytes(r.mem):'-'}</td>
@@ -711,11 +725,11 @@ async function renderServiceBody(){
     </div>
   </div>
   <div class="panel" style="margin-bottom:16px"><h3>容器实例 <span class="sub">按容器名聚合（跨 ${podCount} 个 Pod，含重启合并）</span></h3>
-    <table><thead><tr><th>容器</th><th>镜像</th><th>CPU(总)</th><th>内存(总)</th><th>重启(总)</th><th>OOMKilled</th><th>Throttled</th><th>磁盘读</th><th>磁盘写</th></tr></thead>
+    <table><thead><tr><th>容器</th><th>类型</th><th>镜像</th><th>CPU(总)</th><th>内存(总)</th><th>重启(总)</th><th>OOMKilled</th><th>Throttled</th><th>磁盘读</th><th>磁盘写</th></tr></thead>
     <tbody>${rows||'<tr><td colspan="9" class="dim">无容器数据（该集群可能无 cadvisor/kube-state-metrics）</td></tr>'}</tbody></table></div>
   <div class="panel" style="margin-bottom:16px"><h3>Pod × 容器明细 <span class="sub">逐 Pod 逐容器：状态 / CPU / 内存 / 限额 / 重启</span></h3>
-    <table><thead><tr><th>Pod</th><th>容器</th><th>状态</th><th>CPU</th><th>内存</th><th>CPU 限额</th><th>内存限额</th><th>重启</th><th>上次终止原因</th></tr></thead>
-    <tbody>${pcHtml||'<tr><td colspan="9" class="dim">无容器明细（需 kube-state-metrics + cAdvisor）</td></tr>'}</tbody></table></div>
+    <table><thead><tr><th>Pod</th><th>容器</th><th>类型</th><th>状态</th><th>CPU</th><th>内存</th><th>CPU 限额</th><th>内存限额</th><th>重启</th><th>上次终止原因</th></tr></thead>
+    <tbody>${pcHtml||'<tr><td colspan="10" class="dim">无容器明细（需 kube-state-metrics + cAdvisor）</td></tr>'}</tbody></table></div>
   <div class="row" style="margin-bottom:16px">
     ${[['CPU 使用率',cpuPct==null?'-':cpuPct+'%',`限额 ${dash((mine[0]||{}).cpu_limit)}×${podCount}`,cpuPct],
        ['内存使用率',memPct==null?'-':memPct+'%',`限额 ${dash((mine[0]||{}).memory_limit)}×${podCount}`,memPct],
@@ -942,6 +956,8 @@ async function refreshView(){
 const ST = new URLSearchParams(location.search).get('selftest');
 if(ST){
   if(ST==='cluster') setTimeout(()=>{ const c=CLUSTERS[0]; if(c&&c.id!=null) navCluster(c.id); }, 1200);
+  if(ST==='svc'){ const qs=new URLSearchParams(location.search);
+    setTimeout(()=>navCluster(Number(qs.get('cid')), {ns:qs.get('ns'), svc:qs.get('svc')}), 1200); }
   // 等视图稳定后再取样，再等一轮刷新比较（集群模式 3s/次）
   const start = ()=>setTimeout(()=>{
     const before=$('#app').firstElementChild, cbody=$('#cbody');

@@ -111,6 +111,7 @@
   - 数据全部走 Prometheus：`container_cpu_usage_seconds_total`、`container_memory_working_set_bytes`、`kube_pod_container_status_restarts_total`、`kube_pod_container_resource_limits`、`kube_pod_container_status_waiting_reason`、`kube_pod_container_status_last_terminated_reason`。
   - 状态判定：Waiting 原因优先，其次 Last terminated reason，否则用 Pod status；重启>0 或异常状态行标红。
 - 原「容器实例」聚合表保留（跨 Pod 按容器名汇总），与新表互补。
+- **业务容器 / Sidecar 分开**（老板 2026-10-19 反馈）：`filebeat`、`istio-proxy`、`logtail`、`fluent-bit`、`node-exporter` 等识别为 Sidecar，表格加「类型」列并分组排序（业务容器在前、Sidecar 单独分组行），避免与业务容器混在一起看。
 
 **验证（真实数据，2026-10-19）**：总览容器 Top 出实际集群/命名空间/容器（如 `0.46 core`、`9265.6 MiB`）；Pod×容器明细出现 `Running` / `Last:Error`、`1.00 core / 200.0MiB` 限额、重启数。
 
