@@ -1037,8 +1037,10 @@ async function loadOverviewReal(){
   loadContainerTop().catch(()=>{});
 }
 
+let _lastAt = 0;           // 最近一次成功刷新时间（陈旧检测 / 前台恢复节流）
 function tickClock(){ const el=document.getElementById('clock'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
-  patchHTML(el, '<b>API-OPS 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]); }
+  const stale = _lastAt && (Date.now()-_lastAt > 60000) ? ' · <span style="color:#ff7a45">数据停更 '+(Math.floor((Date.now()-_lastAt)/1000))+'s</span>' : '';
+  patchHTML(el, '<b>API-OPS 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]+stale); }
 setInterval(tickClock,1000); tickClock();
 
 /* ---------- 启动 ---------- */
@@ -1046,8 +1048,18 @@ window.addEventListener('resize', ()=>chartPool.forEach(c=>{try{c.resize()}catch
 function markUpdated(){ const el=document.getElementById('updated'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
   el.textContent='更新于 '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
 let _refreshing = false;
+let _timer = null;
+function nextDelay(){ return document.hidden ? 5000 : (VIEW.page==='cluster' ? REFRESH_MS_CLUSTER : REFRESH_MS_OVERVIEW); }
+function scheduleRefresh(){
+  if(_timer) clearTimeout(_timer);
+  _timer = setTimeout(()=>{ _timer=null; refreshView(); }, nextDelay());
+}
 async function refreshView(){
-  if(document.hidden || _refreshing) return;    // 后台标签不刷新；避免慢查询叠套
+  /* ⚠️ 任何「跳过」分支都必须继续排下一轮，否则轮询链就断了：
+     旧实现 `if(document.hidden||_refreshing) return;` 直接 return 不重排 →
+     大屏只要进过一次后台就永久停更，只能手动刷新（2026-10-20 修复）。*/
+  if(_refreshing){ scheduleRefresh(); return; }      // 上一轮未跑完，避免慢查询叠套
+  if(document.hidden){ scheduleRefresh(); return; }  // 后台标签不拉数据，但保持轮询链
   _refreshing = true;
   try{
     if(VIEW.page==='cluster'){
@@ -1057,17 +1069,32 @@ async function refreshView(){
       if(Date.now()-(CV.wlAt||0) > 30000){ CV.wlAt=Date.now(); await openCluster(); }
     } else { await loadOverviewReal(); setMode('real'); renderOverview(); }
     markUpdated();
+    _lastAt = Date.now();
   }catch(e){ /* 失败保留上次的「最后可用」数据，不清屏 */ }
   finally{
     _refreshing = false;
-    setTimeout(refreshView, document.hidden ? 5000 : (VIEW.page==='cluster' ? REFRESH_MS_CLUSTER : REFRESH_MS_OVERVIEW));
+    scheduleRefresh();
   }
 }
+/* 前台恢复：浏览器会节流后台定时器，锁屏/息屏也会停掉定时器 →
+   回到前台 / 窗口聚焦 / 网络恢复时立刻补刷一次，并重启轮询链。*/
+function resumeRefresh(){
+  if(document.hidden || _refreshing) return;
+  if(Date.now()-(_lastAt||0) < 1500){ scheduleRefresh(); return; }   // 刚刷过，别重复打接口
+  if(_timer){ clearTimeout(_timer); _timer=null; }
+  refreshView();
+}
+document.addEventListener('visibilitychange', resumeRefresh);
+window.addEventListener('focus', resumeRefresh);
+window.addEventListener('online', resumeRefresh);
+/* 看门狗：轮询链万一断了（异常/浏览器休眠），15s 内自愈 */
+setInterval(()=>{ if(!_timer && !_refreshing) scheduleRefresh(); }, 15000);
 (async function boot(){
   try{ await loadOverviewReal(); setMode('real'); }catch(e){ setMode('demo'); }
   renderOverview();
   markUpdated();
-  setTimeout(refreshView, REFRESH_MS_OVERVIEW);
+  _lastAt = Date.now();
+  scheduleRefresh();
 })();
 
 /* N12 自检：?selftest=1（总览）/ ?selftest=cluster（集群+容器视图）
