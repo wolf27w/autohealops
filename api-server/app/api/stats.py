@@ -408,10 +408,13 @@ async def _compute_dashboard(
         }
 
         # --- alert_trend（按 range 分桶）---
-        # 新口径：10m→1 分钟/桶、3h→5 分钟/桶、8h→15 分钟/桶；24h→小时/桶；7d/30d→天；90d/1y→周
+        # 口径：10m→1 分钟/桶、3h→5 分钟/桶、8h→15 分钟/桶、24h→5 分钟/桶；7d/30d→天；90d/1y→周
+        # 24h 从「小时/桶」改成「5 分钟/桶」：小时的最后一桶标签恒为 HH:00，看起来像停在整点
+        # （大屏/仪表盘实测都被误解为「不刷新」）；5 分钟桶让右边缘每 5 分钟推进、新告警即时落入当前桶。
         _minute_spec = {"10m": (60, timedelta(minutes=10)),
                         "3h": (300, timedelta(hours=3)),
-                        "8h": (900, timedelta(hours=8))}
+                        "8h": (900, timedelta(hours=8)),
+                        "24h": (300, timedelta(hours=24))}
         if custom_span is not None:
             step = _cstep
             _bucket_col = lambda col: func.from_unixtime(  # noqa: E731

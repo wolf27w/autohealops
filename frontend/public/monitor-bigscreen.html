@@ -339,7 +339,7 @@ function lineOpt(x, seriesArr, colors, yName){
     grid:{left:38,right:16,top:28,bottom:26},
     tooltip:{trigger:'axis',backgroundColor:tipBg,borderColor:ln,textStyle:{color:tipTx,fontSize:11}},
     legend:{top:0,textStyle:{color:ax,fontSize:11},itemWidth:12,itemHeight:8},
-    xAxis:{type:'category',data:x,boundaryGap:false,axisLine:{lineStyle:{color:ln}},axisLabel:{color:ax,fontSize:10}},
+    xAxis:{type:'category',data:x,boundaryGap:false,axisLine:{lineStyle:{color:ln}},axisLabel:{color:ax,fontSize:10,hideOverlap:true}},
     yAxis:{type:'value',name:yName||'',nameTextStyle:{color:ax,fontSize:10},axisLabel:{color:ax,fontSize:10},splitLine:{lineStyle:{color:grid}}},
     series:seriesArr.map((s,i)=>({name:s.name,type:'line',smooth:true,symbol:'none',data:s.data,
       lineStyle:{width:2,color:colors[i%colors.length]},areaStyle:{opacity:.10,color:colors[i%colors.length]}}))
@@ -385,7 +385,7 @@ function renderOverview(){
 
   <!-- 趋势：近24h 告警（新增/已解决/自愈）——与仪表盘同源 -->
   <div class="panel" style="margin-bottom:20px">
-    <h3>近 24 小时 告警趋势 <span class="sub">新增 / 已解决 / 自愈（逐小时）</span></h3>
+    <h3>近 24 小时 告警趋势 <span class="sub">新增 / 已解决 / 自愈（每 5 分钟，随刷新实时推进）</span></h3>
     <div id="ch-ov-trend" class="chart" style="height:200px"></div>
   </div>
 
