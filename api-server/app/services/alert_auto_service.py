@@ -2,12 +2,13 @@
 """告警自动处理闭环：知识库优先 → AI 诊断兜底 → 边界审核 → 执行/审批 → 留痕"""
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 
 from app.clients.ai_client import ai_client
 from app.clients.executor_client import executor_client
@@ -387,28 +388,70 @@ async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -
         await session.commit()
 
 
-async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_id: str) -> None:
-    """免审方案自动执行 + 留痕（写入审计链路 execution 阶段）"""
+async def _set_plan_status(plan_id: int, status: str) -> None:
+    """更新方案状态（自动执行路径用）"""
+    if not plan_id:
+        return
+    try:
+        from app.models import RepairPlan
+        async with async_session() as session:
+            plan = await session.get(RepairPlan, plan_id)
+            if plan:
+                plan.status = status
+                await session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("更新方案 %s 状态为 %s 失败: %s", plan_id, status, e)
+
+
+async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_id: str) -> str:
+    """免审方案自动执行 + 留痕，返回 "success" / "failed"
+
+    2026-10-21 修复：
+    - 之前无论步骤成败都往审计里写 result=success，且**从不更新 plan 状态** →
+      页面上「执行记录/处理中」永远是 pending，看起来像"平台从来没自动修复过"。
+    - 现在按 executor 返回的真实 success 记账，并维护 plan.status：
+      executing →（验证通过由调用方置 completed / 未通过退回 pending 供下轮重试）。
+    """
+    if plan_id:
+        await _set_plan_status(plan_id, "executing")
+    result = "success"
     try:
         # 子线程消费生成器，避免阻塞事件循环
         progresses = await asyncio.to_thread(lambda: list(executor_client.execute_plan(alert.cluster_id, plan_id, plan_json, trace_id)))
+        failed_steps = []
         for progress in progresses:
-            logger.info("自动执行进度: step=%s success=%s", progress.get("step_index"), progress.get("success"))
+            ok = bool(progress.get("success"))
+            logger.info("自动执行进度: step=%s success=%s%s", progress.get("step_index"), ok,
+                        "" if ok else f" message={progress.get('message') or progress.get('error') or ''}")
+            if progress.get("step_index") is not None and progress.get("step_index") >= 0 and not ok:
+                failed_steps.append(progress.get("step_index"))
+        if failed_steps:
+            result = "failed"
         await audit_service.update_audit_record(trace_id, "execution_detail", json.dumps({
-            "plan_id": plan_id, "alert_id": alert.id, "mode": "auto", "result": "success",
+            "plan_id": plan_id, "alert_id": alert.id, "mode": "auto", "result": result,
+            "failed_steps": failed_steps,
         }, ensure_ascii=False))
     except Exception as e:  # noqa: BLE001
+        result = "failed"
         logger.error("自动执行失败: %s", e)
         await audit_service.update_audit_record(trace_id, "execution_detail", json.dumps({
             "plan_id": plan_id, "alert_id": alert.id, "mode": "auto", "result": "failed", "error": str(e),
         }, ensure_ascii=False))
+    if result == "failed":
+        await _set_plan_status(plan_id, "failed")
+    return result
 
 
-async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = 60) -> bool:
+AUTO_VERIFY_WAIT_SECONDS = int(os.getenv("AUTO_VERIFY_WAIT_SECONDS", "180"))
+
+
+async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS) -> bool:
     """执行修复后等待并验证 Pod 恢复（每 10s 查一次，最多 max_wait_seconds 秒）
 
     删除 Pod 重建 / 补 imagePullSecrets 后，Pod 需要时间重新拉镜像、调度、启动。
     验证通过（所有容器 Running+Ready）才允许标记已解决，否则保持 pending。
+    2026-10-21：默认 60s 太短（实测 23 条"执行成功但验证不过"多数是拉镜像/调度超 1 分钟），
+    默认放宽到 180s，可用环境变量 AUTO_VERIFY_WAIT_SECONDS 覆盖。
     """
     waited = 0
     while waited < max_wait_seconds:
@@ -1113,11 +1156,12 @@ async def _process_one(alert: Alert) -> bool:
             )
             logger.info("告警 %d 触发循环抑制，转人工", alert.id)
             return True
-        await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
+        exec_result = await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
         await _record_suppression(alert)
         # 等待 + 验证修复（Pod 重建需时间，验证通过才标记已解决）
         repaired = await _verify_auto_repair(alert)
         if repaired:
+            await _set_plan_status(plan_id, "completed")
             async with async_session() as session:
                 a = await session.get(Alert, alert.id)
                 a.status = "self_healed"
@@ -1132,7 +1176,10 @@ async def _process_one(alert: Alert) -> bool:
                 )
         else:
             # 验证未通过：不标记已解决，保持 pending（下次扫描再处理，累积触发升级转人工）
-            logger.warning("告警 %d 自动修复执行完成但验证未通过，保持待处理", alert.id)
+            # 方案状态回退 pending（否则 executing 会挡住下轮重试），执行本身失败则保留 failed
+            logger.warning("告警 %d 自动修复执行完成但验证未通过（exec=%s），保持待处理", alert.id, exec_result)
+            if exec_result == "success":
+                await _set_plan_status(plan_id, "pending")
             async with async_session() as session:
                 a = await session.get(Alert, alert.id)
                 if a and "自动修复" not in (a.message or ""):
@@ -1213,9 +1260,23 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
                 Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
             ).order_by(Alert.detected_at.asc()).limit(limit)
         )).scalars())
+    # 正在自动执行修复的告警：本轮跳过，等执行+验证跑完由执行链路自己落 self_healed，
+    # 否则会出现「平台刚删了 Pod，新 Pod 起来了，恢复扫描先把它按 resolved 关掉」→ 自愈记录丢失
+    # （2026-10-21：实测这就是"看不到 AI 自动修复"的主要原因之一）。
+    from app.models import RepairPlan
+    async with async_session() as session:
+        executing_ids = set((await session.execute(
+            select(RepairPlan.alert_id).where(
+                RepairPlan.status == "executing",
+                RepairPlan.alert_id.in_([a.id for a in rows]) if rows else text("1=0"),
+            )
+        )).scalars())
     for alert in rows:
         try:
             if not alert.resource_name:
+                continue
+            if alert.id in executing_ids:
+                logger.info("恢复收敛：告警 %d 正在自动执行修复，本轮跳过（等验证结果）", alert.id)
                 continue
             if not await check_pod_recovered(alert.cluster_id, alert.namespace or "", alert.resource_name):
                 continue
