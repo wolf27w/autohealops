@@ -148,3 +148,8 @@ make crypto-test
 | JWT_SECRET_KEY | JWT 签名密钥 |
 | OPENAI_API_KEY / DEEPSEEK_API_KEY / CLAUDE_API_KEY | AI 模型 Key（也可前端「AI 模型」页配置） |
 | PROMETHEUS_URL / ES_URL | 可观测性（也可前端「系统设置」页配置） |
+
+## 文档
+
+- 告警自动处理流程图：`docs/alert-flow.html`
+- 节点故障处置手册（人工）：`docs/ops/NODE-RUNBOOK.md`

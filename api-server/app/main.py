@@ -224,6 +224,14 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("容器资源告警扫描启动失败: %s", e)
 
+    # 节点恢复自动 uncordon（每 5 分钟：只解平台自己 cordon 的节点，Ready 且无压力条件才解）
+    try:
+        from app.services.node_diagnosis_service import uncordon_ready_nodes
+        _background_tasks.append(asyncio.create_task(_interval_worker("节点恢复 uncordon", 300, uncordon_ready_nodes, 120.0)))
+        logger.info("节点恢复自动 uncordon 已启动（每 5 分钟，仅处理平台 cordon 的节点）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("节点 uncordon 扫描启动失败: %s", e)
+
     # 恢复收敛扫描（每 60 秒：待处理/审批中的 Pod 告警，资源恢复即关闭）
     try:
         from app.services.alert_auto_service import recovery_sweep_loop

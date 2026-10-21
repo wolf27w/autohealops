@@ -31,6 +31,7 @@ AutoHealOps 自愈平台采用三服务 + 前端 + 共享数据库的架构：
 ## 数据流（核心闭环）
 
 > 完整流程图（含所有出栈分支与阈值）：`docs/alert-flow.html`（浏览器打开）/ `docs/alert-flow.png`（图片）。
+> 节点（Node）类故障另走独立分支：只读诊断 + cordon/drain 审批隔离；节点内操作见 `docs/ops/NODE-RUNBOOK.md`（人工手册）。
 > 下面是主干摘要，细节以流程图为准。
 
 ```

@@ -967,6 +967,83 @@ async def _auto_force_delete_terminating(alert: Alert) -> bool:
     return True
 
 
+async def _process_node_alert(alert: Alert) -> bool:
+    """节点告警闭环（2026-10-21 老板要求 P1+P2）
+
+    P1 只读诊断：conditions / capacity / taints / Node 事件 / node-exporter 指标 → 规则结论
+    P2 受限自愈：压力或 NotReady 且集群还有别的可调度节点 → cordon+drain 方案（**必走审批**）
+    其余（无法隔离 / 诊断无异常）→ 转工单，但工单里带完整诊断结论。
+    """
+    from app.models import RepairPlan
+    from app.services import node_diagnosis_service as node_diag
+
+    # 已转人工 / 已有在途审批 → 不重复诊断
+    if alert.manual_required:
+        return False
+    async with async_session() as session:
+        inflight = (await session.execute(
+            select(Approval).where(Approval.alert_id == alert.id, Approval.status == "pending").limit(1)
+        )).scalar_one_or_none()
+    if inflight:
+        return False
+
+    diag = await node_diag.diagnose(alert.cluster_id, alert.resource_name or "", alert.fault_type)
+    summary = diag.get("summary") or ""
+
+    # 已恢复（Ready 且无压力条件）→ 关闭
+    if diag.get("ok") and diag.get("ready") and not diag.get("pressure"):
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a:
+                _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                a.message = (a.message or "") + "（节点已恢复 Ready，系统自动关闭）"
+                await session.commit()
+                recovered = a
+            else:
+                recovered = None
+        await _notify_recovered([recovered] if recovered else [])
+        logger.info("节点告警 %d 已恢复，自动关闭", alert.id)
+        return True
+
+    # P2：可隔离恢复 → 生成 cordon+drain 方案，强制走审批（drain 为高危命令）
+    steps, why = await node_diag.build_isolate_steps(alert.cluster_id, alert.resource_name or "", alert.fault_type)
+    if steps:
+        plan_json = json.dumps({"steps": steps}, ensure_ascii=False)
+        async with async_session() as session:
+            plan = RepairPlan(alert_id=alert.id, diagnosis_id=None, plan_json=plan_json,
+                              operation_types="UPDATE,DELETE", risk_level="high", status="pending")
+            session.add(plan)
+            await session.commit()
+            await session.refresh(plan)
+            plan_id = plan.id
+        from app.services.approval_service import create_approval
+        from app.services.decision_engine import DecisionLevel
+        from app.models import User
+        async with async_session() as session:
+            admin = (await session.execute(select(User).where(User.role == "admin"))).scalars().first()
+        await create_approval(plan_id, DecisionLevel.approval_1, admin, alert_id=alert.id)
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a:
+                a.status = "awaiting_approval"
+                if summary and "【节点诊断】" not in (a.message or ""):
+                    a.message = (a.message or "") + "\n【节点诊断】\n" + summary
+                await session.commit()
+        logger.info("节点告警 %d 生成隔离方案（%s），等待审批（drain 高危）", alert.id, why)
+        return True
+
+    # 不能隔离 → 转工单，带上诊断结论
+    detail = summary or f"节点 {alert.resource_name} 诊断不可用（集群/executor 不可达）"
+    await _mark_manual_and_notify(alert, f"节点故障（{alert.fault_type}）", detail[:900])
+    async with async_session() as session:
+        a = await session.get(Alert, alert.id)
+        if a and summary and "【节点诊断】" not in (a.message or ""):
+            a.message = (a.message or "") + "\n【节点诊断】\n" + summary
+            await session.commit()
+    logger.info("节点告警 %d 转工单（%s），已附诊断结论", alert.id, why)
+    return True
+
+
 async def _process_one(alert: Alert) -> bool:
     """处理单条告警的完整闭环：知识库优先 → AI 诊断 → AI 修复 → 转人工。
 
@@ -982,6 +1059,10 @@ async def _process_one(alert: Alert) -> bool:
     # 数据库告警：诊断只给方案、绝不执行修改（建单时已标 manual_required），跳过自动修复链路
     if alert.resource_type == "db":
         return False
+
+    # 节点类告警（2026-10-21）：走节点诊断分支（Pod 那套采集/工具都不适用）
+    if alert.resource_type == "node":
+        return await _process_node_alert(alert)
 
     # N5：Pod 重启原因 AI 诊断告警（检测侧已完成「诊断 + 通知」闭环），
     # 此处不自动修复、不走审批、不转人工，直接跳过（防误入审批分支）。

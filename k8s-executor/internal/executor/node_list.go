@@ -5,8 +5,10 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,18 +31,29 @@ func wantsJSON(args []string) bool {
 	return false
 }
 
+type nodeConditionJSON struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+	Since   string `json:"since"` // lastTransitionTime RFC3339
+}
+
 type nodeJSON struct {
-	Name          string            `json:"name"`
-	Ready         bool              `json:"ready"`
-	Unschedulable bool              `json:"unschedulable"`
-	Roles         []string          `json:"roles"`
-	Allocatable   map[string]string `json:"allocatable"`
-	Capacity      map[string]string `json:"capacity"`
-	PodCount      int               `json:"pod_count"`
-	CPUUsageMilli int64             `json:"cpu_usage_milli"`
-	MemUsageBytes int64             `json:"mem_usage_bytes"`
-	HasMetrics    bool              `json:"has_metrics"`
-	KubeletVer    string            `json:"kubelet_version"`
+	Name          string              `json:"name"`
+	Ready         bool                `json:"ready"`
+	Unschedulable bool                `json:"unschedulable"`
+	Roles         []string            `json:"roles"`
+	Allocatable   map[string]string   `json:"allocatable"`
+	Capacity      map[string]string   `json:"capacity"`
+	PodCount      int                 `json:"pod_count"`
+	CPUUsageMilli int64               `json:"cpu_usage_milli"`
+	MemUsageBytes int64               `json:"mem_usage_bytes"`
+	HasMetrics    bool                `json:"has_metrics"`
+	KubeletVer    string              `json:"kubelet_version"`
+	InternalIP    string              `json:"internal_ip"` // 诊断用：Prometheus instance 常是节点 IP
+	Conditions    []nodeConditionJSON `json:"conditions"`  // 节点诊断用（2026-10-21）
+	Taints        []string            `json:"taints"`      // key=value:effect
 }
 
 func nodeReady(n *corev1.Node) bool {
@@ -105,11 +118,30 @@ func (e *Executor) nodesJSON(ctx context.Context) (string, error) {
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		u := usage[n.Name]
+		conds := make([]nodeConditionJSON, 0, len(n.Status.Conditions))
+		for _, c := range n.Status.Conditions {
+			conds = append(conds, nodeConditionJSON{
+				Type: string(c.Type), Status: string(c.Status), Reason: c.Reason,
+				Message: strings.ReplaceAll(c.Message, "\n", " "),
+				Since:   c.LastTransitionTime.Format(time.RFC3339),
+			})
+		}
+		taints := make([]string, 0, len(n.Spec.Taints))
+		for _, t := range n.Spec.Taints {
+			taints = append(taints, fmt.Sprintf("%s=%s:%s", t.Key, t.Value, t.Effect))
+		}
+		ip := ""
+		for _, a := range n.Status.Addresses {
+			if a.Type == corev1.NodeInternalIP {
+				ip = a.Address
+				break
+			}
+		}
 		out = append(out, nodeJSON{
 			Name: n.Name, Ready: nodeReady(n), Unschedulable: n.Spec.Unschedulable, Roles: nodeRoles(n),
 			Allocatable: qtyMap(n.Status.Allocatable), Capacity: qtyMap(n.Status.Capacity),
 			PodCount: podCount[n.Name], CPUUsageMilli: u[0], MemUsageBytes: u[1], HasMetrics: hasMetrics,
-			KubeletVer: n.Status.NodeInfo.KubeletVersion,
+			KubeletVer: n.Status.NodeInfo.KubeletVersion, InternalIP: ip, Conditions: conds, Taints: taints,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -451,6 +451,10 @@ func (e *Executor) execCordon(ctx context.Context, pc *ParsedCommand) (string, e
 }
 
 func (e *Executor) execDescribe(ctx context.Context, pc *ParsedCommand, ns string) (string, error) {
+	// 节点诊断（2026-10-21）：describe node <name> → 条件/容量/requests/污点/事件，供节点诊断使用（只读）
+	if (pc.Resource == "node" || pc.Resource == "nodes") && pc.Name != "" {
+		return e.describeNode(ctx, pc.Name)
+	}
 	if pc.Resource == "pod" && pc.Name != "" {
 		pod, err := e.clientset.CoreV1().Pods(ns).Get(ctx, pc.Name, metav1.GetOptions{})
 		if err != nil {
@@ -486,7 +490,7 @@ func (e *Executor) execDescribe(ctx context.Context, pc *ParsedCommand, ns strin
 		}
 		return b.String(), nil
 	}
-	return "", fmt.Errorf("describe 仅支持 pod，且需指定名称")
+	return "", fmt.Errorf("describe 仅支持 pod/node，且需指定名称")
 }
 
 func (e *Executor) execScale(ctx context.Context, pc *ParsedCommand, ns string) (string, error) {
