@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <script>(function(){try{var p=window.parent;var d=(p&&p!==window)?p.document.documentElement.getAttribute('data-theme'):null;var m=d||localStorage.getItem('api_ops_theme_mode')||'light';document.documentElement.setAttribute('data-theme',(m==='dark')?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <title>多集群 K8s 监控大屏 · Demo</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="/vendor/echarts.min.js"></script>
+<script>if(!window.echarts){document.write('<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"><\/script>')}</script>
 <style>
   :root{
     --bg:#eef4ef; --panel:#ffffff; --panel-2:#f7fbf8; --elev:#f2f7f4; --fill:#e7f0ea;
@@ -664,18 +665,24 @@ function setSvc(s){ CV.svc=s; CV.pod=0; renderService(); }
 
 async function renderServiceBody(skipInstant=false){
   const cid=CV.cluster, ns=CV.ns, svc=CV.svc;
+  // 还没选中命名空间/服务（openCluster 未回）→ 不发无意义的 namespaces/null 请求
+  if(cid==null || !ns || !svc) return;
   const wl=(CV.workloads||[]).find(w=>w.namespace===ns&&w.name===svc)||{name:svc,kind:CV.type,replicas:0,ready_replicas:0};
   const instKey=[cid,ns,svc].join('|');
   let mine, podCount, cpuLim, memLim;
-  if(skipInstant && CV.instCache && CV.instCache.key===instKey){
-    ({ mine, podCount, cpuLim, memLim } = CV.instCache);
+  // Pods 列表缓存 15s（2026-10-21）：这张表只用它算副本数/limit，3s 一轮全量重拉纯浪费
+  const podsKey=cid+'|'+ns;
+  const podsHit = CV.podsCache && CV.podsCache.key===podsKey;
+  if(podsHit && (Date.now()-CV.podsCache.at) < 15000){
+    ({ mine, podCount, cpuLim, memLim } = CV.podsCache);
   } else {
     const pods=(await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods').catch(()=>[]))||[];
     mine=pods.filter(p=>p.name===svc||p.name.startsWith(svc+'-'));
     podCount=mine.length||(wl.replicas||0)||1;
     cpuLim=parseCpuMilli((mine[0]||{}).cpu_limit); memLim=parseMemBytes((mine[0]||{}).memory_limit);
-    CV.instCache={ key:instKey, mine, podCount, cpuLim, memLim };
+    CV.podsCache={ key:podsKey, at:Date.now(), mine, podCount, cpuLim, memLim };
   }
+  if(skipInstant && CV.instCache && CV.instCache.key===instKey){ CV.instCache={ key:instKey, mine, podCount, cpuLim, memLim }; }
   const R=`namespace="${ns}",pod=~"${svc}-.*",container!=""`;
   let INST;
   if(skipInstant && CV.instCache && CV.instCache.key===instKey && CV.instCache.rows){
@@ -707,32 +714,28 @@ async function renderServiceBody(skipInstant=false){
   const CCPU=mapBy(a,'container'),CMEM=mapBy(b,'container'),RST=mapBy(c,'container'),OOM=mapBy(d,'container'),THR=mapBy(e,'container'),RD=mapBy(f,'container'),WR=mapBy(g,'container'),NERR=mapBy(h,'container'),NETT=mapBy(i2,'container');
   const names=[...new Set([...Object.keys(CCPU),...Object.keys(CMEM),...Object.keys(RST),...Object.keys(OOM),...Object.keys(THR),...Object.keys(RD)])].sort();
   const imgMap={};
-  if(mine[0]){ const det=await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods/'+mine[0].name+'/detail').catch(()=>null); ((det&&det.containers)||[]).forEach(x=>imgMap[x.name]=x.image); }
+  const imgKey=[cid,ns,(mine[0]||{}).name||''].join('|');
+  if(CV.imgCache && CV.imgCache.key===imgKey && (Date.now()-CV.imgCache.at)<60000){
+    Object.assign(imgMap, CV.imgCache.map);
+  } else if(mine[0]){
+    const det=await apiGet('/resources/clusters/'+cid+'/namespaces/'+ns+'/pods/'+mine[0].name+'/detail').catch(()=>null);
+    ((det&&det.containers)||[]).forEach(x=>imgMap[x.name]=x.image);
+    CV.imgCache={ key:imgKey, at:Date.now(), map:{...imgMap} };
+  }
   // 趋势（Prometheus range）：按所选历史范围取数；同一范围/容器 30s 内复用缓存
   if(CV.histContainer && !names.includes(CV.histContainer)) CV.histContainer='';
   const [hMin,hStep]=[histDef()[2], histDef()[3]];
   const cSel = CV.histContainer ? `,container="${CV.histContainer}"` : '';
   const R2 = R + cSel;
   const tKey = [cid,ns,svc,CV.histRange||'3d',CV.histContainer||''].join('|');
-  let rcpu, rmem, rrst;
-  if(!CV.trendCache || CV.trendCache.key!==tKey || (Date.now()-CV.trendCache.at)>REFRESH_MS_TREND){
-    [rcpu,rmem,rrst]=await Promise.all([
-      promRange(cid,`sum by(container)(rate(container_cpu_usage_seconds_total{${R2}}[5m]))`,hMin,hStep),
-      promRange(cid,`sum by(container)(container_memory_working_set_bytes{${R2}})`,hMin,hStep),
-      // 容器级重启次数（累计 counter）
-      promRange(cid,`sum by(container)(kube_pod_container_status_restarts_total{${R2}})`,hMin,hStep),
-    ]);
-    CV.trendCache = { key:tKey, at:Date.now(), rcpu, rmem, rrst };
-  } else {
-    ({ rcpu, rmem, rrst } = CV.trendCache);
-  }
+  // 2026-10-21：趋势（Prometheus range）比即时查询慢一个量级（3 天窗口实测 1~4s），
+  // 旧实现把它跟即时查询一起 await → 整张表要等趋势返回才出。
+  // 改成：先用缓存画图（没有就画空图），表格立即渲染；趋势在后台取完再补画。
+  const trendStale = !CV.trendCache || CV.trendCache.key!==tKey || (Date.now()-CV.trendCache.at)>REFRESH_MS_TREND;
+  const TR = CV.trendCache && CV.trendCache.key===tKey ? CV.trendCache : null;
+  const rcpu = TR?TR.rcpu:null, rmem = TR?TR.rmem:null, rrst = TR?TR.rrst:null;
+  if(trendStale && !TR) trendBusy(true, '趋势加载中…');
   const capCpu=cpuLim*podCount, capMem=memLim*podCount;
-  // 容器粒度：每个容器一条线（不再工作负载聚合）
-  const cnames=[...new Set([...(rcpu||[]),...(rmem||[]),...(rrst||[])].map(s=>(s.metric&&s.metric.container)||'').filter(Boolean))].sort();
-  const X=(rcpu&&rcpu[0])?rcpu[0].values.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):times(24);
-  const sOf=(rr,f)=>cnames.map(cn=>{const s=(rr||[]).find(x=>x.metric&&x.metric.container===cn); return {name:cn,data:s?s.values.map(v=>+f(v[1]).toFixed(2)):[]};});
-  const cpuSeries=sOf(rcpu,v=>v), memSeries=sOf(rmem,v=>v/1048576), rstSeries=sOf(rrst,v=>Math.round(v));
-  const PAL=['#3b82f6','#22d3ee','#a855f7','#22c55e','#f59e0b','#ef4444','#14b8a6','#eab308','#f472b6','#60a5fa'];
   const ready=wl.ready_replicas||0, desired=wl.replicas||0, abnormal=ready<desired;
   const rowOf=cn=>{
     const bad=(RST[cn]||0)>0||(OOM[cn]||0)>0;
@@ -833,9 +836,38 @@ async function renderServiceBody(skipInstant=false){
       .map(([l,v,b])=>`<div class="col cnt-box"><div class="n" style="color:${b?'var(--red)':'var(--green)'}">${v}</div><div class="l">${l}</div></div>`).join('')}
   </div>
 `);
-  mkChart('ch-svc-res', lineOpt(X,cpuSeries,PAL,'core'));
-  mkChart('ch-svc-mem', lineOpt(X,memSeries,PAL,'MiB'));
-  mkChart('ch-svc-rst', lineOpt(X,rstSeries,PAL,'次'));
+  drawTrendCharts(rcpu,rmem,rrst);
+  if(trendStale){ loadTrendAsync(tKey, cid, R2, hMin, hStep); }
+}
+
+const PAL=['#3b82f6','#22d3ee','#a855f7','#22c55e','#f59e0b','#ef4444','#14b8a6','#eab308','#f472b6','#60a5fa'];
+
+/* 画三张趋势图（容器粒度：每个容器一条线） */
+function drawTrendCharts(rcpu,rmem,rrst){
+  if(!$('#ch-svc-res')) return;
+  const cnames=[...new Set([...(rcpu||[]),...(rmem||[]),...(rrst||[])].map(s=>(s.metric&&s.metric.container)||'').filter(Boolean))].sort();
+  const X=(rcpu&&rcpu[0])?rcpu[0].values.map(v=>new Date(v[0]*1000).toTimeString().slice(0,5)):(rcpu&&rcpu.length?[]:times(24));
+  const sOf=(rr,f)=>cnames.map(cn=>{const s=(rr||[]).find(x=>x.metric&&x.metric.container===cn); return {name:cn,data:s?s.values.map(v=>+f(v[1]).toFixed(2)):[]};});
+  mkChart('ch-svc-res', lineOpt(X,sOf(rcpu,v=>v),PAL,'core'));
+  mkChart('ch-svc-mem', lineOpt(X,sOf(rmem,v=>v/1048576),PAL,'MiB'));
+  mkChart('ch-svc-rst', lineOpt(X,sOf(rrst,v=>Math.round(v)),PAL,'次'));
+}
+
+/* 后台拉趋势（不阻塞表格渲染）；回来时若还停在同一个服务/范围才补画 */
+async function loadTrendAsync(tKey, cid, R2, hMin, hStep){
+  if(CV._trendLoading===tKey) return;   // 同一目标只允许一个在飞
+  CV._trendLoading=tKey;
+  try{
+    const [a,b,c]=await Promise.all([
+      promRange(cid,`sum by(container)(rate(container_cpu_usage_seconds_total{${R2}}[5m]))`,hMin,hStep),
+      promRange(cid,`sum by(container)(container_memory_working_set_bytes{${R2}})`,hMin,hStep),
+      promRange(cid,`sum by(container)(kube_pod_container_status_restarts_total{${R2}})`,hMin,hStep),
+    ]);
+    CV.trendCache={ key:tKey, at:Date.now(), rcpu:a, rmem:b, rrst:c };
+    const cur=[CV.cluster,CV.ns,CV.svc,CV.histRange||'3d',CV.histContainer||''].join('|');
+    if(VIEW.page==='cluster' && CV.tab==='service' && cur===tKey){ drawTrendCharts(a,b,c); trendBusy(false); }
+  }catch(e){ trendBusy(false); }
+  finally{ if(CV._trendLoading===tKey) CV._trendLoading=null; }
 }
 function setPod(i){ CV.pod=i; renderService(); }
 function gotoNode(n){ CV.tab='node'; CV.node=n; CV.from=`节点 ${n}`; renderCluster(); }

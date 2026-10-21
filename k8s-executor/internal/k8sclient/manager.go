@@ -82,6 +82,15 @@ func buildRestConfig(clusterID uint, kubeconfigJSON string) (*rest.Config, error
 			return nil, classifyErr("指定 context 构建失败", err)
 		}
 	}
+	// 客户端限流放宽（2026-10-21）：client-go 默认 QPS=5/Burst=10，
+	// 监控大屏一次刷新并发 15~18 个查询会被串行化成数秒（实测 4.4s）。
+	// executor 只服务本平台，50/100 足够安全，配合 prometheus 包的发现缓存使用。
+	if restConfig.QPS < 50 {
+		restConfig.QPS = 50
+	}
+	if restConfig.Burst < 100 {
+		restConfig.Burst = 100
+	}
 	return restConfig, nil
 }
 

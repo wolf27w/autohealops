@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,8 +25,75 @@ var probeNamespaces = []string{
 	"default",
 }
 
-// discoverService 动态发现集群内 Prometheus Service（ClusterIP，端口 9090）
+// ---- 性能优化（2026-10-21）----
+// 背景：大屏容器监控一次刷新会并发 15~18 个 Prom 查询。旧实现每个查询都会：
+//  1. LIST 最多 5 个命名空间的 Service 来发现 Prometheus（受 client-go 默认 5 QPS 限流，
+//     15 个查询被串行化成 ~4.4s，实测首屏 6.8s）；
+//  2. rest.TransportFor() 新建 transport → 每次重新做 TLS 握手，keep-alive 完全复用不上。
+//
+// 修法：发现结果缓存 5 分钟（Prometheus Service 基本不变）+ http.Client 按 apiserver 复用。
+const discoverTTL = 5 * time.Minute
+
+type discoverEntry struct {
+	ns      string
+	svc     string
+	fetched time.Time
+}
+
+var (
+	discoverMu    sync.Mutex
+	discoverCache = map[string]discoverEntry{}
+
+	clientMu    sync.Mutex
+	clientCache = map[string]*http.Client{}
+)
+
+func cacheKey(clientset kubernetes.Interface) string { return fmt.Sprintf("%p", clientset) }
+
+// httpClientFor 同一 apiserver 复用同一个 http.Client（transport + 连接池）
+func httpClientFor(restConfig *rest.Config) (*http.Client, error) {
+	key := restConfig.Host
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if c, ok := clientCache[key]; ok {
+		return c, nil
+	}
+	transport, err := rest.TransportFor(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("transport 构建失败: %w", err)
+	}
+	c := &http.Client{Transport: transport, Timeout: 60 * time.Second}
+	clientCache[key] = c
+	return c, nil
+}
+
+// discoverService 动态发现集群内 Prometheus Service（ClusterIP，端口 9090），结果缓存 discoverTTL
 func discoverService(clientset kubernetes.Interface) (string, string, error) {
+	key := cacheKey(clientset)
+	discoverMu.Lock()
+	if e, ok := discoverCache[key]; ok && time.Since(e.fetched) < discoverTTL {
+		discoverMu.Unlock()
+		return e.ns, e.svc, nil
+	}
+	discoverMu.Unlock()
+
+	ns, svc, err := discoverServiceUncached(clientset)
+	if err != nil {
+		return "", "", err
+	}
+	discoverMu.Lock()
+	discoverCache[key] = discoverEntry{ns: ns, svc: svc, fetched: time.Now()}
+	discoverMu.Unlock()
+	return ns, svc, nil
+}
+
+func invalidateDiscover(clientset kubernetes.Interface) {
+	discoverMu.Lock()
+	delete(discoverCache, cacheKey(clientset))
+	discoverMu.Unlock()
+}
+
+func discoverServiceUncached(clientset kubernetes.Interface) (string, string, error) {
 	for _, ns := range probeNamespaces {
 		svcs, err := clientset.CoreV1().Services(ns).List(context.Background(), metav1.ListOptions{})
 		if err != nil {
@@ -55,32 +123,47 @@ func Query(clientset kubernetes.Interface, restConfig *rest.Config, promql strin
 		return nil, err
 	}
 
-	proxyPath := fmt.Sprintf(
-		"%s/api/v1/namespaces/%s/services/%s:9090/proxy/api/v1/query?query=%s",
-		strings.TrimRight(restConfig.Host, "/"), ns, svcName, url.QueryEscape(promql),
-	)
-	req, err := http.NewRequest(http.MethodGet, proxyPath, nil)
-	if err != nil {
-		return nil, fmt.Errorf("请求构建失败: %w", err)
+	path := func(ns, svc string) string {
+		return fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s:9090/proxy/api/v1/query?query=%s",
+			strings.TrimRight(restConfig.Host, "/"), ns, svc, url.QueryEscape(promql))
 	}
-	transport, err := rest.TransportFor(restConfig)
-	if err != nil {
-		return nil, fmt.Errorf("transport 构建失败: %w", err)
+	body, status, err := doProxy(restConfig, path(ns, svcName))
+	if err == nil && status == http.StatusNotFound {
+		// 缓存的 Service 已不存在（Prometheus 重建/迁移）→ 失效重试一次
+		invalidateDiscover(clientset)
+		if ns2, svc2, err2 := discoverService(clientset); err2 == nil && (ns2 != ns || svc2 != svcName) {
+			body, status, err = doProxy(restConfig, path(ns2, svc2))
+		}
 	}
-	client := &http.Client{Transport: transport, Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Prometheus 查询失败: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("Prometheus 返回 %d: %s", status, string(body)[:min(len(body), 300)])
+	}
+	return body, nil
+}
+
+// doProxy 走 apiserver Service Proxy 发一次 GET，返回 body 与状态码
+func doProxy(restConfig *rest.Config, proxyPath string) ([]byte, int, error) {
+	req, err := http.NewRequest(http.MethodGet, proxyPath, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("请求构建失败: %w", err)
+	}
+	client, err := httpClientFor(restConfig)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Prometheus 响应读取失败: %w", err)
+		return nil, 0, fmt.Errorf("Prometheus 响应读取失败: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, string(body)[:min(len(body), 300)])
-	}
-	return body, nil
+	return body, resp.StatusCode, nil
 }
 
 // ContainerUsagePromQL 容器资源使用率 PromQL（usage ÷ limit × 100）//
@@ -109,30 +192,24 @@ func QueryRange(clientset kubernetes.Interface, restConfig *rest.Config, promql 
 	if step <= 0 {
 		step = 30
 	}
-	proxyPath := fmt.Sprintf(
-		"%s/api/v1/namespaces/%s/services/%s:9090/proxy/api/v1/query_range?query=%s&start=%d&end=%d&step=%d",
-		strings.TrimRight(restConfig.Host, "/"), ns, svcName, url.QueryEscape(promql), start, end, step,
-	)
-	req, err := http.NewRequest(http.MethodGet, proxyPath, nil)
-	if err != nil {
-		return nil, fmt.Errorf("请求构建失败: %w", err)
+	path := func(ns, svc string) string {
+		return fmt.Sprintf(
+			"%s/api/v1/namespaces/%s/services/%s:9090/proxy/api/v1/query_range?query=%s&start=%d&end=%d&step=%d",
+			strings.TrimRight(restConfig.Host, "/"), ns, svc, url.QueryEscape(promql), start, end, step,
+		)
 	}
-	transport, err := rest.TransportFor(restConfig)
-	if err != nil {
-		return nil, fmt.Errorf("transport 构建失败: %w", err)
+	body, status, err := doProxy(restConfig, path(ns, svcName))
+	if err == nil && status == http.StatusNotFound {
+		invalidateDiscover(clientset)
+		if ns2, svc2, err2 := discoverService(clientset); err2 == nil && (ns2 != ns || svc2 != svcName) {
+			body, status, err = doProxy(restConfig, path(ns2, svc2))
+		}
 	}
-	client := &http.Client{Transport: transport, Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Prometheus 范围查询失败: %w", err)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("Prometheus 响应读取失败: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, string(body)[:min(len(body), 300)])
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("Prometheus 返回 %d: %s", status, string(body)[:min(len(body), 300)])
 	}
 	return body, nil
 }

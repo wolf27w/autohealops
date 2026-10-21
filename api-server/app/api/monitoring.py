@@ -50,6 +50,8 @@ async def set_source(payload: dict, user=Depends(require_admin)):
         elif url:
             s.add(MonitorSource(cluster_id=cluster_id, url=url))
         await s.commit()
+    # 数据源改了 → 立刻让解析缓存失效（否则最多 60s 内仍走旧地址）
+    prometheus_service.invalidate_source_cache(cluster_id)
     return {"code": 200, "message": "success", "data": {"cluster_id": cluster_id, "url": url}}
 
 
