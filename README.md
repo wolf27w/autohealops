@@ -153,3 +153,5 @@ make crypto-test
 
 - 告警自动处理流程图：`docs/alert-flow.html`
 - 节点故障处置手册（人工）：`docs/ops/NODE-RUNBOOK.md`
+- Agent-only 纳管需求/设计基线：`docs/AGENT-ONLY-ARCHITECTURE.md`
+- 剩余需求清单（最新口径）：`docs/ROADMAP.md`
