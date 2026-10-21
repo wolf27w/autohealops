@@ -388,6 +388,34 @@ async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -
         await session.commit()
 
 
+# ---- 「修复进行中」标记（2026-10-21）----
+# 作用：修复/验证期间让恢复扫描别把告警按 resolved 关掉，否则自愈结果永远落不到 self_healed。
+REPAIR_MARK_TTL = 600  # 10 分钟
+
+
+async def _begin_repair(alert_id: int) -> bool:
+    """抢占「该告警正在修复」标记；已被别的流程占用返回 False"""
+    try:
+        return bool(await redis_pool.set(f"alert:repairing:{alert_id}", "1", ex=REPAIR_MARK_TTL, nx=True))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("修复标记写入失败（忽略）: %s", e)
+        return True
+
+
+async def _end_repair(alert_id: int) -> None:
+    try:
+        await redis_pool.delete(f"alert:repairing:{alert_id}")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _is_repairing(alert_id: int) -> bool:
+    try:
+        return bool(await redis_pool.get(f"alert:repairing:{alert_id}"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _set_plan_status(plan_id: int, status: str) -> None:
     """更新方案状态（自动执行路径用）"""
     if not plan_id:
@@ -461,6 +489,71 @@ async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_
         waited += 10
     # 超时后最后再查一次
     return await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name)
+
+
+REBUILD_TRIED_MARK = "（已尝试自动重建一次）"
+
+
+def _has_tried_rebuild(alert: Alert) -> bool:
+    return REBUILD_TRIED_MARK in (alert.message or "")
+
+
+async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
+    """CrashLoopBackOff 先删 Pod 重建一次（老板 2026-10-21 口径）
+
+    返回 True = 已终局处理（自愈成功）；False = 没恢复/无法执行，交给后续 AI 诊断链路。
+    只尝试一次（告警 message 打标 + Redis 修复标记），避免与 AI 方案/循环抑制重复删 Pod。
+    """
+    from app.models import RepairPlan
+
+    steps = build_standard_steps(alert)
+    if not steps:
+        return False
+    if not await _begin_repair(alert.id):
+        return False  # 别的流程正在修这条告警
+    plan_id = 0
+    try:
+        plan_json = json.dumps({"steps": steps}, ensure_ascii=False)
+        async with async_session() as session:
+            plan = RepairPlan(alert_id=alert.id, diagnosis_id=None, plan_json=plan_json,
+                              operation_types="DELETE", risk_level="medium", status="executing")
+            session.add(plan)
+            await session.commit()
+            await session.refresh(plan)
+            plan_id = plan.id
+        exec_result = await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
+        repaired = await _verify_auto_repair(alert)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a:
+                if repaired:
+                    a.status = "self_healed"
+                    a.resolved_at = now
+                    a.message = (a.message or "") + "（自愈：删 Pod 重建，验证通过）"
+                else:
+                    a.message = (a.message or "") + REBUILD_TRIED_MARK + "，重建后仍未恢复，转 AI 诊断"
+                await session.commit()
+        if repaired:
+            await _set_plan_status(plan_id, "completed")
+            logger.info("告警 %d CrashLoop 首次重建自愈成功", alert.id)
+            return True
+        await _set_plan_status(plan_id, "failed" if exec_result == "failed" else "pending")
+        logger.info("告警 %d CrashLoop 首次重建未恢复（exec=%s），继续 AI 诊断", alert.id, exec_result)
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d CrashLoop 重建尝试异常: %s", alert.id, e)
+        try:
+            async with async_session() as session:
+                a = await session.get(Alert, alert.id)
+                if a and REBUILD_TRIED_MARK not in (a.message or ""):
+                    a.message = (a.message or "") + REBUILD_TRIED_MARK + "（执行异常）"
+                    await session.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+    finally:
+        await _end_repair(alert.id)
 
 
 async def _collect_pod_events(alert: Alert) -> str:
@@ -648,6 +741,15 @@ async def _repair_image_pull_alert(alert: Alert, trace_id: str) -> None:
         logger.info("告警 %d 镜像修复触发循环抑制，转人工", alert.id)
         return
 
+    if not await _begin_repair(alert.id):
+        return  # 已有流程在修这条告警
+    try:
+        await _repair_image_pull_inner(alert, trace_id)
+    finally:
+        await _end_repair(alert.id)
+
+
+async def _repair_image_pull_inner(alert: Alert, trace_id: str) -> None:
     result = await executor_client.acall(executor_client.repair_image_pull, alert.cluster_id, alert.namespace, alert.resource_name, trace_id)
     fixed = result.get("fixed", False)
     msg = result.get("message", "")
@@ -1052,9 +1154,28 @@ async def _process_one(alert: Alert) -> bool:
                 )
                 logger.info("告警 %d 识别为应用代码问题（命中特征 %r），跳过 AI 诊断，转人工", alert.id, crash_hit)
                 return True
-            diagnosis = await ai_client.diagnose(
-                alert.id, alert_data, {"exec_output": container_diag}, trace_id
-            )
+            # CrashLoopBackOff：先试一次「删 Pod 重建」（很多是依赖抖动/偶发，重建即恢复），
+            # 失败再往下走 AI 诊断/转人工（老板 2026-10-21 口径）
+            if alert.fault_type == "CrashLoopBackOff" and not _has_tried_rebuild(alert):
+                if await _try_rebuild_once(alert, trace_id):
+                    return True
+
+            # AI 诊断失败自动重试 1 次（老板 2026-10-21 口径），两次都失败才转人工
+            diagnosis = None
+            _diag_err = None
+            for _attempt in (1, 2):
+                try:
+                    diagnosis = await ai_client.diagnose(
+                        alert.id, alert_data, {"exec_output": container_diag}, trace_id
+                    )
+                    break
+                except Exception as e:  # noqa: BLE001
+                    _diag_err = e
+                    logger.warning("告警 %d AI 诊断失败（第 %d/2 次）: %s", alert.id, _attempt, e)
+                    if _attempt == 1:
+                        await asyncio.sleep(2)
+            if diagnosis is None:
+                raise _diag_err  # 交给外层 except → 转人工 + 通知
             root_cause = diagnosis.get("root_cause", "")
             repair_steps_text = "; ".join(diagnosis.get("suggestions", []))
             root_cause_layer = diagnosis.get("root_cause_layer", "")
@@ -1275,8 +1396,8 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
         try:
             if not alert.resource_name:
                 continue
-            if alert.id in executing_ids:
-                logger.info("恢复收敛：告警 %d 正在自动执行修复，本轮跳过（等验证结果）", alert.id)
+            if alert.id in executing_ids or await _is_repairing(alert.id):
+                logger.info("恢复收敛：告警 %d 正在修复中，本轮跳过（等验证结果自行落 self_healed）", alert.id)
                 continue
             if not await check_pod_recovered(alert.cluster_id, alert.namespace or "", alert.resource_name):
                 continue

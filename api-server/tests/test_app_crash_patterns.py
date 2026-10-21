@@ -63,3 +63,37 @@ class TestAppCrashDetection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCrashLoopRebuild(unittest.TestCase):
+    """CrashLoop 先重建一次（2026-10-21 老板口径）的边界：命令生成 + 只试一次标记"""
+
+    def _alert(self, ft="CrashLoopBackOff", name="web-6d8f9-abcde", ns="qa-demo", msg=""):
+        class A:
+            pass
+        a = A()
+        a.fault_type = ft
+        a.resource_name = name
+        a.namespace = ns
+        a.message = msg
+        return a
+
+    def test_standard_steps_delete_pod(self):
+        from app.services.alert_auto_service import build_standard_steps
+        steps = build_standard_steps(self._alert())
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0]["command"], "kubectl delete pod web-6d8f9-abcde -n qa-demo")
+
+    def test_illegal_name_refused(self):
+        from app.services.alert_auto_service import build_standard_steps
+        steps = build_standard_steps(self._alert(name="web; rm -rf /"))
+        self.assertEqual(steps, [])
+
+    def test_tried_marker(self):
+        from app.services.alert_auto_service import _has_tried_rebuild, REBUILD_TRIED_MARK
+        self.assertFalse(_has_tried_rebuild(self._alert()))
+        self.assertTrue(_has_tried_rebuild(self._alert(msg="x" + REBUILD_TRIED_MARK)))
+
+
+if __name__ == "__main__":
+    unittest.main()
