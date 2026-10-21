@@ -455,7 +455,7 @@ async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str
         logger.info("无管理员邮箱，跳过邮件渠道")
         return
 
-    subject = f"[API-OPS 告警] {alert.fault_type or '未知类型'} - {alert.resource_name or ''}"
+    subject = f"[AutoHealOps 告警] {alert.fault_type or '未知类型'} - {alert.resource_name or ''}"
     body = format_alert_message(alert, project_name, cluster_name, env)
     try:
         await asyncio.to_thread(_send_email_sync, host, port, username, password,
@@ -695,7 +695,7 @@ def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str
     cluster = cluster_name or str(alert.cluster_id)
     env_line = f"环境: {env}\n" if env else ""
     return (
-        f"【API-OPS 告警】\n"
+        f"【AutoHealOps 告警】\n"
         f"{proj}"
         f"集群: {cluster}\n"
         f"{env_line}"
@@ -965,7 +965,7 @@ async def send_approval_notification(approval_id: int, plan_summary: str, risk_l
 
 async def send_repair_complete_notification(alert: Alert | None, verdict: str) -> None:
     """发送修复完成通知（按告警项目路由到项目组群，无则默认群）"""
-    content = f"【API-OPS 修复完成】资源 {alert.namespace or ''}/{alert.resource_name if alert else ''} 修复验证结果：{verdict}"
+    content = f"【AutoHealOps 修复完成】资源 {alert.namespace or ''}/{alert.resource_name if alert else ''} 修复验证结果：{verdict}"
     if alert:
         project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
         if project_cfg and _source_match(project_cfg, alert.resource_type):
@@ -984,7 +984,7 @@ def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str,
     cluster = cluster_name or str(alert.cluster_id or "-")
     resolved = alert.resolved_at or "-"
     return (
-        f"【API-OPS {title}】\n"
+        f"【AutoHealOps {title}】\n"
         f"{proj}"
         f"集群: {cluster}\n"
         f"资源: {alert.resource_type}/{alert.resource_name}\n"
@@ -1098,7 +1098,7 @@ async def build_alert_digest() -> tuple[int, str]:
     sev_order = ["critical", "high", "medium", "low"]
     sev_parts = [f"{s} {sev_map[s]}" for s in sev_order if sev_map.get(s)]
     lines = [
-        "【API-OPS 告警汇总】",
+        "【AutoHealOps 告警汇总】",
         f"⚠️ 未解决告警 {total} 条",
     ]
     if sev_parts:

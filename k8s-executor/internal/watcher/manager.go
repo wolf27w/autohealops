@@ -5,8 +5,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/api-ops-platform/k8s-executor/internal/database"
-	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
+	"github.com/autohealops/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"go.uber.org/zap"
 )
 

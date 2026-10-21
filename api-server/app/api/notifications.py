@@ -142,11 +142,11 @@ async def test_config(config_id: int, user=Depends(require_admin)):
     if c.channel_type == "feishu" and (c.send_mode == "app" or (c.app_id or "").strip()):
         from app.services.feishu_service import send_feishu_message
         resp = await send_feishu_message(c.receive_id, c.receive_id_type or "chat_id",
-                                         "【API-OPS】这是一条测试消息，渠道连通正常 ✅", c.app_id, c.app_secret)
+                                         "【AutoHealOps】这是一条测试消息，渠道连通正常 ✅", c.app_id, c.app_secret)
         ok = resp.get("status") == "success"
         detail = resp
     else:
-        resp = await messaging.send_text(c.channel_type, c.webhook_url, "【API-OPS】这是一条测试消息，渠道连通正常 ✅")
+        resp = await messaging.send_text(c.channel_type, c.webhook_url, "【AutoHealOps】这是一条测试消息，渠道连通正常 ✅")
         ok = messaging.resp_ok(c.channel_type, resp, c.webhook_url)
         detail = resp
         if not ok and messaging.check_webhook_url(c.channel_type, c.webhook_url):

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 项目根目录（api-server/app/core/config.py 向上 3 级 = api-ops-platform/）
+# 项目根目录（api-server/app/core/config.py 向上 3 级 = autohealops/）
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
 

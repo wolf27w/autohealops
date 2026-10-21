@@ -26,7 +26,7 @@
 ## 定时执行（二选一，**需老板确认后再配置**）
 ### 方案 A：系统 cron（每天 03:00）
 ```cron
-0 3 * * * cd /Users/wolf/Documents/project/api-ops-platform && ./scripts/rotate_logs.sh >> logs/rotate.log 2>&1
+0 3 * * * cd /Users/wolf/Documents/project/autohealops && ./scripts/rotate_logs.sh >> logs/rotate.log 2>&1
 ```
 
 ### 方案 B：macOS launchd（推荐，无需常驻 shell）
@@ -38,9 +38,9 @@
   <key>Label</key><string>com.apiops.rotate-logs</string>
   <key>ProgramArguments</key><array>
     <string>/bin/bash</string>
-    <string>/Users/wolf/Documents/project/api-ops-platform/scripts/rotate_logs.sh</string>
+    <string>/Users/wolf/Documents/project/autohealops/scripts/rotate_logs.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/wolf/Documents/project/api-ops-platform</string>
+  <key>WorkingDirectory</key><string>/Users/wolf/Documents/project/autohealops</string>
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
 </dict></plist>
 ```

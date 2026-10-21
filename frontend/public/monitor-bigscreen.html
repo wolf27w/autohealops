@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <script>(function(){try{var p=window.parent;var d=(p&&p!==window)?p.document.documentElement.getAttribute('data-theme'):null;var m=d||localStorage.getItem('api_ops_theme_mode')||'light';document.documentElement.setAttribute('data-theme',(m==='dark')?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
-<title>多集群 K8s 监控大屏 · Demo</title>
+<title>AutoHealOps 监控大屏</title>
 <script src="/vendor/echarts.min.js"></script>
 <script>if(!window.echarts){document.write('<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"><\/script>')}</script>
 <style>
@@ -447,7 +447,7 @@ function renderOverview(){
   <!-- 第四行 -->
   <div class="row" style="margin-bottom:16px">
     <div class="col panel">
-      <h3>自愈效果 <span class="sub">最近 24 小时（顶部概况不重复统计）</span></h3>
+      <h3>自愈效果 <span class="sub">最近 24 小时 · 成功率 = 成功 /（成功 + 失败）</span></h3>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
         <div class="cnt-box"><div class="n down">${OVERVIEW.heal.success}</div><div class="l">成功</div></div>
         <div class="cnt-box"><div class="n up">${OVERVIEW.heal.failed}</div><div class="l">失败</div></div>
@@ -1027,8 +1027,14 @@ async function loadOverviewReal(){
   OVERVIEW.kpi.approvalPending = {v: core.approval_pending??0};
   OVERVIEW.kpi.mttr = {v: core.mttr_minutes??0};
   OVERVIEW.kpi.abnormal = {v: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0)), total: core.cluster_total||0};
-  OVERVIEW.heal = { success: core.today_resolved??0, failed: core.manual_pending??0,
-    processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), rate: core.heal_rate??0, avgMin: core.mttr_minutes??0 };
+  // 成功率必须与上方两个数字同口径（2026-10-21 修正）：
+  // 旧实现用 core.heal_rate（= 24h 内产生告警的已解决占比），跟展示的「成功/失败」不是同一个分母，
+  // 会出现「成功 3 / 失败 1 / 成功率 100%」。现改为 成功/(成功+失败)。
+  const healOk = core.today_resolved??0, healFail = core.manual_pending??0;
+  OVERVIEW.heal = { success: healOk, failed: healFail,
+    processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)),
+    rate: (healOk+healFail)>0 ? healOk/(healOk+healFail) : 0,
+    avgMin: core.mttr_minutes??0 };
   OVERVIEW.waterline = [
     {dim:'CPU', pct: Math.round(byCpu[0]?.cpu_pct||0), peak: byCpu[0]?.name||'-'},
     {dim:'内存', pct: Math.round(byMem[0]?.mem_pct||0), peak: byMem[0]?.name||'-'},
@@ -1072,7 +1078,7 @@ async function loadOverviewReal(){
 let _lastAt = 0;           // 最近一次成功刷新时间（陈旧检测 / 前台恢复节流）
 function tickClock(){ const el=document.getElementById('clock'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
   const stale = _lastAt && (Date.now()-_lastAt > 60000) ? ' · <span style="color:#ff7a45">数据停更 '+(Math.floor((Date.now()-_lastAt)/1000))+'s</span>' : '';
-  patchHTML(el, '<b>API-OPS 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]+stale); }
+  patchHTML(el, '<b>AutoHealOps 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]+stale); }
 setInterval(tickClock,1000); tickClock();
 
 /* ---------- 启动 ---------- */

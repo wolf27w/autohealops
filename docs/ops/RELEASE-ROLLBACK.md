@@ -1,6 +1,6 @@
 # 平台发布与回滚（M10）
 
-> 整理：小吴　2026-10-15　对象：API-OPS 平台自身（api-server / ai-service / k8s-executor / frontend）
+> 整理：小吴　2026-10-15　对象：AutoHealOps 平台自身（api-server / ai-service / k8s-executor / frontend）
 
 ## 1. 容器化
 

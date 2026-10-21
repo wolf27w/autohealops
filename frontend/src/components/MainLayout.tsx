@@ -123,9 +123,9 @@ export default function MainLayout() {
   const { token } = theme.useToken()
   const { mode, toggle } = useThemeMode()
   // 版本标记：方便确认浏览器加载的是哪一版
-  document.title = `API-OPS 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
+  document.title = `AutoHealOps 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
   // eslint-disable-next-line no-console
-  console.info('[API-OPS] frontend build:', __BUILD_TS__)
+  console.info('[AutoHealOps] frontend build:', __BUILD_TS__)
   const navigate = useNavigate()
   const location = useLocation()
   // 安全读取当前用户（JSON.parse 写坏不崩溃）；按角色过滤菜单
@@ -287,7 +287,7 @@ export default function MainLayout() {
           </div>
           {!collapsed && (
             <div style={{ lineHeight: 1.15 }}>
-              <b style={{ color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>API-OPS</b>
+              <b style={{ color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>AutoHealOps</b>
               <small style={{ display: 'block', color: '#6f8f80', fontSize: 9.5, letterSpacing: 2 }}>自愈运维平台</small>
             </div>
           )}
@@ -310,7 +310,7 @@ export default function MainLayout() {
           <Space size={12}>
             <Button type="text" onClick={() => handleCollapse(!collapsed)}
               icon={collapsed ? <MenuUnfoldOutlined style={{ color: token.colorText, fontSize: 16 }} /> : <MenuFoldOutlined style={{ color: token.colorText, fontSize: 16 }} />} />
-            <div style={{ fontSize: 16, fontWeight: 700, color: token.colorText }}>API-OPS 自愈平台</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: token.colorText }}>AutoHealOps 自愈平台</div>
             <span style={{ fontSize: 11, color: token.colorTextSecondary }} title="前端构建/启动时间戳">build {__BUILD_TS__.slice(5, 16).replace('T', ' ')}</span>
           </Space>
           <Space size={16}>

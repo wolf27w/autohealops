@@ -2,7 +2,7 @@
 # 截图真实运行中的后台（可点按钮后截图）
 # 用法: bash shoot.sh <路由> <输出png> [点击按钮文本]
 set -e
-ROOT="/Users/wolf/Documents/project/api-ops-platform"
+ROOT="/Users/wolf/Documents/project/autohealops"
 TARGET="$1"
 OUT="$2"
 CLICK="${3:-}"

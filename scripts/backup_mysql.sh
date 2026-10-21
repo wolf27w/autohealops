@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# API-OPS 平台数据库备份（M11 备份/DR）
+# AutoHealOps 平台数据库备份（M11 备份/DR）
 #
 # 用法：
 #   ./scripts/backup_mysql.sh                # 立即执行一次备份

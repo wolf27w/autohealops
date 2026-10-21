@@ -54,7 +54,7 @@ async def build_report(range_days: int = 7) -> str:
     mttr = round(sum(durs) / len(durs) / 60, 1) if durs else 0.0
     rate = round(healed / total * 100, 1) if total else 0.0
     lines = [
-        f"【API-OPS 运行报表】近 {range_days} 天",
+        f"【AutoHealOps 运行报表】近 {range_days} 天",
         f"集群健康：{chealthy}/{ctotal}",
         f"告警：新增 {total}，已处理 {healed}（处理率 {rate}%）",
         f"待处理 {pending}｜待审批 {approvals}｜需人工协助 {manual}",

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/api-ops-platform/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/database"
 )
 
 // RepairStep 修复步骤（与 ai-service 生成的 plan_json steps 结构一致）

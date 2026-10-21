@@ -1,4 +1,4 @@
-# API-OPS 自愈平台 全面代码审计报告
+# AutoHealOps 自愈平台 全面代码审计报告
 
 > 审计日期：2026-08-26
 > 审计范围：api-server（Python FastAPI，143 文件 / 约 1.5 万行）、k8s-executor（Go，26 文件 / 6700 行）、ai-service（Python FastAPI，23 文件）、frontend（React+AntD，40 文件 / 4750 行）

@@ -1,6 +1,6 @@
 name: ci
 
-# API-OPS 平台 CI：编译/构建校验（api-server / ai-service / frontend / k8s-executor）
+# AutoHealOps 平台 CI：编译/构建校验（api-server / ai-service / frontend / k8s-executor）
 on:
   push:
     branches: [main, master, develop]

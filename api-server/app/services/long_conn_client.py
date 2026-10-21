@@ -66,7 +66,7 @@ async def _handle_incoming(channel: str, external_user_id: str, text: str, sourc
             try:
                 from app.services.feishu_service import send_feishu_message
                 if channel == "feishu":
-                    await send_feishu_message(chat_id, "chat_id", f"【API-OPS】{reply}", app_id, app_secret)
+                    await send_feishu_message(chat_id, "chat_id", f"【AutoHealOps】{reply}", app_id, app_secret)
             except Exception as e:  # noqa: BLE001
                 logger.warning("回执发送失败: %s", e)
         return
@@ -96,7 +96,7 @@ async def _handle_incoming(channel: str, external_user_id: str, text: str, sourc
         try:
             from app.services.feishu_service import send_feishu_message
             if channel == "feishu":
-                await send_feishu_message(chat_id, "chat_id", f"【API-OPS】{reply}", app_id, app_secret)
+                await send_feishu_message(chat_id, "chat_id", f"【AutoHealOps】{reply}", app_id, app_secret)
         except Exception as e:  # noqa: BLE001
             logger.warning("回执发送失败: %s", e)
 

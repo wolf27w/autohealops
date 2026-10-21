@@ -1,7 +1,7 @@
 #!/bin/bash
 # 进按数据库授权 tab，选项目后截图
 set -e
-ROOT="/Users/wolf/Documents/project/api-ops-platform"
+ROOT="/Users/wolf/Documents/project/autohealops"
 TOKEN=*** "$ROOT/api-server" && ./.venv/bin/python -c "from app.core.security import create_jwt; print(create_jwt(1,'admin','admin'))")
 cat > "$ROOT/frontend/public/__seed.html" <<'HTML'
 <!doctype html><meta charset="utf-8"><script>

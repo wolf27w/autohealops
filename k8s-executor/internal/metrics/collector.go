@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/api-ops-platform/k8s-executor/internal/database"
-	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
+	"github.com/autohealops/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

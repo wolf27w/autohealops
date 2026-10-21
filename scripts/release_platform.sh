@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# API-OPS 平台发布脚本（M10 平台自身发布/回滚）
+# AutoHealOps 平台发布脚本（M10 平台自身发布/回滚）
 #
 # 流程：构建镜像（带版本 tag）→ 推送 → kubectl set image → 滚动发布并等待完成。
 #      发布前把各 Deployment 的当前镜像记录到 .deploy-history，便于回滚对照。

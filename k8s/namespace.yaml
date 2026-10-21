@@ -1,4 +1,4 @@
-# API-OPS 命名空间
+# AutoHealOps 命名空间
 apiVersion: v1
 kind: Namespace
 metadata:

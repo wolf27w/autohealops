@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# API-OPS 平台回滚脚本（M10）
+# AutoHealOps 平台回滚脚本（M10）
 #
 # 用 K8s Deployment 的 revisionHistory（保留 5 版，见 k8s/deployments.yaml revisionHistoryLimit）
 # 回滚到上一个/指定版本。镜像 tag 唯一（非 latest），因此 ReplicaSet 历史可回溯。

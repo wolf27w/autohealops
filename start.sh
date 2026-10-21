@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# API-OPS 平台本地启动/管理脚本（nohup 后台方式）
+# AutoHealOps 平台本地启动/管理脚本（nohup 后台方式）
 #
 # 用法:
 #   ./start.sh            # 启动全部服务（默认）
@@ -72,7 +72,7 @@ start_frontend() {
 }
 
 start_all() {
-  echo "== 启动 API-OPS 服务 =="
+  echo "== 启动 AutoHealOps 服务 =="
   start_api_server
   start_ai_service
   start_executor
@@ -85,7 +85,7 @@ start_all() {
 
 # ---------- 停止 ----------
 stop_all() {
-  echo "== 停止 API-OPS 服务 =="
+  echo "== 停止 AutoHealOps 服务 =="
   kill_port 8080 "api-server"
   kill_port 9000 "ai-service"
   kill_port 5173 "frontend"

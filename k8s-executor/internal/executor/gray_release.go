@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/api-ops-platform/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/database"
 )
 
 // NotifyFunc 进度推送回调（gRPC 流式推送用）

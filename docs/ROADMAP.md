@@ -1,4 +1,4 @@
-# API-OPS 平台 —— 剩余需求与开发顺序（Roadmap）
+# AutoHealOps 平台 —— 剩余需求与开发顺序（Roadmap）
 
 > 整理：小吴　更新：2026-10-19　依据：代码核实（2026-10-19 追加 N12/N13 登记，见 `NEW-REQUIREMENTS-2026-10-19.md`）
 > 用途：一张表看清「还剩什么没做 + 建议先做哪个」。状态一律以**代码为准**，`REQUIREMENTS-BACKLOG.md` 为历史流水。

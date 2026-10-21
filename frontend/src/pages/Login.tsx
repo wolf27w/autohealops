@@ -40,7 +40,7 @@ export default function Login() {
       }}>
         <div style={{ fontSize: 40, fontWeight: 'bold', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
           <SafetyCertificateOutlined />
-          API-OPS 自愈平台
+          AutoHealOps 自愈平台
         </div>
         <div style={{ fontSize: 20, opacity: 0.9, marginBottom: 8 }}>多集群智能运维 · AI 诊断自愈</div>
         <div style={{ fontSize: 14, opacity: 0.7, lineHeight: 1.8 }}>

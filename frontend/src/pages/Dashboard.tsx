@@ -180,7 +180,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
     { title: '待审核', value: kpi?.approval_pending ?? 0, color: (kpi?.approval_pending ?? 0) > 0 ? '#1677ff' : '#8c8c8c' },
     { title: '今日已审核', value: kpi?.approval_decided_today ?? 0, color: '#52c41a' },
     { title: 'DB 异常', value: kpi?.db_abnormal ?? 0, color: (kpi?.db_abnormal ?? 0) > 0 ? '#ff4d4f' : '#1677ff' },
-    { title: '成功率（24小时）', value: `${(((kpi?.heal_rate ?? 0) * 100).toFixed(1))}%`, color: '#52c41a' },
+    { title: '解决率（24小时）', value: `${(((kpi?.heal_rate ?? 0) * 100).toFixed(1))}%`, color: '#52c41a' },
     { title: 'MTTR（分钟·24小时）', value: kpi?.mttr_minutes ?? 0, color: '#722ed1' },
   ]
 
@@ -202,7 +202,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
         <Card bodyStyle={{ padding: '16px 24px' }} style={{ marginBottom: 0, border: 'none', boxShadow: 'none', background: 'linear-gradient(90deg, rgba(18,185,129,0.10), rgba(4,140,99,0.05) 60%, rgba(18,185,129,0.02))' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
             <div>
-              <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: 1, color: ink }}>API-OPS 智能运维大屏</div>
+              <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: 1, color: ink }}>AutoHealOps 智能运维大屏</div>
               <div style={{ fontSize: 13, color: muted, marginTop: 3 }}>
                 {new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })} · 聚合视图 · 最近 7 天 · 5 秒自动刷新
               </div>

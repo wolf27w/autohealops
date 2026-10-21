@@ -15,8 +15,8 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
-	"github.com/api-ops-platform/k8s-executor/internal/prometheus"
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
+	"github.com/autohealops/k8s-executor/internal/prometheus"
 )
 
 // Server 日志流 HTTP 服务

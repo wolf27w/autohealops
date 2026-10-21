@@ -6964,7 +6964,7 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\x0eRolloutHistory\x12\x1f.executor.RolloutHistoryRequest\x1a .executor.RolloutHistoryResponse\x12J\n" +
 	"\vUpdateProbe\x12\x1c.executor.UpdateProbeRequest\x1a\x1d.executor.UpdateProbeResponse\x12Y\n" +
 	"\x10RecreateWorkload\x12!.executor.RecreateWorkloadRequest\x1a\".executor.RecreateWorkloadResponse\x12O\n" +
-	"\rExecPodStream\x12\x1c.executor.ExecPodStreamFrame\x1a\x1c.executor.ExecPodStreamFrame(\x010\x01B9Z7github.com/api-ops-platform/k8s-executor/proto;executorb\x06proto3"
+	"\rExecPodStream\x12\x1c.executor.ExecPodStreamFrame\x1a\x1c.executor.ExecPodStreamFrame(\x010\x01B4Z2github.com/autohealops/k8s-executor/proto;executorb\x06proto3"
 
 var (
 	file_proto_executor_proto_rawDescOnce sync.Once

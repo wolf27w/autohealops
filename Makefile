@@ -1,4 +1,4 @@
-# API-OPS 平台 Makefile
+# AutoHealOps 平台 Makefile
 ROOT := $(shell pwd)
 PY := $(ROOT)/api-server/.venv/bin/python
 GO := /opt/homebrew/bin/go
@@ -7,10 +7,10 @@ GO := /opt/homebrew/bin/go
 
 # 构建所有服务镜像
 build:
-	cd api-server && docker build -t api-ops/api-server:latest .
-	cd k8s-executor && docker build -t api-ops/k8s-executor:latest .
-	cd ai-service && docker build -t api-ops/ai-service:latest .
-	cd frontend && docker build -t api-ops/frontend:latest .
+	cd api-server && docker build -t autohealops/api-server:latest .
+	cd k8s-executor && docker build -t autohealops/k8s-executor:latest .
+	cd ai-service && docker build -t autohealops/ai-service:latest .
+	cd frontend && docker build -t autohealops/frontend:latest .
 
 # docker compose 启动（数据库/缓存使用外部 192.168.6.99）
 up:

@@ -1,4 +1,4 @@
-# API-OPS 自愈平台 docker-compose（数据库/缓存使用外部中间件 192.168.6.99）
+# AutoHealOps 自愈平台 docker-compose（数据库/缓存使用外部中间件 192.168.6.99）
 # 配置统一从项目根 .env 读取
 services:
   api-server:

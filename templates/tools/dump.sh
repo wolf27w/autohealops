@@ -2,7 +2,7 @@
 # dump 真实运行中某页弹窗的表单字段（验证 UI 结构）
 # 用法: bash dump.sh <路由> <点击按钮文本>
 set -e
-ROOT="/Users/wolf/Documents/project/api-ops-platform"
+ROOT="/Users/wolf/Documents/project/autohealops"
 TARGET="$1"
 CLICK="$2"
 TOKEN=$(cd "$ROOT/api-server" && ./.venv/bin/python -c "from app.core.security import create_jwt; print(create_jwt(1,'admin','admin'))")

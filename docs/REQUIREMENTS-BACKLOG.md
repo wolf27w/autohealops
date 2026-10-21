@@ -1,4 +1,4 @@
-# API-OPS 平台 —— 需求总账（Backlog）
+# AutoHealOps 平台 —— 需求总账（Backlog）
 
 > 整理：小吴　更新：2026-10-14　依据：DESIGN-2026-09-10.md + 工作日志 + 代码核查
 > 用途：一张表看清「已做 / 待做 / 待确认」。状态以代码为准，未核实项标 ❓。
@@ -546,7 +546,7 @@
 
 ## 2026-10-12 新增需求：对标 KubeDoor · 短板补齐
 
-**背景**：与开源项目 **KubeDoor**（[CassInfra/KubeDoor](https://github.com/CassInfra/KubeDoor)，2.1，AI 驱动的多 K8S 管控平台）对比后，梳理出 API-OPS 的相对短板；老板 2026-10-12 决定纳入开发计划。
+**背景**：与开源项目 **KubeDoor**（[CassInfra/KubeDoor](https://github.com/CassInfra/KubeDoor)，2.1，AI 驱动的多 K8S 管控平台）对比后，梳理出 AutoHealOps 的相对短板；老板 2026-10-12 决定纳入开发计划。
 
 **现状澄清（已具备，不重复开发）**：K8s 资源 CRUD / YAML 编辑、Pod exec + 交互终端、Pod 文件浏览、scale / rollout / recreate / probe、定时任务（`custom_tasks`）、AI 诊断助手会话（`AgentChat`）、告警 / 工单 / 审批 / 审计（哈希链）/ 知识库 RAG / DB 诊断 / 中间件监控、Prometheus 查询、仪表盘实时刷新（SSE + 缓存代次）。
 

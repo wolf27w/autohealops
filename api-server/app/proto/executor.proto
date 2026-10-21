@@ -3,7 +3,7 @@ syntax = "proto3";
 
 package executor;
 
-option go_package = "github.com/api-ops-platform/k8s-executor/proto;executor";
+option go_package = "github.com/autohealops/k8s-executor/proto;executor";
 
 // ExecutorService：K8s 交互、故障检测、命令执行
 service ExecutorService {

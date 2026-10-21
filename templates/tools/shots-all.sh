@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
-cd /Users/wolf/Documents/project/api-ops-platform/api-server
+cd /Users/wolf/Documents/project/autohealops/api-server
 TOKEN=$(./.venv/bin/python -c "from app.core.security import create_jwt; print(create_jwt(1,'admin','admin'))")
 B="http://localhost:5173"
-D="/Users/wolf/Documents/project/api-ops-platform/templates/before"
+D="/Users/wolf/Documents/project/autohealops/templates/before"
 mkdir -p "$D"
 
 # 登录页（无需 token）

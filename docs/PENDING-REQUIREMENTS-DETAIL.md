@@ -1,4 +1,4 @@
-# API-OPS 平台 —— 待开发需求详细描述（供老板拍板）
+# AutoHealOps 平台 —— 待开发需求详细描述（供老板拍板）
 
 > 整理：小吴　日期：2026-09-20　依据：`REQUIREMENTS-BACKLOG.md` + `DASHBOARD-V2-REQUIREMENTS.md` + 代码核查
 > 用途：把「还没做」的需求写细，老板看完直接拍板「做哪个 / 怎么做 / 先做哪个」。

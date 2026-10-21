@@ -1,4 +1,4 @@
-module github.com/api-ops-platform/k8s-executor
+module github.com/autohealops/k8s-executor
 
 go 1.26.6
 

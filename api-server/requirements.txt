@@ -1,4 +1,4 @@
-# API-OPS api-server 依赖（MySQL 版）
+# AutoHealOps api-server 依赖（MySQL 版）
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 sqlalchemy[asyncio]==2.0.35

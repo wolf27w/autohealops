@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/api-ops-platform/k8s-executor/internal/database"
-	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
+	"github.com/autohealops/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )

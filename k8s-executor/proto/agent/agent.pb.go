@@ -129,7 +129,7 @@ const file_agent_proto_rawDesc = "" +
 	"\apayload\x18\x06 \x01(\fR\apayload\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error2B\n" +
 	"\fAgentService\x122\n" +
-	"\x06Tunnel\x12\x11.agent.AgentFrame\x1a\x11.agent.AgentFrame(\x010\x01B>Z<github.com/api-ops-platform/k8s-executor/proto/agent;agentpbb\x06proto3"
+	"\x06Tunnel\x12\x11.agent.AgentFrame\x1a\x11.agent.AgentFrame(\x010\x01B9Z7github.com/autohealops/k8s-executor/proto/agent;agentpbb\x06proto3"
 
 var (
 	file_agent_proto_rawDescOnce sync.Once

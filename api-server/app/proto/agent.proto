@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent;
 
-option go_package = "github.com/api-ops-platform/k8s-executor/proto/agent;agentpb";
+option go_package = "github.com/autohealops/k8s-executor/proto/agent;agentpb";
 
 // Agent 反向隧道（R12：agent 主动外连接入模式）
 // 集群内以「单个 Deployment」部署 agent，agent 主动连平台并建立双向流；

@@ -752,7 +752,7 @@ async function loadOverviewReal(){
 }
 
 function tickClock(){ const el=document.getElementById('clock'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
-  el.innerHTML='<b>API-OPS 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]; }
+  el.innerHTML='<b>AutoHealOps 监控大屏</b> · '+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+' 周'+'日一二三四五六'[d.getDay()]; }
 setInterval(tickClock,1000); tickClock();
 
 /* ---------- 启动 ---------- */

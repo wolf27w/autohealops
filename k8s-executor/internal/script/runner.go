@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/api-ops-platform/k8s-executor/internal/database"
-	"github.com/api-ops-platform/k8s-executor/internal/k8sclient"
+	"github.com/autohealops/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"go.uber.org/zap"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"

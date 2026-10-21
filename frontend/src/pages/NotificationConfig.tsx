@@ -53,9 +53,9 @@ const SCENE_COLOR: Record<string, string> = {
 
 // IM 通知模板预置（按渠道各一套，占位符：{project}/{cluster}/{namespace}/{resource}/{fault_type}/{severity}/{message}/{approval_id}/{plan_summary}/{risk_level}）
 const IM_TEMPLATE_PRESET = {
-  dingtalk: '【API-OPS 告警】\n项目: {project}\n集群: {cluster}\n资源: {resource}\n命名空间: {namespace}\n故障: {fault_type}\n级别: {severity}\n详情: {message}',
-  wechat: '【API-OPS 告警】\n项目: {project}\n集群: {cluster}\n资源: {resource}\n命名空间: {namespace}\n故障: {fault_type}\n级别: {severity}\n详情: {message}',
-  feishu: '【API-OPS 告警】\n项目: {project}\n集群: {cluster}\n资源: {resource}\n命名空间: {namespace}\n故障: {fault_type}\n级别: {severity}\n详情: {message}',
+  dingtalk: '【AutoHealOps 告警】\n项目: {project}\n集群: {cluster}\n资源: {resource}\n命名空间: {namespace}\n故障: {fault_type}\n级别: {severity}\n详情: {message}',
+  wechat: '【AutoHealOps 告警】\n项目: {project}\n集群: {cluster}\n资源: {resource}\n命名空间: {namespace}\n故障: {fault_type}\n级别: {severity}\n详情: {message}',
+  feishu: '【AutoHealOps 告警】\n项目: {project}\n集群: {cluster}\n资源: {resource}\n命名空间: {namespace}\n故障: {fault_type}\n级别: {severity}\n详情: {message}',
 }
 
 const IM_TEMPLATE_PLACEHOLDER_HINT = '占位符：{project} {cluster} {namespace} {resource} {fault_type} {severity} {message} {approval_id} {plan_summary} {risk_level}'

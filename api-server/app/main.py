@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""API-OPS 平台入口（唯一对外 API 入口）"""
+"""AutoHealOps 平台入口（唯一对外 API 入口）"""
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -300,7 +300,7 @@ async def startup_tasks() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动/关闭事件"""
-    logger.info("API-OPS 平台启动中...")
+    logger.info("AutoHealOps 平台启动中...")
     # 数据库表结构由 alembic 管理（部署时执行 alembic upgrade head），启动时只做初始化
     await startup_tasks()
     # R12：启动 Agent 反向隧道网关（agent 主动外连接入）
@@ -309,7 +309,7 @@ async def lifespan(app: FastAPI):
         agent_gateway.start_server(getattr(settings, "AGENT_GATEWAY_ADDR", "0.0.0.0:9095"))
     except Exception as e:  # noqa: BLE001
         logger.warning("Agent 网关启动失败: %s", e)
-    logger.info("API-OPS 平台启动完成")
+    logger.info("AutoHealOps 平台启动完成")
     yield
     # 关闭共享 HTTP 连接池
     from app.core.http_client import close_http_clients
@@ -319,10 +319,10 @@ async def lifespan(app: FastAPI):
         agent_gateway.stop_server()
     except Exception:  # noqa: BLE001
         pass
-    logger.info("API-OPS 平台已停止")
+    logger.info("AutoHealOps 平台已停止")
 
 
-app = FastAPI(title="API-OPS平台", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="AutoHealOps平台", version="1.0.0", lifespan=lifespan)
 
 # CORS（显式白名单；不可 allow_origins=* 且 credentials=True）
 _cors_origins = [o.strip() for o in (settings.CORS_ORIGINS or "").split(",") if o.strip()]

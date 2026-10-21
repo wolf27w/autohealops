@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/api-ops-platform/k8s-executor/internal/executor"
-	agentpb "github.com/api-ops-platform/k8s-executor/proto/agent"
-	pb "github.com/api-ops-platform/k8s-executor/proto"
+	"github.com/autohealops/k8s-executor/internal/executor"
+	agentpb "github.com/autohealops/k8s-executor/proto/agent"
+	pb "github.com/autohealops/k8s-executor/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"

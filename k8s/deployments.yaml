@@ -32,7 +32,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: api-server
-          image: api-ops/api-server:latest
+          image: autohealops/api-server:latest
           ports:
             - containerPort: 8080
             - containerPort: 9095
@@ -95,7 +95,7 @@ spec:
     spec:
       containers:
         - name: k8s-executor
-          image: api-ops/k8s-executor:latest
+          image: autohealops/k8s-executor:latest
           ports:
             - containerPort: 9090
           envFrom:
@@ -150,7 +150,7 @@ spec:
     spec:
       containers:
         - name: ai-service
-          image: api-ops/ai-service:latest
+          image: autohealops/ai-service:latest
           ports:
             - containerPort: 9000
           envFrom:
@@ -218,7 +218,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: api-ops/frontend:latest
+          image: autohealops/frontend:latest
           ports:
             - containerPort: 80
           livenessProbe:
