@@ -468,19 +468,36 @@ async def _collect_container_diagnostics(alert: Alert) -> str:
 
 
 # 应用代码异常特征（崩溃日志中出现 → 应用问题，需改代码走发布，不走 AI 诊断）
+#
+# 2026-10-21 收窄（老板反馈「告警都不走 AI 诊断」）：
+# 旧列表里 "java.lang." / "at com." / "at org." / "Caused by" / "Connection refused" /
+# "Fatal error" 这些是**任何** Java/Spring 崩溃栈都会出现的通用行（"at org.springframework…"），
+# 于是所有 CrashLoopBackOff 都被判成「应用代码问题」直接转人工，AI 诊断永远跑不到。
+# 现在只保留「明确指向代码 bug」的强特征；依赖不通、配置错、OOM、探针失败等交给 AI 判层。
 APP_CRASH_PATTERNS = [
-    "NullPointerException", "NullPointer", "Traceback", "panic:", "Segmentation fault",
-    "IndexError", "KeyError", "AttributeError", "TypeError", "ValueError",
-    "java.lang.", "at com.", "at org.", "Exception in thread", "Caused by",
-    "FileNotFoundError", "Connection refused", "RuntimeError", "Fatal error",
+    "NullPointerException",              # Java 空指针（代码 bug）
+    "Exception in thread",               # Java 未捕获异常栈头
+    "Traceback (most recent call last)",  # Python 异常栈头
+    "panic:",                            # Go panic
+    "Segmentation fault",                # 原生崩溃
+    "IndexError: ", "KeyError: ",        # Python 代码级异常（带冒号避免误伤普通文案）
+    "AttributeError: ", "TypeError: ", "ValueError: ", "FileNotFoundError: ",
 ]
 
 
-def _is_application_crash(diag_text: str) -> bool:
-    """判断崩溃是否应用代码异常（代码 bug/配置错误，需改代码走发布）"""
+def _match_app_crash(diag_text: str) -> str:
+    """返回命中的应用代码异常特征（未命中返回空串），便于日志说明为什么跳过 AI"""
     if not diag_text:
-        return False
-    return any(p in diag_text for p in APP_CRASH_PATTERNS)
+        return ""
+    for p in APP_CRASH_PATTERNS:
+        if p in diag_text:
+            return p
+    return ""
+
+
+def _is_application_crash(diag_text: str) -> bool:
+    """判断崩溃是否应用代码异常（代码 bug，需改代码走发布）"""
+    return bool(_match_app_crash(diag_text))
 
 
 def _mark_alert_recovered(a: Alert, now: str) -> None:
@@ -980,7 +997,8 @@ async def _process_one(alert: Alert) -> bool:
         try:
             container_diag = await _collect_container_diagnostics(alert)
             # 应用问题识别：崩溃日志显示代码异常 → 不走 AI 诊断，直接转人工（改代码走发布）
-            if _is_application_crash(container_diag):
+            crash_hit = _match_app_crash(container_diag)
+            if crash_hit:
                 await _dedup_knowledge(
                     alert.fault_type, "应用代码异常导致崩溃",
                     "分析崩溃日志、修复应用代码后重新发布", execution_steps="",
@@ -989,7 +1007,7 @@ async def _process_one(alert: Alert) -> bool:
                     alert, "应用代码问题（崩溃日志代码异常）",
                     "崩溃日志显示代码异常，需修复应用代码后重新发布，平台不自动执行。",
                 )
-                logger.info("告警 %d 识别为应用代码问题，跳过 AI 诊断，转人工", alert.id)
+                logger.info("告警 %d 识别为应用代码问题（命中特征 %r），跳过 AI 诊断，转人工", alert.id, crash_hit)
                 return True
             diagnosis = await ai_client.diagnose(
                 alert.id, alert_data, {"exec_output": container_diag}, trace_id
