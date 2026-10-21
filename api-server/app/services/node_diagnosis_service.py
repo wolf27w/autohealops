@@ -260,12 +260,13 @@ def analyze(node: dict, metrics: dict, fault_type: str = "") -> list[dict]:
             "detail": "若是平台隔离动作，节点恢复后会自动 uncordon",
             "advice": "确认是否仍在维护窗口内",
         })
-    if fault_type and not f:
+    if not f:
         f.append({
             "code": "no_anomaly", "level": "info",
-            "title": f"未采集到与 {fault_type} 对应的异常指标",
-            "detail": "可能是瞬时抖动或指标采集缺失（node-exporter / Prometheus 不可达）",
-            "advice": "结合 Node 事件与 kubelet 日志复核",
+            "title": f"未采集到与 {fault_type} 对应的异常指标" if fault_type else "未发现异常（条件与指标均在阈值内）",
+            "detail": "节点条件正常、磁盘/inode/内存/load/网络均在阈值内"
+                      if not fault_type else "可能是瞬时抖动或指标采集缺失（node-exporter / Prometheus 不可达）",
+            "advice": "无需操作；如仍异常请结合 Node 事件与 kubelet 日志复核（NODE-RUNBOOK §2）",
         })
     return f
 

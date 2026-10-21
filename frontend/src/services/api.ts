@@ -646,6 +646,19 @@ export const getNodes = (clusterId: number) => http.get<K8sNode[]>(`/resources/c
 export const scheduleWorkload = (clusterId: number, kind: string, namespace: string, name: string, data: { node: string; preview?: boolean }) =>
   http.post<{ preview: boolean; node: string; old_node_selector: Record<string, string>; new_node_selector: Record<string, string> }>(
     `/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/schedule`, data)
+export interface NodeFinding { code: string; level: 'critical' | 'high' | 'warn' | 'info'; title: string; detail?: string; advice?: string }
+export interface NodeDiagnosis {
+  ok: boolean; node: string; ready: boolean; pressure: string[]
+  findings: NodeFinding[]; summary: string
+  metrics: {
+    mem_pct?: number | null; load1?: number | null; load5?: number | null; processes?: number | null
+    net_err_per_s?: number | null; net_drop_per_s?: number | null; time_offset_s?: number | null
+    disk?: { label: string; value: number }[]; inode?: { label: string; value: number }[]
+  }
+}
+export const diagnoseNode = (clusterId: number, node: string, faultType = '') =>
+  http.get<NodeDiagnosis>(`/resources/clusters/${clusterId}/nodes/${node}/diagnose`, { params: { fault_type: faultType } })
+
 export const cordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/cordon`)
 export const uncordonNode = (clusterId: number, node: string) => http.post<{ message: string }>(`/resources/clusters/${clusterId}/nodes/${node}/uncordon`)
 export const drainPreview = (clusterId: number, node: string) =>

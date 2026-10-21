@@ -277,7 +277,8 @@ export default function MainLayout() {
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
-      <Sider width={236} theme="dark" collapsible collapsed={collapsed} onCollapse={handleCollapse}>
+      {/* trigger={null}：底部那根折叠条与顶部的折叠按钮重复，去掉底部的（2026-10-21 老板要求） */}
+      <Sider width={236} theme="dark" collapsible trigger={null} collapsed={collapsed} onCollapse={handleCollapse}>
         <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#34d399,#059669)', display: 'grid', placeItems: 'center', boxShadow: '0 6px 16px rgba(16,185,129,0.35)', flex: 'none' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#04231a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">

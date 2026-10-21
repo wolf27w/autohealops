@@ -20,8 +20,12 @@ def cond(node, **kw):
 
 
 class TestNodeAnalyze(unittest.TestCase):
-    def test_healthy_node_no_findings(self):
-        self.assertEqual(analyze(NODE_OK, {"mem_pct": 40, "disk": [], "inode": []}), [])
+    def test_healthy_node_only_info(self):
+        """健康节点也要给一条 info（前端表格不至于空白），但不能有 warn 及以上"""
+        f = analyze(NODE_OK, {"mem_pct": 40, "disk": [], "inode": []})
+        self.assertEqual(len(f), 1)
+        self.assertEqual(f[0]["level"], "info")
+        self.assertEqual(f[0]["code"], "no_anomaly")
 
     def test_disk_thresholds(self):
         f = analyze(NODE_OK, {"disk": [{"label": "/var", "value": 96.0}], "inode": []})

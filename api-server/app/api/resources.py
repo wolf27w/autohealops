@@ -1650,6 +1650,21 @@ async def list_nodes(cluster_id: int, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": [_node_from_json(n) for n in raw]}
 
 
+@router.get("/clusters/{cluster_id}/nodes/{node_name}/diagnose")
+async def diagnose_node(cluster_id: int, node_name: str, fault_type: str = "", user=Depends(require_any_user)):
+    """节点诊断（P1，只读）：conditions / 容量 / 污点 / Node 事件 / node-exporter 指标 + 规则结论
+
+    给「节点管理」页的「诊断」按钮用；与告警自动处理里的节点分支同一套逻辑（node_diagnosis_service）。
+    """
+    if denied := await _deny_cluster(user, cluster_id):
+        return denied
+    from app.services import node_diagnosis_service
+    data = await node_diagnosis_service.diagnose(cluster_id, node_name, fault_type)
+    if not data.get("ok"):
+        return {"code": 404, "message": data.get("summary") or "节点不存在或集群不可达", "data": None}
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.post("/clusters/{cluster_id}/nodes/{node_name}/cordon")
 async def cordon_node(cluster_id: int, node_name: str, user=Depends(require_operator)):
     if denied := await _deny_cluster(user, cluster_id, required="operate"):

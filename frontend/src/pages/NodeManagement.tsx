@@ -3,8 +3,8 @@ import { useEffect, useState, type Key } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card, Table, Button, Space, Select, Tag, message, Popconfirm, Progress, Modal, InputNumber, Alert, Collapse } from 'antd'
 import { ReloadOutlined, ApartmentOutlined } from '@ant-design/icons'
-import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan, drainPreview, drainNode } from '../services/api'
-import type { K8sNode, BalancePlan } from '../services/api'
+import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan, drainPreview, drainNode, diagnoseNode } from '../services/api'
+import type { K8sNode, BalancePlan, NodeDiagnosis } from '../services/api'
 import type { Cluster } from '../types'
 
 const pctColor = (v?: number | null) => (!v && v !== 0) ? '#999' : v >= 85 ? '#ff4d4f' : v >= 70 ? '#faad14' : '#52c41a'
@@ -29,8 +29,19 @@ export default function NodeManagement() {
   const [drainText, setDrainText] = useState('')
   const [drainLoading, setDrainLoading] = useState(false)
   const [draining, setDraining] = useState(false)
+  // 节点诊断（P1，只读）
+  const [diagOpen, setDiagOpen] = useState(false)
+  const [diagNode, setDiagNode] = useState('')
+  const [diag, setDiag] = useState<NodeDiagnosis | null>(null)
+  const [diagLoading, setDiagLoading] = useState(false)
 
   useEffect(() => { getClusters().then((d) => setClusters(d || [])).catch(() => {}) }, [])
+
+  const openDiagnose = (name: string) => {
+    if (!clusterId) return
+    setDiagNode(name); setDiag(null); setDiagOpen(true); setDiagLoading(true)
+    diagnoseNode(clusterId, name).then((d) => setDiag(d)).catch(() => message.error('诊断失败（集群/executor 不可达）')).finally(() => setDiagLoading(false))
+  }
 
   const load = () => {
     if (!clusterId) { setNodes([]); return }
@@ -121,6 +132,7 @@ export default function NodeManagement() {
             {
               title: '操作', width: 140, fixed: 'right', render: (_, r) => (
                 <Space size="small">
+                  <a onClick={() => openDiagnose(r.name)}>诊断</a>
                   {r.schedulable
                     ? <Popconfirm title={`停止调度 ${r.name}？（禁止新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'cordon')}><a style={{ color: '#cf1322' }}>停止调度</a></Popconfirm>
                     : <Popconfirm title={`启用调度 ${r.name}？（允许新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>启用调度</a></Popconfirm>}
@@ -131,6 +143,40 @@ export default function NodeManagement() {
           ]}
           locale={{ emptyText: '请选择集群（或该集群 node_exporter/metrics-server 不可用）' }} />
       </Card>
+
+      <Modal open={diagOpen} title={`节点诊断 · ${diagNode}`} footer={null} width={860}
+        onCancel={() => setDiagOpen(false)} destroyOnClose>
+        {diagLoading ? <div style={{ padding: 24, textAlign: 'center' }}>采集中…</div> : diag && (
+          <div>
+            <Alert
+              type={diag.findings.some(f => f.level === 'critical') ? 'error'
+                : diag.findings.some(f => f.level === 'high') ? 'warning' : 'info'}
+              showIcon
+              message={diag.ready ? '节点 Ready' : '节点 NotReady'}
+              description={`压力条件：${diag.pressure.length ? diag.pressure.join('、') : '无'}　·　只读诊断，不执行任何变更`}
+              style={{ marginBottom: 12 }} />
+            <Space size="large" wrap style={{ marginBottom: 12 }}>
+              <span>内存 <b>{diag.metrics.mem_pct ?? '-'}%</b></span>
+              <span>load1 <b>{diag.metrics.load1 ?? '-'}</b></span>
+              <span>进程数 <b>{diag.metrics.processes ?? '-'}</b></span>
+              <span>磁盘 <b>{diag.metrics.disk?.[0] ? `${diag.metrics.disk[0].label} ${diag.metrics.disk[0].value.toFixed(1)}%` : '-'}</b></span>
+              <span>inode <b>{diag.metrics.inode?.[0] ? `${diag.metrics.inode[0].label} ${diag.metrics.inode[0].value.toFixed(1)}%` : '-'}</b></span>
+              <span>网络错/丢 <b>{diag.metrics.net_err_per_s ?? '-'} / {diag.metrics.net_drop_per_s ?? '-'}</b></span>
+            </Space>
+            <Table rowKey="code" size="small" pagination={false} dataSource={diag.findings}
+              columns={[
+                { title: '级别', dataIndex: 'level', width: 90, render: (v: string) => (
+                  <Tag color={v === 'critical' ? 'red' : v === 'high' ? 'volcano' : v === 'warn' ? 'gold' : 'blue'}>{v}</Tag>) },
+                { title: '结论', dataIndex: 'title' },
+                { title: '细节', dataIndex: 'detail', render: (v?: string) => <span style={{ fontSize: 12, color: '#666' }}>{v || '-'}</span> },
+                { title: '建议', dataIndex: 'advice', width: 220, render: (v?: string) => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
+              ]} />
+            <div style={{ marginTop: 12, fontSize: 12, color: '#888' }}>
+              处置命令见 <code>docs/ops/NODE-RUNBOOK.md</code>；平台不会在节点上执行任何命令。
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={planOpen} title="节点均衡计划（只读建议，不执行）" footer={null} onCancel={() => setPlanOpen(false)} width={920}>
         <Space style={{ marginBottom: 12 }}>

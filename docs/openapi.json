@@ -11637,6 +11637,68 @@
         "summary": "Cordon Node"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/diagnose": {
+      "get": {
+        "description": "节点诊断（P1，只读）：conditions / 容量 / 污点 / Node 事件 / node-exporter 指标 + 规则结论\n\n给「节点管理」页的「诊断」按钮用；与告警自动处理里的节点分支同一套逻辑（node_diagnosis_service）。",
+        "operationId": "get_api_v1_resources_clusters_cluster_id_nodes_node_name_diagnose",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_name",
+            "required": true,
+            "schema": {
+              "title": "Node Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fault_type",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Fault Type",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Diagnose Node"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/uncordon": {
       "post": {
         "operationId": "post_api_v1_resources_clusters_cluster_id_nodes_node_name_uncordon",
