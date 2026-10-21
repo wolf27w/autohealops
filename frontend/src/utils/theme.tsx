@@ -11,6 +11,29 @@ export type ThemeMode = 'light' | 'dark'
 const STORAGE_KEY = 'autohealops_theme_mode'
 const LEGACY_STORAGE_KEY = 'api_ops_theme_mode'
 
+// 读取初始主题（含一次性迁移）
+// 注意：2026-10-21 改键名时这里踩过坑 —— 写成 `A || B === 'dark' ? 'dark' : 'light'`，
+// 由于 || 优先级高于 ?:，只要新键有任意非空值（包括 'light'）就判成 dark，
+// 于是首屏先写 'light'、下次刷新变黑，登录框/整站主色都变黑。这里改回显式比较，
+// 并把旧的 api_ops_theme_mode 迁移到新键（迁移一次后清掉旧键）。
+function readInitialMode(): ThemeMode {
+  try {
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+    let current = localStorage.getItem(STORAGE_KEY)
+    if (legacy !== null) {
+      // 旧键是本次改键名前的「真实偏好」，优先以它为准做一次迁移
+      if (current !== legacy) {
+        current = legacy
+        localStorage.setItem(STORAGE_KEY, legacy)
+      }
+      localStorage.removeItem(LEGACY_STORAGE_KEY)
+    }
+    return current === 'dark' ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
 const FONT_FAMILY =
   '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif'
 
@@ -145,13 +168,7 @@ const ThemeContext = createContext<ThemeContextValue>({
 })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState<ThemeMode>(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY) === 'dark' ? 'dark' : 'light'
-    } catch {
-      return 'light'
-    }
-  })
+  const [mode, setModeState] = useState<ThemeMode>(readInitialMode)
 
   // 同步 <html>/<body> 的 data-theme，供 index.css 深色规则 + localStorage 持久化
   // 用 useLayoutEffect：在浏览器 paint 前就位，深色刷新时不闪白
