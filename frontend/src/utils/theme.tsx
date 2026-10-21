@@ -8,7 +8,8 @@ import type { ThemeConfig } from 'antd'
 
 export type ThemeMode = 'light' | 'dark'
 
-const STORAGE_KEY = 'api_ops_theme_mode'
+const STORAGE_KEY = 'autohealops_theme_mode'
+const LEGACY_STORAGE_KEY = 'api_ops_theme_mode'
 
 const FONT_FAMILY =
   '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif'
@@ -146,7 +147,7 @@ const ThemeContext = createContext<ThemeContextValue>({
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) === 'dark' ? 'dark' : 'light'
+      return localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY) === 'dark' ? 'dark' : 'light'
     } catch {
       return 'light'
     }

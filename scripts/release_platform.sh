@@ -12,14 +12,14 @@
 #   ./scripts/release_platform.sh --help
 #
 # 环境变量：
-#   PLATFORM_REGISTRY   镜像仓库前缀（默认 api-ops，如 harbor.example.com/apiops）
-#   PLATFORM_NAMESPACE  K8s 命名空间（默认 api-ops）
+#   PLATFORM_REGISTRY   镜像仓库前缀（默认 autohealops，如 harbor.example.com/apiops）
+#   PLATFORM_NAMESPACE  K8s 命名空间（默认 autohealops）
 #   CONTAINER_ENGINE    podman|docker（默认自动探测）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REGISTRY="${PLATFORM_REGISTRY:-api-ops}"
-NS="${PLATFORM_NAMESPACE:-api-ops}"
+REGISTRY="${PLATFORM_REGISTRY:-autohealops}"
+NS="${PLATFORM_NAMESPACE:-autohealops}"
 SERVICES="api-server,ai-service,k8s-executor,frontend"
 VERSION=""
 SKIP_BUILD=0

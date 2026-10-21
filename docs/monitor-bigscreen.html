@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<script>(function(){try{var p=window.parent;var d=(p&&p!==window)?p.document.documentElement.getAttribute('data-theme'):null;var m=d||localStorage.getItem('api_ops_theme_mode')||'light';document.documentElement.setAttribute('data-theme',(m==='dark')?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
+<script>(function(){try{var p=window.parent;var d=(p&&p!==window)?p.document.documentElement.getAttribute('data-theme'):null;var m=d||(localStorage.getItem('autohealops_theme_mode')||localStorage.getItem('api_ops_theme_mode'))||'light';document.documentElement.setAttribute('data-theme',(m==='dark')?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <title>多集群 K8s 监控大屏 · Demo</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>

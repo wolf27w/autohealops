@@ -3,7 +3,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: api-server-pdb
-  namespace: api-ops
+  namespace: autohealops
 spec:
   minAvailable: 2
   selector:

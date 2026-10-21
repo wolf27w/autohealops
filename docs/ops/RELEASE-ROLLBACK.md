@@ -23,7 +23,7 @@ K8s 侧清单在 `k8s/`：`deployments.yaml`（4 个 Deployment + 探针 + 反�
 
 脚本动作：`build → push → kubectl set image → rollout status`；发布前把各 Deployment 当前镜像追加到 `.deploy-history`（回滚对照）。
 
-环境变量：`PLATFORM_REGISTRY`（镜像前缀，默认 `api-ops`）、`PLATFORM_NAMESPACE`（默认 `api-ops`）、`CONTAINER_ENGINE`（podman/docker 自动探测）。
+环境变量：`PLATFORM_REGISTRY`（镜像前缀，默认 `autohealops`）、`PLATFORM_NAMESPACE`（默认 `autohealops`）、`CONTAINER_ENGINE`（podman/docker 自动探测）。
 
 ## 3. 回滚
 
@@ -52,7 +52,7 @@ K8s 侧清单在 `k8s/`：`deployments.yaml`（4 个 Deployment + 探针 + 反�
 
 1. 镜像 tag 唯一（非 latest），推送到镜像仓库；
 2. Secret/ConfigMap 就绪（含 `ENCRYPTION_KEY`、`JWT_SECRET_KEY` 等）；
-3. 数据库已迁移：`kubectl -n api-ops exec deploy/api-server -- alembic upgrade head`；
+3. 数据库已迁移：`kubectl -n autohealops exec deploy/api-server -- alembic upgrade head`；
 4. 备份完成（见 `docs/ops/BACKUP-DR.md`）；
 5. `rollout status` 全绿；`/ready` 探针通过。
 

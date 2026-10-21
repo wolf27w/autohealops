@@ -473,9 +473,9 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 	ri := dc.Resource(gvr)
 	var applyErr error
 	if clusterScoped {
-		_, applyErr = ri.Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "api-ops", Force: true})
+		_, applyErr = ri.Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "autohealops", Force: true})
 	} else {
-		_, applyErr = ri.Namespace(namespace).Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "api-ops", Force: true})
+		_, applyErr = ri.Namespace(namespace).Apply(ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "autohealops", Force: true})
 	}
 	if applyErr != nil {
 		return fmt.Errorf("apply 失败: %w", applyErr)

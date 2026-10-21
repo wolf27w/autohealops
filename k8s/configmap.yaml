@@ -3,9 +3,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: api-server-config
-  namespace: api-ops
+  namespace: autohealops
 data:
-  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/api_ops"
+  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
   REDIS_URL: "redis://:REPLACE_ME@192.168.6.99:6379/0"
   K8S_EXECUTOR_GRPC_ADDR: "k8s-executor:9090"
   AI_SERVICE_HTTP_ADDR: "http://ai-service:9000"
@@ -14,9 +14,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: k8s-executor-config
-  namespace: api-ops
+  namespace: autohealops
 data:
-  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/api_ops"
+  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
   GRPC_PORT: "9090"
   COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit"
 ---
@@ -24,9 +24,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ai-service-config
-  namespace: api-ops
+  namespace: autohealops
 data:
-  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/api_ops"
+  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
   EMBEDDING_MODEL: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
   PROMETHEUS_URL: ""
   ES_URL: ""

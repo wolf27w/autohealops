@@ -3,7 +3,7 @@
 services:
   api-server:
     build: ./api-server
-    container_name: api-ops-api-server
+    container_name: autohealops-api-server
     env_file: .env
     environment:
       K8S_EXECUTOR_GRPC_ADDR: k8s-executor:9090
@@ -17,7 +17,7 @@ services:
 
   k8s-executor:
     build: ./k8s-executor
-    container_name: api-ops-executor
+    container_name: autohealops-executor
     env_file: .env
     ports:
       - "9090:9090"
@@ -25,7 +25,7 @@ services:
 
   ai-service:
     build: ./ai-service
-    container_name: api-ops-ai-service
+    container_name: autohealops-ai-service
     env_file: .env
     ports:
       - "9000:9000"
@@ -33,7 +33,7 @@ services:
 
   frontend:
     build: ./frontend
-    container_name: api-ops-frontend
+    container_name: autohealops-frontend
     ports:
       - "80:80"
     depends_on:

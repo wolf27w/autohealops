@@ -44,7 +44,7 @@ jobs:
         run: ./scripts/ci_check.sh
         env:
           # CI 仅做静态校验，不连数据库；配置占位避免导入期报错
-          DATABASE_URL: mysql+aiomysql://root:root@127.0.0.1:3306/api_ops
+          DATABASE_URL: mysql+aiomysql://root:root@127.0.0.1:3306/autohealops
           REDIS_URL: redis://127.0.0.1:6379/0
           JWT_SECRET_KEY: ci-dummy
           ENCRYPTION_KEY: ci-dummy-32-bytes-0123456789abcd

@@ -11,10 +11,10 @@
 #   ./scripts/rollback_platform.sh --status              # 只看 rollout 历史
 #   ./scripts/rollback_platform.sh --help
 #
-# 环境变量：PLATFORM_NAMESPACE（默认 api-ops）
+# 环境变量：PLATFORM_NAMESPACE（默认 autohealops）
 set -euo pipefail
 
-NS="${PLATFORM_NAMESPACE:-api-ops}"
+NS="${PLATFORM_NAMESPACE:-autohealops}"
 SERVICES="api-server,ai-service,k8s-executor,frontend"
 TO_REVISION=""
 STATUS_ONLY=0

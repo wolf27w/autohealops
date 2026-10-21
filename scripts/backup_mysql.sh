@@ -8,7 +8,7 @@
 #
 # 连接参数优先取环境变量，其次解析 .env 里的 DATABASE_URL：
 #   MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_DB
-# 备份落地：BACKUP_DIR（默认 ./backups），文件名 api_ops-YYYYmmdd-HHMMSS.sql.gz
+# 备份落地：BACKUP_DIR（默认 ./backups），文件名 autohealops-YYYYmmdd-HHMMSS.sql.gz
 # 保留：BACKUP_KEEP_DAYS 天（默认 7），超期自动清理（--dry-run 不删）
 # 异地：BACKUP_REMOTE 非空时，备份完成后执行 `rclone copy <file> <BACKUP_REMOTE>`
 #       （未装 rclone 则跳过并告警；也可换成 scp/ossutil，按需改 _upload）
@@ -52,7 +52,7 @@ MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
 MYSQL_PORT="${MYSQL_PORT:-3306}"
 MYSQL_USER="${MYSQL_USER:-root}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-}"
-MYSQL_DB="${MYSQL_DB:-api_ops}"
+MYSQL_DB="${MYSQL_DB:-autohealops}"
 BACKUP_REMOTE="${BACKUP_REMOTE:-}"
 
 TS="$(date +%Y%m%d-%H%M%S)"

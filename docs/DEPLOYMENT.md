@@ -50,7 +50,7 @@ curl http://localhost:8080/health
 
 | 文件 | 说明 |
 |---|---|
-| namespace.yaml | api-ops 命名空间 |
+| namespace.yaml | autohealops 命名空间 |
 | configmap-*.yaml | 各服务环境变量（DATABASE_URL、PROMETHEUS_URL 等） |
 | secret.yaml | 敏感配置（ENCRYPTION_KEY、JWT_SECRET_KEY、AI Key）base64 |
 | deployment-*.yaml | 各服务 Deployment |
@@ -91,7 +91,7 @@ kubectl apply -f k8s/ingress.yaml
 2. 恢复 MySQL 数据
 
 ```bash
-mysql -uroot -p api_ops < backup.sql
+mysql -uroot -p autohealops < backup.sql
 ```
 
 3. 重启服务
@@ -106,7 +106,7 @@ kubectl rollout restart deployment/ai-service
 
 | 中间件 | 地址 | 说明 |
 |---|---|---|
-| MySQL | 192.168.6.99:3306 | 库 api_ops（utf8mb4），root/root |
+| MySQL | 192.168.6.99:3306 | 库 autohealops（utf8mb4），root/root |
 | Redis | 192.168.6.99:6379 | 密码见 .env |
 
 > 生产环境建议：应用使用专用 MySQL 账号（仅业务库权限），中间件密码改强密码。

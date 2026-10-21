@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api-server
-  namespace: api-ops
+  namespace: autohealops
 spec:
   replicas: 3
   revisionHistoryLimit: 5
@@ -44,12 +44,12 @@ spec:
             - name: ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: api-ops-secrets
+                  name: autohealops-secrets
                   key: ENCRYPTION_KEY
             - name: JWT_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: api-ops-secrets
+                  name: autohealops-secrets
                   key: JWT_SECRET_KEY
           livenessProbe:
             httpGet:
@@ -77,7 +77,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: k8s-executor
-  namespace: api-ops
+  namespace: autohealops
 spec:
   replicas: 1
   # 有状态 watcher（单写者）：用 Recreate 避免新旧同时 watch 双写
@@ -105,7 +105,7 @@ spec:
             - name: ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: api-ops-secrets
+                  name: autohealops-secrets
                   key: ENCRYPTION_KEY
           livenessProbe:
             tcpSocket:
@@ -130,7 +130,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ai-service
-  namespace: api-ops
+  namespace: autohealops
 spec:
   replicas: 2
   revisionHistoryLimit: 5
@@ -160,17 +160,17 @@ spec:
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: api-ops-secrets
+                  name: autohealops-secrets
                   key: OPENAI_API_KEY
             - name: DEEPSEEK_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: api-ops-secrets
+                  name: autohealops-secrets
                   key: DEEPSEEK_API_KEY
             - name: CLAUDE_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: api-ops-secrets
+                  name: autohealops-secrets
                   key: CLAUDE_API_KEY
           livenessProbe:
             httpGet:
@@ -198,7 +198,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: api-ops
+  namespace: autohealops
 spec:
   replicas: 2
   revisionHistoryLimit: 5

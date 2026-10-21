@@ -40,7 +40,7 @@ func (r *Runner) RunScript(ctx context.Context, clusterID uint, scriptContent st
 	scriptContent = expandParams(scriptContent, parameters)
 
 	// 创建临时 Job 执行脚本
-	jobName := fmt.Sprintf("api-ops-script-%d-%d", taskID, time.Now().Unix())
+	jobName := fmt.Sprintf("autohealops-script-%d-%d", taskID, time.Now().Unix())
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
 		Spec: batchv1.JobSpec{

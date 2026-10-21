@@ -135,7 +135,8 @@ def _classify_action(command: str, status: str) -> str:
 
 
 # ============ 仪表盘缓存 / 单飞 / 预热（2026-09-24 性能修复） ============
-# 背景：/stats/dashboard 聚合较重（历史冷路径 15~22s），前端 5s 轮询 + 15s 缓存 TTL
+# 背景：/stats/dashboard 聚合较重（2026-09 首次优化前冷路径 15~22s；2026-10-21 复测本地冷路径 ≈1.5s、
+#       命中缓存 ≈50ms），前端 5s 轮询 + 45s fresh 缓存
 #       会出现「缓存击穿（多请求同时算）」与「缓存过期窗口内前端看到空白」两种抖动。
 # 方案：短 TTL 的 fresh 缓存 + 长 TTL 的 last-good 兜底（宁可回旧值也不给空白）
 #       + Redis 单飞锁（缓存 miss 时只允许一个请求真正计算，其余等待或回退）
@@ -851,8 +852,12 @@ async def _compute_dashboard(
                 .group_by(PodMetric.cluster_id)
             )).all()
 
-    # MTTR（24h 内已解决告警平均修复时长，分钟）+ 今日处理数
-    durs = [(r.resolved_at - r.detected_at).total_seconds() for r in rows if r.resolved_at and r.detected_at]
+    # MTTR（最近 24 小时**内产生的告警**的平均修复时长，分钟）+ 今日处理数
+    # 口径统一（2026-10-21）：旧实现在这里取「24h 内检测 或 24h 内解决」的告警，
+    # 会把几周前产生、今天才解决的告警也算进来（时长极大），而 kpi.mttr_minutes 用的是
+    # 「24h 内检测且已解决」→ 同一张卡两个数。统一为后者，两者现在必然一致。
+    durs = [(r.resolved_at - r.detected_at).total_seconds() for r in rows
+            if r.resolved_at and r.detected_at and r.detected_at >= since_24h]
     mttr_minutes = round(sum(durs) / len(durs) / 60, 1) if durs else 0.0
     today_resolved = sum(1 for r in rows if r.resolved_at and r.resolved_at >= today_start)
 

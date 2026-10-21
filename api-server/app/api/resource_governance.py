@@ -33,7 +33,7 @@ def _ns_limitrange_manifest(ns: str, default_request: dict, default_limit: dict)
     return yaml.safe_dump({
         "apiVersion": "v1", "kind": "LimitRange",
         "metadata": {"name": NS_LIMITRANGE_NAME, "namespace": ns,
-                     "labels": {"app.kubernetes.io/managed-by": "api-ops"}},
+                     "labels": {"app.kubernetes.io/managed-by": "autohealops"}},
         "spec": {"limits": [lim]},
     }, allow_unicode=True)
 
@@ -42,7 +42,7 @@ def _ns_quota_manifest(ns: str, hard: dict) -> str:
     return yaml.safe_dump({
         "apiVersion": "v1", "kind": "ResourceQuota",
         "metadata": {"name": NS_QUOTA_NAME, "namespace": ns,
-                     "labels": {"app.kubernetes.io/managed-by": "api-ops"}},
+                     "labels": {"app.kubernetes.io/managed-by": "autohealops"}},
         "spec": {"hard": hard},
     }, allow_unicode=True)
 

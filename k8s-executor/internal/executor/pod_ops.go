@@ -97,7 +97,7 @@ func (e *Executor) ApplyPodYaml(ctx context.Context, namespace, yamlContent stri
 	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 	_, err = dynamicClient.Resource(gvr).Namespace(namespace).Apply(
 		ctx, obj.GetName(), obj,
-		metav1.ApplyOptions{FieldManager: "api-ops", Force: true},
+		metav1.ApplyOptions{FieldManager: "autohealops", Force: true},
 	)
 	if err != nil {
 		return fmt.Errorf("apply 失败: %w", err)

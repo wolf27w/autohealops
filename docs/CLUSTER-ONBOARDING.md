@@ -26,7 +26,7 @@
 | 能力 | 现状 | 落点 |
 |---|---|---|
 | kubeconfig 接入 | ✅ **已有**：上传/粘贴 kubeconfig → AES-256-GCM 加密存库 | `models/cluster.py: kubeconfig_encrypted`；`api/clusters.py: create_cluster`；`ClusterList.tsx` 添加集群 |
-| 平台自身容器化部署 | 🟡 **清单已有，未上生产** | `k8s/*.yaml`（ns=api-ops：deployments/services/configmap/secret/hpa/pdb/networkpolicy/ingress） |
+| 平台自身容器化部署 | 🟡 **清单已有，未上生产** | `k8s/*.yaml`（ns=autohealops：deployments/services/configmap/secret/hpa/pdb/networkpolicy/ingress） |
 | Agent 反向隧道（R12） | 🟡 **半成品**：隧道通了（agent 在线 → executor 请求走隧道），**但没有「接入闭环」** | `api-server/app/agent_gateway.py`（gRPC 双向流 `AgentService.Tunnel`）、`proto/agent.proto` |
 | 集群来源/接入方式字段 | ❌ 无 | `clusters` 表只有 `kubeconfig_encrypted`，没有 `source` / agent 令牌 / 心跳 |
 | 多 context 批量 / 启动导入 | ❌ 无 | 添加集群只支持单份 kubeconfig |
@@ -48,7 +48,7 @@
 - **检测**：进程内存在 `KUBERNETES_SERVICE_HOST`/`PORT` + SA token 文件 → in-cluster 模式。
 - executor 支持 **in-cluster config**（Go `rest.InClusterConfig()`），无需 kubeconfig 即可操作本集群。
 - api-server 启动钩子 `bootstrap_incluster_cluster()`：
-  - `AUTO_REGISTER_CLUSTER=true`（默认 true）时，探测本集群 UID + 名称（env `CLUSTER_NAME`，缺省用 ns `api-ops` 的 UID 短码）→ **upsert** 一条 `source=in-cluster` 的 Cluster。
+  - `AUTO_REGISTER_CLUSTER=true`（默认 true）时，探测本集群 UID + 名称（env `CLUSTER_NAME`，缺省用 ns `autohealops` 的 UID 短码）→ **upsert** 一条 `source=in-cluster` 的 Cluster。
   - 该记录不存 kubeconfig；executor 对该集群走 in-cluster 凭据。
 - 前端：集群列表标「**本集群**」；该记录**不允许删除**（只能停用/改环境标签）。
 - 落点：`k8s-executor`（in-cluster config 分支）、`api-server/app/main.py`（启动钩子）、`clusters` 模型 + `ClusterList.tsx`。
