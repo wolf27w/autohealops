@@ -36,6 +36,7 @@ const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
 const AlertSilences = lazy(() => import('./pages/AlertSilences'))
 const NodeManagement = lazy(() => import('./pages/NodeManagement'))
 const HostManagement = lazy(() => import('./pages/HostManagement'))
+const OnDuty = lazy(() => import('./pages/OnDuty'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -103,6 +104,7 @@ export default function App() {
         <Route path="custom-tasks" element={<RequireRole role="admin"><CustomTasks /></RequireRole>} />
         <Route path="resource-governance" element={<RequireRole role="admin"><ResourceGovernance /></RequireRole>} />
         <Route path="alert-silences" element={<RequireRole role="admin"><AlertSilences /></RequireRole>} />
+        <Route path="on-duty" element={<OnDuty />} />
         <Route path="node-management" element={<RequireRole role="admin"><NodeManagement /></RequireRole>} />
         <Route path="host-management" element={<RequireRole role="admin"><HostManagement /></RequireRole>} />
         <Route path="agent" element={<AgentChat />} />

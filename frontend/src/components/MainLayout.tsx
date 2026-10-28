@@ -11,7 +11,7 @@ import {
   SettingOutlined, LogoutOutlined, DownOutlined, MedicineBoxOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
-  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined,
+  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined, CalendarOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -51,6 +51,7 @@ const menuItems: NavItem[] = [
       { key: '/alert-handling', icon: <AlertOutlined />, label: '告警处理' },
       { key: '/tickets', icon: <FileTextOutlined />, label: '工单' },
       { key: '/alert-silences', icon: <StopOutlined />, label: '告警屏蔽' },
+      { key: '/on-duty', icon: <CalendarOutlined />, label: '值班排班' },
     ],
   },
   {

@@ -543,3 +543,47 @@ export interface DBConnection {
   readonly_password?: string
   [key: string]: unknown
 }
+
+// ============ 值班排班（on-duty：排班规则 / 节假日 / 换班代班 / 值班日历） ============
+export interface OnDutySchedule {
+  id: number
+  name: string
+  day_type: string // weekday / weekend / holiday
+  shift_type: string // day / night
+  start_time: string // HH:mm
+  end_time: string // HH:mm
+  user_ids: string // 逗号分隔的用户名
+  enabled: boolean
+}
+
+export interface Holiday {
+  id: number
+  date: string // YYYY-MM-DD
+  name: string
+}
+
+// 换班/代班完整字段（services/api.ts 里 DutyOverride 仅保留 id/date/type 精简字段）
+export interface DutyOverrideItem {
+  id: number
+  date: string // YYYY-MM-DD
+  original_username: string // 被替换人（代班时为空）
+  substitute_username: string // 替班人
+  type: string // swap / substitute
+  note: string
+  created_by: string
+  created_at: string
+}
+
+export interface DutyCalendarDay {
+  date: string // YYYY-MM-DD
+  day_type: string // weekday / weekend / holiday
+  holiday: string // 节假日名称，非节假日为空
+  users: string[] // 当日值班人用户名
+  overrides: Array<{ id: number; original: string; substitute: string; type: string; note: string }>
+}
+
+export interface DutyCalendarData {
+  start: string
+  end: string
+  days: DutyCalendarDay[]
+}
