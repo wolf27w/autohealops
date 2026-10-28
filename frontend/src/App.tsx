@@ -67,7 +67,7 @@ export default function App() {
         path="/screen"
         element={
           <RequireAuth>
-            <iframe src="/monitor-bigscreen.html?v=12" title="监控大屏"
+            <iframe src="/monitor-bigscreen.html?v=13" title="监控大屏"
               style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', border: 0 }} />
           </RequireAuth>
         }

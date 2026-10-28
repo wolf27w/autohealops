@@ -175,6 +175,8 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
   const kpiItems = [
     { title: '集群数', value: kpi?.cluster_total ?? 0, color: '#1677ff' },
     { title: '活跃告警', value: kpi?.alert_pending ?? 0, color: (kpi?.alert_pending ?? 0) > 0 ? '#ff4d4f' : '#1677ff' },
+    // 处理中 = 自愈计划在跑且关联告警仍活跃（与大屏「处理中」同源同口径）
+    { title: '处理中', value: kpi?.plan_running ?? 0, color: (kpi?.plan_running ?? 0) > 0 ? '#faad14' : '#1677ff' },
     { title: '自动处理（24小时）', value: kpi?.auto_processed_24h ?? 0, color: '#13c2c2' },
     { title: '待人工', value: kpi?.manual_pending ?? 0, color: (kpi?.manual_pending ?? 0) > 0 ? '#faad14' : '#1677ff' },
     { title: '待审核', value: kpi?.approval_pending ?? 0, color: (kpi?.approval_pending ?? 0) > 0 ? '#1677ff' : '#8c8c8c' },

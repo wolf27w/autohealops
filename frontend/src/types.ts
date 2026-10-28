@@ -243,6 +243,10 @@ export interface DashboardData {
     heal_rate: number
     plan_total: number
     plan_completed: number
+    /** 处理中：在跑状态(pending/executing) 且关联告警仍活跃的自愈计划数 */
+    plan_running: number
+    /** 僵尸计划：在跑状态但关联告警已结束（后台收尾会清成 cancelled） */
+    plan_stale: number
     plan_success_rate: number
     mttr_minutes: number
     today_resolved: number
@@ -290,6 +294,10 @@ export interface DashboardKpi {
   db_abnormal: number
   heal_rate: number
   mttr_minutes: number
+  /** 处理中：自愈计划在跑且关联告警仍活跃（仪表盘/大屏同源） */
+  plan_running: number
+  /** 僵尸计划：在跑状态但关联告警已结束（后台收尾会清成 cancelled） */
+  plan_stale: number
 }
 
 export interface AlertTrendPoint {

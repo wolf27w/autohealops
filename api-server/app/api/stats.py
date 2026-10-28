@@ -157,11 +157,11 @@ async def _dashboard_cache_key(range_: str, start: str, end: str,
     """
     gen = await get_dashboard_generation()
     if range_ != "24h" or cluster_id is not None or project_id is not None or env_tag or start or end or ai_range:
-        return (f"cache:dashboard:v4:{gen}:{range_}:{start}:{end}:"
+        return (f"cache:dashboard:v5:{gen}:{range_}:{start}:{end}:"
                 f"{cluster_id if cluster_id is not None else '-'}:"
                 f"{project_id if project_id is not None else '-'}:"
                 f"{ai_range or '-'}:{env_tag or '-'}")
-    return f"cache:dashboard:v4:{gen}"
+    return f"cache:dashboard:v5:{gen}"
 
 
 async def _cache_get(key: str):
@@ -212,6 +212,24 @@ async def _compute_dashboard(
         plan_total = (await session.execute(select(func.count()).select_from(RepairPlan))).scalar() or 0
         plan_done = (await session.execute(
             select(func.count()).select_from(RepairPlan).where(RepairPlan.status == "completed")
+        )).scalar() or 0
+        # 「处理中」口径（2026-10-28 修正）：
+        #   旧的大屏用 plan_total - plan_completed，把 cancelled/failed（已结束）也算成"未完成"，
+        #   再叠加历史僵尸计划（告警早已 resolved/self_healed，计划却一直挂在 pending），
+        #   会出现「活跃告警 0，处理中 477」的自相矛盾。
+        #   现在：plan_running = 在跑状态 且 关联告警仍活跃（pending/awaiting_approval/ticketed）；
+        #        plan_stale   = 在跑状态但关联告警已结束/不存在（由后台收尾清理成 cancelled）。
+        plan_running = (await session.execute(
+            select(func.count()).select_from(RepairPlan)
+            .join(Alert, Alert.id == RepairPlan.alert_id)
+            .where(RepairPlan.status.in_(("pending", "executing")),
+                   Alert.status.in_(("pending", "awaiting_approval", "ticketed")))
+        )).scalar() or 0
+        plan_stale = (await session.execute(
+            select(func.count()).select_from(RepairPlan)
+            .outerjoin(Alert, Alert.id == RepairPlan.alert_id)
+            .where(RepairPlan.status.in_(("pending", "executing")),
+                   or_(Alert.id.is_(None), Alert.status.notin_(("pending", "awaiting_approval", "ticketed"))))
         )).scalar() or 0
         manual_pending = (await session.execute(
             select(func.count()).select_from(Alert).where(
@@ -705,6 +723,9 @@ async def _compute_dashboard(
             "approval_decided_today": approval_decided_today,
             "approval_cancelled_today": _ap_today.get("cancelled", 0),
             "approval_approved_total": approval_approved_total,
+            # 处理中（自愈计划口径，与 core 同源；仪表盘与大屏都读这个）
+            "plan_running": plan_running,
+            "plan_stale": plan_stale,
         }
 
         # 告警级别分布
@@ -1004,6 +1025,7 @@ async def _compute_dashboard(
             "alert_total": alert_total, "alert_healed": alert_healed,
             "heal_rate": round(alert_healed / alert_total, 4) if alert_total else 0.0,
             "plan_total": plan_total, "plan_completed": plan_done,
+            "plan_running": plan_running, "plan_stale": plan_stale,
             "plan_success_rate": round(plan_done / plan_total, 4) if plan_total else 0.0,
             "mttr_minutes": mttr_minutes, "today_resolved": today_resolved,
             "manual_pending": manual_pending,

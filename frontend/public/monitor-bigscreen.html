@@ -365,7 +365,7 @@ function renderOverview(){
     <div class="col panel">
       <div class="kpi-label"><span>处理中</span></div>
       <div class="big warn">${k.healing.v}</div>
-      <div class="kpi-sub">自愈计划未完成（累计总数）</div>
+      <div class="kpi-sub">自愈计划处理中（关联告警仍活跃）</div>
     </div>
     <div class="col panel">
       <div class="kpi-label"><span>待审批</span>${k.approvalPending.v>0?'<span class="tag yellow">待处理</span>':''}</div>
@@ -1021,7 +1021,10 @@ async function loadOverviewReal(){
   const byCpu = cd.slice().sort((a,b)=>(b.cpu_pct||0)-(a.cpu_pct||0));
   const byMem = cd.slice().sort((a,b)=>(b.mem_pct||0)-(a.mem_pct||0));
   OVERVIEW.kpi.activeAlerts = {v: core.alert_pending??0, delta:0, deltaLabel:'待处理告警'};
-  OVERVIEW.kpi.healing = {v: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)), avgMin: core.mttr_minutes??0};
+  // 处理中 = 自愈计划在跑(pending/executing)且关联告警仍活跃；与仪表盘同源同口径（2026-10-28 修正）
+  // 旧实现 plan_total-plan_completed 把 cancelled/failed 也算"未完成"，叠加历史僵尸计划 →
+  // 出现「活跃告警 0 却 处理中 477」的自相矛盾。
+  OVERVIEW.kpi.healing = {v: core.plan_running??0, avgMin: core.mttr_minutes??0};
   OVERVIEW.kpi.healedToday = {v: core.today_resolved??0, rate: core.heal_rate??0};
   OVERVIEW.kpi.failed = {v: core.manual_pending??0, abnormalClusters: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0))};
   OVERVIEW.kpi.approvalPending = {v: core.approval_pending??0};
@@ -1032,7 +1035,7 @@ async function loadOverviewReal(){
   // 会出现「成功 3 / 失败 1 / 成功率 100%」。现改为 成功/(成功+失败)。
   const healOk = core.today_resolved??0, healFail = core.manual_pending??0;
   OVERVIEW.heal = { success: healOk, failed: healFail,
-    processing: Math.max(0,(core.plan_total||0)-(core.plan_completed||0)),
+    processing: core.plan_running??0,
     rate: (healOk+healFail)>0 ? healOk/(healOk+healFail) : 0,
     avgMin: core.mttr_minutes??0 };
   OVERVIEW.waterline = [
