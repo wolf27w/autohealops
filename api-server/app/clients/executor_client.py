@@ -44,12 +44,59 @@ def _conv_vol(v) -> dict:
 
 
 def _get_stub():
-    """懒初始化 gRPC stub"""
+    """懒初始化 gRPC stub（隧道感知：agent 集群的方法调用自动改走反向隧道，见 _TunnelAwareStub）"""
     global _channel, _stub
     if _stub is None:
         _channel = grpc.insecure_channel(settings.K8S_EXECUTOR_GRPC_ADDR)
-        _stub = executor_pb2_grpc.ExecutorServiceStub(_channel)
+        _stub = _TunnelAwareStub(executor_pb2_grpc.ExecutorServiceStub(_channel))
     return _stub
+
+
+# ==================== P1：全方法反向代理（agent 隧道） ====================
+# 原先只有 ExecuteCommand / GetPodLogs 显式走 _agent_call，其余 30+ 个方法一律直连平台侧 executor，
+# agent 接入的集群「连得上但用不了」。这里在 stub 层做一次代理：
+#   请求体里的 cluster_id 对应集群有在线 agent → 序列化后经隧道下发，把响应字节反序列化返回；
+#   否则原样透传给直连 stub（平台侧 executor，行为完全不变）。
+# 好处：30+ 个调用点一行代码都不用改，将来新增 RPC 也自动支持。
+
+_SERVICE_DESC = executor_pb2.DESCRIPTOR.services_by_name["ExecutorService"]
+# 方法名 → 响应消息类（隧道回来的是响应字节，需要按类型反序列化）
+_RESP_CLASSES = {
+    m.name: getattr(executor_pb2, m.output_type.name) for m in _SERVICE_DESC.methods
+}
+# 流式方法：隧道目前是请求/响应模型，不代理（保持直连语义）
+_STREAMING_METHODS = {
+    m.name for m in _SERVICE_DESC.methods if m.server_streaming or m.client_streaming
+}
+
+
+class _TunnelAwareStub:
+    """gRPC stub 代理：agent 在线的集群走反向隧道，其余直连 executor。"""
+
+    __slots__ = ("_real",)
+
+    def __init__(self, real):
+        object.__setattr__(self, "_real", real)
+
+    def __getattr__(self, name):
+        fn = getattr(self._real, name)
+        resp_cls = _RESP_CLASSES.get(name)
+        if resp_cls is None or name in _STREAMING_METHODS:
+            return fn  # 流式 / 未知方法：保持直连
+
+        def _call(req, timeout=None, metadata=None, **kwargs):
+            cid = int(getattr(req, "cluster_id", 0) or 0)
+            if cid:
+                from app import agent_gateway
+                if agent_gateway.is_connected(cid):
+                    data = agent_gateway.call(
+                        cid, name, req.SerializeToString(),
+                        timeout=timeout or ExecutorClient.TIMEOUT,
+                    )
+                    return resp_cls.FromString(data)
+            return fn(req, timeout=timeout, metadata=metadata, **kwargs)
+
+        return _call
 
 
 def _agent_call(cluster_id: int, method: str, req, resp_cls, timeout: float):

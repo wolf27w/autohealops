@@ -15,14 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/autohealops/k8s-executor/internal/executor"
+	"github.com/autohealops/k8s-executor/internal/agentbridge"
 	"github.com/autohealops/k8s-executor/internal/watcher"
 	"go.uber.org/zap"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
-	pb "github.com/autohealops/k8s-executor/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -67,7 +65,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "创建 clientset 失败: %v\n", err)
 		os.Exit(1)
 	}
-	exec := executor.NewExecutor(uint(*clusterID), cs, rc, splitCSV(*whitelist))
+	// P1：agent 进程内起一个真实的 ExecutorService，隧道请求按方法名原样转发 →
+	// 33 个 unary RPC 全部可用（原先只有 ExecuteCommand/GetPodLogs 两个）
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+	bridge, err := agentbridge.New(uint(*clusterID), rc, cs, splitCSV(*whitelist), logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化 agent 桥失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer bridge.Close()
 
 	// 连平台 gateway（反向隧道）
 	conn, err := grpc.NewClient(*platform, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -88,7 +95,7 @@ func main() {
 
 	// 断线自动重连
 	for ctx.Err() == nil {
-		if err := runTunnel(ctx, conn, *clusterID, *token, exec, cs, *watch); err != nil {
+		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, *watch, logger); err != nil {
 			fmt.Fprintf(os.Stderr, "[agent] 隧道断开: %v，3s 后重连\n", err)
 		}
 		select {
@@ -100,7 +107,7 @@ func main() {
 }
 
 func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, token string,
-	exec *executor.Executor, cs *kubernetes.Clientset, enableWatch bool) error {
+	bridge *agentbridge.Bridge, cs *kubernetes.Clientset, enableWatch bool, logger *zap.Logger) error {
 	client := agentpb.NewAgentServiceClient(conn)
 	stream, err := client.Tunnel(ctx)
 	if err != nil {
@@ -143,7 +150,6 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 			return
 		}
 		watchOnce.Do(func() {
-			logger, _ := zap.NewProduction()
 			watcher.SetSink(watcher.NewTunnelSink(uint(clusterID), func(payload []byte) error {
 				return send(&agentpb.AgentFrame{Type: "event", Method: "AlertEvent", Payload: payload})
 			}, logger))
@@ -181,7 +187,7 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 				startWatch(cfg.Policies)
 			}
 		case "request":
-			resp := handleRequest(ctx, exec, frame)
+			resp := handleRequest(ctx, bridge, frame)
 			if err := send(resp); err != nil {
 				return err
 			}
@@ -189,37 +195,15 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	}
 }
 
-// handleRequest 执行一个隧道请求并构造响应帧（method 对应 executor.proto 的 rpc 名）
-func handleRequest(ctx context.Context, exec *executor.Executor, f *agentpb.AgentFrame) *agentpb.AgentFrame {
+// handleRequest 把隧道请求转给进程内 ExecutorService（P1：全方法反向代理，不再逐方法 switch）
+func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.AgentFrame) *agentpb.AgentFrame {
 	resp := &agentpb.AgentFrame{Type: "response", ReqId: f.ReqId, Method: f.Method}
-	switch f.Method {
-	case "ExecuteCommand":
-		var req pb.ExecuteCommandRequest
-		if err := proto.Unmarshal(f.Payload, &req); err != nil {
-			resp.Error = "解码请求失败: " + err.Error()
-			return resp
-		}
-		out, err := exec.ExecuteCommand(ctx, req.Namespace, req.Command)
-		r := &pb.ExecuteCommandResponse{Success: err == nil, Output: out}
-		if err != nil {
-			r.Error = err.Error()
-		}
-		resp.Payload, _ = proto.Marshal(r)
-	case "GetPodLogs":
-		var req pb.GetPodLogsRequest
-		if err := proto.Unmarshal(f.Payload, &req); err != nil {
-			resp.Error = "解码请求失败: " + err.Error()
-			return resp
-		}
-		logs, err := exec.GetPodLogs(ctx, req.Namespace, req.PodName, req.Container, int64(req.TailLines), req.Previous)
-		r := &pb.GetPodLogsResponse{Success: err == nil, Logs: logs}
-		if err != nil {
-			r.Error = err.Error()
-		}
-		resp.Payload, _ = proto.Marshal(r)
-	default:
-		resp.Error = "agent 暂不支持的方法: " + f.Method
+	out, err := bridge.Call(ctx, f.Method, f.Payload)
+	if err != nil {
+		resp.Error = err.Error()
+		return resp
 	}
+	resp.Payload = out
 	return resp
 }
 
