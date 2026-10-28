@@ -1,7 +1,7 @@
 # Agent-only 纳管架构（需求 / 设计基线）
 
 > 提出：老板 2026-10-21 10:52–11:04 讨论后定方向
-> 整理：小吴　状态：**待开发**（方向已确认，分期与工期待排期）
+> 整理：小吴　状态：**进行中**（2026-10-28：P2 告警检测下沉已完成；剩 P1/P3/P4）
 > 现状核实：2026-10-21，以代码为准（`cmd/agent/main.go`、`clients/executor_client.py`、`agent_gateway.py`）
 
 ---
@@ -43,7 +43,7 @@
 | 反向隧道 + 令牌签发/吊销 + 心跳 + 一键安装清单 | ✅ 已有（2026-10-16 测试环境真连通过） | `api-server/app/agent_gateway.py`、`api/clusters.py`（`/agent-onboard`、`/agent/install.yaml`）、`cmd/agent/main.go` |
 | **agent 支持的方法** | ⚠️ **只有 2 个**：`ExecuteCommand`、`GetPodLogs` | `cmd/agent/main.go` → `handleRequest()` 的 switch；其余走 `default: agent 暂不支持的方法` |
 | **api-server 走 agent 的调用** | ⚠️ 只有 2 处 | `clients/executor_client.py` 的 `_agent_call`（execute_command、get_pod_logs）；`get_pod_status` / `list_pods` / `list_workloads` / `query_prometheus` / `StartWatch` 等仍直连集群 |
-| **告警检测（watcher）** | ❌ 跑在**平台侧** executor 进程，需直连 apiserver | `executor_client.start_watch()` → `StartWatch`；`internal/watcher/{pod_watcher,node_watcher}.go` |
+| **告警检测（watcher）** | ✅ **已下沉（2026-10-28, `50eba3c`）**：agent 内跑 Pod/Node watcher（策略由平台 config 帧下发），事件经隧道上报，平台统一落库/去重/触发自动处理 | `executor_client.start_watch()` → `StartWatch`；`internal/watcher/{pod_watcher,node_watcher}.go` |
 | in-cluster 自接入（本集群自动登记） | ❌ 未实现 | 无启动 upsert；`clusters.source` 字段已预留 |
 | agent 版本管理 / 自动升级 / 回退 | ❌ 未实现 | 只有 `AGENT_IMAGE` 常量用于 install.yaml |
 | 隧道安全 | ⚠️ **明文 gRPC**（`insecure`），当前仅 127.0.0.1 使用 | `cmd/agent/main.go` → `grpc.WithTransportCredentials(insecure.NewCredentials())` |
