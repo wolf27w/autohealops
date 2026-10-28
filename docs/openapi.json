@@ -10138,7 +10138,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/namespace-list": {
       "get": {
-        "description": "轻量返回集群的 namespace 名称列表（ResourceSnapshot distinct + Redis 短缓存）",
+        "description": "轻量返回集群的 namespace 名称列表（最近窗口快照 distinct + Redis 短缓存）\n\n性能（2026-10-28）：原实现对本集群全历史快照做 DISTINCT，在 718 万行表上要 6~11s。\n改为只扫最近 NS_LOOKBACK_MIN 分钟（命中快照时间索引），约 0.05~0.2s；\n窗口内无数据（采集停摆/新集群）时回退全量查询兜底。",
         "operationId": "get_api_v1_resources_clusters_cluster_id_namespace_list",
         "parameters": [
           {
@@ -10377,7 +10377,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/containers": {
       "get": {
-        "description": "列出 Pod 的容器名（进容器前选择用）",
+        "description": "列出 Pod 的容器名（进容器前选择用）；结果按 Pod 缓存 10 分钟，避免重复 describe",
         "operationId": "get_api_v1_resources_clusters_cluster_id_namespaces_namespace_pods_pod_name_containers",
         "parameters": [
           {

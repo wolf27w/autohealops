@@ -75,6 +75,13 @@ export default function AgentChat() {
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [pods, setPods] = useState<PodOption[]>([])
   const [containers, setContainers] = useState<string[]>([])
+  const [nsLoading, setNsLoading] = useState(false)
+  const [podsLoading, setPodsLoading] = useState(false)
+  const [ctnLoading, setCtnLoading] = useState(false)
+  // 选择器数据本地缓存：集群→namespace、集群/ns→pods、集群/ns/pod→containers（切回来瞬时）
+  const nsCache = useRef<Record<number, string[]>>({})
+  const podsCache = useRef<Record<string, PodOption[]>>({})
+  const ctnCache = useRef<Record<string, string[]>>({})
   const [olderOpen, setOlderOpen] = useState<Record<string, boolean>>({})
   const [searchParams] = useSearchParams()
   const [loadingMsgs, setLoadingMsgs] = useState(false)
@@ -152,22 +159,48 @@ export default function AgentChat() {
     }
   }
 
-  const loadClusters = () => getClusters().then((d) => setClusters(d || []))
+  const loadClusters = () => getClusters().then((d) => { const list = (d || []) as Cluster[]; setClusters(list); return list })
+
+  const fetchNamespaces = async (clusterId: number): Promise<string[]> => {
+    const hit = nsCache.current[clusterId]
+    if (hit) return hit
+    const d = await getClusterNamespaces(clusterId)
+    const list = (d || []) as string[]
+    nsCache.current[clusterId] = list
+    return list
+  }
+
+  // 打开新建窗口时并行预热所有集群的 namespace，选集群时基本秒开
+  const prefetchNamespaces = (list: Cluster[]) => {
+    for (const c of list) {
+      if (nsCache.current[c.id]) continue
+      getClusterNamespaces(c.id).then((d) => { nsCache.current[c.id] = (d || []) as string[] }).catch(() => { /* 预热失败静默，选中时再拉 */ })
+    }
+  }
 
   const handleClusterChange = (clusterId: number) => {
     form.setFieldsValue({ namespace: undefined, pod_name: undefined })
     setNamespaces([])
-    setPods([])
-    getClusterNamespaces(clusterId).then((d) => setNamespaces(d || []))
+    setPods([]); setContainers([])
+    const cached = nsCache.current[clusterId]
+    if (cached) { setNamespaces(cached); return }
+    setNsLoading(true)
+    fetchNamespaces(clusterId).then((list) => setNamespaces(list)).catch(() => setNamespaces([])).finally(() => setNsLoading(false))
   }
 
   const handleNamespaceChange = (ns: string) => {
     form.setFieldsValue({ pod_name: undefined })
     setPods([]); setContainers([])
     const clusterId = form.getFieldValue('cluster_id')
+    const key = `${clusterId}/${ns}`
+    const cached = podsCache.current[key]
+    if (cached) { setPods(cached); return }
+    setPodsLoading(true)
     getNamespacePods(clusterId, ns).then((d) => {
-      setPods(((d || []) as Array<{ name: string }>).map((p) => ({ label: p.name, value: p.name })))
-    })
+      const opts = ((d || []) as Array<{ name: string }>).map((p) => ({ label: p.name, value: p.name }))
+      podsCache.current[key] = opts
+      setPods(opts)
+    }).finally(() => setPodsLoading(false))
   }
 
   const handlePodChange = (pod: string) => {
@@ -175,7 +208,19 @@ export default function AgentChat() {
     setContainers([])
     const clusterId = form.getFieldValue('cluster_id')
     const ns = form.getFieldValue('namespace')
-    if (clusterId && ns && pod) getPodContainers(clusterId, ns, pod).then((d) => setContainers((d as unknown as { containers?: string[] })?.containers || [])).catch(() => setContainers([]))
+    if (!clusterId || !ns || !pod) return
+    const key = `${clusterId}/${ns}/${pod}`
+    const cached = ctnCache.current[key]
+    if (cached) { setContainers(cached); return }
+    setCtnLoading(true)
+    getPodContainers(clusterId, ns, pod)
+      .then((d) => {
+        const names = (d as unknown as { containers?: string[] })?.containers || []
+        ctnCache.current[key] = names
+        setContainers(names)
+      })
+      .catch(() => setContainers([]))
+      .finally(() => setCtnLoading(false))
   }
 
   const handleCreate = async () => {
@@ -301,7 +346,11 @@ export default function AgentChat() {
     <ConfigProvider theme={buildTheme('light')}>
     <Layout style={{ height: 'calc(100vh - 120px)', background: '#fff' }}>
       <Sider width={320} theme="light" className="agentchat-sider" style={{ borderRight: '1px solid #f0f0f0', padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <Button type="primary" block icon={<PlusOutlined />} onClick={() => { loadClusters(); setModalOpen(true) }}>
+        <Button type="primary" block icon={<PlusOutlined />} onClick={() => {
+          setModalOpen(true)
+          if (clusters.length) prefetchNamespaces(clusters)
+          else loadClusters().then((list) => prefetchNamespaces(list))
+        }}>
           新建诊断会话
         </Button>
         <div style={{ marginTop: 12, overflowY: 'auto', flex: 1 }}>
@@ -429,14 +478,16 @@ export default function AgentChat() {
             <Select placeholder="选择集群" onChange={handleClusterChange} options={clusters.map((c) => ({ label: c.name, value: c.id }))} />
           </Form.Item>
           <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '请选择命名空间' }]}>
-            <Select placeholder="选择命名空间" onChange={handleNamespaceChange} disabled={!namespaces.length}
+            <Select placeholder={nsLoading ? '加载中…' : '选择命名空间'} onChange={handleNamespaceChange}
+              disabled={nsLoading || !namespaces.length} loading={nsLoading} showSearch optionFilterProp="label"
               options={namespaces.map((n) => ({ label: n, value: n }))} />
           </Form.Item>
           <Form.Item name="pod_name" label="Pod" rules={[{ required: true, message: '请选择 Pod' }]}>
-            <Select placeholder="选择 Pod" showSearch optionFilterProp="label" disabled={!pods.length} options={pods} onChange={handlePodChange} />
+            <Select placeholder={podsLoading ? '加载中…' : '选择 Pod'} showSearch optionFilterProp="label"
+              disabled={podsLoading || !pods.length} loading={podsLoading} options={pods} onChange={handlePodChange} />
           </Form.Item>
           <Form.Item name="container" label="容器（可选）" tooltip="会话名会变成 环境/命名空间/服务[容器]，便于区分同一 Pod 下不同容器">
-            <Select placeholder="默认容器" allowClear disabled={!containers.length}
+            <Select placeholder={ctnLoading ? '加载中…' : '默认容器'} allowClear disabled={ctnLoading || !containers.length} loading={ctnLoading}
               options={containers.map((c) => ({ label: c, value: c }))} />
           </Form.Item>
           <Form.Item name="problem" label="问题描述">

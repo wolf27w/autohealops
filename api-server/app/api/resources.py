@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/v1/resources")
 
 
 NS_CACHE_TTL = 300  # namespace 列表缓存秒数（批二·提速）
+NS_LOOKBACK_MIN = 60  # namespace 列表只看最近 N 分钟快照（executor 每 60s 采集一次）
 
 
 async def _deny_cluster(user, cluster_id: int, namespace: str = "", required: str = "read"):
@@ -56,10 +57,15 @@ async def namespaces(cluster_id: int, user=Depends(require_any_user)):
 
 @router.get("/clusters/{cluster_id}/namespace-list")
 async def namespace_list(cluster_id: int, user=Depends(require_any_user)):
-    """轻量返回集群的 namespace 名称列表（ResourceSnapshot distinct + Redis 短缓存）"""
+    """轻量返回集群的 namespace 名称列表（最近窗口快照 distinct + Redis 短缓存）
+
+    性能（2026-10-28）：原实现对本集群全历史快照做 DISTINCT，在 718 万行表上要 6~11s。
+    改为只扫最近 NS_LOOKBACK_MIN 分钟（命中快照时间索引），约 0.05~0.2s；
+    窗口内无数据（采集停摆/新集群）时回退全量查询兜底。
+    """
     if denied := await _deny_cluster(user, cluster_id):
         return denied
-    cache_key = f"cache:ns-list:{cluster_id}"
+    cache_key = f"cache:ns-list:v2:{cluster_id}"
     try:
         cached = await redis_pool.get(cache_key)
         if cached:
@@ -67,12 +73,24 @@ async def namespace_list(cluster_id: int, user=Depends(require_any_user)):
     except Exception:  # noqa: BLE001  Redis 不可用则降级直查
         pass
     async with async_session() as session:
+        since = datetime.now() - timedelta(minutes=NS_LOOKBACK_MIN)
         result = await session.execute(
             select(ResourceSnapshot.namespace)
-            .where(ResourceSnapshot.cluster_id == cluster_id)
+            .where(
+                ResourceSnapshot.cluster_id == cluster_id,
+                ResourceSnapshot.snapshot_time >= since,
+                ResourceSnapshot.namespace != "",
+            )
             .distinct()
         )
         ns_list = sorted({r[0] for r in result.all() if r[0]})
+        if not ns_list:  # 兜底：采集停摆或只有历史数据 → 全量（慢但保证不空）
+            result = await session.execute(
+                select(ResourceSnapshot.namespace)
+                .where(ResourceSnapshot.cluster_id == cluster_id, ResourceSnapshot.namespace != "")
+                .distinct()
+            )
+            ns_list = sorted({r[0] for r in result.all() if r[0]})
     try:
         await redis_pool.set(cache_key, json.dumps(ns_list), ex=NS_CACHE_TTL)
     except Exception:  # noqa: BLE001
@@ -80,14 +98,29 @@ async def namespace_list(cluster_id: int, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": ns_list}
 
 
+CTN_CACHE_TTL = 600  # Pod 容器名缓存秒数（容器名基本不变）
+
+
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/containers")
 async def pod_containers(cluster_id: int, namespace: str, pod_name: str, user=Depends(require_any_user)):
-    """列出 Pod 的容器名（进容器前选择用）"""
+    """列出 Pod 的容器名（进容器前选择用）；结果按 Pod 缓存 10 分钟，避免重复 describe"""
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
+    cache_key = f"cache:pod-ctn:{cluster_id}:{namespace}:{pod_name}"
+    try:
+        cached = await redis_pool.get(cache_key)
+        if cached:
+            return {"code": 200, "message": "success", "data": {"containers": json.loads(cached)}}
+    except Exception:  # noqa: BLE001
+        pass
     r = await executor_client.acall(executor_client.execute_command, cluster_id, namespace, f"describe pod {pod_name}")
     text = r.get("output", "") if r.get("success") else ""
     names = re.findall(r"container ([^\s:]+):", text)
+    if names:
+        try:
+            await redis_pool.set(cache_key, json.dumps(names), ex=CTN_CACHE_TTL)
+        except Exception:  # noqa: BLE001
+            pass
     return {"code": 200, "message": "success", "data": {"containers": names}}
 
 
