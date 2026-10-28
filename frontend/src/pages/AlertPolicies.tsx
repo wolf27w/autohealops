@@ -1,30 +1,13 @@
 // 告警策略页：审核人值班 + 日志告警规则
 import { useEffect, useState } from 'react'
-import { Card, Tabs, Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Tag, Popconfirm, message, Calendar } from 'antd'
+import { Alert, Card, Tabs, Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Tag, Popconfirm, message } from 'antd'
+import { useNavigate } from 'react-router-dom'
 import { PlusOutlined } from '@ant-design/icons'
 import {
-  getOnDuty, createOnDuty, updateOnDuty, deleteOnDuty,
-  getUsers,
   getResourceAlertRules, createResourceAlertRule, updateResourceAlertRule, deleteResourceAlertRule, getClusters,
   getAlertPolicies, updateAlertPolicy, getNotificationConfigs,
-  getDutyCalendar, createDutyOverride, deleteDutyOverride,
 } from '../services/api'
-import type { Cluster, NotificationConfig, User } from '../types'
-import type { Dayjs } from 'dayjs'
-
-const dayTypeLabel: Record<string, string> = { weekday: '工作日', weekend: '周末' }
-
-interface DutyItem {
-  id: number
-  name?: string
-  day_type?: string
-  shift_type?: string
-  start_time?: string
-  end_time?: string
-  user_ids?: string
-  enabled?: boolean
-  [key: string]: unknown
-}
+import type { Cluster, NotificationConfig } from '../types'
 
 interface ResourceAlertRule {
   id: number
@@ -50,84 +33,6 @@ interface AlertPolicy {
   notify_config_id?: number | null
   enabled?: boolean
   [key: string]: unknown
-}
-
-interface DutyDay {
-  date: string
-  holiday?: string
-  users?: string[]
-  overrides?: Array<{ substitute?: string }>
-  [key: string]: unknown
-}
-
-// ============ 审核人值班 ============
-function DutyTab() {
-  const [data, setData] = useState<DutyItem[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<DutyItem | null>(null)
-  const [form] = Form.useForm()
-
-  const load = () => getOnDuty().then((d) => setData(d as DutyItem[]))
-  useEffect(() => { load(); getUsers().then((d) => setUsers(d || [])) }, [])
-
-  const nameMap: Record<number, string> = {}
-  users.forEach((u) => { nameMap[u.id] = u.username })
-  const toNames = (ids: string) => (ids || '').split(',').filter(Boolean).map((x) => nameMap[Number(x)] || x).join('、')
-  const toIdArray = (ids: string) => (ids || '').split(',').filter(Boolean).map(Number)
-
-  const save = async () => {
-    const v = await form.validateFields()
-    const payload = { ...v, user_ids: Array.isArray(v.user_ids) ? v.user_ids.join(',') : v.user_ids }
-    if (editing) await updateOnDuty(editing.id, payload)
-    else await createOnDuty(payload)
-    message.success('已保存'); setOpen(false); form.resetFields(); load()
-  }
-
-  const openEdit = (r: DutyItem) => { setEditing(r); form.setFieldsValue({ ...r, user_ids: toIdArray(r.user_ids ?? '') }); setOpen(true) }
-
-  return (
-    <Card>
-      <div style={{ marginBottom: 12, color: '#666' }}>
-        所有异常都由 AI 诊断处理；需要审核的操作，由这里的值班审核人处理。当天值班人优先，无值班人时由管理员兜底。
-      </div>
-      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 16 }} onClick={() => { setEditing(null); form.resetFields(); setOpen(true) }}>新增审核人值班</Button>
-      <Table rowKey="id" dataSource={data} columns={[
-        { title: '名称', dataIndex: 'name' },
-        { title: '适用日', dataIndex: 'day_type', render: (d) => <Tag>{dayTypeLabel[d] || d}</Tag> },
-        { title: '班次', dataIndex: 'shift_type', render: (s) => (s === 'day' ? '白班' : '夜班') },
-        { title: '时间段', render: (_, r) => `${r.start_time} - ${r.end_time}` },
-        { title: '审核人', dataIndex: 'user_ids', render: (ids) => toNames(ids) || '-' },
-        { title: '启用', dataIndex: 'enabled', render: (v) => (v ? '是' : '否') },
-        { title: '操作', render: (_, r) => (
-          <Space>
-            <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
-            <Popconfirm title="确认删除？" onConfirm={async () => { await deleteOnDuty(r.id); load() }}>
-              <Button size="small" danger>删除</Button>
-            </Popconfirm>
-          </Space>
-        ) },
-      ]} />
-      <Modal title={editing ? '编辑审核人值班' : '新增审核人值班'} open={open} onOk={save} onCancel={() => setOpen(false)}>
-        <Form form={form} layout="vertical" initialValues={{ day_type: 'weekday', shift_type: 'day', start_time: '09:00', end_time: '18:00', enabled: true }}>
-          <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="如 工作日白班" /></Form.Item>
-          <Form.Item name="day_type" label="适用日"><Select options={[
-            { value: 'weekday', label: '工作日' }, { value: 'weekend', label: '周末' },
-          ]} /></Form.Item>
-          <Form.Item name="shift_type" label="班次"><Select options={[
-            { value: 'day', label: '白班' }, { value: 'night', label: '夜班' },
-          ]} /></Form.Item>
-          <Form.Item name="start_time" label="开始时间"><Input placeholder="09:00" /></Form.Item>
-          <Form.Item name="end_time" label="结束时间"><Input placeholder="18:00（夜班可跨天如 09:00）" /></Form.Item>
-          <Form.Item name="user_ids" label="审核人（用户名）" rules={[{ required: true }]}>
-            <Select mode="multiple" placeholder="选择审核人" optionFilterProp="label"
-              options={users.map((u) => ({ value: u.id, label: u.username }))} />
-          </Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
-        </Form>
-      </Modal>
-    </Card>
-  )
 }
 
 // ============ 容器资源阈值规则（Prometheus） ============
@@ -294,79 +199,22 @@ function PolicyTab() {
 }
 
 
-// ============ 值班日历 / 换班代班（C6） ============
-function DutyCalendarTab() {
-  const [days, setDays] = useState<DutyDay[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const [open, setOpen] = useState(false)
-  const [form] = Form.useForm()
-
-  const load = () => getDutyCalendar().then((d) => setDays((d as { days?: DutyDay[] }).days || []))
-  useEffect(() => { load(); getUsers().then((d) => setUsers(d || [])) }, [])
-
-  const dayMap: Record<string, DutyDay> = {}
-  days.forEach((d) => { dayMap[d.date] = d })
-  const fmt = (dt: Dayjs) => dt.format('YYYY-MM-DD')
-
-  const save = async () => {
-    const v = await form.validateFields()
-    await createDutyOverride(v)
-    message.success('已保存换班/代班')
-    setOpen(false); form.resetFields(); load()
-  }
-
-  const userOptions = users.map((u) => ({ value: u.username, label: u.username }))
-
-  return (
-    <Card>
-      <div style={{ marginBottom: 12, color: '#666' }}>
-        值班日历：按「排班规则 + 节假日」自动算出每天值班人；临时变动用<b>换班（指定替班的人）/ 代班（整班换人）</b>覆盖当天。点日期即可新增。
-      </div>
-      <Calendar
-        cellRender={(current, info) => {
-          if (info.type !== 'date') return info.originNode
-          const d = dayMap[fmt(current)]
-          if (!d) return null
-          return (
-            <div style={{ fontSize: 12, lineHeight: '18px' }}>
-              {d.holiday && <Tag color="red" style={{ marginInlineEnd: 2 }}>{d.holiday}</Tag>}
-              {(d.users || []).length === 0
-                ? <span style={{ color: '#bbb' }}>无值班</span>
-                : (d.users as string[]).map((u) => (
-                  <Tag key={u} color={d.overrides?.some((o) => o.substitute === u) ? 'orange' : 'blue'} style={{ marginBottom: 2 }}>{u}</Tag>
-                ))}
-            </div>
-          )
-        }}
-        onSelect={(dt) => { form.resetFields(); form.setFieldsValue({ date: fmt(dt), type: 'swap' }); setOpen(true) }}
-      />
-      <Modal title="换班 / 代班" open={open} onOk={save} onCancel={() => setOpen(false)}>
-        <Form form={form} layout="vertical" initialValues={{ type: 'swap' }}>
-          <Form.Item name="date" label="日期" rules={[{ required: true }]}><Input disabled /></Form.Item>
-          <Form.Item name="type" label="类型">
-            <Select options={[{ value: 'swap', label: '换班（替换指定值班人）' }, { value: 'substitute', label: '代班（加一名值班人）' }]} />
-          </Form.Item>
-          <Form.Item name="original_username" label="被替换人（换班时填；代班留空）">
-            <Select allowClear options={userOptions} placeholder="如 zhangsan" />
-          </Form.Item>
-          <Form.Item name="substitute_username" label="替班人" rules={[{ required: true }]}>
-            <Select options={userOptions} placeholder="选择替班人" />
-          </Form.Item>
-          <Form.Item name="note" label="备注"><Input placeholder="如：家里有事，调休" /></Form.Item>
-        </Form>
-      </Modal>
-    </Card>
-  )
-}
-
-
 export default function AlertPolicies() {
+  const navigate = useNavigate()
   return (
-    <Tabs items={[
-      { key: 'policy', label: '故障分类策略', children: <PolicyTab /> },
-      { key: 'duty', label: '审核人值班', children: <DutyTab /> },
-      { key: 'duty-calendar', label: '值班日历', children: <DutyCalendarTab /> },
-      { key: 'resource', label: '容器资源阈值', children: <ResourceRuleTab /> },
-    ]} />
+    <>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="审核人值班已独立成页"
+        description="排班规则、值班日历、换班/代班与节假日统一在「告警与工单 → 值班排班」维护；审核时当天值班人优先，无值班人时由管理员兜底。"
+        action={<Button size="small" type="primary" ghost onClick={() => navigate('/on-duty')}>去值班排班</Button>}
+      />
+      <Tabs items={[
+        { key: 'policy', label: '故障分类策略', children: <PolicyTab /> },
+        { key: 'resource', label: '容器资源阈值', children: <ResourceRuleTab /> },
+      ]} />
+    </>
   )
 }
