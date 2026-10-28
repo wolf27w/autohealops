@@ -54,3 +54,35 @@ async def close_stale_repair_plans(limit: int = 5000) -> int:
     await bump_dashboard_generation()
     logger.info("僵尸自愈计划已关闭 %d 条（关联告警已结束）", len(ids))
     return len(ids)
+
+
+async def cancel_running_plans_for_alert(alert_id: int) -> int:
+    """单条告警收尾时立即取消它的在跑计划（ORM 钩子调用，做到「告警一解决，计划即废」）。
+
+    与 close_stale_repair_plans 的区别：那个是周期兜底扫表；这个是变更即触发，
+    覆盖 ORM 写入路径（告警 resolve / 人工解决 / 工单关闭联动 等）。批量 update() 不走 ORM 事件，
+    仍由 5 秒兜底扫表覆盖。
+    """
+    if not alert_id:
+        return 0
+    cutoff = datetime.now() - timedelta(minutes=EXECUTING_GRACE_MIN)
+    async with async_session() as session:
+        ids = list((await session.execute(
+            select(RepairPlan.id).where(
+                RepairPlan.alert_id == alert_id,
+                or_(
+                    RepairPlan.status == "pending",
+                    (RepairPlan.status == "executing") & (RepairPlan.created_at <= cutoff),
+                ),
+            )
+        )).scalars())
+        if not ids:
+            return 0
+        await session.execute(
+            update(RepairPlan).where(RepairPlan.id.in_(ids)).values(status="cancelled")
+        )
+        await session.commit()
+    from app.core.redis_client import bump_dashboard_generation
+    await bump_dashboard_generation()
+    logger.info("告警 #%s 已收尾，取消在跑计划 %d 条", alert_id, len(ids))
+    return len(ids)

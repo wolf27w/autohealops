@@ -15,7 +15,9 @@
 注意：核心批量 `session.execute(update()/delete())` 不触发 ORM 事件，此类少量路径
 由前端 5s 轮询 + 后台预热兜底。
 """
-from sqlalchemy import event
+import asyncio
+
+from sqlalchemy import event, inspect
 
 from app.core.redis_client import bump_dashboard_generation_sync
 from app.models.alert import Alert
@@ -30,7 +32,45 @@ def _on_change(*_args) -> None:
     bump_dashboard_generation_sync()
 
 
+# 告警「活跃」状态：这些之外的（resolved/self_healed）触发计划收尾
+_ACTIVE_ALERT_STATUSES = ("pending", "awaiting_approval", "ticketed")
+# 计划收尾任务强引用（防止 create_task 被 GC）
+_plan_cancel_tasks: set = set()
+
+
+def _schedule_cancel_plans(alert_id: int) -> None:
+    """告警离开活跃态 → 立即取消它的在跑计划（异步、失败静默，5 秒兜底扫表仍在）"""
+    try:
+        from app.services.repair_plan_service import cancel_running_plans_for_alert
+        loop = asyncio.get_running_loop()
+    except Exception:  # noqa: BLE001  无事件循环（脚本/同步上下文）→ 交给兜底扫表
+        return
+    try:
+        task = loop.create_task(cancel_running_plans_for_alert(alert_id))
+        _plan_cancel_tasks.add(task)
+        task.add_done_callback(_plan_cancel_tasks.discard)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _on_alert_update(_mapper, _connection, target) -> None:
+    """告警状态变更钩子：除了失效缓存，还做「告警一解决 → 计划立即作废」。"""
+    bump_dashboard_generation_sync()
+    try:
+        hist = inspect(target).attrs.status.history
+        if not hist.has_changes():
+            return
+        new_status = (target.status or "").lower()
+        if new_status in _ACTIVE_ALERT_STATUSES:
+            return
+        _schedule_cancel_plans(int(target.id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 for _model in (Alert, Ticket, Approval, RepairPlan, Task):
     event.listen(_model, "after_insert", _on_change)
     event.listen(_model, "after_update", _on_change)
     event.listen(_model, "after_delete", _on_change)
+# 告警状态变更额外挂载（同一事件可多个监听器）
+event.listen(Alert, "after_update", _on_alert_update)

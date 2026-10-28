@@ -205,15 +205,16 @@ async def startup_tasks() -> None:
         ("告警自动处理", auto_process_alerts, 150.0),
         ("日志告警扫描", scan_log_alerts, 120.0),
         ("告警恢复自动关单", auto_close_tickets_for_resolved_alerts, 60.0),
-        # 僵尸自愈计划收尾：告警已结束但计划还挂在 pending/executing → cancelled（每 60 秒；查询走 (status) 索引，空转极轻）
+        # 僵尸自愈计划收尾：告警已结束但计划还挂在 pending/executing → cancelled（每 5 秒兜底；
+        # ORM 写入路径已由 orm_hooks 的告警状态钩子即时取消，这里只覆盖批量 update() 等绕过 ORM 的路径）
         ("僵尸计划收尾", close_stale_repair_plans, 120.0),
     ):
-        _background_tasks.append(asyncio.create_task(_interval_worker(name, 60 if name == "僵尸计划收尾" else 30, fn, timeout)))
+        _background_tasks.append(asyncio.create_task(_interval_worker(name, 5 if name == "僵尸计划收尾" else 30, fn, timeout)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
     # 仪表盘预热（每 10 秒）：把默认「实时」视图预先算好写缓存，前端轮询不再踩冷路径
     from app.api.stats import prewarm_dashboard
     _background_tasks.append(asyncio.create_task(_interval_worker("仪表盘预热", 10, prewarm_dashboard, 60.0)))
-    logger.info("后台定时任务已拆分启动：审批超时/告警自动处理/日志告警扫描/告警恢复自动关单（每 30 秒，独立隔离）+ 僵尸自愈计划收尾（每 60 秒）+ 周期维护 + 仪表盘预热（每 10 秒）")
+    logger.info("后台定时任务已拆分启动：审批超时/告警自动处理/日志告警扫描/告警恢复自动关单（每 30 秒，独立隔离）+ 僵尸自愈计划收尾（每 5 秒兜底 + 告警变更即触发）+ 周期维护 + 仪表盘预热（每 10 秒）")
 
     # 云原生 RBAC：启动时自动接入存量集群（未接入的自动补上，无需人工触发）
     asyncio.create_task(_auto_setup_rbac_on_startup())
