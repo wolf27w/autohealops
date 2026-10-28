@@ -9,11 +9,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"encoding/json"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/autohealops/k8s-executor/internal/executor"
+	"github.com/autohealops/k8s-executor/internal/watcher"
+	"go.uber.org/zap"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
 	pb "github.com/autohealops/k8s-executor/proto"
 	"google.golang.org/grpc"
@@ -44,6 +48,7 @@ func main() {
 	clusterID := flag.Int64("cluster-id", 0, "集群 id（注册用）")
 	token := flag.String("token", "", "接入令牌")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig 路径（空=in-cluster，回退 ~/.kube/config）")
+	watch := flag.Bool("watch", true, "是否在 agent 内跑告警检测（Pod/Node watcher → 经隧道上报平台）")
 	whitelist := flag.String("whitelist", defaultWhitelist, "命令白名单")
 	flag.Parse()
 
@@ -83,7 +88,7 @@ func main() {
 
 	// 断线自动重连
 	for ctx.Err() == nil {
-		if err := runTunnel(ctx, conn, *clusterID, *token, exec); err != nil {
+		if err := runTunnel(ctx, conn, *clusterID, *token, exec, cs, *watch); err != nil {
 			fmt.Fprintf(os.Stderr, "[agent] 隧道断开: %v，3s 后重连\n", err)
 		}
 		select {
@@ -94,30 +99,90 @@ func main() {
 	}
 }
 
-func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, token string, exec *executor.Executor) error {
+func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, token string,
+	exec *executor.Executor, cs *kubernetes.Clientset, enableWatch bool) error {
 	client := agentpb.NewAgentServiceClient(conn)
 	stream, err := client.Tunnel(ctx)
 	if err != nil {
 		return err
 	}
+	// stream.Send 不是并发安全的：主循环回响应 + watcher goroutine 上报事件都要写，
+	// 统一走 sendMu 串行化。
+	var sendMu sync.Mutex
+	send := func(f *agentpb.AgentFrame) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(f)
+	}
+
 	// 注册
-	if err := stream.Send(&agentpb.AgentFrame{Type: "register", ClusterId: clusterID, Token: token}); err != nil {
+	if err := send(&agentpb.AgentFrame{Type: "register", ClusterId: clusterID, Token: token}); err != nil {
 		return err
 	}
 	fmt.Printf("[agent] 已向平台注册集群 %d，等待指令\n", clusterID)
+
+	// 告警检测（P2）：watcher 在 agent 内跑，事件经隧道上报平台，平台统一写库/触发处理
+	var pw *watcher.PodWatcher
+	var nw *watcher.NodeWatcher
+	stopWatch := func() {
+		if pw != nil {
+			pw.Stop()
+			pw = nil
+		}
+		if nw != nil {
+			nw.Stop()
+			nw = nil
+		}
+	}
+	defer stopWatch()
+
+	// 收到平台下发的 config（告警策略）后再启动 watcher；超时没收到就用默认策略
+	var watchOnce sync.Once
+	startWatch := func(policies []watcher.PolicyRow) {
+		if !enableWatch {
+			return
+		}
+		watchOnce.Do(func() {
+			logger, _ := zap.NewProduction()
+			watcher.SetSink(watcher.NewTunnelSink(uint(clusterID), func(payload []byte) error {
+				return send(&agentpb.AgentFrame{Type: "event", Method: "AlertEvent", Payload: payload})
+			}, logger))
+			pw = watcher.NewPodWatcher(uint(clusterID), cs, logger)
+			nw = watcher.NewNodeWatcher(uint(clusterID), cs, logger)
+			if len(policies) > 0 {
+				pw.ApplyPolicies(policies)
+			}
+			pw.Start()
+			nw.Start()
+			fmt.Printf("[agent] 告警检测已启动（Pod/Node watcher，策略 %d 条）\n", len(policies))
+		})
+	}
+	// 兜底：15s 内没收到 config 也先把 watcher 跑起来（用默认策略）
+	cfgTimer := time.AfterFunc(15*time.Second, func() { startWatch(nil) })
+	defer cfgTimer.Stop()
+
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
+			stopWatch()
 			return err
 		}
 		switch frame.Type {
 		case "register_ack":
 			fmt.Println("[agent] 注册成功")
 		case "ping":
-			_ = stream.Send(&agentpb.AgentFrame{Type: "pong", ReqId: frame.ReqId})
+			_ = send(&agentpb.AgentFrame{Type: "pong", ReqId: frame.ReqId})
+		case "config":
+			var cfg struct {
+				Policies []watcher.PolicyRow `json:"policies"`
+			}
+			if json.Unmarshal(frame.Payload, &cfg) == nil {
+				fmt.Printf("[agent] 收到平台策略 %d 条\n", len(cfg.Policies))
+				startWatch(cfg.Policies)
+			}
 		case "request":
 			resp := handleRequest(ctx, exec, frame)
-			if err := stream.Send(resp); err != nil {
+			if err := send(resp); err != nil {
 				return err
 			}
 		}

@@ -65,6 +65,7 @@ type PodWatcher struct {
 	obsMu    sync.Mutex
 	observed map[string]*observedFault
 	// 告警策略（fault_type → 配置）
+	polMu    sync.RWMutex
 	policies map[string]*policyConfig
 	// Terminating 扫描进行中标志（防重叠：上一轮未结束时跳过本轮）
 	terminatingScanning int32
@@ -82,13 +83,53 @@ func NewPodWatcher(clusterID uint, clientset *kubernetes.Clientset, logger *zap.
 	return w
 }
 
-// loadPolicies 从数据库加载告警策略（alert_policies 表），读不到用默认常量
+// PolicyRow 告警策略行（DB 读取 / 平台经隧道下发共用）
+type PolicyRow struct {
+	FaultType         string `json:"fault_type"`
+	ObserveSeconds    int    `json:"observe_seconds"`
+	TimeWindowSeconds int    `json:"time_window_seconds"`
+	RestartThreshold  int    `json:"restart_threshold"`
+}
+
+// ApplyPolicies 应用策略（agent 收到平台 config 帧后调用）
+func (w *PodWatcher) ApplyPolicies(rows []PolicyRow) {
+	w.polMu.Lock()
+	defer w.polMu.Unlock()
+	for _, p := range rows {
+		cfg := &policyConfig{
+			observeWindow:    time.Duration(p.ObserveSeconds) * time.Second,
+			oomWindow:        time.Duration(p.TimeWindowSeconds) * time.Second,
+			restartThreshold: int32(p.RestartThreshold),
+		}
+		if cfg.observeWindow <= 0 {
+			cfg.observeWindow = observeWindow
+		}
+		if cfg.oomWindow <= 0 {
+			cfg.oomWindow = oomTimeWindow
+		}
+		if cfg.restartThreshold <= 0 {
+			cfg.restartThreshold = restartGrowThreshold
+		}
+		w.policies[p.FaultType] = cfg
+	}
+	if w.logger != nil {
+		w.logger.Info("告警策略已应用", zap.Int("count", len(rows)))
+	}
+}
+
+// loadPolicies 从数据库加载告警策略（alert_policies 表），读不到用默认常量。
+// 隧道模式（agent 跑在集群内、无平台库）跳过，改由平台 config 帧下发 → ApplyPolicies。
 func (w *PodWatcher) loadPolicies() {
+	if !CurrentSink().LocalFilters() {
+		return
+	}
 	db := database.GetDB()
 	var policies []database.AlertPolicy
 	if err := db.Where("enabled = ?", true).Find(&policies).Error; err != nil {
 		return
 	}
+	w.polMu.Lock()
+	defer w.polMu.Unlock()
 	for _, p := range policies {
 		cfg := &policyConfig{
 			observeWindow:    time.Duration(p.ObserveSeconds) * time.Second,
@@ -110,7 +151,10 @@ func (w *PodWatcher) loadPolicies() {
 
 // policyFor 取某故障类型的策略（无则默认）
 func (w *PodWatcher) policyFor(faultType string) *policyConfig {
-	if cfg, ok := w.policies[faultType]; ok {
+	w.polMu.RLock()
+	cfg, ok := w.policies[faultType]
+	w.polMu.RUnlock()
+	if ok {
 		return cfg
 	}
 	return &policyConfig{
@@ -175,7 +219,11 @@ func (w *PodWatcher) handlePodEvent(event watch.Event) {
 		return
 	}
 	// 维护窗口 + 限流（观察与上报统一入口检查）
-	if inMaintenanceWindow(w.clusterID) || rateLimited(w.clusterID) {
+	// 隧道模式（agent）连不到平台库 → 维护窗口交给平台侧在入库前判
+	if CurrentSink().LocalFilters() && inMaintenanceWindow(w.clusterID) {
+		return
+	}
+	if rateLimited(w.clusterID) {
 		return
 	}
 
@@ -356,102 +404,25 @@ func inferDeploymentName(podName string) string {
 	return podName
 }
 
-// dedupLocks 串行化同一去重键的「查-插/更新」临界区，消除并发重复告警。
-// executor 固定单副本（见 k8s/deployments.yaml：有状态 watcher，多副本会重复 watch），
-// 进程内互斥即可保证「查-插」原子；若未来水平扩容，需追加 DB 唯一索引（活跃去重键）+ upsert 兑底。
-var dedupLocks sync.Map // key string -> *sync.Mutex
-
-func dedupLock(key string) *sync.Mutex {
-	if m, ok := dedupLocks.Load(key); ok {
-		return m.(*sync.Mutex)
-	}
-	m, _ := dedupLocks.LoadOrStore(key, &sync.Mutex{})
-	return m.(*sync.Mutex)
-}
-
-// isDuplicateKey 判断是否 MySQL 唯一索引冲突（1062）。告警去重 DB 兜底用。
-func isDuplicateKey(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate")
-}
-
-// mergeDuplicateAlert 告警去重 DB 兜底：唯一索引冲突（多副本竞态）时，
-// 合并进已有活跃告警（event_count + 1），不新增重复记录。
-// byDeployment=true 按 deployment_name 维度合并，否则按 resource_name 维度。
-func mergeDuplicateAlert(clusterID uint, name, faultType, message string, byDeployment bool) {
-	db := database.GetDB()
-	where := "cluster_id = ? AND resource_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')"
-	if byDeployment {
-		where = "cluster_id = ? AND deployment_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')"
-	}
-	if err := db.Exec(
-		"UPDATE alerts SET event_count = event_count + 1, detected_at = ?, message = ? WHERE "+where,
-		time.Now(), message, clusterID, name, faultType,
-	).Error; err != nil {
-		// 兜底失败不致命（下一轮观察期会再报），静默忽略
-		return
-	}
-}
-
-// createAlert 写入告警/自愈记录
+// createAlert 写入告警/自愈记录（落地方式由 AlertSink 决定：DB 直写 / 隧道上报）
 func (w *PodWatcher) createAlert(namespace, name, faultType, severity, message string, occurredAt *time.Time, status string) {
-	db := database.GetDB()
-	depName := inferDeploymentName(name)
-	// pending 去重聚合：按 Deployment 名聚合（同服务持续故障合并为一条告警，不按 Pod 实例分散）；
-	// 跨状态聚合（pending/awaiting_approval 都算活跃，同服务同故障只保留一条活跃告警）
-	if status == "pending" {
-		// 并发竞态防护：watch 事件循环与观察期扫描为不同 goroutine，
-		// 同去重键的「查-插」必须互斥，否则会并发首插出重复告警。
-		mu := dedupLock(fmt.Sprintf("%d/%s/%s", w.clusterID, depName, faultType))
-		mu.Lock()
-		defer mu.Unlock()
-		var existing database.Alert
-		err := db.Where("cluster_id = ? AND deployment_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')",
-			w.clusterID, depName, faultType).
-			Order("id desc").First(&existing).Error
-		if err == nil {
-			db.Model(&existing).Updates(map[string]interface{}{
-				"event_count":   existing.EventCount + 1,
-				"detected_at":   time.Now(),
-				"message":       message,
-				"resource_name": name, // 更新为最新出问题的 Pod 名
-			})
-			return
-		}
-	}
-	alert := database.Alert{
+	id := CurrentSink().Report(AlertEvent{
 		ClusterID:      w.clusterID,
 		ResourceType:   "pod",
-		ResourceName:   name,
-		DeploymentName: depName,
 		Namespace:      namespace,
+		ResourceName:   name,
+		DeploymentName: inferDeploymentName(name),
 		FaultType:      faultType,
 		Severity:       severity,
-		Status:         status,
 		Message:        message,
-		EventCount:     1,
+		Status:         status,
 		OccurredAt:     occurredAt,
 		DetectedAt:     time.Now(),
-	}
-	if status == "resolved" {
-		now := time.Now()
-		alert.ResolvedAt = &now
-	}
-	if err := db.Create(&alert).Error; err != nil {
-		if isDuplicateKey(err) {
-			mergeDuplicateAlert(w.clusterID, depName, faultType, message, true)
-			w.logger.Info("Pod 告警命中唯一索引，已合并计数",
-				zap.Uint("cluster", w.clusterID), zap.String("fault", faultType))
-			return
-		}
-		w.logger.Error("写入告警失败", zap.Error(err))
-		return
-	}
-	w.logger.Info("Pod 告警写入",
-		zap.Uint("cluster", w.clusterID), zap.String("pod", name),
-		zap.String("fault", faultType), zap.String("status", status))
-	if status == "pending" {
-		// 告警写入即触发 api-server 立即处理（知识库优先 → AI 诊断 → 修复）
-		triggerAlertProcess(alert.ID)
+	})
+	if id != 0 {
+		w.logger.Info("Pod 告警写入",
+			zap.Uint("cluster", w.clusterID), zap.String("pod", name),
+			zap.String("fault", faultType), zap.String("status", status), zap.Uint("alert", id))
 	}
 }
 
@@ -520,7 +491,7 @@ func (w *PodWatcher) terminatingLoop() {
 // 全集群 Pod 一次性 List 在大集群下偶发 connection reset（API 读超时），
 // 改为分页（Limit+Continue）+ 单页瞬时错误有限重试，降低超时概率。
 func (w *PodWatcher) scanTerminating() {
-	if inMaintenanceWindow(w.clusterID) {
+	if CurrentSink().LocalFilters() && inMaintenanceWindow(w.clusterID) {
 		return
 	}
 	// 防重叠：上一轮扫描尚未结束时跳过本轮（避免大集群下扫描慢导致重叠）
@@ -601,17 +572,10 @@ func (w *PodWatcher) processTerminatingPage(pods *corev1.PodList) {
 	}
 }
 
-// emitTerminatingStuck 报 TerminatingStuck 告警（去重：同 Pod 已存在 pending 则不重复报）
+// emitTerminatingStuck 报 TerminatingStuck 告警（去重：同 Pod 已存在活跃告警则不重复报）
 func (w *PodWatcher) emitTerminatingStuck(pod *corev1.Pod, stuckFor time.Duration) {
-	db := database.GetDB()
-	var existing database.Alert
-	err := db.Where("cluster_id = ? AND resource_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')",
-		w.clusterID, pod.Name, "TerminatingStuck").Order("id desc").First(&existing).Error
-	if err == nil {
-		return // 已报过
-	}
 	t := pod.DeletionTimestamp.Time
-	alert := database.Alert{
+	CurrentSink().Report(AlertEvent{
 		ClusterID:      w.clusterID,
 		ResourceType:   "pod",
 		ResourceName:   pod.Name,
@@ -621,20 +585,11 @@ func (w *PodWatcher) emitTerminatingStuck(pod *corev1.Pod, stuckFor time.Duratio
 		Severity:       "high",
 		Status:         "pending",
 		Message:        fmt.Sprintf("Pod %s in namespace %s 卡 Terminating 已 %.0f 秒（预计 60s 后自动强删）", pod.Name, pod.Namespace, stuckFor.Seconds()),
-		EventCount:     1,
 		OccurredAt:     &t,
 		DetectedAt:     time.Now(),
-	}
-	if err := db.Create(&alert).Error; err != nil {
-		if isDuplicateKey(err) {
-			mergeDuplicateAlert(w.clusterID, pod.Name, "TerminatingStuck", alert.Message, false)
-			return
-		}
-		w.logger.Error("写入 TerminatingStuck 告警失败", zap.Error(err))
-		return
-	}
+		DedupBy:        "resource",
+	})
 	w.logger.Info("检测到 TerminatingStuck", zap.Uint("cluster", w.clusterID), zap.String("pod", pod.Name), zap.Duration("stuck", stuckFor))
-	triggerAlertProcess(alert.ID)
 }
 
 // forceDeletePod 自动强删卡死的 Pod（force + grace 0，免审批；批三 TerminatingStuck 兜底）
@@ -646,13 +601,8 @@ func (w *PodWatcher) forceDeletePod(pod *corev1.Pod) {
 		return
 	}
 	// 告警标记已解决（自愈：自动强删）
-	db := database.GetDB()
-	now := time.Now()
-	db.Model(&database.Alert{}).Where("cluster_id = ? AND resource_name = ? AND fault_type = ? AND status IN ('pending','awaiting_approval')",
-		w.clusterID, pod.Name, "TerminatingStuck").Updates(map[string]interface{}{
-		"status":      "resolved",
-		"resolved_at": &now,
-		"message":     fmt.Sprintf("Pod %s 卡 Terminating 已自动强删（force + grace 0）", pod.Name),
+	CurrentSink().Resolve(w.clusterID, "pod", pod.Name, "TerminatingStuck", ResolveOpts{
+		MessageOverride: fmt.Sprintf("Pod %s 卡 Terminating 已自动强删（force + grace 0）", pod.Name),
 	})
 	w.logger.Info("TerminatingStuck 已自动强删", zap.Uint("cluster", w.clusterID), zap.String("pod", pod.Name))
 }

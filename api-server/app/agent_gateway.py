@@ -7,6 +7,7 @@ agent（集群内单 Deployment）主动连本网关，建立 gRPC 双向流 Tun
 - 接入判定：某 cluster 的 agent 当前已连接 → 该集群走隧道（无需额外开关）。
 - 传输：同步 grpc.server（跑在后台线程），与现有同步 executor_client 兼容（经 acall 走线程池）。
 """
+import json
 import queue
 import threading
 import time
@@ -100,6 +101,33 @@ def call(cluster_id: int, method: str, payload: bytes, timeout: float = 30.0) ->
     return slot["payload"]
 
 
+def _push_config(a: "_AgentConn") -> None:
+    """把平台配置（告警策略）推给刚注册的 agent（best-effort，失败不影响隧道）"""
+    if not _loop:
+        return
+
+    async def _build():
+        from app.services.agent_alert_service import build_agent_config
+        return await build_agent_config(a.cluster_id)
+
+    try:
+        cfg = asyncio.run_coroutine_threadsafe(_build(), _loop).result(timeout=8)
+        payload = json.dumps(cfg, ensure_ascii=False).encode()
+        a.out.put(agent_pb2.AgentFrame(type="config", method="agent_config", payload=payload))
+        logger.info("已向 agent 下发配置 cluster=%s 策略=%d 条", a.cluster_id, len(cfg.get("policies") or []))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("下发 agent 配置失败 cluster=%s: %s", a.cluster_id, e)
+
+
+async def _handle_event(cluster_id: int, method: str, payload: bytes) -> None:
+    """处理 agent 上行事件（异常不外抛，避免打断隧道读循环）"""
+    from app.services.agent_alert_service import handle_event
+    try:
+        await handle_event(cluster_id, method, payload)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("处理 agent 事件失败 cluster=%s method=%s: %s", cluster_id, method, e)
+
+
 class _Servicer(agent_pb2_grpc.AgentServiceServicer):
     def Tunnel(self, request_iterator, context):  # noqa: N802 (grpc 命名)
         state = {"a": None}
@@ -128,6 +156,8 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                             _agents[a.cluster_id] = a
                         a.out.put(agent_pb2.AgentFrame(type="register_ack"))
                         logger.info("agent 已接入 cluster=%s", a.cluster_id)
+                        # P2：把告警策略下发给 agent（agent 内 watcher 用；agent 连不到平台库）
+                        _push_config(a)
                     elif f.type == "response":
                         a = state["a"]
                         if a:
@@ -136,6 +166,13 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                                 slot["payload"] = bytes(f.payload)
                                 slot["error"] = f.error
                                 slot["event"].set()
+                    elif f.type == "event":
+                        # P2：agent 内 watcher 检测到的故障/恢复事件 → 平台统一写库 + 触发处理
+                        a = state["a"]
+                        if a and _loop:
+                            asyncio.run_coroutine_threadsafe(
+                                _handle_event(a.cluster_id, f.method, bytes(f.payload)), _loop
+                            )
                     elif f.type == "pong":
                         pass
             except Exception as e:  # noqa: BLE001
