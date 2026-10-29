@@ -308,6 +308,15 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("会话定时采集启动失败: %s", e)
 
+    # D1 凭据到期主动通知（2026-10-29）：30/7/1 天三档提醒，每小时扫一次（Redis 去重）
+    try:
+        from app.services.credential_notice_service import check_credentials
+        _background_tasks.append(asyncio.create_task(
+            _interval_worker("凭据到期提醒", 3600, check_credentials, 120.0)))
+        logger.info("凭据到期提醒已启动（每 60 分钟扫描一次）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("凭据到期提醒启动失败: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

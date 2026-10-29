@@ -103,7 +103,7 @@ class AIDiagnosisResult(Base):
     context_snapshot: Mapped[str] = mapped_column(Text, default="")
     diagnosis_json: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    is_useful: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_useful: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

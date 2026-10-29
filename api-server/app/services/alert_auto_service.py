@@ -1396,9 +1396,25 @@ async def _process_one(alert: Alert) -> bool:
         except Exception as e:  # noqa: BLE001
             # AI 诊断失败 → 主动转人工 + 通知值班人（不静默跳过）
             logger.warning("告警 %d AI 诊断失败，转人工: %s", alert.id, e)
+            # 单独记录（老板 2026-10-29 口径）：失败率/原因分布要能统计
+            try:
+                from app.services import diagnosis_failure_service as _dfail
+                await _dfail.record(
+                    alert_id=alert.id, cluster_id=alert.cluster_id, fault_type=alert.fault_type,
+                    stage="diagnose", reason=_dfail.classify(str(e)), attempts=2, error=str(e),
+                    namespace=alert.namespace or "", resource_type=alert.resource_type,
+                    resource_name=alert.resource_name or "")
+            except Exception as _e:  # noqa: BLE001
+                logger.debug("记录诊断失败失败: %s", _e)
             await _mark_manual_and_notify(alert, "AI 诊断失败", str(e)[:150])
             return True
-        # 沉淀时机改为「执行成功后」，诊断后不立即写库
+        # A-2（2026-10-29 老板口径）：诊断成功即沉淀知识库。
+        # 原来只在「修复执行成功」后沉淀，没走到执行的结论全丢了 → 同类问题反复推理、命中率上不去。
+        if root_cause:
+            try:
+                await _dedup_knowledge(alert.fault_type, root_cause, repair_steps_text, execution_steps="")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("诊断结论沉淀知识库失败: %s", e)
 
     # 3.25 探针配置问题（平台可直接修）：AI 常把它判成 B 层「需改代码」就转人工，
     # 但实测已证明是探针参数问题 → 生成调参方案走审批链，不让人为踢回。
@@ -1462,6 +1478,15 @@ async def _process_one(alert: Alert) -> bool:
             steps = plan.get("steps", [])
         except Exception as e:  # noqa: BLE001
             logger.warning("告警 %d 方案生成失败: %s", alert.id, e)
+            try:
+                from app.services import diagnosis_failure_service as _dfail
+                await _dfail.record(
+                    alert_id=alert.id, cluster_id=alert.cluster_id, fault_type=alert.fault_type,
+                    stage="plan", reason="plan_error", attempts=1, error=str(e),
+                    namespace=alert.namespace or "", resource_type=alert.resource_type,
+                    resource_name=alert.resource_name or "")
+            except Exception as _e:  # noqa: BLE001
+                logger.debug("记录方案生成失败失败: %s", _e)
             await _mark_manual_and_notify(alert, "方案生成失败", str(e)[:150])
             return True
 
@@ -1516,6 +1541,12 @@ async def _process_one(alert: Alert) -> bool:
         await _record_suppression(alert)
         # 等待 + 验证修复（Pod 重建需时间，验证通过才标记已解决）
         repaired = await _verify_auto_repair(alert)
+        # A-3（2026-10-29）：隐式反馈 —— 自动修复验证结果反推诊断质量
+        try:
+            from app.services import diagnosis_feedback_service as _dfb
+            await _dfb.implicit_feedback(alert.id, bool(repaired), note="auto")
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("隐式反馈失败: %s", _e)
         if repaired:
             await _set_plan_status(plan_id, "completed")
             async with async_session() as session:

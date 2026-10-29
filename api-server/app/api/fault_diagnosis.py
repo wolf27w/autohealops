@@ -166,6 +166,29 @@ async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str
     return {"code": 200, "message": "success", "data": data}
 
 
+@router.get("/failures")
+async def list_diagnosis_failures(page: int = 1, page_size: int = 50, days: int = 7,
+                                  fault_type: str = "", user=Depends(require_any_user)):
+    """诊断失败记录（老板 2026-10-29 口径：诊断失败要单独记录）"""
+    from app.services import diagnosis_failure_service as dfs
+    data = await dfs.list_failures(page=page, page_size=page_size, fault_type=fault_type, days=days)
+    return {"code": 200, "message": "success", "data": data}
+
+
+@router.get("/failures/stats")
+async def diagnosis_failure_stats(days: int = 7, user=Depends(require_any_user)):
+    """诊断失败统计（按原因/故障类型/阶段）"""
+    from app.services import diagnosis_failure_service as dfs
+    return {"code": 200, "message": "success", "data": await dfs.stats(days=days)}
+
+
+@router.get("/quality")
+async def diagnosis_quality(days: int = 7, user=Depends(require_any_user)):
+    """诊断质量概览（人工/隐式评价 + 有用率）"""
+    from app.services import diagnosis_feedback_service as dfb
+    return {"code": 200, "message": "success", "data": await dfb.quality_stats(days=days)}
+
+
 @router.get("/{alert_id}/feedback")
 async def get_feedback(alert_id: int, user=Depends(require_any_user)):
     """AI 诊断反馈（C5）：列表 + 有用/无用统计"""
@@ -191,16 +214,11 @@ async def add_feedback(alert_id: int, payload: dict, user=Depends(require_operat
         rating = 0
     if rating not in (1, -1):
         return {"code": 400, "message": "rating 必须是 1（有用）或 -1（无用）", "data": None}
-    async with async_session() as session:
-        fb = AiFeedback(
-            alert_id=alert_id, rating=rating,
-            comment=(payload.get("comment") or "")[:500],
-            username=user.username if user else "",
-        )
-        session.add(fb)
-        await session.commit()
-        await session.refresh(fb)
-    return {"code": 200, "message": "success", "data": {"id": fb.id}}
+    # A-3（2026-10-29）：反馈同时回写最近一条诊断的 is_useful（原来只写 ai_feedback，is_useful 永远是 NULL）
+    from app.services import diagnosis_feedback_service as dfb
+    data = await dfb.user_feedback(alert_id, rating, payload.get("comment") or "",
+                                  user.username if user else "")
+    return {"code": 200, "message": "success", "data": data}
 
 
 @router.get("/{alert_id}")

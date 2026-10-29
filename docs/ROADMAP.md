@@ -274,6 +274,22 @@ M2 executor HA ─► B3
 2026-10-29 已改为 **api-server 采集指标注入诊断上下文**（`services/diagnosis_metrics.py`）：Pod 容器
 CPU/内存（含 limit 使用率）/重启/就绪 + 节点 Ready/CPU/内存/load1/磁盘，近 60 分钟 min/max/avg。
 
+### A-2/A-3/B1/D1/D2/D3（2026-10-29 第二批，老板「把 A 需求、D 需求都做了，诊断失败单独记录」）
+
+| 项 | 内容 | 落点 |
+|---|---|---|
+| **B1 诊断失败单独记录** | 新表 `diagnosis_failures`（迁移 `d5e6f7a8b9c0`）：alert_id / cluster / fault_type / stage(diagnose\|plan) / reason(ai_error\|timeout\|empty_result\|rate_limited\|plan_error) / attempts / error / model | `models/diagnosis.py`、`services/diagnosis_failure_service.py`、写入点在 `alert_auto_service`（诊断两次失败、方案生成失败） |
+| **A-2 诊断即沉淀知识库** | 原来只在「修复执行成功」后沉淀，没执行到的结论全丢；现在诊断拿到 root_cause 就写知识库（同源 0.9 相似度去重） | `alert_auto_service`（AI 诊断成功分支） |
+| **A-3 反馈闭环** | ① 人工 👍/👎 同步回写 `ai_diagnosis_results.is_useful`；② **隐式反馈**：修复验证通过→1、未通过→-1（人工优先不覆盖）；③ 质量接口 `GET /fault-diagnoses/quality` | `services/diagnosis_feedback_service.py`、`api/fault_diagnosis.py`、`approval_service`/`alert_auto_service` 验证点 |
+| **D1 凭据到期通知** | 每小时扫 `clusters.cred_expires_at`，30/7/1 天三档 + 已过期，站内信 + IM（`notify_platform`）；Redis 按「集群+档位+到期时间戳」去重 | `services/credential_notice_service.py`、`main.py` 后台循环 |
+| **D2 大表分区核对** | 新增只读脚本 `scripts/check_partitions.py`：实测 `resource_snapshots` 已分区（12 个，807 万行，边界到 2026-11-02）；**`pod_metrics` 261 万行、`quota_snapshots`、`slow_sql_records` 仍未分区** → 需运维窗口 DDL | `scripts/check_partitions.py` |
+| **D3 大屏验收** | CDP 实测 `/screen`：3 个集群数据正常（节点 50 / Pod 797 / CPU 3% / 内存 35%，MTTR 7.3 分钟），截图见附件 | — |
+| **历史重复告警评估** | 只读脚本 `scripts/alert_merge_report.py`：1797 行告警里 **233 个重复分组（918 行）**，30 分钟内相邻重复 613 行（新规则已开始吸收）；真正归并需单独确认 | `scripts/alert_merge_report.py` |
+
+前端：故障诊断页加「诊断失败记录」弹窗 + 近 7 天质量概览（诊断数/已评价/有用率）。
+
+---
+
 ### 探针专项（2026-10-29 当日完成，`services/probe_audit.py`）
 
 探针类故障（`PodRestartProbeFail` / `CrashLoopBackOff`）占告警大头，原诊断只会说「探针失败，去看 health indicators」。

@@ -461,6 +461,13 @@ export const getFaultDiagnoses = (params?: PageParams & { category?: string }) =
 export const getFaultDiagnosesPaged = (params?: PageParams & { category?: string }) =>
   http.get<PageResult<FaultDiagnosisItem>>('/fault-diagnoses', { params: { ...params, with_total: true } })
 export const getFaultDiagnosis = (alertId: number) => http.get<FaultDiagnosisItem>(`/fault-diagnoses/${alertId}`)
+// 诊断失败记录 + 诊断质量（A-3 / B1，2026-10-29）
+export const getDiagnosisFailures = (params?: { page?: number; page_size?: number; days?: number }) =>
+  http.get('/fault-diagnoses/failures', { params })
+export const getDiagnosisFailureStats = (days = 7) =>
+  http.get('/fault-diagnoses/failures/stats', { params: { days } })
+export const getDiagnosisQuality = (days = 7) =>
+  http.get('/fault-diagnoses/quality', { params: { days } })
 
 // ============ 数据库连接管理 ============
 export const getDBConnections = () => http.get('/db-connections')

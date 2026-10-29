@@ -19,7 +19,7 @@ from app.models.cluster import Cluster
 from app.models.custom_task import CustomTask, CustomTaskLog
 from app.models.db_connection import DBConnection
 from app.models.decision import DecisionPolicy, DecisionResult
-from app.models.diagnosis import AIDiagnosisResult
+from app.models.diagnosis import AIDiagnosisResult, DiagnosisFailure
 from app.models.diagnostic import DiagnosticReport, DiagnosticTask
 from app.models.execution import ExecutionLog
 from app.models.knowledge import KnowledgeEntry
@@ -99,6 +99,7 @@ __all__ = [
     "PromptTemplate",
     "PromptVersion",
     "AIDiagnosisResult",
+    "DiagnosisFailure",
     "DiagnosticTask",
     "DiagnosticReport",
     "DBConnection",

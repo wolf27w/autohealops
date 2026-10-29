@@ -425,6 +425,38 @@ export interface FaultDiagnosisItem {
   [key: string]: unknown
 }
 
+export interface DiagnosisFailureItem {
+  id: number
+  alert_id: number
+  cluster_id?: number | null
+  namespace?: string
+  resource_name?: string
+  fault_type?: string
+  stage?: string
+  reason?: string
+  attempts?: number
+  error?: string
+  model?: string
+  created_at?: string
+}
+
+export interface DiagnosisQuality {
+  days: number
+  diagnoses: number
+  judged: number
+  useful: number
+  useless: number
+  useful_rate: number | null
+}
+
+export interface DiagnosisFailureStats {
+  days: number
+  total: number
+  by_reason: Array<{ reason: string; count: number }>
+  by_fault_type: Array<{ fault_type: string; count: number }>
+  by_stage: Array<{ stage: string; count: number }>
+}
+
 export interface AiFeedbackData {
   useful?: number
   useless?: number

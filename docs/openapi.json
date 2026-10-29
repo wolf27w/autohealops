@@ -5150,6 +5150,168 @@
         "summary": "List Fault Diagnoses"
       }
     },
+    "/api/v1/fault-diagnoses/failures": {
+      "get": {
+        "description": "诊断失败记录（老板 2026-10-29 口径：诊断失败要单独记录）",
+        "operationId": "get_api_v1_fault_diagnoses_failures",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fault_type",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Fault Type",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Diagnosis Failures"
+      }
+    },
+    "/api/v1/fault-diagnoses/failures/stats": {
+      "get": {
+        "description": "诊断失败统计（按原因/故障类型/阶段）",
+        "operationId": "get_api_v1_fault_diagnoses_failures_stats",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Diagnosis Failure Stats"
+      }
+    },
+    "/api/v1/fault-diagnoses/quality": {
+      "get": {
+        "description": "诊断质量概览（人工/隐式评价 + 有用率）",
+        "operationId": "get_api_v1_fault_diagnoses_quality",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Diagnosis Quality"
+      }
+    },
     "/api/v1/fault-diagnoses/{alert_id}": {
       "get": {
         "description": "查看某告警的最新诊断结果",

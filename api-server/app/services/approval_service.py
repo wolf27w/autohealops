@@ -955,6 +955,13 @@ async def execute_approved_plan(plan_id: int) -> None:
     else:
         repaired = True  # 非 Pod 资源无状态验证能力，默认通过
     verdict = "healed" if repaired else "unchanged"
+    # A-3（2026-10-29）：隐式反馈 —— 修复验证结果反推诊断质量（人工已评价则不覆盖）
+    try:
+        from app.services import diagnosis_feedback_service as _dfb
+        if plan and plan.alert_id:
+            await _dfb.implicit_feedback(plan.alert_id, bool(repaired), note=verdict)
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("隐式反馈失败: %s", _e)
 
     if repaired:
         # 人工审批通过 + 执行 + 验证通过 → 告警标记「已解决」（resolved）

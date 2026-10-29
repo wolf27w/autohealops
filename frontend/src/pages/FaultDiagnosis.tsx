@@ -2,9 +2,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Tag, Button, Space, Modal, message, Input } from 'antd'
-import { getFaultDiagnosesPaged, getFaultDiagnosis, diagnoseAlert, getAiFeedback, addAiFeedback } from '../services/api'
+import { getFaultDiagnosesPaged, getFaultDiagnosis, diagnoseAlert, getAiFeedback, addAiFeedback,
+  getDiagnosisFailures, getDiagnosisQuality } from '../services/api'
 import { canWrite } from '../utils/auth'
-import type { AiFeedbackData, FaultDiagnosisItem } from '../types'
+import type { AiFeedbackData, FaultDiagnosisItem, DiagnosisFailureItem, DiagnosisQuality } from '../types'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 import Markdown from '../components/Markdown'
@@ -22,6 +23,20 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
   })
   const data = paged?.items ?? []
   const total = paged?.total ?? 0
+  // B1 诊断失败记录（2026-10-29）：单独台账 + 统计
+  const [failOpen, setFailOpen] = useState(false)
+  const [failPage, setFailPage] = useState(1)
+  const { data: quality } = useQuery({
+    queryKey: ['diagnosis-quality'],
+    queryFn: () => getDiagnosisQuality(7) as unknown as Promise<DiagnosisQuality>,
+    refetchInterval: 60000,
+  })
+  const { data: failures, isLoading: failLoading } = useQuery({
+    queryKey: ['diagnosis-failures', failPage],
+    queryFn: () => getDiagnosisFailures({ page: failPage, page_size: 20 }) as unknown as Promise<{ items: DiagnosisFailureItem[]; total: number }>,
+    enabled: failOpen,
+    refetchInterval: failOpen ? 30000 : false,
+  })
   const [detail, setDetail] = useState<FaultDiagnosisItem | null>(null)
   const [currentAlertId, setCurrentAlertId] = useState<number | null>(null)
   const [diagnosing, setDiagnosing] = useState<number | null>(null)
@@ -71,6 +86,18 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
         <div style={{ marginTop: 4, color: '#999', fontSize: 12 }}>
           已按「集群 + 命名空间 + 资源 + 故障类型」<strong>归并</strong>：同一问题只列最新一条，
           「次数」= 该问题告警次数；重复诊断已自动复用上次结论（窗口可在系统设置 diagnosis_reuse_minutes 调整）。
+        </div>
+        <div style={{ marginTop: 6 }}>
+          <Space>
+            <Button size="small" onClick={() => { setFailPage(1); setFailOpen(true) }}>诊断失败记录</Button>
+            {quality && (
+              <span style={{ color: '#888', fontSize: 12 }}>
+                近 {quality.days} 天诊断 {quality.diagnoses} 条，已评价 {quality.judged} 条：
+                有用 {quality.useful} / 无用 {quality.useless}
+                {quality.useful_rate !== null && `（有用率 ${quality.useful_rate}%）`}
+              </span>
+            )}
+          </Space>
         </div>
       </div>
       <Table rowKey="alert_id" loading={loading} dataSource={data}
@@ -139,6 +166,24 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
             </div>
           )
         })()}
+      </Modal>
+      <Modal title="诊断失败记录（近 7 天）" open={failOpen} onCancel={() => setFailOpen(false)} footer={null} width={900}>
+        <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>
+          AI 诊断失败 / 方案生成失败都会单独留痕（stage=diagnose|plan，reason=ai_error|timeout|empty_result|plan_error）。
+        </div>
+        <Table rowKey="id" size="small" loading={failLoading}
+          dataSource={failures?.items ?? []}
+          pagination={{ current: failPage, pageSize: 20, total: failures?.total ?? 0, onChange: setFailPage, showSizeChanger: false }}
+          columns={[
+            { title: '时间', dataIndex: 'created_at', width: 160, render: (v) => v ? String(v).slice(0, 19) : '-' },
+            { title: '告警', dataIndex: 'alert_id', width: 80 },
+            { title: '故障类型', dataIndex: 'fault_type', width: 160 },
+            { title: '资源', dataIndex: 'resource_name', ellipsis: true },
+            { title: '阶段', dataIndex: 'stage', width: 90, render: (v) => <Tag>{String(v || '-')}</Tag> },
+            { title: '原因', dataIndex: 'reason', width: 120, render: (v) => <Tag color="red">{String(v || '-')}</Tag> },
+            { title: '尝试', dataIndex: 'attempts', width: 70 },
+            { title: '错误', dataIndex: 'error', ellipsis: true, render: (v) => String(v || '-').slice(0, 120) },
+          ]} />
       </Modal>
     </div>
   )
