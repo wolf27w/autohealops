@@ -445,7 +445,9 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
     result = "success"
     try:
         # 子线程消费生成器，避免阻塞事件循环
-        progresses = await asyncio.to_thread(lambda: list(executor_client.execute_plan(alert.cluster_id, plan_id, plan_json, trace_id)))
+        # 计划执行统一走 plan_runner（支持「平台内置动作」步骤，如探针调参）
+        from app.services import plan_runner
+        progresses = await asyncio.to_thread(plan_runner.run_plan, alert.cluster_id, plan_id, plan_json, trace_id)
         failed_steps = []
         for progress in progresses:
             ok = bool(progress.get("success"))
@@ -902,6 +904,93 @@ async def _cancel_related_approvals(alert_id: int) -> None:
             logger.info("告警 %d 资源已恢复，解除 pending 审批单 %d 张", alert_id, cancelled)
 
 
+async def _resolve_deployment(alert: Alert) -> str:
+    """把 Pod 反查到所属 Deployment（探针只能改 Deployment 层）
+
+    Pod owner 是 ReplicaSet（名字 = {deployment}-{hash}）→ 去掉最后一段；
+    StatefulSet/DaemonSet 的 Pod 没有 Deployment 可改 → 返回空（不生成方案）。
+    """
+    if not alert.resource_name or not alert.namespace:
+        return ""
+    try:
+        d = await executor_client.acall(
+            executor_client.get_pod_detail, alert.cluster_id, alert.namespace, alert.resource_name)
+        if d.get("success"):
+            detail = d.get("detail") or {}
+            kind = (detail.get("owner_kind") or "").lower()
+            name = detail.get("owner_name") or ""
+            if kind == "replicaset" and name:
+                return "-".join(name.split("-")[:-1]) or ""
+            if kind in ("statefulset", "daemonset", "job", "cronjob"):
+                logger.info("Pod %s 属于 %s，探针调参暂只支持 Deployment，跳过", alert.resource_name, kind)
+                return ""
+    except Exception as e:  # noqa: BLE001
+        logger.debug("反查 Pod owner 失败: %s", e)
+    from app.utils.pod import infer_deployment_name
+    return infer_deployment_name(alert.resource_name)
+
+
+async def _build_probe_fix_steps(alert: Alert, probe_result: dict) -> list[dict]:
+    """探针配置问题 → 平台内置动作步骤（update_probe）
+
+    只处理「配置类」问题（timeout 过小 / 阈值过低 / 实测耗时 > timeout）。
+    端点本身不健康（非 2xx）不改探针——改了只会掩盖故障。
+    """
+    fixes = [f for f in (probe_result.get("findings") or []) if f.get("fix")]
+    if not fixes:
+        return []
+    deployment = await _resolve_deployment(alert)
+    if not deployment:
+        return []
+    steps, seen = [], set()
+    for f in fixes:
+        key = (f.get("container"), (f.get("fix") or {}).get("probe_type"))
+        if key in seen:
+            continue
+        seen.add(key)
+        params = dict(f["fix"])
+        params.update({
+            "namespace": alert.namespace or "",
+            "deployment": deployment,
+            "container": f.get("container", ""),
+        })
+        steps.append({
+            "platform_action": "update_probe",
+            "description": (f"调整 {deployment}/{f.get('container')} 的 {params['probe_type']} 探针："
+                            f"timeoutSeconds={params['timeout_seconds']}s、"
+                            f"failureThreshold={params['failure_threshold']}"),
+            "params": params,
+        })
+    return steps
+
+
+def _plan_is_platform(plan_row) -> bool:
+    """该方案是否为平台内置动作方案（如探针调参）"""
+    try:
+        steps = json.loads(plan_row.plan_json or "{}").get("steps") or []
+    except json.JSONDecodeError:
+        return False
+    return any(isinstance(s, dict) and s.get("platform_action") for s in steps)
+
+
+async def _create_probe_plan(alert: Alert, diag_row, steps: list) -> int:
+    """探针调参方案落表（RepairPlan，steps 为平台内置动作）"""
+    """探针调参方案落表（RepairPlan，steps 为平台内置动作）"""
+    async with async_session() as session:
+        plan = RepairPlan(
+            alert_id=alert.id,
+            diagnosis_id=diag_row.id if diag_row and diag_row.alert_id == alert.id else None,
+            plan_json=json.dumps({"steps": steps}, ensure_ascii=False),
+            operation_types="UPDATE",
+            risk_level="medium",
+            status="pending",
+        )
+        session.add(plan)
+        await session.commit()
+        await session.refresh(plan)
+        return plan.id
+
+
 async def _create_plan_from_kb(alert: Alert, diag_row, steps: list) -> int:
     """知识库命中零 AI：本地创建 RepairPlan 留痕，返回 plan_id"""
     from app.models import RepairPlan
@@ -1158,6 +1247,15 @@ async def _process_one(alert: Alert) -> bool:
     repair_steps_text = ""
     root_cause_layer = ""
     diag_cached = bool(diag_row and diag_row.diagnosis_json)
+    # 探针专项（2026-10-29）：只对 Pod 类故障采一次，供给「AI 诊断上下文」和「探针调参方案」两处用
+    probe_result: dict = {"text": "", "findings": []}
+    if alert.resource_type == "pod" and alert.resource_name:
+        try:
+            from app.services import probe_audit
+            probe_result = await probe_audit.audit_pod(
+                alert.cluster_id, alert.namespace or "", alert.resource_name)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("采集探针证据失败: %s", e)
     if not diag_cached:
         # 诊断去重（2026-10-29 老板反馈「同一个问题诊断有很多」）：
         # 同集群+namespace+资源名+fault_type 在窗口内已有**有结论**的诊断 → 直接复用，
@@ -1274,16 +1372,9 @@ async def _process_one(alert: Alert) -> bool:
                 diag_ctx["metrics_trend"] = metrics_text
             # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测，让结论落到
             # 「探针配置不合理」还是「端点真的挂了」，而不是笼统的「探针失败」。
-            if alert.resource_type == "pod" and alert.resource_name:
-                try:
-                    from app.services import probe_audit
-                    pr = await probe_audit.audit_pod(
-                        alert.cluster_id, alert.namespace or "", alert.resource_name)
-                    if pr.get("text"):
-                        alert_data["probe_evidence"] = pr["text"]
-                        diag_ctx["probe_evidence"] = pr["text"]
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("采集探针证据失败: %s", e)
+            if probe_result.get("text"):
+                alert_data["probe_evidence"] = probe_result["text"]
+                diag_ctx["probe_evidence"] = probe_result["text"]
             diagnosis = None
             _diag_err = None
             for _attempt in (1, 2):
@@ -1309,8 +1400,14 @@ async def _process_one(alert: Alert) -> bool:
             return True
         # 沉淀时机改为「执行成功后」，诊断后不立即写库
 
+    # 3.25 探针配置问题（平台可直接修）：AI 常把它判成 B 层「需改代码」就转人工，
+    # 但实测已证明是探针参数问题 → 生成调参方案走审批链，不让人为踢回。
+    probe_steps = await _build_probe_fix_steps(alert, probe_result)
+    if probe_steps:
+        logger.info("告警 %d 命中探针配置问题，生成 %d 个调参步骤（跳过 AI 方案生成）", alert.id, len(probe_steps))
+
     # 3.3 根因层路由（执行决策矩阵落地）：B/C/D 层直接转人工，不再浪费 AI 生成方案；A 层才走 Pod 自愈
-    layer = root_cause_layer or _infer_layer(alert.fault_type)
+    layer = "A" if probe_steps else (root_cause_layer or _infer_layer(alert.fault_type))
     if layer == "B":
         await _mark_manual_and_notify(
             alert, "根因在应用层（需改代码走发布）",
@@ -1334,7 +1431,18 @@ async def _process_one(alert: Alert) -> bool:
         return True
 
     # 4. 方案：有则复用 → 知识库命中直接复用（零 AI）→ 无则 AI 生成
-    if plan_row:
+    if probe_steps:
+        # 已有平台动作方案（上轮生成但未走完）→ 复用，不重复建单
+        if plan_row and _plan_is_platform(plan_row):
+            plan_id = plan_row.id
+            try:
+                steps = json.loads(plan_row.plan_json).get("steps") or probe_steps
+            except json.JSONDecodeError:
+                steps = probe_steps
+        else:
+            plan_id = await _create_probe_plan(alert, diag_row, probe_steps)
+            steps = probe_steps
+    elif plan_row:
         plan_id = plan_row.id
         try:
             steps = json.loads(plan_row.plan_json).get("steps", [])
@@ -1373,6 +1481,10 @@ async def _process_one(alert: Alert) -> bool:
 
     # 8. 按操作风险分流：风险评分决定自愈/审批（单人/双人）
     action = await _decide_action(alert, steps)
+    if probe_steps and action == "auto":
+        # 改探针会滚动重启 Pod，属影响面动作：至少单人放行（自愈规则仍可 force_auto 覆盖）
+        action = "approval_1"
+        logger.info("告警 %d 探针调参方案强制走审批（影响面动作）", alert.id)
 
     # 9. 场景规则覆盖（策略层规则库）：force_manual 强制审批 / force_auto 强制自动 / shadow 仅记录
     rule = await match_rule(alert)

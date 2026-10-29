@@ -286,3 +286,15 @@ CPU/内存（含 limit 使用率）/重启/就绪 + 节点 Ready/CPU/内存/load
 实测样例（`prod-lch/efreight-prm-…`）：三探针 `timeout=30s failureThreshold=10 initialDelay=80s`，端点 HTTP 200 / 6ms
 → 结论：**探针配置不背锅**，重启是应用/依赖侧问题（此前的 AI 结论把它归为「探针超时」是错的）。
 ai-service 侧：`render_ctx` 增 `{probe_evidence}`，存量模板没占位符时自动追加在 prompt 末尾（不改库里的提示词）。
+
+**探针自动修复（2026-10-29 当日完成，`services/plan_runner.py` + `alert_auto_service`）**
+
+- 探针审计判定为「配置类」问题（timeout 过小 / failureThreshold 过低 / 实测耗时 > timeout）时，
+  自动生成修复方案：`timeoutSeconds = max(当前, ceil(实测耗时)*2, 5)（上限 60）`、`failureThreshold = max(当前, 3)`，
+  **不动 path/port/kind**；只处理 Deployment 的 Pod（StatefulSet/DaemonSet 跳过）
+- 端点类问题（HTTP 503/404）**不生成方案**——改探针只会掩盖故障
+- 执行方式：step 用 `platform_action: update_probe`（结构化调 executor `UpdateProbe`），
+  新的 `plan_runner.run_plan` 统一执行「平台动作 + shell 步骤」，审批通过后走同一条路
+- 安全口径：改探针会滚动重启 Pod → **强制至少单人审批**（自愈规则 `force_auto` 仍可覆盖）；
+  已有平台动作方案时复用不重复建单
+- 单测：`api-server/tests/test_probe_audit.py`（8 条，锁住判定口径/参数边界/未知动作安全失败）

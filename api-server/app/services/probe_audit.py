@@ -154,24 +154,48 @@ async def _running_containers(cluster_id: int, namespace: str, pod: str) -> set[
     return {c.get("name") for c in (st.get("containers") or []) if c.get("state") == "running"}
 
 
-def _judge(item: dict, m: dict | None) -> list[str]:
-    """规则判定：返回问题描述列表（空 = 配置看起来合理）"""
+def _judge(item: dict, m: dict | None) -> list[dict]:
+    """规则判定：返回 [{kind, text}]（kind: config=可平台内修 / endpoint=端点真不健康 / hint=提示）"""
     issues = []
     t = item["timeout"]
     if t < 2:
-        issues.append(f"timeoutSeconds={t}s 偏小（Java/高负载服务建议 ≥3s）")
+        issues.append({"kind": "config", "text": f"timeoutSeconds={t}s 偏小（Java/高负载服务建议 ≥5s）"})
     if item["failure_threshold"] < 3:
-        issues.append(f"failureThreshold={item['failure_threshold']}（建议 ≥3，偶发抖动不至于重启）")
+        issues.append({"kind": "config",
+                       "text": f"failureThreshold={item['failure_threshold']}（建议 ≥3，偶发抖动不至于重启）"})
     if item["period"] < 5:
-        issues.append(f"periodSeconds={item['period']}s 探针过密（建议 ≥10s）")
+        issues.append({"kind": "config", "text": f"periodSeconds={item['period']}s 探针过密（建议 ≥10s）"})
     if m:
         if m.get("error"):
-            issues.append(m["error"])
+            issues.append({"kind": "hint", "text": m["error"]})
         elif m.get("ok") is False:
-            issues.append(f"健康端点返回 HTTP {m.get('http_code')}（端点本身不健康，问题在应用/依赖，不是探针）")
+            issues.append({"kind": "endpoint",
+                           "text": f"健康端点返回 HTTP {m.get('http_code')}（端点本身不健康，问题在应用/依赖，不是探针）"})
         if m.get("elapsed_ms") is not None and m["elapsed_ms"] > t * 1000:
-            issues.append(f"实测耗时 {m['elapsed_ms']}ms > timeoutSeconds={t}s（探针必然超时，与反复重启直接对应）")
+            issues.append({"kind": "config",
+                           "text": f"实测耗时 {m['elapsed_ms']}ms > timeoutSeconds={t}s（探针必然超时，与反复重启直接对应）"})
     return issues
+
+
+def _fix_params(item: dict, m: dict | None) -> dict:
+    """根据实测给出探针修复参数（只调 timeout/failureThreshold，不动 path/port/kind）"""
+    import math
+    new_timeout = max(item["timeout"], 5)
+    if m and m.get("elapsed_ms"):
+        new_timeout = max(new_timeout, int(math.ceil(m["elapsed_ms"] / 1000.0)) * 2)
+    new_timeout = min(new_timeout, 60)
+    return {
+        "probe_type": {"livenessProbe": "liveness", "readinessProbe": "readiness",
+                       "startupProbe": "startup"}.get(item["probe"], "liveness"),
+        "probe_kind": item["kind"],
+        "path": item.get("path", ""),
+        "port": item.get("port", 0),
+        "timeout_seconds": new_timeout,
+        "failure_threshold": max(item["failure_threshold"], 3),
+        "period_seconds": item["period"],
+        "initial_delay_seconds": item["initial_delay"],
+        "success_threshold": item["success_threshold"],
+    }
 
 
 async def audit_pod(cluster_id: int, namespace: str, pod: str, max_containers: int = 2) -> dict:
@@ -214,15 +238,21 @@ async def audit_pod(cluster_id: int, namespace: str, pod: str, max_containers: i
 
             issues = _judge(item, measured)
             if issues:
-                head += "\n  ⚠ " + "；".join(issues)
-                findings.append({"container": cname, "probe": item["probe"], "issues": issues})
+                head += "\n  ⚠ " + "；".join(i["text"] for i in issues)
+                finding = {"container": cname, "probe": item["probe"], "issues": issues,
+                           "kinds": sorted({i["kind"] for i in issues})}
+                # 配置类问题才给修复参数（端点不健康改探针没用，反而掩盖故障）
+                if any(i["kind"] == "config" for i in issues):
+                    finding["fix"] = _fix_params(item, measured)
+                findings.append(finding)
             lines.append(head)
 
             if item["kind"] == "httpGet":
                 key = (item["path"], item["port"])
                 if key in same_target and item["probe"] == "readinessProbe":
-                    findings.append({"container": cname, "probe": "readinessProbe",
-                                     "issues": ["与存活探针使用同一端点：应用慢时会被 liveness 先杀掉，建议分离"]})
+                    findings.append({"container": cname, "probe": "readinessProbe", "kinds": ["hint"],
+                                     "issues": [{"kind": "hint",
+                                                 "text": "与存活探针使用同一端点：应用慢时会被 liveness 先杀掉，建议分离"}]})
                     lines.append("  ⚠ 与存活探针同端点：慢初始化时会被 liveness 直接重启，建议 readiness 单独端点")
                 same_target.add(key)
 

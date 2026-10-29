@@ -891,7 +891,9 @@ async def execute_approved_plan(plan_id: int) -> None:
     # 执行（流式进度：在子线程消费 gRPC 生成器，避免阻塞事件循环）
     exec_error = ""
     try:
-        progresses = await asyncio.to_thread(lambda: list(executor_client.execute_plan(cluster_id, plan_id, plan_json, trace_id)))
+        # 计划执行统一走 plan_runner（支持「平台内置动作」步骤，如探针调参）
+        from app.services import plan_runner
+        progresses = await asyncio.to_thread(plan_runner.run_plan, cluster_id, plan_id, plan_json, trace_id)
         for progress in progresses:
             logger.info("执行进度: step=%s success=%s", progress.get("step_index"), progress.get("success"))
     except Exception as e:  # noqa: BLE001
