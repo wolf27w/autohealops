@@ -1158,6 +1158,21 @@ async def _process_one(alert: Alert) -> bool:
     repair_steps_text = ""
     root_cause_layer = ""
     diag_cached = bool(diag_row and diag_row.diagnosis_json)
+    if not diag_cached:
+        # 诊断去重（2026-10-29 老板反馈「同一个问题诊断有很多」）：
+        # 同集群+namespace+资源名+fault_type 在窗口内已有**有结论**的诊断 → 直接复用，
+        # 不再调 AI、不再新增 ai_diagnosis_results 行（窗口见系统设置 diagnosis_reuse_minutes）。
+        try:
+            from app.services import diagnosis_reuse
+            reused = await diagnosis_reuse.find_reusable_diagnosis(
+                alert.cluster_id, alert.namespace or "", alert.resource_name or "", alert.fault_type
+            )
+            if reused:
+                diag_row = reused[0]
+                diag_cached = True
+                logger.info("告警 %d 复用同资源同故障诊断 #%d（窗口内，跳过 AI 诊断）", alert.id, diag_row.id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("诊断复用查询失败: %s", e)
     if diag_cached:
         try:
             diag_data = json.loads(diag_row.diagnosis_json)

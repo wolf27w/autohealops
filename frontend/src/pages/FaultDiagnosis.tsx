@@ -68,6 +68,10 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
         {category === 'cluster' && '（只含节点 / 集群层故障）'}
         {category === 'app' && '（只含 Pod / 工作负载 / 容器 / 日志故障）'}
         （处理闭环记录见「告警处理 → 处理记录」）。
+        <div style={{ marginTop: 4, color: '#999', fontSize: 12 }}>
+          已按「集群 + 命名空间 + 资源 + 故障类型」<strong>归并</strong>：同一问题只列最新一条，
+          「次数」= 该问题告警次数；重复诊断已自动复用上次结论（窗口可在系统设置 diagnosis_reuse_minutes 调整）。
+        </div>
       </div>
       <Table rowKey="alert_id" loading={loading} dataSource={data}
         pagination={{
@@ -77,9 +81,11 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
           onChange: (p) => setPage(p),
         }}
         columns={[
-          { title: '告警ID', dataIndex: 'alert_id', width: 80 },
+          { title: '最新告警', dataIndex: 'alert_id', width: 90 },
           { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v) => v || '-' },
           { title: '故障类型', dataIndex: 'fault_type', width: 170 },
+          { title: '次数', dataIndex: 'occurrences', width: 80, sorter: (a, b) => (a.occurrences || 0) - (b.occurrences || 0),
+            render: (v?: number) => (v && v > 1) ? <Tag color="orange">×{v}</Tag> : (v || 1) },
           { title: '资源', dataIndex: 'resource_name', ellipsis: true },
           { title: '诊断', dataIndex: 'has_diagnosis', width: 150, render: (v, r) => v
             ? <Tag color="green">已诊断（置信度 {(r.confidence ?? 0).toFixed(2)}）</Tag>

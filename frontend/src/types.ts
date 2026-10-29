@@ -418,6 +418,10 @@ export interface FaultDiagnosisItem {
   diagnosis_time?: string
   diagnosis_json?: string
   created_at?: string
+  /** 归并后：同一问题累计告警次数 / 诊断条数（2026-10-29） */
+  occurrences?: number
+  diagnosis_count?: number
+  grouped?: boolean
   [key: string]: unknown
 }
 

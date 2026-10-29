@@ -16,19 +16,105 @@ from app.models import AIDiagnosisResult, AiFeedback, Alert, Cluster
 router = APIRouter(prefix="/api/v1/fault-diagnoses")
 
 
+async def _list_grouped(page: int, page_size: int, category: str, with_total: bool):
+    """按「集群 + namespace + 资源名 + fault_type」归并的诊断台账
+
+    同一问题多次告警只出一行：occurrences = 告警次数，diagnosis_count = 诊断条数，
+    代表行 = 该问题最近一条告警（alert_id / detected_at / 诊断结论均取最新）。
+    """
+    key_cols = (Alert.cluster_id, Alert.namespace, Alert.resource_name, Alert.fault_type)
+    agg = (
+        select(
+            Alert.cluster_id.label("cluster_id"),
+            Alert.namespace.label("namespace"),
+            Alert.resource_name.label("resource_name"),
+            Alert.fault_type.label("fault_type"),
+            func.count(func.distinct(Alert.id)).label("occurrences"),
+            func.count(func.distinct(AIDiagnosisResult.id)).label("diagnosis_count"),
+            func.max(Alert.id).label("last_alert_id"),
+            func.max(Alert.detected_at).label("last_detected_at"),
+        )
+        .select_from(Alert)
+        .outerjoin(AIDiagnosisResult, AIDiagnosisResult.alert_id == Alert.id)
+    )
+    if category:
+        agg = agg.where(Alert.diag_category == category)
+    agg = agg.group_by(*key_cols).subquery()
+
+    async with async_session() as session:
+        total = 0
+        if with_total:
+            total = int((await session.execute(select(func.count()).select_from(agg))).scalar() or 0)
+        grow_rows = list((await session.execute(
+            select(agg).order_by(agg.c.last_detected_at.desc(), agg.c.last_alert_id.desc())
+            .offset((page - 1) * page_size).limit(page_size)
+        )).all())
+        alert_ids = [r.last_alert_id for r in grow_rows]
+        alerts: dict[int, Alert] = {}
+        if alert_ids:
+            for a in (await session.execute(select(Alert).where(Alert.id.in_(alert_ids)))).scalars():
+                alerts[a.id] = a
+        diags: dict[int, AIDiagnosisResult] = {}
+        if alert_ids:
+            for d in (await session.execute(
+                select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id.in_(alert_ids))
+                .order_by(AIDiagnosisResult.id.desc())
+            )).scalars():
+                diags.setdefault(d.alert_id, d)  # 保留最新
+        cluster_names = {c.id: c.name for c in (await session.execute(select(Cluster))).scalars()}
+
+    import json as _json
+    data = []
+    for r in grow_rows:
+        a = alerts.get(r.last_alert_id)
+        if not a:
+            continue
+        d = diags.get(a.id)
+        root_cause = ""
+        if d and d.diagnosis_json:
+            try:
+                root_cause = str(_json.loads(d.diagnosis_json).get("root_cause", ""))[:120]
+            except Exception:  # noqa: BLE001
+                root_cause = ""
+        data.append({
+            "alert_id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "resource_type": a.resource_type, "resource_name": a.resource_name, "namespace": a.namespace,
+            "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
+            "diag_category": a.diag_category,
+            "message": (a.message or "")[:200], "detected_at": str(a.detected_at),
+            "has_diagnosis": d is not None,
+            "confidence": d.confidence if d else None,
+            "diagnosis_time": str(d.created_at) if d else "",
+            "root_cause": root_cause,
+            "occurrences": int(r.occurrences or 0),
+            "diagnosis_count": int(r.diagnosis_count or 0),
+            "grouped": True,
+        })
+    if with_total:
+        return {"code": 200, "message": "success", "data": {"items": data, "total": total, "page": page, "page_size": page_size}}
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.get("")
 async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str = "",
-                              with_total: bool = False, user=Depends(require_any_user)):
+                              with_total: bool = False, group: bool = True,
+                              user=Depends(require_any_user)):
     """列出告警及其诊断状态（故障诊断列表）
 
     category（N3 诊断分离）：cluster=集群故障 / app=应用故障 / db=数据库故障；空=全部。
     按 alerts.diag_category（STORED 生成列）过滤，三类互不串。
+
+    group（默认 true，2026-10-29）：按「集群 + namespace + 资源名 + fault_type」归并，
+    同一问题只列一行（occurrences=告警次数，diagnosis_count=诊断条数），latest = 最近一条告警。
+    原来同一 Pod 反复告警 → 一屏几十行完全重复的诊断，老板看不下去。
     """
     if category not in ("", "cluster", "app", "db"):
         return {"code": 400, "message": "category 仅支持 cluster/app/db", "data": None}
     # 分页参数兜底（防 page/page_size 非法或过大拖库）
     page = max(1, int(page or 1))
     page_size = min(max(1, int(page_size or 50)), 500)
+    if group:
+        return await _list_grouped(page, page_size, category, with_total)
     async with async_session() as session:
         stmt = select(Alert)
         if category:

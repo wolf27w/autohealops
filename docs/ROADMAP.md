@@ -246,3 +246,28 @@ M2 executor HA ─► B3
 - **exec 链路与冷启动偏慢**：单接口 40–60s、api-server 冷启动 3–4min（环境冷 + HDD），开发验证时预留时间。
 - **重启服务只杀监听进程**（勿 `lsof -ti tcp:8080 | xargs kill`，会误杀 vite）——见 `TOOLS.md`。
 - 各批次完成 → `./scripts/ci_check.sh` 全绿 + 真实接口冒烟 + 按路径 `git commit`。
+
+---
+
+## 五、2026-10-29 诊断去重（老板反馈「同一个问题诊断有很多」）
+
+**问题**：同一 Pod 同一故障在窗口内反复告警（探针抖动 / 重启计数递增 / watcher 每轮扫描），
+每条告警都调一次 AI 并落一条 `ai_diagnosis_results` → 台账里同一问题十几条（实测同一 Pod 最多 15 条），
+既费钱又看不出结论。诊断 753 条里按「集群+ns+资源+fault_type」归并后只有 512 条（重复占 32%）。
+
+**改法（提交 `feat(诊断): 同一问题诊断去重`）**：
+1. 新增 `api-server/app/services/diagnosis_reuse.py`
+   - `find_reusable_diagnosis(cluster_id, ns, resource, fault_type, window)`：窗口内最近一条**有结论**的诊断
+   - `find_alert_diagnosis(alert_id)`：同一告警自己的历史诊断（N5 聚合告警重复诊断的根治）
+2. `alert_auto_service.process_alert`：本告警无诊断时，先按窗口复用同资源同故障诊断 → 不调 AI
+3. `pod_restart_service._diagnose_and_notify`：① 同告警已诊断 → 永不复诊；② 再按窗口跨告警复用
+4. `api/fault_diagnosis.py`：列表默认 `group=true`，按「集群+ns+资源+fault_type」归并，返回
+   `occurrences`（告警次数）/ `diagnosis_count`（诊断条数），代表行=最新告警；`group=false` 保留原行为
+5. 前端 `FaultDiagnosis.tsx`：新增「次数（×N）」列 + 顶部归并说明；`types.ts` 补字段
+6. 新设置 `diagnosis_reuse_minutes`（默认 30，0=关闭复用）
+
+**验证**：`py_compile` / `tsc -b` 通过；真库实测 2090 号告警走 `_diagnose_and_notify` → 复用 #755、AI 调用 0 次；
+`/fault-diagnoses?with_total=true` → 总组数 1110（原 1795 行）；CDP 页面实测列头含「次数」、行内 `×6/×8` 标签正常。
+
+**遗留**：诊断上下文里 `metrics_trend` 753/753 全空（ai-service 的 `PROMETHEUS_URL` 为空，与 api-server 的
+`prometheus_service` 两套配置不互通）→ 诊断只能看日志/事件，结论停在「探针失败」表层。下一步修这个。
