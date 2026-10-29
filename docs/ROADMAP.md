@@ -269,5 +269,7 @@ M2 executor HA ─► B3
 **验证**：`py_compile` / `tsc -b` 通过；真库实测 2090 号告警走 `_diagnose_and_notify` → 复用 #755、AI 调用 0 次；
 `/fault-diagnoses?with_total=true` → 总组数 1110（原 1795 行）；CDP 页面实测列头含「次数」、行内 `×6/×8` 标签正常。
 
-**遗留**：诊断上下文里 `metrics_trend` 753/753 全空（ai-service 的 `PROMETHEUS_URL` 为空，与 api-server 的
-`prometheus_service` 两套配置不互通）→ 诊断只能看日志/事件，结论停在「探针失败」表层。下一步修这个。
+**后续（当日已修）**：诊断上下文里 `metrics_trend` 753/753 全空（ai-service 的 `PROMETHEUS_URL` 为空，
+与 api-server 的 `prometheus_service` 两套配置不互通）→ 诊断只能看日志/事件，结论停在「探针失败」表层。
+2026-10-29 已改为 **api-server 采集指标注入诊断上下文**（`services/diagnosis_metrics.py`）：Pod 容器
+CPU/内存（含 limit 使用率）/重启/就绪 + 节点 Ready/CPU/内存/load1/磁盘，近 60 分钟 min/max/avg。

@@ -1257,12 +1257,27 @@ async def _process_one(alert: Alert) -> bool:
                     return True
 
             # AI 诊断失败自动重试 1 次（老板 2026-10-21 口径），两次都失败才转人工
+            # 指标趋势（2026-10-29）：ai-service 自己的 PROMETHEUS_URL 是空的，
+            # 由 api-server 采好指标注入上下文（否则 AI 只能看日志/事件，结论停在表层）。
+            metrics_text = ""
+            try:
+                from app.services import diagnosis_metrics
+                metrics_text = await diagnosis_metrics.alert_metrics_trend(
+                    alert.cluster_id, alert.resource_type, alert.namespace or "", alert.resource_name or ""
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("采集诊断指标失败: %s", e)
+            if metrics_text:
+                alert_data["metrics_trend"] = metrics_text
+            diag_ctx = {"exec_output": container_diag}
+            if metrics_text:
+                diag_ctx["metrics_trend"] = metrics_text
             diagnosis = None
             _diag_err = None
             for _attempt in (1, 2):
                 try:
                     diagnosis = await ai_client.diagnose(
-                        alert.id, alert_data, {"exec_output": container_diag}, trace_id
+                        alert.id, alert_data, diag_ctx, trace_id
                     )
                     break
                 except Exception as e:  # noqa: BLE001

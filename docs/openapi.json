@@ -5068,7 +5068,7 @@
     },
     "/api/v1/fault-diagnoses": {
       "get": {
-        "description": "列出告警及其诊断状态（故障诊断列表）\n\ncategory（N3 诊断分离）：cluster=集群故障 / app=应用故障 / db=数据库故障；空=全部。\n按 alerts.diag_category（STORED 生成列）过滤，三类互不串。",
+        "description": "列出告警及其诊断状态（故障诊断列表）\n\ncategory（N3 诊断分离）：cluster=集群故障 / app=应用故障 / db=数据库故障；空=全部。\n按 alerts.diag_category（STORED 生成列）过滤，三类互不串。\n\ngroup（默认 true，2026-10-29）：按「集群 + namespace + 资源名 + fault_type」归并，\n同一问题只列一行（occurrences=告警次数，diagnosis_count=诊断条数），latest = 最近一条告警。\n原来同一 Pod 反复告警 → 一屏几十行完全重复的诊断，老板看不下去。",
         "operationId": "get_api_v1_fault_diagnoses",
         "parameters": [
           {
@@ -5108,6 +5108,16 @@
             "schema": {
               "default": false,
               "title": "With Total",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Group",
               "type": "boolean"
             }
           }

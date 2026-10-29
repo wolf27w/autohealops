@@ -212,6 +212,14 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         "recent_events": (events_text or "")[:3000],
         "recent_logs": (logs_text or "")[:4000],
     }
+    # 指标趋势（2026-10-29）：同一 Pod 的 CPU/内存/重启/limit 使用率，避免 AI 只能看日志猜
+    try:
+        from app.services import diagnosis_metrics
+        metrics_text = await diagnosis_metrics.pod_metrics_trend(cluster_id, pod["namespace"], pod["name"])
+        if metrics_text:
+            alert_data["metrics_trend"] = metrics_text
+    except Exception as e:  # noqa: BLE001
+        logger.debug("采集 Pod 指标趋势失败: %s", e)
     trace_id = generate_trace_id()
 
     # AI 诊断（ai-service 侧落 AIDiagnosisResult，与 api-server 共享同一张表）
