@@ -285,6 +285,7 @@ CPU/内存（含 limit 使用率）/重启/就绪 + 节点 Ready/CPU/内存/load
 | **D2 大表分区核对** | 新增只读脚本 `scripts/check_partitions.py`：实测 `resource_snapshots` 已分区（12 个，807 万行，边界到 2026-11-02）；**`pod_metrics` 261 万行、`quota_snapshots`、`slow_sql_records` 仍未分区** → 需运维窗口 DDL | `scripts/check_partitions.py` |
 | **D3 大屏验收** | CDP 实测 `/screen`：3 个集群数据正常（节点 50 / Pod 797 / CPU 3% / 内存 35%，MTTR 7.3 分钟），截图见附件 | — |
 | **历史重复告警评估** | 只读脚本 `scripts/alert_merge_report.py`：1797 行告警里 **233 个重复分组（918 行）**，30 分钟内相邻重复 613 行（新规则已开始吸收）；真正归并需单独确认 | `scripts/alert_merge_report.py` |
+| **历史重复告警归并（已执行）** | 老板确认后执行 `scripts/merge_duplicate_alerts.py --apply`：**1797 行 → 1112 行，重复分组 233 → 0**；保留行优先保留活跃状态（本次无活跃行受影响），event_count 求和、detected_at/occurred_at 取最早、关联记录（诊断/计划/工单/审批/反馈）全部重指向。备份 `alerts_bak_20261029_180821`，映射 `alert_merge_map_20261029_180821`（可回滚） | `scripts/merge_duplicate_alerts.py` |
 
 前端：故障诊断页加「诊断失败记录」弹窗 + 近 7 天质量概览（诊断数/已评价/有用率）。
 
