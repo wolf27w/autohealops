@@ -67,6 +67,8 @@ DEFAULT_SETTINGS = {
     "agent_max_tool_steps": ("12", "深度诊断单次对话最大工具步数（1~100）"),
     # 诊断去重窗口：同集群+ns+资源名+fault_type 在窗口内复用已有诊断结论（0 = 关闭复用）
     "diagnosis_reuse_minutes": ("30", "同一问题复用 AI 诊断的窗口（分钟，0=每次都重新诊断）"),
+    # 告警复发合并窗口：同资源同故障在窗口内复发 → 复用原告警（不新建），0 = 关闭
+    "alert_merge_window_minutes": ("30", "告警复发合并窗口（分钟，同资源同故障复用原告警；0=不复用）"),
     # 历史数据保留期（资源/配额快照 + Pod 指标 + 慢SQL）
     "snapshot_retention_days": ("7", "快照/指标/慢SQL 历史保留天数（默认 7，超期每日清理）"),
     "inspection_retention_days": ("30", "巡检/诊断报告保留天数（默认 30，超期每日清理）"),

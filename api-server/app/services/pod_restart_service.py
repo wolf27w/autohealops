@@ -144,21 +144,19 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
     now = datetime.now()
     dep = infer_deployment_name(pod["name"])
     async with async_session() as session:
-        existing = (await session.execute(
-            select(Alert).where(
-                Alert.cluster_id == cluster_id,
-                Alert.resource_type == "pod",
-                Alert.namespace == pod["namespace"],
-                Alert.deployment_name == dep,
-                Alert.fault_type == fault_type,
-                Alert.status == "pending",
-            ).order_by(Alert.id.desc()).limit(1)
-        )).scalar_one_or_none()
-        if existing:
-            existing.event_count = (existing.event_count or 0) + 1
-            existing.resource_name = pod["name"]  # 更新为最新出问题的 Pod
-            existing.message = _build_message(pod, fault_type, prev_r, restart, extra)
+        # 合并（2026-10-29）：活跃告警 → 计数；窗口内已解决的同故障 → 复用 reopen，
+        # 避免「每轮重启一条告警」（实测同一 Pod 7 天 24 条，全是秒关秒开）
+        from app.services import alert_merge
+        row, reopen = await alert_merge.find_merge_target(
+            session, cluster_id=cluster_id, resource_type="pod", fault_type=fault_type,
+            namespace=pod["namespace"], deployment_name=dep, resource_name=pod["name"])
+        if row:
+            alert_merge.apply_merge(row, message=_build_message(pod, fault_type, prev_r, restart, extra),
+                                    resource_name=pod["name"], reopen=reopen, now=now)
             await session.commit()
+            if reopen:
+                logger.info("Pod 重启告警复发合并：%s %s 复用 #%d（累计 %d 次）",
+                            dep, fault_type, row.id, row.event_count)
             return 0
         alert = Alert(
             cluster_id=cluster_id,

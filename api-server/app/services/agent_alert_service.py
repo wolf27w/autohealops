@@ -28,6 +28,7 @@ logger = get_logger("api-server.agent_alert")
 
 # 节点告警同故障 5 分钟内合并（与 Go 侧 emitAlert 语义一致）
 NODE_DEDUP_WINDOW = timedelta(minutes=5)
+NODE_DEDUP_WINDOW_MINUTES = 5
 
 
 def _parse_dt(v) -> datetime | None:
@@ -83,46 +84,35 @@ async def _merge_or_insert(ev: dict) -> int:
 
     async with async_session() as session:
         if status == "pending":
-            if rtype == "node":
-                # 节点：同节点同故障 5 分钟内合并
-                row = (await session.execute(
-                    select(Alert).where(
-                        Alert.cluster_id == cid, Alert.resource_name == rname,
-                        Alert.fault_type == fault, Alert.status == "pending",
-                        Alert.detected_at > now - NODE_DEDUP_WINDOW,
-                    ).order_by(Alert.id.desc()).limit(1)
-                )).scalars().first()
+            from app.services import alert_merge
+            if rtype == "node" or dedup_by == "resource":
+                # 节点：同节点同故障窗口内合并（活跃 or 窗口内已解决→reopen）
+                row, reopen = await alert_merge.find_merge_target(
+                    session, cluster_id=cid, resource_type=rtype, fault_type=fault,
+                    namespace=ev.get("namespace") or "", deployment_name=dep, resource_name=rname,
+                    window_min=NODE_DEDUP_WINDOW_MINUTES if rtype == "node" else None)
                 if row:
-                    row.event_count = (row.event_count or 1) + 1
-                    row.detected_at = now
-                    row.message = message
+                    if dedup_by == "resource" and not reopen:
+                        return 0  # TerminatingStuck：同 Pod 已报过就不再报，也不计数
+                    alert_merge.apply_merge(row, message=message, resource_name=rname,
+                                            severity=ev.get("severity") or "", reopen=reopen, now=now)
                     await session.commit()
-                    return 0
-            elif dedup_by == "resource":
-                # 按资源名去重（TerminatingStuck：同 Pod 已报过就不再报）
-                row = (await session.execute(
-                    select(Alert).where(
-                        Alert.cluster_id == cid, Alert.resource_name == rname,
-                        Alert.fault_type == fault, Alert.status.in_(("pending", "awaiting_approval")),
-                    ).order_by(Alert.id.desc()).limit(1)
-                )).scalars().first()
-                if row:
+                    if reopen:
+                        logger.info("告警复发合并（节点/资源）：%s %s 复用 #%d（次数 %d）",
+                                    rname, fault, row.id, row.event_count)
                     return 0
             else:
-                # Pod：按 Deployment 聚合（同服务持续故障合成一条）
-                row = (await session.execute(
-                    select(Alert).where(
-                        Alert.cluster_id == cid, Alert.deployment_name == dep,
-                        Alert.fault_type == fault, Alert.status.in_(("pending", "awaiting_approval")),
-                    ).order_by(Alert.id.desc()).limit(1)
-                )).scalars().first()
+                # Pod：按 Deployment 聚合（同服务持续故障合成一条；窗口内复发 → 复用原告警 reopen）
+                row, reopen = await alert_merge.find_merge_target(
+                    session, cluster_id=cid, resource_type=rtype, fault_type=fault,
+                    namespace=ev.get("namespace") or "", deployment_name=dep, resource_name=rname)
                 if row:
-                    row.event_count = (row.event_count or 1) + 1
-                    row.detected_at = now
-                    row.message = message
-                    if rname:
-                        row.resource_name = rname  # 更新为最新出问题的 Pod 名
+                    alert_merge.apply_merge(row, message=message, resource_name=rname,
+                                            severity=ev.get("severity") or "", reopen=reopen, now=now)
                     await session.commit()
+                    if reopen:
+                        logger.info("告警复发合并：%s/%s %s 复用 #%d（次数 %d）",
+                                    dep or rname, fault, rname, row.id, row.event_count)
                     return 0
 
         alert = Alert(

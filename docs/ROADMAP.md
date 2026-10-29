@@ -287,6 +287,23 @@ CPU/内存（含 limit 使用率）/重启/就绪 + 节点 Ready/CPU/内存/load
 → 结论：**探针配置不背锅**，重启是应用/依赖侧问题（此前的 AI 结论把它归为「探针超时」是错的）。
 ai-service 侧：`render_ctx` 增 `{probe_evidence}`，存量模板没占位符时自动追加在 prompt 末尾（不改库里的提示词）。
 
+**告警复发合并（2026-10-29 当日完成，`services/alert_merge.py`）**
+
+问题：诊断去重修完后，告警本身还在刷 —— 实测 `jenkins/wscheck4` 7 天 24 条 ImagePullBackOff，
+每条 15~60s 就被判恢复关闭，下一轮检测又新建一条。
+根因：`alerts.dedup_key`（唯一索引）只在 `pending/awaiting_approval` 时非空，告警一 resolved 键变 NULL → 下次插新行。
+
+改法（四路落地，口径统一）：
+1. 新增 `api-server/app/services/alert_merge.py`：`find_merge_target`（先找**活跃**告警，再找窗口内**已解决**的同类）
+   + `apply_merge`（event_count+1 / 刷新 message·resource_name·detected_at；reopen 时清 resolved_*、状态回 pending）
+2. `agent_alert_service`（agent 事件落库）、`pod_restart_service`（N5）、`resource_alert_service`（CPU/内存阈值）全部改走它
+3. Go `internal/watcher/sink.go`：Pod/Node 落地两处同样加「窗口内已解决 → reopen 复用」（平台侧 watcher 直连 DB 时）
+4. 新设置 `alert_merge_window_minutes`（默认 30，0=关闭）
+
+效果：同一 Pod 反复故障 → 一条告警 + `event_count` 累加；窗口内复发直接 reopen 原记录，事件历史不再被切成几十条。
+单测 `tests/test_alert_merge.py` 锁住合并维度（TerminatingStuck/node/db/log 按资源名，其余按 Deployment）；
+真库脚本验证 reopen（10 分钟前 resolved → 命中并 reopen、次数 2、resolved_at 清空；90 分钟前窗口 30 → 不命中）。
+
 **探针自动修复（2026-10-29 当日完成，`services/plan_runner.py` + `alert_auto_service`）**
 
 - 探针审计判定为「配置类」问题（timeout 过小 / failureThreshold 过低 / 实测耗时 > timeout）时，

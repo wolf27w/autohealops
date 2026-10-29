@@ -156,40 +156,43 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
     """
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
     async with async_session() as session:
-        exists = (await session.execute(
-            select(Alert).where(
-                Alert.status == "pending",
-                Alert.fault_type == fault_type,
-                Alert.cluster_id == cluster_id,
-                Alert.namespace == item["namespace"],
-                Alert.resource_name == item["pod"],
-            )
-        )).scalars().first()
-        if exists:
-            return False
-        alert = Alert(
-            cluster_id=cluster_id,
-            resource_type="pod",
-            resource_name=item["pod"],
-            namespace=item["namespace"],
-            fault_type=fault_type,
-            severity=rule.severity,
-            status="pending",
-            message=(
-                f"容器 {item['container']} {metric_label(rule.metric_type)} "
-                f"当前 {_fmt_value(rule.metric_type, usage_pct)}，超过阈值 {_fmt_value(rule.metric_type, rule.threshold_pct)}"
-                f"（规则:{rule.name}）"
-            ),
+        from app.services import alert_merge
+        message = (
+            f"容器 {item['container']} {metric_label(rule.metric_type)} "
+            f"当前 {_fmt_value(rule.metric_type, usage_pct)}，超过阈值 {_fmt_value(rule.metric_type, rule.threshold_pct)}"
+            f"（规则:{rule.name}）"
         )
-        session.add(alert)
-        try:
+        # 合并（2026-10-29）：活跃告警刷新；窗口内已解决的同资源同故障 → reopen 复用
+        row, reopen = await alert_merge.find_merge_target(
+            session, cluster_id=cluster_id, resource_type="pod", fault_type=fault_type,
+            namespace=item["namespace"], deployment_name="", resource_name=item["pod"])
+        if row:
+            alert_merge.apply_merge(row, message=message, severity=rule.severity, reopen=reopen)
             await session.commit()
-        except IntegrityError:
-            # dedup_key 唯一索引竞态（并发建单 / 同源已在途）→ 视为已存在，跳过不重复建
-            await session.rollback()
-            return False
-        await session.refresh(alert)
-        alert_id = alert.id
+            alert_id = row.id
+            alert = row
+            if not reopen:
+                return False  # 已活跃：刷新计数/消息即可，不重复建单不重复通知
+        else:
+            alert = Alert(
+                cluster_id=cluster_id,
+                resource_type="pod",
+                resource_name=item["pod"],
+                namespace=item["namespace"],
+                fault_type=fault_type,
+                severity=rule.severity,
+                status="pending",
+                message=message,
+            )
+            session.add(alert)
+            try:
+                await session.commit()
+            except IntegrityError:
+                # dedup_key 唯一索引竞态（并发建单 / 同源已在途）→ 视为已存在，跳过不重复建
+                await session.rollback()
+                return False
+            await session.refresh(alert)
+            alert_id = alert.id
     # 通知（统一入口：分级/静默/渠道/模板/限频都在 notify_alert 内）
     try:
         await notification_service.notify_alert(alert)

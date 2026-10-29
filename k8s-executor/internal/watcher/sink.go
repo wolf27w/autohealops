@@ -25,6 +25,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// alertMergeWindow 告警复发合并窗口（2026-10-29）：同一 Deployment/资源同故障在窗口内
+// 已解决过的告警→复用该行 reopen，避免「每轮扫描一条新告警」（实测同一 Pod 7 天 24 条）。
+// 与 api-server 侧 system setting alert_merge_window_minutes 默认值保持一致。
+const alertMergeWindow = 30 * time.Minute
+
 // AlertEvent 一条告警落地请求（DB 与隧道两种落地方式共用同一结构，隧道走 JSON）。
 type AlertEvent struct {
 	ClusterID      uint       `json:"cluster_id"`
@@ -130,6 +135,28 @@ func reportPodAlert(ev AlertEvent) uint {
 			})
 			return existing.ID
 		}
+		// 复发合并（2026-10-29）：窗口内已解决的同类告警 → 复用并 reopen，不新建行
+		err = db.Where("cluster_id = ? AND deployment_name = ? AND fault_type = ? AND status IN ('resolved','self_healed') AND resolved_at >= ?",
+			ev.ClusterID, ev.DeploymentName, ev.FaultType, time.Now().Add(-alertMergeWindow)).
+			Order("id desc").First(&existing).Error
+		if err == nil {
+			db.Model(&existing).Updates(map[string]interface{}{
+				"event_count":     existing.EventCount + 1,
+				"detected_at":     time.Now(),
+				"occurred_at":     time.Now(),
+				"message":         ev.Message,
+				"resource_name":   ev.ResourceName,
+				"status":          "pending",
+				"resolved_at":     nil,
+				"resolved_by":     "",
+				"manual_required": false,
+				"manual_reason":   "",
+			})
+			fmt.Printf("[watcher] 告警复发合并：%s %s 复用 alert#%d（累计 %d 次）\n",
+				ev.DeploymentName, ev.FaultType, existing.ID, existing.EventCount+1)
+			triggerAlertProcess(existing.ID)
+			return existing.ID
+		}
 	}
 	alert := database.Alert{
 		ClusterID:      ev.ClusterID,
@@ -176,6 +203,25 @@ func reportNodeAlert(ev AlertEvent) uint {
 			"detected_at": time.Now(),
 			"message":     ev.Message,
 		})
+		return existing.ID
+	}
+	// 复发合并（2026-10-29）：节点故障在窗口内复发 → 复用原告警，不新建行
+	err = db.Where("cluster_id = ? AND resource_name = ? AND fault_type = ? AND status IN ('resolved','self_healed') AND resolved_at >= ?",
+		ev.ClusterID, ev.ResourceName, ev.FaultType, time.Now().Add(-alertMergeWindow)).
+		Order("id desc").First(&existing).Error
+	if err == nil {
+		db.Model(&existing).Updates(map[string]interface{}{
+			"event_count":     existing.EventCount + 1,
+			"detected_at":     time.Now(),
+			"occurred_at":     time.Now(),
+			"message":         ev.Message,
+			"status":          "pending",
+			"resolved_at":     nil,
+			"resolved_by":     "",
+			"manual_required": false,
+			"manual_reason":   "",
+		})
+		triggerAlertProcess(existing.ID)
 		return existing.ID
 	}
 	alert := database.Alert{
