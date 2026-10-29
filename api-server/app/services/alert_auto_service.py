@@ -1272,6 +1272,18 @@ async def _process_one(alert: Alert) -> bool:
             diag_ctx = {"exec_output": container_diag}
             if metrics_text:
                 diag_ctx["metrics_trend"] = metrics_text
+            # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测，让结论落到
+            # 「探针配置不合理」还是「端点真的挂了」，而不是笼统的「探针失败」。
+            if alert.resource_type == "pod" and alert.resource_name:
+                try:
+                    from app.services import probe_audit
+                    pr = await probe_audit.audit_pod(
+                        alert.cluster_id, alert.namespace or "", alert.resource_name)
+                    if pr.get("text"):
+                        alert_data["probe_evidence"] = pr["text"]
+                        diag_ctx["probe_evidence"] = pr["text"]
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("采集探针证据失败: %s", e)
             diagnosis = None
             _diag_err = None
             for _attempt in (1, 2):

@@ -220,6 +220,14 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
             alert_data["metrics_trend"] = metrics_text
     except Exception as e:  # noqa: BLE001
         logger.debug("采集 Pod 指标趋势失败: %s", e)
+    # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测（N5 本就是探针/OOM 专项，最需要这个）
+    try:
+        from app.services import probe_audit
+        probe = await probe_audit.audit_pod(cluster_id, pod["namespace"], pod["name"])
+        if probe.get("text"):
+            alert_data["probe_evidence"] = probe["text"]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("采集探针证据失败: %s", e)
     trace_id = generate_trace_id()
 
     # AI 诊断（ai-service 侧落 AIDiagnosisResult，与 api-server 共享同一张表）

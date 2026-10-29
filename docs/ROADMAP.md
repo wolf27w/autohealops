@@ -273,3 +273,16 @@ M2 executor HA ─► B3
 与 api-server 的 `prometheus_service` 两套配置不互通）→ 诊断只能看日志/事件，结论停在「探针失败」表层。
 2026-10-29 已改为 **api-server 采集指标注入诊断上下文**（`services/diagnosis_metrics.py`）：Pod 容器
 CPU/内存（含 limit 使用率）/重启/就绪 + 节点 Ready/CPU/内存/load1/磁盘，近 60 分钟 min/max/avg。
+
+### 探针专项（2026-10-29 当日完成，`services/probe_audit.py`）
+
+探针类故障（`PodRestartProbeFail` / `CrashLoopBackOff`）占告警大头，原诊断只会说「探针失败，去看 health indicators」。
+现在诊断前自动采集并注入（`probe_evidence`）：
+
+1. 从 Pod YAML 解析 liveness / readiness / startup 的**真实参数**（path、port、timeoutSeconds、periodSeconds、failureThreshold、initialDelaySeconds）
+2. 容器 running 时**进容器实测健康端点**一次（`curl -w '%{http_code} %{time_total}'`，无 curl 退 `wget -S`；executor 只允许单命令不经 shell，所以不能写管道/脚本）
+3. 本地规则判定（不靠模型）：实测耗时 > timeout → 「探针必然超时」；端点非 2xx → 「端点本身不健康」；timeout<2s / failureThreshold<3 / period<5s → 参数激进；readiness 与 liveness 同端点 → 慢初始化会被杀
+
+实测样例（`prod-lch/efreight-prm-…`）：三探针 `timeout=30s failureThreshold=10 initialDelay=80s`，端点 HTTP 200 / 6ms
+→ 结论：**探针配置不背锅**，重启是应用/依赖侧问题（此前的 AI 结论把它归为「探针超时」是错的）。
+ai-service 侧：`render_ctx` 增 `{probe_evidence}`，存量模板没占位符时自动追加在 prompt 末尾（不改库里的提示词）。
