@@ -98,6 +98,76 @@ class _TunnelAwareStub:
 
         return _call
 
+    # ---------- 流式方法（2026-11-04 起可走 agent 隧道） ----------
+
+    def _stream_via_agent(self, req, method: str, resp_cls, timeout=None):
+        """返回 (是否走隧道, 迭代器)"""
+        cid = int(getattr(req, "cluster_id", 0) or 0)
+        if not cid:
+            return False, None
+        from app import agent_gateway
+        if not agent_gateway.is_connected(cid):
+            return False, None
+        payload = req.SerializeToString()
+
+        def gen():
+            for data in agent_gateway.stream_call(cid, method, payload, timeout):
+                yield resp_cls.FromString(data)
+
+        return True, gen()
+
+    def ExecutePlan(self, req, timeout=None, metadata=None, **kwargs):  # noqa: N802 (grpc 命名)
+        ok, it = self._stream_via_agent(req, "ExecutePlan", executor_pb2.ExecutePlanResponse, timeout)
+        if ok:
+            return it
+        return self._real.ExecutePlan(req, timeout=timeout, metadata=metadata, **kwargs)
+
+    def BatchExecute(self, req, timeout=None, metadata=None, **kwargs):  # noqa: N802
+        """批量执行是「多集群」请求：逐集群判断走隧道还是直连，保持流式语义"""
+        ids = list(getattr(req, "cluster_ids", []) or [])
+        if not ids:
+            return self._real.BatchExecute(req, timeout=timeout, metadata=metadata, **kwargs)
+        from app import agent_gateway
+        agent_ids = {i for i in ids if agent_gateway.is_connected(i)}
+        if not agent_ids:
+            return self._real.BatchExecute(req, timeout=timeout, metadata=metadata, **kwargs)
+
+        def gen():
+            for cid in ids:
+                sub = executor_pb2.BatchExecuteRequest(
+                    cluster_ids=[cid], namespace=req.namespace, command=req.command, trace_id=req.trace_id,
+                )
+                if cid in agent_ids:
+                    for data in agent_gateway.stream_call(cid, "BatchExecute", sub.SerializeToString(), timeout):
+                        yield executor_pb2.BatchExecuteResponse.FromString(data)
+                else:
+                    for resp in self._real.BatchExecute(sub, timeout=timeout, metadata=metadata):
+                        yield resp
+
+        return gen()
+
+    def ExecPodStream(self, request_iterator, timeout=None, metadata=None, **kwargs):  # noqa: N802
+        """双向流（交互终端）：需要先窥探首帧的 cluster_id 判断是否走隧道"""
+        it = iter(request_iterator)
+        try:
+            first = next(it)
+        except StopIteration:
+            return iter(())
+
+        def chain():
+            yield first
+            yield from it
+
+        cid = int(getattr(first, "cluster_id", 0) or 0)
+        if cid:
+            from app import agent_gateway
+            if agent_gateway.is_connected(cid):
+                def gen():
+                    for data in agent_gateway.bidi_call(cid, "ExecPodStream", chain(), timeout):
+                        yield executor_pb2.ExecPodStreamFrame.FromString(data)
+                return gen()
+        return self._real.ExecPodStream(chain(), timeout=timeout, metadata=metadata, **kwargs)
+
 
 def _agent_call(cluster_id: int, method: str, req, resp_cls, timeout: float):
     """R12：若该集群有在线 agent，则经反向隧道下发并反序列化响应；否则返回 None（走直连）。"""

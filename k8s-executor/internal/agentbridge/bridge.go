@@ -11,23 +11,24 @@
 // 传输：本机 loopback 监听 + 自定义 raw codec（客户端收发原始字节；服务端用标准 proto
 // 反序列化到具体 message），无需知道每个方法的请求/响应 Go 类型。
 //
-// 暂不支持：3 个流式 RPC（ExecutePlan / BatchExecute / ExecPodStream）—— 隧道是请求/响应模型，
-// 流式需要多帧协议，留作 P1 后续（会返回明确错误，而不是静默不可用）。
+// 流式 RPC（2026-11-04 补齐）：隧道新增 stream_open / stream_msg / stream_end / stream_error 帧，
+// 服务端流式（ExecutePlan / BatchExecute）逐条回传；双向流（ExecPodStream 终端）双向转发。
 package agentbridge
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
 	"github.com/autohealops/k8s-executor/internal/config"
+	grpcsrv "github.com/autohealops/k8s-executor/internal/grpc"
 	"github.com/autohealops/k8s-executor/internal/health"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/quota"
 	"github.com/autohealops/k8s-executor/internal/script"
 	"github.com/autohealops/k8s-executor/internal/watcher"
-	grpcsrv "github.com/autohealops/k8s-executor/internal/grpc"
 	pb "github.com/autohealops/k8s-executor/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -39,7 +40,7 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-// 流式 RPC：隧道当前是请求/响应，暂不支持
+// 流式 RPC：走 stream_* 帧（2026-11-04 起已支持）
 var streamingMethods = map[string]bool{
 	"ExecutePlan":   true,
 	"BatchExecute":  true,
@@ -148,7 +149,7 @@ func (b *Bridge) Call(ctx context.Context, method string, payload []byte) ([]byt
 		return nil, fmt.Errorf("method 为空")
 	}
 	if streamingMethods[method] {
-		return nil, fmt.Errorf("流式方法 %s 暂不支持经 agent 隧道调用（P1 后续）", method)
+		return nil, fmt.Errorf("流式方法 %s 请用 ServerStream/Bidi 调用", method)
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -160,6 +161,62 @@ func (b *Bridge) Call(ctx context.Context, method string, payload []byte) ([]byt
 		return nil, err
 	}
 	return out.data, nil
+}
+
+// ServerStream 调用服务端流式方法，逐条回调响应；返回 nil 表示正常结束
+func (b *Bridge) ServerStream(ctx context.Context, method string, payload []byte, onMsg func([]byte) error) error {
+	desc := &grpc.StreamDesc{ServerStreams: true}
+	stream, err := b.conn.NewStream(ctx, desc, "/executor.ExecutorService/"+method)
+	if err != nil {
+		return err
+	}
+	if err := stream.SendMsg(&rawMessage{data: payload}); err != nil {
+		return err
+	}
+	if err := stream.CloseSend(); err != nil {
+		return err
+	}
+	for {
+		out := &rawMessage{}
+		if err := stream.RecvMsg(out); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if err := onMsg(out.data); err != nil {
+			return err
+		}
+	}
+}
+
+// Bidi 打开双向流：返回发送函数（grpc 允许单 goroutine 发 + 单 goroutine 收并发）。
+// onDone 在收方向结束时调用（err=nil 表示对端正常关闭）。
+func (b *Bridge) Bidi(ctx context.Context, method string, onMsg func([]byte) error, onDone func(error)) (func([]byte) error, error) {
+	desc := &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
+	stream, err := b.conn.NewStream(ctx, desc, "/executor.ExecutorService/"+method)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		for {
+			out := &rawMessage{}
+			err := stream.RecvMsg(out)
+			if err != nil {
+				if err == io.EOF {
+					onDone(nil)
+				} else {
+					onDone(err)
+				}
+				return
+			}
+			if e := onMsg(out.data); e != nil {
+				onDone(e)
+				return
+			}
+		}
+	}()
+	return func(p []byte) error { return stream.SendMsg(&rawMessage{data: p}) }, nil
 }
 
 // ==================== raw codec ====================

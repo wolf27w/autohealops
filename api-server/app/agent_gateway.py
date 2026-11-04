@@ -72,7 +72,13 @@ class _AgentConn:
         self.cluster_id = int(cluster_id)
         self.out: "queue.Queue" = queue.Queue()
         self.pending: dict[str, dict] = {}
+        # 流式会话：req_id → queue.Queue（stream_msg 帧投递到此；结束时投 _STREAM_END）
+        self.streams: dict[str, "queue.Queue"] = {}
         self.alive = True
+
+    def fail_streams(self, msg: str) -> None:
+        for q in list(self.streams.values()):
+            q.put(RuntimeError(msg))
 
 
 def is_connected(cluster_id: int) -> bool:
@@ -101,6 +107,75 @@ def call(cluster_id: int, method: str, payload: bytes, timeout: float = 30.0) ->
     if slot["error"]:
         raise RuntimeError(slot["error"])
     return slot["payload"]
+
+
+_STREAM_END = object()
+
+
+def stream_call(cluster_id: int, method: str, payload: bytes, timeout: float | None = 300.0):
+    """服务端流式调用：逐条 yield 响应 payload 字节（ExecutePlan / BatchExecute）"""
+    with _agents_lock:
+        a = _agents.get(int(cluster_id))
+    if not a or not a.alive:
+        raise RuntimeError(f"集群 {cluster_id} 无在线 agent")
+    req_id = uuid.uuid4().hex
+    q: "queue.Queue" = queue.Queue()
+    a.streams[req_id] = q
+    logger.info("隧道流式下发 cluster=%s method=%s", cluster_id, method)
+    a.out.put(agent_pb2.AgentFrame(type="stream_open", req_id=req_id, method=method, payload=payload))
+    deadline = (time.time() + timeout) if timeout else None
+    try:
+        while True:
+            remain = None if deadline is None else max(0.1, deadline - time.time())
+            if deadline is not None and remain <= 0.1:
+                raise TimeoutError(f"agent 流式超时（{method}）")
+            item = q.get(timeout=remain)
+            if item is _STREAM_END:
+                return
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        a.streams.pop(req_id, None)
+
+
+def bidi_call(cluster_id: int, method: str, request_iterator, timeout: float | None = None):
+    """双向流调用（ExecPodStream 交互终端）：平台→agent 发消息由后台线程泵送"""
+    with _agents_lock:
+        a = _agents.get(int(cluster_id))
+    if not a or not a.alive:
+        raise RuntimeError(f"集群 {cluster_id} 无在线 agent")
+    req_id = uuid.uuid4().hex
+    q: "queue.Queue" = queue.Queue()
+    a.streams[req_id] = q
+    logger.info("隧道双向流下发 cluster=%s method=%s", cluster_id, method)
+    a.out.put(agent_pb2.AgentFrame(type="stream_open", req_id=req_id, method=method))
+
+    def pump():
+        try:
+            for req in request_iterator:
+                data = req if isinstance(req, (bytes, bytearray)) else req.SerializeToString()
+                a.out.put(agent_pb2.AgentFrame(type="stream_msg", req_id=req_id, payload=bytes(data)))
+        except Exception as e:  # noqa: BLE001 上游迭代器异常（如 WS 断开）
+            logger.info("终端上行流结束: %s", e)
+        finally:
+            a.out.put(agent_pb2.AgentFrame(type="stream_end", req_id=req_id))
+
+    threading.Thread(target=pump, daemon=True).start()
+    deadline = (time.time() + timeout) if timeout else None
+    try:
+        while True:
+            remain = None if deadline is None else max(0.1, deadline - time.time())
+            if deadline is not None and remain <= 0.1:
+                raise TimeoutError(f"agent 双向流超时（{method}）")
+            item = q.get(timeout=remain)
+            if item is _STREAM_END:
+                return
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        a.streams.pop(req_id, None)
 
 
 def _push_config(a: "_AgentConn") -> None:
@@ -160,6 +235,24 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                         logger.info("agent 已接入 cluster=%s version=%s", a.cluster_id, f.version or "-")
                         # P2：把告警策略下发给 agent（agent 内 watcher 用；agent 连不到平台库）
                         _push_config(a)
+                    elif f.type == "stream_msg":
+                        a = state["a"]
+                        if a:
+                            q = a.streams.get(f.req_id)
+                            if q:
+                                q.put(bytes(f.payload))
+                    elif f.type == "stream_end":
+                        a = state["a"]
+                        if a:
+                            q = a.streams.get(f.req_id)
+                            if q:
+                                q.put(_STREAM_END)
+                    elif f.type == "stream_error":
+                        a = state["a"]
+                        if a:
+                            q = a.streams.get(f.req_id)
+                            if q:
+                                q.put(RuntimeError(f.error or "agent 流式调用失败"))
                     elif f.type == "response":
                         a = state["a"]
                         if a:
@@ -197,6 +290,7 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                 yield frame
         finally:
             a.alive = False
+            a.fail_streams("agent 隧道断开")
             with _agents_lock:
                 if _agents.get(a.cluster_id) is a:
                     _agents.pop(a.cluster_id, None)

@@ -172,6 +172,24 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 			fmt.Printf("[agent] 告警检测已启动（Pod/Node watcher，策略 %d 条）\n", len(policies))
 		})
 	}
+	// 流式会话（2026-11-04）：stream_open 开启，stream_msg/stream_end 双向转发
+	type streamState struct {
+		in     chan *agentpb.AgentFrame
+		cancel context.CancelFunc
+	}
+	var streamsMu sync.Mutex
+	streams := make(map[string]*streamState)
+	closeAllStreams := func() {
+		streamsMu.Lock()
+		defer streamsMu.Unlock()
+		for id, st := range streams {
+			st.cancel()
+			close(st.in)
+			delete(streams, id)
+		}
+	}
+	defer closeAllStreams()
+
 	// 兜底：15s 内没收到 config 也先把 watcher 跑起来（用默认策略）
 	cfgTimer := time.AfterFunc(15*time.Second, func() { startWatch(nil) })
 	defer cfgTimer.Stop()
@@ -199,6 +217,88 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 			resp := handleRequest(ctx, bridge, frame)
 			if err := send(resp); err != nil {
 				return err
+			}
+		case "stream_open":
+			stCtx, cancel := context.WithCancel(ctx)
+			st := &streamState{in: make(chan *agentpb.AgentFrame, 64), cancel: cancel}
+			streamsMu.Lock()
+			streams[frame.ReqId] = st
+			streamsMu.Unlock()
+
+			if frame.Method == "ExecPodStream" {
+				// 双向流（交互终端）：平台发的 stdin → 本地流；本地流响应 → 平台
+				sendFn, err := bridge.Bidi(stCtx, frame.Method, func(b []byte) error {
+					return send(&agentpb.AgentFrame{Type: "stream_msg", ReqId: frame.ReqId, Payload: b})
+				}, func(e error) {
+					if e != nil {
+						_ = send(&agentpb.AgentFrame{Type: "stream_error", ReqId: frame.ReqId, Error: e.Error()})
+					} else {
+						_ = send(&agentpb.AgentFrame{Type: "stream_end", ReqId: frame.ReqId})
+					}
+					cancel()
+				})
+				if err != nil {
+					_ = send(&agentpb.AgentFrame{Type: "stream_error", ReqId: frame.ReqId, Error: err.Error()})
+					streamsMu.Lock()
+					delete(streams, frame.ReqId)
+					streamsMu.Unlock()
+					continue
+				}
+				go func() {
+					for f := range st.in {
+						if f.Type == "stream_end" {
+							// 平台关闭发送方向：本地流也需要 CloseSend，Bidi 未暴露 → 依赖会话结束
+							return
+						}
+						if err := sendFn(f.Payload); err != nil {
+							cancel()
+							return
+						}
+					}
+				}()
+				// 首帧（含 cluster_id/namespace/... 的会话参数）
+				if len(frame.Payload) > 0 {
+					if err := sendFn(frame.Payload); err != nil {
+						_ = send(&agentpb.AgentFrame{Type: "stream_error", ReqId: frame.ReqId, Error: err.Error()})
+					}
+				}
+				continue
+			}
+
+			// 服务端流式（ExecutePlan / BatchExecute）
+			go func(reqID, method string, payload []byte) {
+				defer cancel()
+				err := bridge.ServerStream(stCtx, method, payload, func(b []byte) error {
+					return send(&agentpb.AgentFrame{Type: "stream_msg", ReqId: reqID, Payload: b})
+				})
+				if err != nil {
+					_ = send(&agentpb.AgentFrame{Type: "stream_error", ReqId: reqID, Error: err.Error()})
+				} else {
+					_ = send(&agentpb.AgentFrame{Type: "stream_end", ReqId: reqID})
+				}
+				streamsMu.Lock()
+				delete(streams, reqID)
+				streamsMu.Unlock()
+			}(frame.ReqId, frame.Method, frame.Payload)
+		case "stream_msg":
+			streamsMu.Lock()
+			st := streams[frame.ReqId]
+			streamsMu.Unlock()
+			if st != nil {
+				select {
+				case st.in <- frame:
+				default:
+				}
+			}
+		case "stream_end":
+			streamsMu.Lock()
+			st := streams[frame.ReqId]
+			streamsMu.Unlock()
+			if st != nil {
+				select {
+				case st.in <- frame:
+				default:
+				}
 			}
 		}
 	}
