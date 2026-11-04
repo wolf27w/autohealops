@@ -141,6 +141,12 @@ async def handle_alert_event(ev: dict) -> None:
     cid = int(ev.get("cluster_id") or 0)
     if not cid or not ev.get("fault_type"):
         return
+    # 防御：AlertResolve 的 payload 没有 status 字段，若因 method 错发走到这里，
+    # 会以 status 缺省= pending 插入「幽灵告警」（2026-11-04 实测 50 节点 × 6 故障类型 = 300 条）
+    if (ev.get("status") or "").strip() not in ("pending", "resolved"):
+        logger.warning("忽略缺少 status 的 agent 告警事件 fault=%s resource=%s（method 可能错发）",
+                       ev.get("fault_type"), ev.get("resource_name"))
+        return
     if ev.get("status") == "pending" and await _in_maintenance_window(cid):
         logger.info("维护窗口内，跳过告警 cluster=%s fault=%s", cid, ev.get("fault_type"))
         return

@@ -7,8 +7,8 @@
 // 现在把「检测」与「落地」拆开：
 //   - 检测逻辑（观察期/去重键/故障类型判定）保持不动，仍在本包；
 //   - 落地通过 AlertSink 接口：
-//       · dbSink     —— 平台侧 executor 用，行为与原来完全一致（直连 MySQL + 回调 api-server）
-//       · tunnelSink —— agent 用，事件经反向隧道上报平台，由平台统一写库/去重/触发处理
+//     · dbSink     —— 平台侧 executor 用，行为与原来完全一致（直连 MySQL + 回调 api-server）
+//     · tunnelSink —— agent 用，事件经反向隧道上报平台，由平台统一写库/去重/触发处理
 //
 // 维护窗口判断：dbSink 在本地判（读 clusters.maintenance_window）；隧道模式由平台侧统一判，
 // 避免 agent 需要读平台库。限流 rateLimited 仍是进程内内存计数，两种模式都保留（多一层保护）。
@@ -32,19 +32,19 @@ const alertMergeWindow = 30 * time.Minute
 
 // AlertEvent 一条告警落地请求（DB 与隧道两种落地方式共用同一结构，隧道走 JSON）。
 type AlertEvent struct {
-	ClusterID      uint       `json:"cluster_id"`
-	ResourceType   string     `json:"resource_type"` // pod | node
-	Namespace      string     `json:"namespace"`
-	ResourceName   string     `json:"resource_name"`
-	DeploymentName string     `json:"deployment_name"`
-	FaultType      string     `json:"fault_type"`
-	Severity       string     `json:"severity"`
-	Message        string     `json:"message"`
-	Status         string     `json:"status"` // pending | resolved
+	ClusterID      uint   `json:"cluster_id"`
+	ResourceType   string `json:"resource_type"` // pod | node
+	Namespace      string `json:"namespace"`
+	ResourceName   string `json:"resource_name"`
+	DeploymentName string `json:"deployment_name"`
+	FaultType      string `json:"fault_type"`
+	Severity       string `json:"severity"`
+	Message        string `json:"message"`
+	Status         string `json:"status"` // pending | resolved
 	// DedupBy 去重维度：deployment（默认，同服务聚合）| resource（按资源名，如 TerminatingStuck）
-	DedupBy string `json:"dedup_by,omitempty"`
-	OccurredAt     *time.Time `json:"occurred_at,omitempty"`
-	DetectedAt     time.Time  `json:"detected_at"`
+	DedupBy    string     `json:"dedup_by,omitempty"`
+	OccurredAt *time.Time `json:"occurred_at,omitempty"`
+	DetectedAt time.Time  `json:"detected_at"`
 }
 
 // ResolveOpts 关闭活跃告警的选项
@@ -321,7 +321,8 @@ func mergeDuplicateAlert(clusterID uint, name, faultType, message string, byDepl
 // ==================== 隧道 sink（agent 模式） ====================
 
 // TunnelSender 事件上行函数（agent 注入：把 AlertEvent 序列化后经隧道发给平台）
-type TunnelSender func(payload []byte) error
+// TunnelSender 上行一帧到平台：method = AlertEvent / AlertResolve（平台按 method 分发）
+type TunnelSender func(method string, payload []byte) error
 
 // tunnelSink agent 侧落地实现：事件经反向隧道上报平台，平台统一写库
 type tunnelSink struct {
@@ -346,7 +347,7 @@ func (t *tunnelSink) Report(ev AlertEvent) uint {
 	if err != nil {
 		return 0
 	}
-	if err := t.send(payload); err != nil && t.logger != nil {
+	if err := t.send("AlertEvent", payload); err != nil && t.logger != nil {
 		t.logger.Warn("告警事件上行失败（下一轮观察期会再报）",
 			zap.Uint("cluster", t.clusterID), zap.String("fault", ev.FaultType), zap.Error(err))
 		return 0
@@ -361,14 +362,14 @@ func (t *tunnelSink) Report(ev AlertEvent) uint {
 
 func (t *tunnelSink) Resolve(clusterID uint, resourceType, resourceName, faultType string, opts ResolveOpts) {
 	payload, err := json.Marshal(struct {
-		ClusterID      uint   `json:"cluster_id"`
-		ResourceType   string `json:"resource_type"`
-		ResourceName   string `json:"resource_name"`
-		FaultType      string `json:"fault_type"`
-		Suffix         string `json:"suffix"`
+		ClusterID       uint   `json:"cluster_id"`
+		ResourceType    string `json:"resource_type"`
+		ResourceName    string `json:"resource_name"`
+		FaultType       string `json:"fault_type"`
+		Suffix          string `json:"suffix"`
 		MessageOverride string `json:"message_override"`
-		IncludeTicketed bool  `json:"include_ticketed"`
-		Notify         bool   `json:"notify"`
+		IncludeTicketed bool   `json:"include_ticketed"`
+		Notify          bool   `json:"notify"`
 	}{
 		ClusterID: t.clusterID, ResourceType: resourceType, ResourceName: resourceName,
 		FaultType: faultType, Suffix: opts.Suffix, MessageOverride: opts.MessageOverride,
@@ -377,7 +378,7 @@ func (t *tunnelSink) Resolve(clusterID uint, resourceType, resourceName, faultTy
 	if err != nil {
 		return
 	}
-	if err := t.send(payload); err != nil && t.logger != nil {
+	if err := t.send("AlertResolve", payload); err != nil && t.logger != nil {
 		t.logger.Warn("告警恢复事件上行失败", zap.Uint("cluster", t.clusterID),
 			zap.String("resource", resourceName), zap.String("fault", faultType), zap.Error(err))
 	}

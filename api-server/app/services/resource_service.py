@@ -88,26 +88,52 @@ async def _latest_snapshots(session, cluster_id: int, namespace: str, resource_t
 
 
 async def get_namespace_pods(cluster_id: int, namespace: str) -> list[dict]:
-    """命名空间下 Pod 快照（含资源限制，每个 Pod 取最新一条）"""
+    """命名空间下 Pod 快照（含资源限制，每个 Pod 取最新一条）；无快照时实时兜底"""
     async with async_session() as session:
         snaps = await _latest_snapshots(session, cluster_id, namespace, "pod")
-    return [
-        {"name": s.resource_name, "status": s.status, "ready_replicas": s.ready_replicas, "replicas": s.replicas,
-         "cpu_request": s.cpu_request, "cpu_limit": s.cpu_limit,
-         "memory_request": s.memory_request, "memory_limit": s.memory_limit}
-        for s in snaps
-    ]
+    if snaps:
+        return [
+            {"name": s.resource_name, "status": s.status, "ready_replicas": s.ready_replicas, "replicas": s.replicas,
+             "cpu_request": s.cpu_request, "cpu_limit": s.cpu_limit,
+             "memory_request": s.memory_request, "memory_limit": s.memory_limit}
+            for s in snaps
+        ]
+    # agent 接入集群平台侧不采集快照 → 实时经隧道取
+    from app.clients.executor_client import executor_client
+    try:
+        r = await executor_client.acall(executor_client.list_pods, cluster_id, namespace)
+        return [
+            {"name": x.get("name"), "status": x.get("status") or x.get("phase") or "",
+             "ready_replicas": x.get("ready_containers"), "replicas": x.get("total_containers"),
+             "cpu_request": "", "cpu_limit": "", "memory_request": "", "memory_limit": ""}
+            for x in (r.get("pods") or []) if r.get("success")
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("实时取 Pod 失败 cluster=%s ns=%s: %s", cluster_id, namespace, e)
+        return []
 
 
 async def get_namespace_deployments(cluster_id: int, namespace: str) -> list[dict]:
-    """命名空间下 Deployment 快照（每个 Deployment 取最新一条，避免历史快照重复）"""
+    """命名空间下 Deployment 快照（每个 Deployment 取最新一条）；无快照时实时兜底"""
     async with async_session() as session:
         snaps = await _latest_snapshots(session, cluster_id, namespace, "deployment")
-    return [
-        {"name": s.resource_name, "replicas": s.replicas, "ready_replicas": s.ready_replicas,
-         "image_version": s.image_version, "status": s.status}
-        for s in snaps
-    ]
+    if snaps:
+        return [
+            {"name": s.resource_name, "replicas": s.replicas, "ready_replicas": s.ready_replicas,
+             "image_version": s.image_version, "status": s.status}
+            for s in snaps
+        ]
+    from app.clients.executor_client import executor_client
+    try:
+        r = await executor_client.acall(executor_client.list_workloads, cluster_id, namespace)
+        return [
+            {"name": x.get("name"), "replicas": x.get("replicas"), "ready_replicas": x.get("ready_replicas"),
+             "image_version": "", "status": ""}
+            for x in (r.get("workloads") or []) if r.get("success") and x.get("kind") == "deployment"
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("实时取 Deployment 失败 cluster=%s ns=%s: %s", cluster_id, namespace, e)
+        return []
 
 
 async def get_cluster_detail(cluster_id: int) -> list[dict]:
@@ -155,7 +181,54 @@ async def get_cluster_detail(cluster_id: int) -> list[dict]:
                         "update_time": ut,
                     })
 
+    if not ns_map:
+        # 快照缺失（典型：agent 接入的集群平台侧不采集）→ 实时经 executor/隧道取一次
+        return await _cluster_detail_live(cluster_id)
     return list(ns_map.values())
+
+
+async def _cluster_detail_live(cluster_id: int) -> list[dict]:
+    """实时构建集群详情（无快照时兜底）：工作负载列表 + Pod 列表都走 executor（agent 集群即隧道）"""
+    from app.clients.executor_client import executor_client
+
+    kind_key = {"deployment": "deployments", "statefulset": "statefulsets",
+                "cronjob": "cronjobs", "daemonset": "daemonsets"}
+    ns_map: dict[str, dict] = {}
+
+    def bucket(ns: str) -> dict:
+        return ns_map.setdefault(ns, {"namespace": ns, "deployments": [], "statefulsets": [],
+                                      "cronjobs": [], "daemonsets": [], "pods": []})
+
+    try:
+        w = await executor_client.acall(executor_client.list_workloads, cluster_id, "")
+        for x in (w.get("workloads") or []) if w.get("success") else []:
+            k = kind_key.get(x.get("kind") or "")
+            if not k:
+                continue
+            b = bucket(x.get("namespace") or "default")[k]
+            if any(i["name"] == x.get("name") for i in b):
+                continue
+            item = {"name": x.get("name")}
+            if x.get("kind") != "cronjob":
+                item["replicas"] = x.get("replicas")
+                item["ready_replicas"] = x.get("ready_replicas")
+            b.append(item)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("实时取工作负载失败 cluster=%s: %s", cluster_id, e)
+
+    try:
+        p = await executor_client.acall(executor_client.list_pods, cluster_id, "")
+        for x in (p.get("pods") or []) if p.get("success") else []:
+            bucket(x.get("namespace") or "default")["pods"].append({
+                "name": x.get("name"),
+                "status": x.get("status") or x.get("phase") or "",
+                "cpu_request": "", "cpu_limit": "", "memory_request": "", "memory_limit": "",
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.warning("实时取 Pod 列表失败 cluster=%s: %s", cluster_id, e)
+
+    return [v for v in ns_map.values()
+            if any(v[k] for k in ("deployments", "statefulsets", "cronjobs", "daemonsets", "pods"))]
 
 
 async def _snapshot_partitions() -> list[tuple[str, str]]:

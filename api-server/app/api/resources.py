@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """资源配额 API"""
 import json
+import logging
 import re
 import yaml
 from datetime import datetime, timedelta
@@ -15,6 +16,8 @@ from app.middleware.permission import require_any_user, require_operator
 from app.models import PodMetric, ResourceSnapshot
 from app.services import resource_service
 from app.services.user_permission_service import check_cluster_permission
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/resources")
 
@@ -91,6 +94,16 @@ async def namespace_list(cluster_id: int, user=Depends(require_any_user)):
                 .distinct()
             )
             ns_list = sorted({r[0] for r in result.all() if r[0]})
+    if not ns_list:
+        # 没有任何快照（典型：agent 接入集群，平台侧不采集）→ 实时经隧道取工作负载/Pod 的命名空间
+        try:
+            w = await executor_client.acall(executor_client.list_workloads, cluster_id, "")
+            names = {x.get("namespace") for x in (w.get("workloads") or []) if x.get("namespace")}
+            p2 = await executor_client.acall(executor_client.list_pods, cluster_id, "")
+            names |= {x.get("namespace") for x in (p2.get("pods") or []) if x.get("namespace")}
+            ns_list = sorted(names)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("实时取命名空间失败 cluster=%s: %s", cluster_id, e)
     try:
         await redis_pool.set(cache_key, json.dumps(ns_list), ex=NS_CACHE_TTL)
     except Exception:  # noqa: BLE001

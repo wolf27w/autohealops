@@ -192,8 +192,8 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 			return
 		}
 		watchOnce.Do(func() {
-			watcher.SetSink(watcher.NewTunnelSink(uint(clusterID), func(payload []byte) error {
-				return send(&agentpb.AgentFrame{Type: "event", Method: "AlertEvent", Payload: payload})
+			watcher.SetSink(watcher.NewTunnelSink(uint(clusterID), func(method string, payload []byte) error {
+				return send(&agentpb.AgentFrame{Type: "event", Method: method, Payload: payload})
 			}, logger))
 			pw = watcher.NewPodWatcher(uint(clusterID), cs, logger)
 			nw = watcher.NewNodeWatcher(uint(clusterID), cs, logger)
