@@ -39,6 +39,14 @@ type nodeConditionJSON struct {
 	Since   string `json:"since"` // lastTransitionTime RFC3339
 }
 
+type nodeTaintJSON struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Effect string `json:"effect"`
+	// TimeAdded 为空表示未设置（k8s 只在 NoExecute 污点记录时间）
+	TimeAdded string `json:"time_added,omitempty"`
+}
+
 type nodeJSON struct {
 	Name          string              `json:"name"`
 	Ready         bool                `json:"ready"`
@@ -51,9 +59,11 @@ type nodeJSON struct {
 	MemUsageBytes int64               `json:"mem_usage_bytes"`
 	HasMetrics    bool                `json:"has_metrics"`
 	KubeletVer    string              `json:"kubelet_version"`
-	InternalIP    string              `json:"internal_ip"` // 诊断用：Prometheus instance 常是节点 IP
-	Conditions    []nodeConditionJSON `json:"conditions"`  // 节点诊断用（2026-10-21）
-	Taints        []string            `json:"taints"`      // key=value:effect
+	InternalIP    string              `json:"internal_ip"`   // 诊断用：Prometheus instance 常是节点 IP
+	Conditions    []nodeConditionJSON `json:"conditions"`    // 节点诊断用（2026-10-21）
+	Taints        []string            `json:"taints"`        // key=value:effect（兼容旧字段）
+	Labels        map[string]string   `json:"labels"`        // 节点标签（编辑用，2026-11-04）
+	TaintsDetail  []nodeTaintJSON     `json:"taints_detail"` // 结构化污点（编辑用）
 }
 
 func nodeReady(n *corev1.Node) bool {
@@ -127,8 +137,14 @@ func (e *Executor) nodesJSON(ctx context.Context) (string, error) {
 			})
 		}
 		taints := make([]string, 0, len(n.Spec.Taints))
+		taintsDetail := make([]nodeTaintJSON, 0, len(n.Spec.Taints))
 		for _, t := range n.Spec.Taints {
 			taints = append(taints, fmt.Sprintf("%s=%s:%s", t.Key, t.Value, t.Effect))
+			td := nodeTaintJSON{Key: t.Key, Value: t.Value, Effect: string(t.Effect)}
+			if t.TimeAdded != nil {
+				td.TimeAdded = t.TimeAdded.Format(time.RFC3339)
+			}
+			taintsDetail = append(taintsDetail, td)
 		}
 		ip := ""
 		for _, a := range n.Status.Addresses {
@@ -142,6 +158,7 @@ func (e *Executor) nodesJSON(ctx context.Context) (string, error) {
 			Allocatable: qtyMap(n.Status.Allocatable), Capacity: qtyMap(n.Status.Capacity),
 			PodCount: podCount[n.Name], CPUUsageMilli: u[0], MemUsageBytes: u[1], HasMetrics: hasMetrics,
 			KubeletVer: n.Status.NodeInfo.KubeletVersion, InternalIP: ip, Conditions: conds, Taints: taints,
+			Labels: n.Labels, TaintsDetail: taintsDetail,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

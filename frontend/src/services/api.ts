@@ -648,7 +648,20 @@ export interface K8sNode {
   kubelet_version?: string; cpu_allocatable?: string; mem_allocatable?: string; pods_allocatable?: string
   pods_count?: number; has_metrics?: boolean; cpu_usage_milli?: number; mem_usage_bytes?: number
   cpu_pct?: number | null; mem_pct?: number | null
+  labels?: Record<string, string>
+  taints?: string[]
+  taints_detail?: NodeTaint[]
 }
+export interface NodeTaint { key: string; value: string; effect: 'NoSchedule' | 'PreferNoSchedule' | 'NoExecute' | string; time_added?: string }
+export interface NodeChangeResult { changed: { op: string; key?: string; value?: string; effect?: string }[]; outputs?: string[] }
+export const setNodeLabels = (clusterId: number, node: string, labels: Record<string, string>, force = false) =>
+  http.put<NodeChangeResult>(`/resources/clusters/${clusterId}/nodes/${node}/labels`, { labels, force })
+export const setNodeTaints = (clusterId: number, node: string, taints: NodeTaint[]) =>
+  http.put<NodeChangeResult>(`/resources/clusters/${clusterId}/nodes/${node}/taints`, { taints })
+export const isolateNode = (clusterId: number, node: string, data: { reason?: string; taint?: boolean } = {}) =>
+  http.post<NodeChangeResult>(`/resources/clusters/${clusterId}/nodes/${node}/isolate`, data)
+export const unisolateNode = (clusterId: number, node: string) =>
+  http.post<NodeChangeResult>(`/resources/clusters/${clusterId}/nodes/${node}/unisolate`)
 export const getNodes = (clusterId: number) => http.get<K8sNode[]>(`/resources/clusters/${clusterId}/nodes`)
 export const scheduleWorkload = (clusterId: number, kind: string, namespace: string, name: string, data: { node: string; preview?: boolean }) =>
   http.post<{ preview: boolean; node: string; old_node_selector: Record<string, string>; new_node_selector: Record<string, string> }>(

@@ -1,13 +1,23 @@
 // 节点管理（P1-R4）：节点列表（容量/用量）+ 单个/批量 cordon·uncordon + 均衡计划（只读建议）
 import { useEffect, useState, type Key } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Card, Table, Button, Space, Select, Tag, message, Popconfirm, Progress, Modal, InputNumber, Alert, Collapse } from 'antd'
+import { Card, Table, Button, Space, Select, Tag, message, Popconfirm, Progress, Modal, InputNumber, Alert, Collapse, Input, Checkbox, Tooltip, Divider } from 'antd'
 import { ReloadOutlined, ApartmentOutlined } from '@ant-design/icons'
-import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan, drainPreview, drainNode, diagnoseNode } from '../services/api'
-import type { K8sNode, BalancePlan, NodeDiagnosis } from '../services/api'
+import { getClusters, getNodes, cordonNode, uncordonNode, batchNodes, getNodeBalancePlan, drainPreview, drainNode, diagnoseNode, setNodeLabels, setNodeTaints, isolateNode, unisolateNode } from '../services/api'
+import type { K8sNode, BalancePlan, NodeDiagnosis, NodeTaint } from '../services/api'
 import type { Cluster } from '../types'
 
 const pctColor = (v?: number | null) => (!v && v !== 0) ? '#999' : v >= 85 ? '#ff4d4f' : v >= 70 ? '#faad14' : '#52c41a'
+
+const ISOLATE_LABEL = 'autohealops.io/isolated'
+const isNodeIsolated = (n?: K8sNode) => !!(n?.labels && n.labels[ISOLATE_LABEL])
+// 稳定序列化（比较“有没有变”）
+const canonLabels = (m: Record<string, string>) => JSON.stringify(Object.keys(m).sort().map((k) => [k, m[k]]))
+const canonTaints = (ts: { key: string; value: string; effect: string }[]) =>
+  JSON.stringify(ts.map((t) => [t.key, t.value, t.effect]).sort())
+
+type LabelRow = { key: string; value: string }
+type TaintRow = { key: string; value: string; effect: string }
 
 export default function NodeManagement() {
   const [clusters, setClusters] = useState<Cluster[]>([])
@@ -34,6 +44,20 @@ export default function NodeManagement() {
   const [diagNode, setDiagNode] = useState('')
   const [diag, setDiag] = useState<NodeDiagnosis | null>(null)
   const [diagLoading, setDiagLoading] = useState(false)
+  // 标签 / 污点编辑（2026-11-04）
+  const [metaOpen, setMetaOpen] = useState(false)
+  const [metaNode, setMetaNode] = useState('')
+  const [labelRows, setLabelRows] = useState<LabelRow[]>([])
+  const [taintRows, setTaintRows] = useState<TaintRow[]>([])
+  const [origLabels, setOrigLabels] = useState<Record<string, string>>({})
+  const [origTaints, setOrigTaints] = useState<TaintRow[]>([])
+  const [metaForce, setMetaForce] = useState(false)
+  const [metaSaving, setMetaSaving] = useState(false)
+  // 隔离 / 解除隔离
+  const [isoOpen, setIsoOpen] = useState(false)
+  const [isoNode, setIsoNode] = useState('')
+  const [isoReason, setIsoReason] = useState('')
+  const [isoTaint, setIsoTaint] = useState(true)
 
   useEffect(() => { getClusters().then((d) => setClusters(d || [])).catch(() => {}) }, [])
 
@@ -88,6 +112,67 @@ export default function NodeManagement() {
     getNodeBalancePlan(clusterId, threshold).then(setPlan).catch(() => {}).finally(() => setPlanLoading(false))
   }
 
+  // ---- 标签 / 污点编辑 ----
+  const openMeta = (node: string) => {
+    const n = nodes.find((x) => x.name === node)
+    const labels = n?.labels || {}
+    const visibleLabels = Object.fromEntries(Object.entries(labels).filter(([k]) => k !== ISOLATE_LABEL && k !== 'autohealops.io/isolate-reason'))
+    const taints = (n?.taints_detail || []).map((t: NodeTaint) => ({ key: t.key, value: t.value, effect: t.effect }))
+    setMetaNode(node)
+    setOrigLabels(visibleLabels)
+    setOrigTaints(taints)
+    setLabelRows(Object.entries(visibleLabels).map(([key, value]) => ({ key, value })))
+    setTaintRows(taints)
+    setMetaForce(false)
+    setMetaOpen(true)
+  }
+
+  const saveMeta = async () => {
+    if (!clusterId || !metaNode) return
+    const desired: Record<string, string> = {}
+    for (const r of labelRows) {
+      const k = r.key.trim()
+      if (!k) continue
+      if (k in desired) { message.error(`标签 key 重复：${k}`); return }
+      desired[k] = r.value.trim()
+    }
+    const taints = taintRows.filter((t) => t.key.trim()).map((t) => ({ key: t.key.trim(), value: t.value.trim(), effect: t.effect }))
+    const seen = new Set<string>()
+    for (const t of taints) {
+      const sig = `${t.key}:${t.effect}`
+      if (seen.has(sig)) { message.error(`污点重复（同 key + effect）：${sig}`); return }
+      seen.add(sig)
+    }
+    const labelsChanged = canonLabels(desired) !== canonLabels(origLabels)
+    const taintsChanged = canonTaints(taints) !== canonTaints(origTaints)
+    if (!labelsChanged && !taintsChanged) { message.info('没有变更'); return }
+    setMetaSaving(true)
+    try {
+      if (labelsChanged) await setNodeLabels(clusterId, metaNode, desired, metaForce)
+      if (taintsChanged) await setNodeTaints(clusterId, metaNode, taints)
+      message.success(`已更新 ${metaNode}${labelsChanged ? ' 标签' : ''}${taintsChanged ? ' 污点' : ''}`)
+      setMetaOpen(false)
+      load()
+    } catch (e) {
+      message.error(String((e as Error)?.message || e))
+    } finally { setMetaSaving(false) }
+  }
+
+  const doIsolate = async () => {
+    if (!clusterId || !isoNode) return
+    try {
+      await isolateNode(clusterId, isoNode, { reason: isoReason || 'manual', taint: isoTaint })
+      message.success(`已隔离 ${isoNode}`)
+      setIsoOpen(false); setIsoReason(''); load()
+    } catch (e) { message.error(String((e as Error)?.message || e)) }
+  }
+
+  const doUnisolate = async (node: string) => {
+    if (!clusterId) return
+    try { await unisolateNode(clusterId, node); message.success(`已解除隔离 ${node}`); load() }
+    catch (e) { message.error(String((e as Error)?.message || e)) }
+  }
+
   const pctCell = (v?: number | null) => (
     <div style={{ minWidth: 96 }}>
       <Progress percent={v ?? 0} size="small" strokeColor={pctColor(v)} format={() => (v === null || v === undefined ? '-' : `${v}%`)} />
@@ -119,7 +204,7 @@ export default function NodeManagement() {
         )}
         <Table rowKey="name" size="small" loading={loading} dataSource={nodes} pagination={{ pageSize: 20 }}
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1400 }}
           columns={[
             { title: '节点', dataIndex: 'name', width: 160, fixed: 'left' },
             { title: '状态', dataIndex: 'ready', width: 90, render: (v: string) => <Tag color={v === 'Ready' ? 'green' : 'red'}>{v === 'Ready' ? '就绪' : '未就绪'}</Tag> },
@@ -127,15 +212,51 @@ export default function NodeManagement() {
             { title: 'CPU', width: 130, render: (_, r) => pctCell(r.cpu_pct) },
             { title: '内存', width: 130, render: (_, r) => pctCell(r.mem_pct) },
             { title: 'Pod 用量', width: 110, render: (_, r) => `${r.pods_count ?? '-'} / ${r.pods_allocatable || '-'}` },
-            { title: '角色', dataIndex: 'roles', width: 150, render: (v) => v || '-' },
+            { title: '角色', dataIndex: 'roles', width: 130, render: (v) => v || '-' },
+            {
+              title: '标签', width: 220, render: (_, r) => {
+                const entries = Object.entries(r.labels || {})
+                if (!entries.length) return '-'
+                return (
+                  <Space size={4} wrap>
+                    {entries.slice(0, 2).map(([k, v]) => (
+                      <Tooltip key={k} title={`${k}=${v}`} overlayStyle={{ maxWidth: 420 }}>
+                        <Tag color={k === ISOLATE_LABEL ? 'orange' : 'blue'} style={{ maxWidth: 96, overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.split('/').pop()}</Tag>
+                      </Tooltip>
+                    ))}
+                    {entries.length > 2 && (
+                      <Tooltip title={<div style={{ whiteSpace: 'pre-line' }}>{entries.slice(2).map(([k, v]) => `${k}=${v}`).join('\n')}</div>}>
+                        <Tag>+{entries.length - 2}</Tag>
+                      </Tooltip>
+                    )}
+                  </Space>
+                )
+              }
+            },
+            {
+              title: '污点', width: 210, render: (_, r) => {
+                const ts = r.taints || []
+                if (!ts.length) return '-'
+                return (
+                  <Space size={4} wrap>
+                    {ts.slice(0, 1).map((t) => <Tag key={t} color="volcano" style={{ maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' }}>{t}</Tag>)}
+                    {ts.length > 1 && <Tooltip title={<div style={{ whiteSpace: 'pre-line' }}>{ts.slice(1).join('\n')}</div>}><Tag>+{ts.length - 1}</Tag></Tooltip>}
+                  </Space>
+                )
+              }
+            },
             { title: 'Kubelet', dataIndex: 'kubelet_version', width: 110, render: (v) => v || '-' },
             {
-              title: '操作', width: 140, fixed: 'right', render: (_, r) => (
-                <Space size="small">
+              title: '操作', width: 300, fixed: 'right', render: (_, r) => (
+                <Space size="small" wrap>
                   <a onClick={() => openDiagnose(r.name)}>诊断</a>
-                  {r.schedulable
+                  <a onClick={() => openMeta(r.name)}>标签/污点</a>
+                  {isNodeIsolated(r)
+                    ? <a style={{ color: '#389e0d' }} onClick={() => doUnisolate(r.name)}>解除隔离</a>
+                    : <a style={{ color: '#d46b08' }} onClick={() => { setIsoNode(r.name); setIsoReason(''); setIsoTaint(true); setIsoOpen(true) }}>隔离</a>}
+                  {!isNodeIsolated(r) && (r.schedulable
                     ? <Popconfirm title={`停止调度 ${r.name}？（禁止新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'cordon')}><a style={{ color: '#cf1322' }}>停止调度</a></Popconfirm>
-                    : <Popconfirm title={`启用调度 ${r.name}？（允许新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>启用调度</a></Popconfirm>}
+                    : <Popconfirm title={`启用调度 ${r.name}？（允许新 Pod 调度到该节点）`} onConfirm={() => act(r.name, 'uncordon')}><a style={{ color: '#389e0d' }}>启用调度</a></Popconfirm>)}
                   <a style={{ color: '#cf1322' }} onClick={() => openDrain(r.name)}>排空</a>
                 </Space>
               )
@@ -223,6 +344,78 @@ export default function NodeManagement() {
         <pre style={{ background: '#f6f8fa', padding: 8, borderRadius: 6, fontSize: 12, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
           {drainLoading ? '预览计算中…' : drainText}
         </pre>
+      </Modal>
+
+      <Modal open={metaOpen} title={`编辑节点标签 / 污点 · ${metaNode}`} width={860}
+        onCancel={() => setMetaOpen(false)} onOk={saveMeta} okText="保存" confirmLoading={metaSaving} destroyOnClose>
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="标签用于调度选择（nodeSelector / 亲和性），污点用于拒绝调度。系统保留域（*.kubernetes.io）由 kubelet 维护，默认不可改。" />
+        <Space style={{ marginBottom: 8 }} wrap>
+          <b>标签（{labelRows.length}）</b>
+          <Button size="small" onClick={() => setLabelRows([...labelRows, { key: '', value: '' }])}>+ 添加标签</Button>
+          <Checkbox checked={metaForce} onChange={(e) => setMetaForce(e.target.checked)}>允许修改系统保留标签（危险）</Checkbox>
+        </Space>
+        <Table rowKey={(_, i) => `l${i}`} size="small" pagination={false} dataSource={labelRows}
+          locale={{ emptyText: '无标签' }}
+          columns={[
+            {
+              title: 'Key', width: '45%', render: (_, r, i) => (
+                <Input value={r.key} placeholder="例如 disk 或 example.com/zone"
+                  status={r.key && !/^([a-z0-9]([-a-z0-9.]*[a-z0-9])?\/)?[A-Za-z0-9]([-_.A-Za-z0-9]*[A-Za-z0-9])?$/.test(r.key) ? 'error' : undefined}
+                  onChange={(e) => { const n = [...labelRows]; n[i] = { ...n[i], key: e.target.value }; setLabelRows(n) }} />
+              )
+            },
+            {
+              title: 'Value', render: (_, r, i) => (
+                <Input value={r.value} placeholder="例如 ssd"
+                  onChange={(e) => { const n = [...labelRows]; n[i] = { ...n[i], value: e.target.value }; setLabelRows(n) }} />
+              )
+            },
+            { title: '', width: 60, render: (_, __, i) => <a style={{ color: '#cf1322' }} onClick={() => setLabelRows(labelRows.filter((_, j) => j !== i))}>删除</a> },
+          ]} />
+        <Divider style={{ margin: '16px 0 12px' }} />
+        <Space style={{ marginBottom: 8 }}>
+          <b>污点（{taintRows.length}）</b>
+          <Button size="small" onClick={() => setTaintRows([...taintRows, { key: '', value: '', effect: 'NoSchedule' }])}>+ 添加污点</Button>
+        </Space>
+        <Table rowKey={(_, i) => `t${i}`} size="small" pagination={false} dataSource={taintRows}
+          locale={{ emptyText: '无污点' }}
+          columns={[
+            {
+              title: 'Key', width: '35%', render: (_, r, i) => (
+                <Input value={r.key} placeholder="例如 dedicated"
+                  onChange={(e) => { const n = [...taintRows]; n[i] = { ...n[i], key: e.target.value }; setTaintRows(n) }} />
+              )
+            },
+            {
+              title: 'Value（可空）', width: '25%', render: (_, r, i) => (
+                <Input value={r.value} placeholder="例如 gpu"
+                  onChange={(e) => { const n = [...taintRows]; n[i] = { ...n[i], value: e.target.value }; setTaintRows(n) }} />
+              )
+            },
+            {
+              title: 'Effect', width: 170, render: (_, r, i) => (
+                <Select style={{ width: '100%' }} value={r.effect}
+                  options={[{ value: 'NoSchedule' }, { value: 'PreferNoSchedule' }, { value: 'NoExecute' }]}
+                  onChange={(v) => { const n = [...taintRows]; n[i] = { ...n[i], effect: v }; setTaintRows(n) }} />
+              )
+            },
+            { title: '', width: 60, render: (_, __, i) => <a style={{ color: '#cf1322' }} onClick={() => setTaintRows(taintRows.filter((_, j) => j !== i))}>删除</a> },
+          ]} />
+        <div style={{ marginTop: 10, fontSize: 12, color: '#888' }}>
+          说明：隔离标记（autohealops.io/isolated）不在此处编辑，请用行内「隔离 / 解除隔离」；kubelet 自动维护的污点（disk-pressure / memory-pressure / not-ready 等）平台不开放修改。
+        </div>
+      </Modal>
+
+      <Modal open={isoOpen} title={`隔离节点 · ${isoNode}`} width={560}
+        onCancel={() => setIsoOpen(false)} onOk={doIsolate} okText="确认隔离" okButtonProps={{ danger: true }}>
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message="隔离 = 停止调度（cordon）+ 打标记，不驱逐已有 Pod；需要清空节点请用「排空」。" />
+        <div style={{ marginBottom: 6 }}>原因（写入标签 <code>autohealops.io/isolate-reason</code>）：</div>
+        <Input value={isoReason} onChange={(e) => setIsoReason(e.target.value)} placeholder="例如 磁盘告警-待清理" maxLength={63} />
+        <Checkbox style={{ marginTop: 12 }} checked={isoTaint} onChange={(e) => setIsoTaint(e.target.checked)}>
+          同时加 NoSchedule 污点（autohealops.io/isolated=true）
+        </Checkbox>
       </Modal>
     </div>
   )

@@ -11871,6 +11871,201 @@
         "summary": "Diagnose Node"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/isolate": {
+      "post": {
+        "description": "隔离节点（B）：cordon + 打标记，可选加 NoSchedule 污点\n\nbody: {\"reason\": \"磁盘告警-待处理\", \"taint\": true}",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_nodes_node_name_isolate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_name",
+            "required": true,
+            "schema": {
+              "title": "Node Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Isolate Node"
+      }
+    },
+    "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/labels": {
+      "put": {
+        "description": "全量设置节点标签（只传期望的完整标签集，后端算差量）\n\nbody: {\"labels\": {\"k\": \"v\"}, \"force\": false}\n保留域（*.kubernetes.io）默认拒绝，force=true 才允许。",
+        "operationId": "put_api_v1_resources_clusters_cluster_id_nodes_node_name_labels",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_name",
+            "required": true,
+            "schema": {
+              "title": "Node Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Node Labels"
+      }
+    },
+    "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/taints": {
+      "put": {
+        "description": "全量设置节点污点（body: {\"taints\": [{\"key\",\"value\",\"effect\"}]}）\n\n保留域（*.kubernetes.io，如 disk-pressure/not-ready）一律拒绝：那是 kubelet 根据实际情况自动加的。",
+        "operationId": "put_api_v1_resources_clusters_cluster_id_nodes_node_name_taints",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_name",
+            "required": true,
+            "schema": {
+              "title": "Node Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Node Taints"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/uncordon": {
       "post": {
         "operationId": "post_api_v1_resources_clusters_cluster_id_nodes_node_name_uncordon",
@@ -11920,6 +12115,58 @@
           }
         ],
         "summary": "Uncordon Node"
+      }
+    },
+    "/api/v1/resources/clusters/{cluster_id}/nodes/{node_name}/unisolate": {
+      "post": {
+        "description": "解除隔离：uncordon + 去掉隔离标记（及平台加的污点，如存在）",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_nodes_node_name_unisolate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_name",
+            "required": true,
+            "schema": {
+              "title": "Node Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unisolate Node"
       }
     },
     "/api/v1/resources/clusters/{cluster_id}/nodes/{node}/drain": {

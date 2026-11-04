@@ -1658,6 +1658,10 @@ def _node_from_json(n: dict) -> dict:
         "cpu_usage_milli": cpu_u, "mem_usage_bytes": mem_u,
         "cpu_pct": round(cpu_u / cpu_alloc * 100, 1) if cpu_alloc else None,
         "mem_pct": round(mem_u / mem_alloc * 100, 1) if mem_alloc else None,
+        # 节点标签/污点（2026-11-04，供节点管理页展示与编辑）
+        "labels": n.get("labels") or {},
+        "taints": n.get("taints") or [],
+        "taints_detail": n.get("taints_detail") or [],
     }
 
 
@@ -1734,6 +1738,268 @@ async def batch_node_op(cluster_id: int, payload: dict, user=Depends(require_ope
                         "message": (rr.get("output") or rr.get("error") or "").strip()[:200]})
     ok = all(x["success"] for x in results)
     return {"code": 200 if ok else 500, "message": "success" if ok else "部分失败", "data": {"results": results}}
+
+
+# ==================== 节点标签 / 污点编辑（2026-11-04） ====================
+
+_NODE_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+_LABEL_KEY_RE = re.compile(r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-_.A-Za-z0-9]*[A-Za-z0-9])?$")
+_LABEL_VALUE_RE = re.compile(r"^([A-Za-z0-9]([-_.A-Za-z0-9]*[A-Za-z0-9])?)?$")
+_TAINT_EFFECTS = {"NoSchedule", "PreferNoSchedule", "NoExecute"}
+# kubelet 托管的标签/污点：默认禁改（磁盘/内存压力、未就绪等都是 kubelet 自己维护的）
+_ISOLATE_LABEL = "autohealops.io/isolated"
+_ISOLATE_REASON_LABEL = "autohealops.io/isolate-reason"
+_ISOLATE_TAINT_KEY = "autohealops.io/isolated"
+
+
+def _is_reserved_key(key: str) -> bool:
+    """是否是 k8s/kubelet 保留域（kubernetes.io 及子域）"""
+    if "/" not in key:
+        return False
+    prefix = key.split("/", 1)[0]
+    return prefix == "kubernetes.io" or prefix.endswith(".kubernetes.io")
+
+
+async def _get_node_json(cluster_id: int, name: str):
+    """取单个节点原始 JSON：返回 (node, err)"""
+    raw, err = await _fetch_nodes_json(cluster_id)
+    if raw is None:
+        return None, err
+    for n in raw:
+        if n.get("name") == name:
+            return n, None
+    return None, f"节点 {name} 不存在"
+
+
+def _bad(reason: str):
+    return {"code": 400, "message": reason, "data": None}
+
+
+@router.put("/clusters/{cluster_id}/nodes/{node_name}/labels")
+async def set_node_labels(cluster_id: int, node_name: str, payload: dict, user=Depends(require_operator)):
+    """全量设置节点标签（只传期望的完整标签集，后端算差量）
+
+    body: {"labels": {"k": "v"}, "force": false}
+    保留域（*.kubernetes.io）默认拒绝，force=true 才允许。
+    """
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    if not _NODE_NAME_RE.match(node_name or ""):
+        return _bad("节点名不合法")
+    desired = payload.get("labels") or {}
+    force = bool(payload.get("force"))
+    if not isinstance(desired, dict):
+        return _bad("labels 必须是对象 {key: value}")
+    for k, v in desired.items():
+        k, v = str(k), str(v)
+        if not _LABEL_KEY_RE.match(k) or len(k) > 253:
+            return _bad(f"标签 key 不合法：{k}")
+        if not _LABEL_VALUE_RE.match(v) or len(v) > 63:
+            return _bad(f"标签值不合法（最多 63 字符，字母数字及 -_.）：{k}={v}")
+
+    node, err = await _get_node_json(cluster_id, node_name)
+    if node is None:
+        return {"code": 404, "message": err, "data": None}
+    current = node.get("labels") or {}
+    to_set = {k: v for k, v in desired.items() if current.get(k) != v}
+    to_del = [k for k in current.keys() if k not in desired]
+    if not to_set and not to_del:
+        return {"code": 200, "message": "标签无变化", "data": {"changed": [], "outputs": []}}
+    # 保留域只在「真的要改」时阻止：未变更的（如 beta.kubernetes.io/arch）原样留存
+    for k in to_set:
+        if _is_reserved_key(k) and not force:
+            return _bad(f"{k} 是 kubernetes.io 保留域，kubelet 会自行维护；确需修改请勾选“允许修改系统保留标签”")
+    for k in to_del:
+        if _is_reserved_key(k) and not force:
+            return _bad(f"{k} 是保留域，不能删除（如需删除请勾选 force）")
+
+    outputs, changed = [], []
+    for k, v in to_set.items():
+        cmd = f"label node {node_name} {k}={v}"
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", cmd)
+        if not r.get("success"):
+            return {"code": 500, "message": f"设置标签 {k} 失败：{r.get('error')}", "data": {"changed": changed, "outputs": outputs}}
+        changed.append({"op": "set", "key": k, "value": v})
+        outputs.append(r.get("output") or "")
+    for k in to_del:
+        cmd = f"label node {node_name} {k}-"
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", cmd)
+        if not r.get("success"):
+            return {"code": 500, "message": f"删除标签 {k} 失败：{r.get('error')}", "data": {"changed": changed, "outputs": outputs}}
+        changed.append({"op": "remove", "key": k})
+        outputs.append(r.get("output") or "")
+
+    await _audit_node_change(user, "node_set_labels", cluster_id, node_name, {"changed": changed})
+    return {"code": 200, "message": "success", "data": {"changed": changed, "outputs": outputs}}
+
+
+@router.put("/clusters/{cluster_id}/nodes/{node_name}/taints")
+async def set_node_taints(cluster_id: int, node_name: str, payload: dict, user=Depends(require_operator)):
+    """全量设置节点污点（body: {"taints": [{"key","value","effect"}]}）
+
+    保留域（*.kubernetes.io，如 disk-pressure/not-ready）一律拒绝：那是 kubelet 根据实际情况自动加的。
+    """
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    if not _NODE_NAME_RE.match(node_name or ""):
+        return _bad("节点名不合法")
+    raw_taints = payload.get("taints")
+    if not isinstance(raw_taints, list):
+        return _bad("taints 必须是数组")
+    desired = []
+    seen = set()
+    for t in raw_taints:
+        if not isinstance(t, dict):
+            return _bad("每个污点必须是 {key, value, effect}")
+        k = str(t.get("key") or "").strip()
+        v = str(t.get("value") or "").strip()
+        e = str(t.get("effect") or "").strip()
+        if not _LABEL_KEY_RE.match(k):
+            return _bad(f"污点 key 不合法：{k}")
+        if v and (not _LABEL_VALUE_RE.match(v) or len(v) > 63):
+            return _bad(f"污点值不合法：{v}")
+        if e not in _TAINT_EFFECTS:
+            return _bad(f"污点 effect 只能是 NoSchedule / PreferNoSchedule / NoExecute（收到 {e}）")
+        sig = (k, e)
+        if sig in seen:
+            return _bad(f"同一 key+effect 重复：{k}:{e}")
+        seen.add(sig)
+        desired.append({"key": k, "value": v, "effect": e})
+
+    node, err = await _get_node_json(cluster_id, node_name)
+    if node is None:
+        return {"code": 404, "message": err, "data": None}
+    current = [{"key": t.get("key") or "", "value": t.get("value") or "", "effect": t.get("effect") or ""}
+               for t in (node.get("taints_detail") or [])]
+    cur_map = {(t["key"], t["effect"]): t["value"] for t in current}
+    des_map = {(t["key"], t["effect"]): t["value"] for t in desired}
+
+    outputs, changed = [], []
+    skipped = []
+    # 先删（不在目标里的），再增/改
+    for (k, e), v in cur_map.items():
+        if (k, e) not in des_map:
+            if _is_reserved_key(k):
+                skipped.append(f"{k}:{e}")
+                continue  # kubelet / 初始化创建的污点不碰
+            spec = f"{k}={v}:{e}-" if v else f"{k}:{e}-"
+            r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"taint node {node_name} {spec}")
+            if not r.get("success"):
+                return {"code": 500, "message": f"删除污点 {k}:{e} 失败：{r.get('error')}", "data": {"changed": changed, "outputs": outputs}}
+            changed.append({"op": "remove", "key": k, "effect": e})
+            outputs.append(r.get("output") or "")
+    for (k, e), v in des_map.items():
+        if cur_map.get((k, e)) == v:
+            continue
+        if _is_reserved_key(k):
+            return _bad(f"{k} 由 kubelet / 集群初始化维护（磁盘/内存压力、未就绪、控制面角色等），平台不开放修改")
+        spec = f"{k}={v}:{e}" if v else f"{k}:{e}"
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"taint node {node_name} {spec}")
+        if not r.get("success"):
+            return {"code": 500, "message": f"添加污点 {k}:{e} 失败：{r.get('error')}", "data": {"changed": changed, "outputs": outputs}}
+        changed.append({"op": "set", "key": k, "value": v, "effect": e})
+        outputs.append(r.get("output") or "")
+
+    if changed:
+        await _audit_node_change(user, "node_set_taints", cluster_id, node_name, {"changed": changed})
+    msg = "success" if changed else "污点无变化"
+    if skipped:
+        msg += f"（系统污点不可改已跳过：{', '.join(skipped)}）"
+    return {"code": 200, "message": msg,
+            "data": {"changed": changed, "outputs": outputs, "skipped_reserved": skipped}}
+
+
+@router.post("/clusters/{cluster_id}/nodes/{node_name}/isolate")
+async def isolate_node(cluster_id: int, node_name: str, payload: dict | None = None, user=Depends(require_operator)):
+    """隔离节点（B）：cordon + 打标记，可选加 NoSchedule 污点
+
+    body: {"reason": "磁盘告警-待处理", "taint": true}
+    """
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    if not _NODE_NAME_RE.match(node_name or ""):
+        return _bad("节点名不合法")
+    payload = payload or {}
+    reason = re.sub(r"[^A-Za-z0-9._-]+", "-", str(payload.get("reason") or "manual"))[:63].strip("-.") or "manual"
+    add_taint = bool(payload.get("taint"))
+
+    node, err = await _get_node_json(cluster_id, node_name)
+    if node is None:
+        return {"code": 404, "message": err, "data": None}
+
+    outputs, changed = [], []
+    if not node.get("unschedulable"):
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"cordon {node_name}")
+        if not r.get("success"):
+            return {"code": 500, "message": f"cordon 失败：{r.get('error')}", "data": None}
+        outputs.append(r.get("output") or "")
+        changed.append({"op": "cordon"})
+    for cmd, op in ((f"label node {node_name} {_ISOLATE_LABEL}=true", {"op": "set", "key": _ISOLATE_LABEL, "value": "true"}),
+                    (f"label node {node_name} {_ISOLATE_REASON_LABEL}={reason}", {"op": "set", "key": _ISOLATE_REASON_LABEL, "value": reason})):
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", cmd)
+        if not r.get("success"):
+            return {"code": 500, "message": f"打标记失败：{r.get('error')}", "data": {"changed": changed, "outputs": outputs}}
+        outputs.append(r.get("output") or "")
+        changed.append(op)
+    if add_taint:
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"taint node {node_name} {_ISOLATE_TAINT_KEY}=true:NoSchedule")
+        if not r.get("success"):
+            return {"code": 500, "message": f"加污点失败：{r.get('error')}", "data": {"changed": changed, "outputs": outputs}}
+        outputs.append(r.get("output") or "")
+        changed.append({"op": "set", "key": _ISOLATE_TAINT_KEY, "value": "true", "effect": "NoSchedule"})
+
+    await _audit_node_change(user, "node_isolate", cluster_id, node_name,
+                             {"reason": reason, "taint": add_taint, "changed": changed})
+    return {"code": 200, "message": "success", "data": {"changed": changed, "outputs": outputs}}
+
+
+@router.post("/clusters/{cluster_id}/nodes/{node_name}/unisolate")
+async def unisolate_node(cluster_id: int, node_name: str, user=Depends(require_operator)):
+    """解除隔离：uncordon + 去掉隔离标记（及平台加的污点，如存在）"""
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    if not _NODE_NAME_RE.match(node_name or ""):
+        return _bad("节点名不合法")
+    node, err = await _get_node_json(cluster_id, node_name)
+    if node is None:
+        return {"code": 404, "message": err, "data": None}
+
+    outputs, changed = [], []
+    if node.get("unschedulable"):
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"uncordon {node_name}")
+        if not r.get("success"):
+            return {"code": 500, "message": f"uncordon 失败：{r.get('error')}", "data": None}
+        outputs.append(r.get("output") or "")
+        changed.append({"op": "uncordon"})
+    for key in (_ISOLATE_LABEL, _ISOLATE_REASON_LABEL):
+        if key in (node.get("labels") or {}):
+            r = await executor_client.acall(executor_client.execute_command, cluster_id, "", f"label node {node_name} {key}-")
+            if r.get("success"):
+                outputs.append(r.get("output") or "")
+                changed.append({"op": "remove", "key": key})
+    has_taint = any((t.get("key") == _ISOLATE_TAINT_KEY) for t in (node.get("taints_detail") or []))
+    if has_taint:
+        r = await executor_client.acall(executor_client.execute_command, cluster_id, "",
+                                        f"taint node {node_name} {_ISOLATE_TAINT_KEY}=true:NoSchedule-")
+        if r.get("success"):
+            outputs.append(r.get("output") or "")
+            changed.append({"op": "remove", "key": _ISOLATE_TAINT_KEY, "effect": "NoSchedule"})
+
+    await _audit_node_change(user, "node_unisolate", cluster_id, node_name, {"changed": changed})
+    return {"code": 200, "message": "success", "data": {"changed": changed, "outputs": outputs}}
+
+
+async def _audit_node_change(user, action: str, cluster_id: int, node_name: str, detail: dict) -> None:
+    """节点元数据变更写审计（哈希链）；失败不影响主流程"""
+    try:
+        from app.core.security import generate_trace_id
+        from app.services import audit_service
+        await audit_service.create_audit_record(generate_trace_id(), decision_detail=json.dumps({
+            "action": action, "operator": getattr(user, "username", ""),
+            "cluster_id": cluster_id, "node": node_name, **detail,
+        }, ensure_ascii=False)[:4000])
+    except Exception:  # noqa: BLE001 审计失败不阻断操作
+        pass
 
 
 @router.get("/clusters/{cluster_id}/nodes/balance-plan")

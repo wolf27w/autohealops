@@ -18,7 +18,7 @@ metadata:
 data:
   DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
   GRPC_PORT: "9090"
-  COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit"
+  COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,label,taint"
 ---
 apiVersion: v1
 kind: ConfigMap

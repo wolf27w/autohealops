@@ -66,6 +66,14 @@ func ParseCommand(command string) (*ParsedCommand, error) {
 		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
 			pc.Name = fields[1]
 		}
+	case "label", "taint":
+		// label node <name> k=v ... / taint node <name> k=v:Effect ...
+		pc.Resource = "node"
+		if len(fields) >= 3 && (fields[1] == "node" || fields[1] == "nodes") {
+			pc.Name, pc.Args = fields[2], fields[3:]
+		} else if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
+			pc.Name, pc.Args = fields[1], fields[2:]
+		}
 	case "logs":
 		// logs <pod> [-c container] [--previous] [--tail=N] [--all-containers=true]
 		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
@@ -251,12 +259,16 @@ func (e *Executor) dispatch(ctx context.Context, pc *ParsedCommand) (string, err
 		return e.execDelete(ctx, pc, ns)
 	case "cordon", "uncordon":
 		return e.execCordon(ctx, pc)
+	case "label":
+		return e.execLabel(ctx, pc)
+	case "taint":
+		return e.execTaint(ctx, pc)
 	case "logs":
 		return e.execLogs(ctx, pc, ns)
 	case "drain":
 		return e.execDrain(ctx, pc, ns)
 	default:
-		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete/cordon/uncordon/logs）", pc.Verb)
+		return "", fmt.Errorf("子命令 %q 暂不支持（当前支持 get/describe/scale/rollout/delete/cordon/uncordon/label/taint/logs）", pc.Verb)
 	}
 }
 
