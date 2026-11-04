@@ -117,7 +117,8 @@ func (c *Checker) onFailure(clusterID uint, err error) {
 func (c *Checker) CheckAllClusters(ctx context.Context) {
 	db := database.GetDB()
 	var clusters []database.Cluster
-	if err := db.Find(&clusters).Error; err != nil {
+	// agent 接入的集群平台侧没有 kubeconfig，健康检查由 api-server 经隧道做（这里跳过）
+	if err := db.Where("COALESCE(source, '') <> ?", "agent").Find(&clusters).Error; err != nil {
 		c.logger.Error("查询集群失败", zap.Error(err))
 		return
 	}

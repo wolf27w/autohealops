@@ -308,7 +308,8 @@ func parseResourceQuota(q corev1.ResourceQuota) database.QuotaSnapshot {
 func (c *Collector) CollectAllClusters(ctx context.Context) {
 	db := database.GetDB()
 	var clusters []database.Cluster
-	if err := db.Find(&clusters).Error; err != nil {
+	// agent 接入的集群没有 kubeconfig，配额采集跳过（避免每次报错）
+	if err := db.Where("COALESCE(source, '') <> ?", "agent").Find(&clusters).Error; err != nil {
 		return
 	}
 	for _, cl := range clusters {

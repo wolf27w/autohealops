@@ -47,10 +47,23 @@ async def _verify_and_mark(cluster_id: int, token: str, version: str = "") -> st
             c.agent_last_seen_at = datetime.now()
             if version:
                 c.agent_version = version[:50]
+            need_rbac = (c.rbac_mode or "off") == "off"
             await s.commit()
+        if need_rbac:
+            asyncio.create_task(_post_connect_setup(int(cluster_id)))
         return ""
     except Exception as e:  # noqa: BLE001
         return f"验证异常: {e}"
+
+
+async def _post_connect_setup(cluster_id: int) -> None:
+    """agent 首次连上后自动接入云原生 RBAC（agent 集群没有 kubeconfig，必须在连上后做）"""
+    try:
+        from app.services import rbac_service
+        await rbac_service.setup_cluster_rbac(cluster_id)
+        logger.info("agent 集群 %s 已自动接入 RBAC", cluster_id)
+    except Exception as e:  # noqa: BLE001 失败不影响隧道
+        logger.warning("agent 集群 %s 自动接入 RBAC 失败: %s", cluster_id, e)
 
 
 async def _mark_disconnected(cluster_id: int) -> None:

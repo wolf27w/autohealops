@@ -138,6 +138,60 @@ async def _maintenance_loop() -> None:
 _background_tasks = []
 
 
+
+async def _agent_cluster_health_loop() -> None:
+    """agent 接入集群的健康检查（2026-11-04）
+
+    这类集群平台侧没有 kubeconfig，executor 的定时 HealthChecker 连不上，
+    `clusters.status` 会一直 unknown。这里经隧道调 HealthCheck（stub 会路由到 agent），
+    顺带把 k8s 版本刷新回来。
+    """
+    import asyncio
+    from datetime import datetime
+    from sqlalchemy import select
+    from app.clients.executor_client import executor_client
+    from app.core.database import async_session
+    from app.models import Cluster
+
+    fails: dict[int, int] = {}
+    while True:
+        try:
+            async with async_session() as session:
+                rows = (await session.execute(
+                    select(Cluster).where(Cluster.source == "agent", Cluster.agent_status == "connected")
+                )).scalars().all()
+                targets = [(c.id, c.name) for c in rows]
+            for cid, name in targets:
+                try:
+                    r = await asyncio.wait_for(
+                        executor_client.acall(executor_client.health_check, cid), timeout=30
+                    )
+                    if r.get("success"):
+                        fails[cid] = 0
+                        status = "healthy"
+                    else:
+                        # 隧道偶发繁忙/超时不算掉线：连续 2 次失败才判 unreachable
+                        fails[cid] = fails.get(cid, 0) + 1
+                        if fails[cid] < 2:
+                            await asyncio.sleep(0)
+                            continue
+                        status = "unreachable"
+                    async with async_session() as session:
+                        c = await session.get(Cluster, cid)
+                        if c:
+                            c.status = status
+                            if r.get("version"):
+                                c.version = r["version"]
+                            c.last_check_at = datetime.now()
+                            c.last_check_error = "" if r.get("success") else (r.get("error") or "")[:255]
+                            await session.commit()
+                except Exception as e:  # noqa: BLE001 单个集群失败不影响其它
+                    logger.warning("agent 集群 %s(%s) 健康检查失败: %s", name, cid, e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("agent 集群健康检查循环异常: %s", e)
+        await asyncio.sleep(60)
+
+
 async def _auto_setup_rbac_on_startup() -> None:
     """启动时自动接入存量集群的云原生 RBAC（未接入的自动补上，无需人工触发）"""
     import asyncio
@@ -219,6 +273,7 @@ async def startup_tasks() -> None:
     ):
         _background_tasks.append(asyncio.create_task(_interval_worker(name, 5 if name == "僵尸计划收尾" else 30, fn, timeout)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
+    _background_tasks.append(asyncio.create_task(_agent_cluster_health_loop()))
     # 仪表盘预热（每 10 秒）：把默认「实时」视图预先算好写缓存，前端轮询不再踩冷路径
     from app.api.stats import prewarm_dashboard
     _background_tasks.append(asyncio.create_task(_interval_worker("仪表盘预热", 10, prewarm_dashboard, 60.0)))

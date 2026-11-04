@@ -5,6 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+echo "== 0/7 proto 单一来源检查（api-server 与 k8s-executor 的 executor.proto 必须一致）=="
+diff -q k8s-executor/proto/executor.proto api-server/app/proto/executor.proto >/dev/null   || { echo "FAIL: 两份 executor.proto 不一致（改协议请同步后再重新生成 Go/Python stub）"; exit 1; }
+echo "  ✓ proto 一致"
+
 echo "== 1/7 api-server py_compile =="
 "$ROOT/api-server/.venv/bin/python" -m compileall -q api-server/app api-server/alembic || { echo "FAIL api-server"; exit 1; }
 

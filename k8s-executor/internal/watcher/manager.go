@@ -76,7 +76,8 @@ func (wm *WatchManager) RestartClusterWatch(ctx context.Context, clusterID uint)
 func (wm *WatchManager) StartAllWatches(ctx context.Context) error {
 	db := database.GetDB()
 	var clusters []database.Cluster
-	if err := db.Find(&clusters).Error; err != nil {
+	// agent 接入的集群：watcher 跑在 agent 里（P2 告警下沉），平台侧不再重复 watch
+	if err := db.Where("COALESCE(source, '') <> ?", "agent").Find(&clusters).Error; err != nil {
 		return err
 	}
 	for _, c := range clusters {
