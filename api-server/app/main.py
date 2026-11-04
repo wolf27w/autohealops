@@ -164,6 +164,14 @@ async def startup_tasks() -> None:
     from app.services import scheduler_service
 
     await seed_default_users()
+    # 凭据到期补齐：功能上线前接入的集群 cred_type 仍是 unknown（否则列表一直显示「未知」、到期通知扫不到）
+    try:
+        from app.services import cluster_credential_service
+        n = await cluster_credential_service.backfill_missing_credentials()
+        if n:
+            logger.info("凭据有效期已补齐 %d 个集群", n)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("凭据有效期补齐失败: %s", e)
     from app.api.alert_policies import seed_default_policies as seed_alert_policies
     await seed_alert_policies()
     await scheduler_service.load_all_tasks()

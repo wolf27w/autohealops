@@ -178,13 +178,18 @@ export default function ClusterList() {
           { title: '版本', dataIndex: 'version' },
           { title: '凭据有效期', dataIndex: 'cred_expires_at', render: (v, r: ClusterWithExtra) => {
             if (r.source === 'in-cluster' || r.source === 'agent') return <Tag color="blue">免维护</Tag>
-            if (r.cred_type === 'unknown') return <Tag>未知</Tag>
+            if (r.cred_type === 'unknown') {
+              return <Tooltip title="kubeconfig 中没有可解析的客户端证书/令牌（或使用了 exec / 云厂商插件，无法离线判断）"><Tag>未知</Tag></Tooltip>
+            }
             if (!v) return <Tag color={r.cred_type === 'token' ? 'orange' : 'default'}>{r.cred_type === 'token' ? '长期 token' : '未解析'}</Tag>
-            const days = Math.ceil((new Date(String(v)).getTime() - Date.now()) / 86400000)
-            if (days < 0) return <Tag color="red">已过期</Tag>
-            if (days <= 7) return <Tag color="red">{days} 天后过期</Tag>
-            if (days <= 30) return <Tag color="orange">{days} 天后过期</Tag>
-            return <Tag>{String(v).slice(0, 10)}</Tag>
+            const days = Math.ceil((new Date(String(v).replace(' ', 'T')).getTime() - Date.now()) / 86400000)
+            const tip = `${r.cred_type === 'cert' ? '客户端证书' : r.cred_type === 'token' ? 'Token' : 'OIDC'} · 到期 ${String(v).slice(0, 19)}`
+            let tag
+            if (days < 0) tag = <Tag color="red">已过期</Tag>
+            else if (days <= 7) tag = <Tag color="red">{days} 天后过期</Tag>
+            else if (days <= 30) tag = <Tag color="orange">{days} 天后过期</Tag>
+            else tag = <Tag>{String(v).slice(0, 10)}</Tag>
+            return <Tooltip title={tip}>{tag}</Tooltip>
           } },
           { title: 'Agent 状态', dataIndex: 'agent_status', render: (v, r: ClusterWithExtra) => {
             if (r.source !== 'agent') return '-'

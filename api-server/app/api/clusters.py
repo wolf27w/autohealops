@@ -35,8 +35,20 @@ def _kubeconfig_credential(kubeconfig: str):
         import base64
         import yaml as _yaml
         from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
         doc = _yaml.safe_load(kubeconfig) or {}
-        user = (doc.get("users") or [{}])[0].get("user") or {}
+        # 按 current-context 解析用户（多 context / 多 user 的 kubeconfig 不能直接取 users[0]）
+        user_ref = ""
+        ctx_name = doc.get("current-context") or ""
+        for ctx in doc.get("contexts") or []:
+            if ctx.get("name") == ctx_name:
+                user_ref = (ctx.get("context") or {}).get("user") or ""
+                break
+        users = doc.get("users") or []
+        entry = next((u for u in users if u.get("name") == user_ref), None) if user_ref else None
+        if entry is None and users:
+            entry = users[0]
+        user = (entry or {}).get("user") or {}
         cert_b64 = user.get("client-certificate-data") or user.get("client-certificate")
         if cert_b64:
             try:
@@ -46,7 +58,8 @@ def _kubeconfig_credential(kubeconfig: str):
                 na = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
                 if na.tzinfo is None:
                     na = na.replace(tzinfo=timezone.utc)
-                return "cert", na.replace(tzinfo=None)
+                # 平台全链路用 Asia/Shanghai，存本地时间（与 MySQL NOW() 一致）
+                return "cert", na.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
             except Exception:  # noqa: BLE001
                 return "cert", None
         tok = user.get("token")
@@ -55,7 +68,9 @@ def _kubeconfig_credential(kubeconfig: str):
                 from jose import jwt
                 exp = jwt.get_unverified_claims(tok).get("exp")
                 if exp:
-                    return "token", datetime.utcfromtimestamp(int(exp))
+                    from datetime import datetime, timezone
+                    from zoneinfo import ZoneInfo
+                    return "token", datetime.fromtimestamp(int(exp), tz=timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
             except Exception:  # noqa: BLE001
                 pass
             return "token", None  # 长期 SA token 无 exp
