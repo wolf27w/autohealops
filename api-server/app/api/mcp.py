@@ -18,7 +18,7 @@ from app.services.tool_registry import TOOL_REGISTRY, coerce_args, validate_args
 router = APIRouter(prefix="/mcp")
 
 _PROTOCOL_VERSION = "2024-11-05"
-_SERVER_INFO = {"name": "apiops", "version": "1.0.0"}
+_SERVER_INFO = {"name": "autohealops", "version": "1.0.0"}
 
 # 上下文参数：注入到每个工具的 inputSchema，调用时从 arguments 提取到 context
 _CONTEXT_PARAMS = {

@@ -4,17 +4,17 @@
 # - 异地：在 command 里追加 rclone/ossutil 上传（见注释），或另起 sidecar
 #
 # 依赖（部署前创建）：
-#   1) Secret apiops-backup-secret：
-#        kubectl -n autohealops create secret generic apiops-backup-secret \
+#   1) Secret autohealops-backup-secret：
+#        kubectl -n autohealops create secret generic autohealops-backup-secret \
 #          --from-literal=MYSQL_HOST=192.168.6.99 --from-literal=MYSQL_PORT=3306 \
 #          --from-literal=MYSQL_USER=root --from-literal=MYSQL_PASSWORD='<pw>' \
 #          --from-literal=MYSQL_DB=autohealops --from-literal=ENCRYPTION_KEY='<key>'
-#   2) PVC apiops-backup-pvc（见下）
+#   2) PVC autohealops-backup-pvc（见下）
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: apiops-backup-pvc
+  name: autohealops-backup-pvc
   namespace: autohealops
 spec:
   accessModes: ["ReadWriteOnce"]
@@ -25,7 +25,7 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: apiops-db-backup
+  name: autohealops-db-backup
   namespace: autohealops
 spec:
   schedule: "0 2 * * *"          # 每日 2:00
@@ -43,7 +43,7 @@ spec:
               image: mysql:8.0
               envFrom:
                 - secretRef:
-                    name: apiops-backup-secret
+                    name: autohealops-backup-secret
               command:
                 - /bin/sh
                 - -c
@@ -60,7 +60,7 @@ spec:
                   find /backup -maxdepth 1 -name "${MYSQL_DB}-*.sql.gz" -mtime +7 -delete
                   find /backup -maxdepth 1 -name "${MYSQL_DB}-*.sql.gz.keyinfo.json" -mtime +7 -delete
                   # 异地副本（可选）：镜像内无 rclone 时改用它法，如
-                  #   ossutil cp "$OUT" oss://your-bucket/apiops-backup/
+                  #   ossutil cp "$OUT" oss://your-bucket/autohealops-backup/
                   echo "backup done: $OUT"
               volumeMounts:
                 - name: backup
@@ -68,4 +68,4 @@ spec:
           volumes:
             - name: backup
               persistentVolumeClaim:
-                claimName: apiops-backup-pvc
+                claimName: autohealops-backup-pvc

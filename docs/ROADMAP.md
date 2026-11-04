@@ -26,7 +26,7 @@
 | A4 | **M2 下发 agent 开关的实际下发动作**（开关默认关） | 只做了开关字段/批量接入，下发未做 | 并入 A1 |
 | A5 | ~~JMX Exporter 集群侧安装~~ | ✅ **已取消（2026-10-16 老板：JMX 属监控，暂不装，用现有 Prometheus 展示）** | — |
 | A6 | **B3 平台自身生产部署** | M10/M11 已备，未上生产 | 部署类 |
-| A6.1 | **agent 镜像构建/推送**：`linux/amd64` 构建 `apiops-agent` → 推到目标集群能拉的仓库（填 `AGENT_IMAGE`）——否则 `install.yaml` 起的 pod 会 ImagePullBackOff | 无镜像 | 部署前置 |
+| A6.1 | **agent 镜像构建/推送**：✅ **已完成（2026-11-04）** `harbor.efreight.cn/ops/autohealops-agent:0.2.0`（含 mTLS/流式/版本上报） | — | — |
 | A6.2 | **平台 agent 网关（9095）对外可达**：填 `AGENT_GATEWAY_PUBLIC_ADDR`；跨集群需 NodePort/LB 或 nginx/SamWaf TCP 四层转发（仅 ClusterIP 只集群内可达） | 仅本地 127.0.0.1 | 部署前置 |
 
 ### B. 🔴 待老板拍板（非开发）
@@ -57,8 +57,8 @@
 |---|---|---|---|
 | **P2** | **告警检测下沉**：watcher 在 agent 内跑，事件经隧道上报 | ✅ **完成（2026-10-28，`50eba3c`）**：`AlertSink` 抽象（dbSink/tunnelSink）+ agent 收平台下发的告警策略后自起 Pod/Node watcher，事件经隧道上报，平台统一去重落库并触发自动处理 | — |
 | **P1** | **全方法反向代理** | ✅ **完成（2026-10-28，`009d680`）**：agent 进程内起真实 ExecutorService + raw codec 转发，33 个 unary RPC 全部可用（流式 3 个待做）；平台侧 stub 代理让 30+ 调用点零改动 | — |
-| **P3** | **in-cluster 自接入 + agent 版本管理/灰度/回退** | ❌ 均未实现（`clusters.source` 字段已预留） | 2.5–3.5d |
-| **P4** | 隧道 TLS/mTLS + agent 网关 9095 对外 | ⚠️ 现为明文 gRPC，仅本机可用 | 1d |
+| **P3** | **in-cluster 自接入 + agent 版本管理/灰度/回退** | ✅ **完成（2026-11-04）**：`bootstrap.EnsureInCluster` + `agent_version` 上报 + `/agent/upgrade`、`/agents/upgrade`（回退=传旧 tag） | — |
+| **P4** | 隧道 TLS/mTLS + agent 网关 9095 对外 | ✅ **mTLS 完成（2026-11-04）**：平台自建 CA、网关要求客户端证书；9095 对外仍需按部署环境配转发 | — |
 
 **建议顺序**：~~P2~~ → ~~P1~~ → P3 → P4（P2/P1 已完成 2026-10-28；下次做 P3 in-cluster 自接入 + agent 版本管理/灰度/回退）。
 **本方向合并原**：A2（agent 托管更新）、A4（下发开关动作）、A3/M1（集群内自接入）。

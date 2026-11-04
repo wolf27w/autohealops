@@ -587,8 +587,8 @@ message SetupRBACResponse {
 // ---------- ReconcileRoleBindings（项目/成员变更 → 绑组） ----------
 message RoleBindingSpec {
   string namespace = 1;
-  string group = 2;        // apiops:proj:<id>:<read|operate|manager>
-  string cluster_role = 3; // apiops-read / apiops-operate / apiops-manager
+  string group = 2;        // autohealops:proj:<id>:<read|operate|manager>
+  string cluster_role = 3; // autohealops-read / autohealops-operate / autohealops-manager
 }
 message ReconcileRoleBindingsRequest {
   int64 cluster_id = 1;

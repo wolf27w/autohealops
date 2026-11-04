@@ -690,7 +690,7 @@ class ExecutorClient:
     def reconcile_role_bindings(self, cluster_id: int, bindings: list[dict], trace_id: str = "") -> dict:
         """项目/成员变更 → reconcile RoleBinding（绑组）
 
-        bindings: [{"namespace": "qa-eft", "group": "apiops:proj:1:read", "cluster_role": "apiops-read"}, ...]
+        bindings: [{"namespace": "qa-eft", "group": "autohealops:proj:1:read", "cluster_role": "autohealops-read"}, ...]
         → 返回 {success, created, updated, deleted, error}
         """
         try:

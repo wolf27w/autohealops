@@ -49,11 +49,11 @@ class Settings(BaseSettings):
     # JVM 诊断：容器无 JDK 工具（JRE 镜像）时，注入 jattach（~63KB 静态二进制，
     # 走 JVM attach socket，JRE 也能做 threaddump / 堆直方图 / jcmd 子命令）
     JVM_JATTACH_URL: str = "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
-    JVM_JATTACH_PATH: str = "/tmp/.apiops-jattach"
+    JVM_JATTACH_PATH: str = "/tmp/.autohealops-jattach"
 
     # Agent 接入（M3 / P3）：镜像、镜像拉取凭据、网关对外地址
     #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 k8s-executor/Dockerfile.agent）
-    AGENT_IMAGE: str = "harbor.efreight.cn/ops/apiops-agent:0.2.0"
+    AGENT_IMAGE: str = "harbor.efreight.cn/ops/autohealops-agent:0.2.0"
     #   AGENT_IMAGE_PULL_SECRET：目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
     AGENT_IMAGE_PULL_SECRET: str = ""
     #   平台对外地址（生成 agent 一键安装命令 / 推导网关地址用；集群侧需能访问）
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     #   mTLS（2026-11-04 老板定：不允许明文）：true=网关只接受带客户端证书的 TLS 连接
     AGENT_TLS_ENABLED: bool = True
     #   agent 部署所在的命名空间（若该命名空间已有镜像拉取 Secret，可避免再复制一份）
-    AGENT_NAMESPACE: str = "apiops-agent"
+    AGENT_NAMESPACE: str = "autohealops"
     #   平台自建 CA 目录（相对路径按仓库根解析；私钥 0600，不进 git）
     AGENT_CA_DIR: str = "data/agent-ca"
 

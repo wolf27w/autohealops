@@ -112,8 +112,8 @@ func buildRestConfig(clusterID uint, kubeconfigJSON string) (*rest.Config, error
 
 // ImpersonatedClient 基于集群平台账号配置派生带 impersonation 的 clientset（云原生 RBAC 运行链）
 //
-//   - user:   impersonate 的用户名（apiops:<username>）
-//   - groups: impersonate 的组（apiops:proj:<id>:<role>、apiops:automation 等）
+//   - user:   impersonate 的用户名（autohealops:<username>）
+//   - groups: impersonate 的组（autohealops:proj:<id>:<role>、autohealops:automation 等）
 //
 // 平台账号本身需具备 impersonate 权限（接入时探测）；透传后由 k8s RBAC 判定实际权限。
 func (m *Manager) ImpersonatedClient(ctx context.Context, clusterID uint, user string, groups []string) (*ClusterClient, error) {

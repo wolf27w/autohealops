@@ -1,9 +1,9 @@
 // Package rbac 云原生 RBAC（Impersonation）接入：能力探测、ClusterRole 下发、自举账号、RoleBinding reconcile
 //
 // 身份映射约定（与 api-server 侧一致）：
-//   - 用户       →  apiops:<username>
-//   - 项目/角色  →  group apiops:proj:<id>:<read|operate|manager>
-//   - 自动化     →  apiops:automation
+//   - 用户       →  autohealops:<username>
+//   - 项目/角色  →  group autohealops:proj:<id>:<read|operate|manager>
+//   - 自动化     →  autohealops:automation
 package rbac
 
 import (
@@ -21,18 +21,18 @@ import (
 
 // 三档 ClusterRole 名称
 const (
-	RoleRead    = "apiops-read"
-	RoleOperate = "apiops-operate"
-	RoleManager = "apiops-manager"
+	RoleRead    = "autohealops-read"
+	RoleOperate = "autohealops-operate"
+	RoleManager = "autohealops-manager"
 	// 自动化账号（AI 诊断 / 自愈）使用的 ServiceAccount
-	AutomationSA      = "apiops-platform"
-	AutomationSANamespace = "apiops"
+	AutomationSA          = "autohealops-platform"
+	AutomationSANamespace = "autohealops"
 	// 用户身份前缀（与 api-server 侧保持一致）
-	UserPrefix = "apiops:"
+	UserPrefix = "autohealops:"
 )
 
 // 平台管理的 RoleBinding 名称前缀（用于 reconcile 时识别并清理）
-const bindingNamePrefix = "apiops-"
+const bindingNamePrefix = "autohealops-"
 
 // 三档 ClusterRole 权限定义
 // read=只读；operate=read + exec/logs/port-forward/scale；manager=operate + delete/patch/update
@@ -137,10 +137,10 @@ func probeImpersonate(ctx context.Context, client *kubernetes.Clientset) bool {
 	return true
 }
 
-// bootstrapAutomationSA 自举 automation ServiceAccount + ClusterRoleBinding（绑定 apiops-manager）
+// bootstrapAutomationSA 自举 automation ServiceAccount + ClusterRoleBinding（绑定 autohealops-manager）
 // 失败不阻断（返回 false），平台仍可用 cluster-admin kubeconfig 运行。
 func bootstrapAutomationSA(ctx context.Context, client *kubernetes.Clientset) bool {
-	// 1. namespace apiops（不存在则建）
+	// 1. namespace autohealops（不存在则建）
 	if _, err := client.CoreV1().Namespaces().Get(ctx, AutomationSANamespace, metav1.GetOptions{}); err != nil {
 		if k8serrors.IsNotFound(err) {
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: AutomationSANamespace}}
@@ -162,9 +162,9 @@ func bootstrapAutomationSA(ctx context.Context, client *kubernetes.Clientset) bo
 			return false
 		}
 	}
-	// 3. ClusterRoleBinding：automation → apiops-manager
+	// 3. ClusterRoleBinding：automation → autohealops-manager
 	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "apiops-automation"},
+		ObjectMeta: metav1.ObjectMeta{Name: "autohealops-automation"},
 		Subjects: []rbacv1.Subject{
 			{Kind: rbacv1.ServiceAccountKind, Name: AutomationSA, Namespace: AutomationSANamespace},
 		},
@@ -181,8 +181,8 @@ func bootstrapAutomationSA(ctx context.Context, client *kubernetes.Clientset) bo
 // BindingSpec 一条项目角色绑定：namespace + group → clusterRole
 type BindingSpec struct {
 	Namespace   string // 项目关联的 namespace
-	Group       string // apiops:proj:<id>:<read|operate|manager>
-	ClusterRole string // apiops-read / apiops-operate / apiops-manager
+	Group       string // autohealops:proj:<id>:<read|operate|manager>
+	ClusterRole string // autohealops-read / autohealops-operate / autohealops-manager
 }
 
 // ReconcileResult reconcile 结果
@@ -195,7 +195,7 @@ type ReconcileResult struct {
 
 // ReconcileRoleBindings 按期望的绑定集合 reconcile 集群内 RoleBinding（幂等）
 //
-// 平台管理的 RoleBinding 命名：apiops-<namespace>-<group>（group 冒号转连字符），reconcile 时：
+// 平台管理的 RoleBinding 命名：autohealops-<namespace>-<group>（group 冒号转连字符），reconcile 时：
 //  1. upsert 期望的绑定（namespace + group → clusterRole）
 //  2. 清理该 namespace 内平台管理但已不在期望集合的过期绑定
 func ReconcileRoleBindings(ctx context.Context, client *kubernetes.Clientset, bindings []BindingSpec) ReconcileResult {

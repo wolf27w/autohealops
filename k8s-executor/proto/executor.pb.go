@@ -5073,8 +5073,8 @@ func (x *SetupRBACResponse) GetError() string {
 type RoleBindingSpec struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Group         string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`                                // apiops:proj:<id>:<read|operate|manager>
-	ClusterRole   string                 `protobuf:"bytes,3,opt,name=cluster_role,json=clusterRole,proto3" json:"cluster_role,omitempty"` // apiops-read / apiops-operate / apiops-manager
+	Group         string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`                                // autohealops:proj:<id>:<read|operate|manager>
+	ClusterRole   string                 `protobuf:"bytes,3,opt,name=cluster_role,json=clusterRole,proto3" json:"cluster_role,omitempty"` // autohealops-read / autohealops-operate / autohealops-manager
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

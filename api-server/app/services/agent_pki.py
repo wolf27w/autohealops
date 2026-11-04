@@ -3,7 +3,7 @@
 
 - CA 私钥只留在平台本机（默认 `data/agent-ca/`，0600），不进 git；
 - 网关用服务端证书 + 要求客户端证书（mTLS）；
-- agent 接入时现场签发客户端证书（CN=apiops-agent-<cluster_id>），塞进 install.yaml 的 Secret。
+- agent 接入时现场签发客户端证书（CN=autohealops-agent-<cluster_id>），塞进 install.yaml 的 Secret。
 """
 import ipaddress
 import os
@@ -151,7 +151,7 @@ def issue_client_cert(cluster_id: int, days: int = 1825) -> tuple[str, str]:
         x509.CertificateBuilder()
         .subject_name(x509.Name([
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "AutoHealOps"),
-            x509.NameAttribute(NameOID.COMMON_NAME, f"apiops-agent-{cluster_id}"),
+            x509.NameAttribute(NameOID.COMMON_NAME, f"autohealops-agent-{cluster_id}"),
         ]))
         .issuer_name(ca_cert.subject)
         .public_key(key.public_key())

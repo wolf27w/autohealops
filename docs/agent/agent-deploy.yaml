@@ -3,18 +3,18 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: apiops-agent
-  namespace: apiops-agent
+  name: autohealops-agent
+  namespace: autohealops-agent
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
 rules:
   - apiGroups: ["*"]
     resources: ["*"]
@@ -23,37 +23,37 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: apiops-agent
+  name: autohealops-agent
 subjects:
   - kind: ServiceAccount
-    name: apiops-agent
-    namespace: apiops-agent
+    name: autohealops-agent
+    namespace: autohealops-agent
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: apiops-agent
-  namespace: apiops-agent
+  name: autohealops-agent
+  namespace: autohealops-agent
   labels:
-    app: apiops-agent
+    app: autohealops-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: apiops-agent
+      app: autohealops-agent
   template:
     metadata:
       labels:
-        app: apiops-agent
+        app: autohealops-agent
     spec:
-      serviceAccountName: apiops-agent
+      serviceAccountName: autohealops-agent
       containers:
         - name: agent
-          image: <镜像仓库>/apiops-agent:latest
+          image: <镜像仓库>/autohealops-agent:latest
           args:
             - "-platform=<平台网关地址>:9095"   # 平台对外暴露的 Agent 网关
             - "-cluster-id=<集群ID>"

@@ -238,8 +238,8 @@ async def agent_install_yaml(cluster_id: int, token: str = ""):
         from urllib.parse import urlparse
         host = urlparse(_public_base_url()).hostname or "localhost"
         gateway_addr = f"{host}:9095"
-    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/apiops-agent:latest"
-    ns = (getattr(settings, "AGENT_NAMESPACE", "") or "apiops-agent").strip() or "apiops-agent"
+    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/autohealops-agent:latest"
+    ns = (getattr(settings, "AGENT_NAMESPACE", "") or "autohealops").strip() or "autohealops"
     pull_secret = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
     # 拉取凭据挂在主 SA 上（不再另建 SA —— 另建的 SA 没有 RBAC，会导致 agent 读不了 apiserver）
     sa_pull_block = f"\nimagePullSecrets:\n  - name: {pull_secret}" if pull_secret else ""
@@ -262,7 +262,7 @@ async def agent_install_yaml(cluster_id: int, token: str = ""):
             "apiVersion: v1\n"
             "kind: Secret\n"
             "metadata:\n"
-            "  name: apiops-agent-tls\n"
+            "  name: autohealops-agent-tls\n"
             f"  namespace: {ns}\n"
             "type: Opaque\n"
             "data:\n"
@@ -283,7 +283,7 @@ async def agent_install_yaml(cluster_id: int, token: str = ""):
             "      volumes:\n"
             "        - name: tls\n"
             "          secret:\n"
-            "            secretName: apiops-agent-tls\n"
+            "            secretName: autohealops-agent-tls\n"
         )
 
     # 多文档 YAML 直接拼字符串（避免 --- 序列化问题）
@@ -295,13 +295,13 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
   namespace: {ns}{sa_pull_block}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
 rules:
   - apiGroups: ["*"]
     resources: ["*"]
@@ -310,34 +310,34 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: apiops-agent
+  name: autohealops-agent
 subjects:
   - kind: ServiceAccount
-    name: apiops-agent
+    name: autohealops-agent
     namespace: {ns}
 {tls_doc}---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: apiops-agent
+  name: autohealops-agent
   namespace: {ns}
   labels:
-    app: apiops-agent
+    app: autohealops-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: apiops-agent
+      app: autohealops-agent
   template:
     metadata:
       labels:
-        app: apiops-agent
+        app: autohealops-agent
     spec:
-      serviceAccountName: apiops-agent
+      serviceAccountName: autohealops-agent
       containers:
         - name: agent
           image: {image}
@@ -355,11 +355,11 @@ spec:
 
 
 # ==================== Agent 版本管理（P3-b，2026-11-04） ====================
-# 升级 = 改目标集群内 apiops-agent Deployment 的镜像（经隧道下发）→ Pod 重启 → 重新注册时回报新版本。
+# 升级 = 改目标集群内 autohealops-agent Deployment 的镜像（经隧道下发）→ Pod 重启 → 重新注册时回报新版本。
 # 回退 = 同一个接口传旧 tag（平台不猜"回退到哪个"，避免歧义）。
 
-_AGENT_NS = "apiops-agent"  # 兼容默认值；实际取 settings.AGENT_NAMESPACE
-_AGENT_DEPLOY = "apiops-agent"
+_AGENT_NS = "autohealops"  # 兼容默认值；实际取 settings.AGENT_NAMESPACE
+_AGENT_DEPLOY = "autohealops-agent"
 _AGENT_CONTAINER = "agent"
 
 

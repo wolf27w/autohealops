@@ -328,10 +328,10 @@ export default function ClusterList() {
         open={agentUpOpen} onCancel={() => setAgentUpOpen(false)} onOk={submitAgentUpgrade}
         okText="开始升级" confirmLoading={agentUpBusy} width={620} destroyOnClose>
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message="升级会滚动重启目标集群的 apiops-agent Pod（短暂断开），平台等它用新版本重连；回退 = 填旧 tag（例如 .../apiops-agent:0.1.1）。" />
+          message="升级会滚动重启目标集群的 autohealops-agent Pod（短暂断开），平台等它用新版本重连；回退 = 填旧 tag（例如 .../autohealops-agent:0.1.1）。" />
         <div style={{ marginBottom: 6 }}>目标镜像：</div>
         <Input value={agentUpImage} onChange={(e) => setAgentUpImage(e.target.value)}
-          placeholder="harbor.efreight.cn/ops/apiops-agent:<版本>" />
+          placeholder="harbor.efreight.cn/ops/autohealops-agent:<版本>" />
         {!agentUpTarget && (
           <>
             <div style={{ margin: '12px 0 6px' }}>选择集群（仅 agent 接入方式）：</div>

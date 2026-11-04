@@ -112,7 +112,7 @@ export default function PlatformSettings() {
                     私有仓库拉取标签需凭据：填全局用户名/密码即可；多仓库可用下方 JSON 按 host 覆盖（优先生效）。
                   </div>
                   <Form.Item name="registry_username" label="仓库用户名（全局）">
-                    <Input placeholder="如 robot$apiops" />
+                    <Input placeholder="如 robot$autohealops" />
                   </Form.Item>
                   <Form.Item name="registry_password" label="仓库密码 / Token（全局）">
                     <Input.Password placeholder="私有仓库凭据" />

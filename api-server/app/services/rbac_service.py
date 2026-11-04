@@ -2,9 +2,9 @@
 """云原生 RBAC（专项 B）：身份映射 + 项目/成员变更 → reconcile RoleBinding
 
 身份映射约定（与 executor 侧 internal/rbac 保持一致）：
-  - 用户       →  apiops:<username>
-  - 项目/角色  →  group apiops:proj:<id>:<read|operate|manager>
-  - 自动化     →  apiops:automation
+  - 用户       →  autohealops:<username>
+  - 项目/角色  →  group autohealops:proj:<id>:<read|operate|manager>
+  - 自动化     →  autohealops:automation
 """
 from sqlalchemy import select
 
@@ -18,13 +18,13 @@ logger = get_logger("api-server.rbac_service")
 
 # 项目角色 → ClusterRole 映射
 ROLE_TO_CLUSTER_ROLE = {
-    "read": "apiops-read",
-    "operate": "apiops-operate",
-    "manager": "apiops-manager",
+    "read": "autohealops-read",
+    "operate": "autohealops-operate",
+    "manager": "autohealops-manager",
 }
 
-USER_PREFIX = "apiops:"
-AUTOMATION_USER = "apiops:automation"
+USER_PREFIX = "autohealops:"
+AUTOMATION_USER = "autohealops:automation"
 
 
 def impersonate_user(username: str) -> str:

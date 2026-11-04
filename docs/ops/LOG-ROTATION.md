@@ -30,12 +30,12 @@
 ```
 
 ### 方案 B：macOS launchd（推荐，无需常驻 shell）
-新建 `~/Library/LaunchAgents/com.apiops.rotate-logs.plist`：
+新建 `~/Library/LaunchAgents/com.autohealops.rotate-logs.plist`：
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.apiops.rotate-logs</string>
+  <key>Label</key><string>com.autohealops.rotate-logs</string>
   <key>ProgramArguments</key><array>
     <string>/bin/bash</string>
     <string>/Users/wolf/Documents/project/autohealops/scripts/rotate_logs.sh</string>
@@ -44,7 +44,7 @@
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
 </dict></plist>
 ```
-加载：`launchctl load ~/Library/LaunchAgents/com.apiops.rotate-logs.plist`
+加载：`launchctl load ~/Library/LaunchAgents/com.autohealops.rotate-logs.plist`
 
 ## 容器部署（docker-compose）
 容器场景建议用 Docker 日志驱动限制大小，例如在 `docker-compose.yml` 各服务下加：

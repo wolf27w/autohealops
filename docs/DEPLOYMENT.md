@@ -147,10 +147,10 @@ kubectl rollout restart deployment/ai-service
 
 ### 3. 接入前置（常见卡点）
 
-- **镜像拉取凭据**：`AGENT_IMAGE_PULL_SECRET=eft-image-auth` 时，该 Secret 必须**已存在于 agent 命名空间**（默认 `apiops-agent`）。不存在 → Pod `ImagePullBackOff`。
+- **镜像拉取凭据**：`AGENT_IMAGE_PULL_SECRET=eft-image-auth` 时，该 Secret 必须**已存在于 agent 命名空间**（默认 `autohealops-agent`）。不存在 → Pod `ImagePullBackOff`。
   ```bash
   kubectl -n default get secret eft-image-auth -o yaml \
-    | sed 's/namespace: default/namespace: apiops-agent/' | kubectl apply -f -
+    | sed 's/namespace: default/namespace: autohealops-agent/' | kubectl apply -f -
   ```
-- **命名空间**：`AGENT_NAMESPACE`（默认 `apiops-agent`）。若目标集群已有现成的拉取 Secret 环境，可改成那个命名空间，省一次复制。
+- **命名空间**：`AGENT_NAMESPACE`（默认 `autohealops-agent`）。若目标集群已有现成的拉取 Secret 环境，可改成那个命名空间，省一次复制。
 - **install.yaml 是匿名的**：集群侧 `kubectl apply -f <平台地址>/api/v1/clusters/<id>/agent/install.yaml?token=<token>` 不需要平台账号，只校验接入令牌（可吊销）。返回裸 YAML + 正确状态码（令牌错 → 403）。

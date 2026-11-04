@@ -103,14 +103,14 @@
 # 1) 本机交叉编译（不需要目标机装 Go）
 cd k8s-executor
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X main.version=0.1.0" -o /tmp/apiops-agent ./cmd/agent
+  -ldflags "-s -w -X main.version=0.1.0" -o /tmp/autohealops-agent ./cmd/agent
 
 # 2) 传到有 docker 的机器（192.168.6.149 已验证）
-scp /tmp/apiops-agent Dockerfile.agent root@192.168.6.149:/tmp/agent-build/
-ssh root@192.168.6.149 'cd /tmp/agent-build && mv apiops-agent agent && docker build -f Dockerfile.agent -t harbor.efreight.cn/ops/apiops-agent:0.1.0 .'
+scp /tmp/autohealops-agent Dockerfile.agent root@192.168.6.149:/tmp/agent-build/
+ssh root@192.168.6.149 'cd /tmp/agent-build && mv autohealops-agent agent && docker build -f Dockerfile.agent -t harbor.efreight.cn/ops/autohealops-agent:0.1.0 .'
 
 # 3) 推送
-ssh root@192.168.6.149 'docker tag harbor.efreight.cn/ops/apiops-agent:0.1.0 harbor.efreight.cn/ops/apiops-agent:latest && docker push harbor.efreight.cn/ops/apiops-agent:0.1.0 && docker push harbor.efreight.cn/ops/apiops-agent:latest'
+ssh root@192.168.6.149 'docker tag harbor.efreight.cn/ops/autohealops-agent:0.1.0 harbor.efreight.cn/ops/autohealops-agent:latest && docker push harbor.efreight.cn/ops/autohealops-agent:0.1.0 && docker push harbor.efreight.cn/ops/autohealops-agent:latest'
 ```
 
 - 底包：`harbor.efreight.cn/ops/python:3.10-slim`（Debian slim，带 CA，方便日后 mTLS）；静态二进制，非 root（uid 1001）。
@@ -124,7 +124,7 @@ ssh root@192.168.6.149 'docker tag harbor.efreight.cn/ops/apiops-agent:0.1.0 har
 
 - **CA**：平台首次启动生成 ECDSA P-256 自签 CA（10 年），落在 `data/agent-ca/`（`ca.crt` / `ca.key`，私钥 0600），**已加入 .gitignore，严禁入库**。
 - **服务端证书**：网关启动时用 CA 签发 `server.crt/server.key`（2 年），SAN 取自 `AGENT_GATEWAY_PUBLIC_ADDR` + `PLATFORM_PUBLIC_URL` + localhost/127.0.0.1；SAN 变化或临期 30 天会自动重签。
-- **客户端证书**：每次渲染 `install.yaml` 时为该集群现场签发（CN=`apiops-agent-<cluster_id>`，5 年，EKU clientAuth），随 Secret `apiops-agent-tls` 下发，挂载到 `/tls`。
+- **客户端证书**：每次渲染 `install.yaml` 时为该集群现场签发（CN=`autohealops-agent-<cluster_id>`，5 年，EKU clientAuth），随 Secret `autohealops-agent-tls` 下发，挂载到 `/tls`。
 - **网关**：`grpc.ssl_server_credentials(..., require_client_auth=True)` → 没有客户端证书的连接直接握手失败（明文 agent 会报 `error reading server preface: EOF`）。
 - **agent**：`-ca-file / -cert-file / -key-file`（+ 可选 `-server-name`）；未配置时退回明文并打印告警（**仅本地调试**）。
 - 开关：`AGENT_TLS_ENABLED`（默认 true）、`AGENT_CA_DIR`（默认 `data/agent-ca`）。

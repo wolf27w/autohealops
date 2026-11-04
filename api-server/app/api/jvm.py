@@ -97,8 +97,8 @@ _ACTIONS: dict[str, dict] = {
         "label": "堆转储 heap dump", "desc": "导出堆快照（大文件，落 /tmp 后下载分析）",
     },
     "jfr_start": {
-        "cmd": "jcmd {pid} JFR.start name=apiops duration=30s filename=/tmp/jvm-recording.jfr",
-        "attach": "jcmd JFR.start name=apiops duration=30s filename=/tmp/jvm-recording.jfr",
+        "cmd": "jcmd {pid} JFR.start name=autohealops duration=30s filename=/tmp/jvm-recording.jfr",
+        "attach": "jcmd JFR.start name=autohealops duration=30s filename=/tmp/jvm-recording.jfr",
         "file": True, "need_pid": True,
         "label": "飞行记录 JFR", "desc": "低开销持续记录 GC/线程/锁/IO（30s，落 /tmp 后下载；JRE8 无 JFR）",
     },
@@ -265,7 +265,7 @@ async def _ensure_jattach(cluster_id: int, namespace: str, pod: str, container: 
     ⚠️ 有些容器的 /tmp 被挂成 **noexec**（chmod +x 后仍 permission denied）→
     依次尝试多个可写目录，并实际探测可执行性后再采用。
     """
-    base = (getattr(settings, "JVM_JATTACH_PATH", "/tmp/.apiops-jattach") or "/tmp/.apiops-jattach")
+    base = (getattr(settings, "JVM_JATTACH_PATH", "/tmp/.autohealops-jattach") or "/tmp/.autohealops-jattach")
     url = (getattr(settings, "JVM_JATTACH_URL", "") or "").strip()
     ck = ("jattach", cluster_id, namespace, pod, container)
     cached = _cache_get(ck)
@@ -273,7 +273,7 @@ async def _ensure_jattach(cluster_id: int, namespace: str, pod: str, container: 
         return cached  # type: ignore[return-value]
     cands: list[str] = [base]
     for d in ("/var/tmp", "/dev/shm", "/usr/local/bin", "/opt", "/root", "/app", "/home"):
-        p = f"{d}/.apiops-jattach"
+        p = f"{d}/.autohealops-jattach"
         if p not in cands:
             cands.append(p)
     for path in cands:
@@ -310,7 +310,7 @@ async def _find_java_pid_ps(cluster_id: int, namespace: str, pod: str, container
         if not m:
             continue
         pid, args = m.group(1), m.group(2)
-        if "/.apiops-jattach" in args or args.strip().startswith("ps "):
+        if "/.autohealops-jattach" in args or args.strip().startswith("ps "):
             continue
         if _JAVA_PROC.search(f" {args} "):
             return int(pid), out

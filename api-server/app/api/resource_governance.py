@@ -3,7 +3,7 @@
 
 - 下限：LimitRange（默认 request/limit，只补默认不设 max/min）
 - 上限：ResourceQuota（CPU/内存总量、Pod 数）
-安全：只管理本平台命名的对象（apiops-ns-defaults / apiops-ns-quota），绝不覆盖运维已有对象。
+安全：只管理本平台命名的对象（autohealops-ns-defaults / autohealops-ns-quota），绝不覆盖运维已有对象。
 """
 import yaml
 from fastapi import APIRouter, Depends
@@ -14,8 +14,10 @@ from app.services.user_permission_service import check_cluster_permission
 
 router = APIRouter(prefix="/api/v1/resource-governance")
 
-NS_LIMITRANGE_NAME = "apiops-ns-defaults"
-NS_QUOTA_NAME = "apiops-ns-quota"
+NS_LIMITRANGE_NAME = "autohealops-ns-defaults"
+NS_QUOTA_NAME = "autohealops-ns-quota"
+# 旧命名（品牌更名前）：下发前先清掉，否则同一命名空间会同时存在两套 LimitRange/ResourceQuota（配额会被双重计算）
+_LEGACY_NS_OBJECTS = (("limitrange", "apiops-ns-defaults"), ("resourcequota", "apiops-ns-quota"))
 
 
 async def _deny(user, cluster_id: int, required: str = "read"):
@@ -128,6 +130,12 @@ async def ns_limit_apply(payload: dict, user=Depends(require_operator)):
     others = await _existing_limits(cluster_id, ns)
     if not payload.get("force") and (others["limitrange"] or others["resourcequota"]):
         return {"code": 409, "message": "该命名空间已存在其它 LimitRange/ResourceQuota（为避免冲突默认拒绝）；确认可传 force=true 继续（不会改动它们）", "data": {"others": others}}
+    # 清理品牌更名前的旧对象（best-effort，不影响下发）
+    for kind, old_name in _LEGACY_NS_OBJECTS:
+        try:
+            await executor_client.acall(executor_client.delete_resource, cluster_id, kind, ns, old_name)
+        except Exception:  # noqa: BLE001 不存在/无权限都不影响主流程
+            pass
     steps = []
     if dr or dl:
         r = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id, "limitrange", ns, NS_LIMITRANGE_NAME, _ns_limitrange_manifest(ns, dr, dl))

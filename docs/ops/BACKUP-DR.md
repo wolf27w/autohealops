@@ -16,7 +16,7 @@
 ```bash
 ./scripts/backup_mysql.sh            # 执行一次：mysqldump → gzip → ./backups/，保留 7 天
 ./scripts/backup_mysql.sh --dry-run  # 只看将做什么，不落盘
-BACKUP_REMOTE=oss:apiops-backup/ ./scripts/backup_mysql.sh   # 顺带 rclone 异地（需装 rclone）
+BACKUP_REMOTE=oss:autohealops-backup/ ./scripts/backup_mysql.sh   # 顺带 rclone 异地（需装 rclone）
 ```
 
 - 连接参数：优先 `MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD/MYSQL_DB` 环境变量，其次解析 `.env` 的 `DATABASE_URL`。
