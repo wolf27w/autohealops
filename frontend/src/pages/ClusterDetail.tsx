@@ -1,12 +1,12 @@
 // 集群详情页：命名空间下拉 + 工作负载类型 Tab 左右切换（无状态/有状态/守护集/定时任务/容器组）
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode, type Key } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
-import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress } from 'antd'
+import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress, InputNumber } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers, batchWorkloadOp } from '../services/api'
 import type { ClusterPod } from '../services/api'
 import type { ProactiveScanResult } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
@@ -105,6 +105,10 @@ export default function ClusterDetail() {
   const [podList, setPodList] = useState<ClusterPod[]>([])
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
+  // 批量操作（2026-11-04）：无状态 / 有状态 / 守护集
+  const [wlSel, setWlSel] = useState<Key[]>([])
+  const [batchModal, setBatchModal] = useState<'start' | 'scale' | null>(null)
+  const [batchReplicas, setBatchReplicas] = useState<number | null>(1)
   const [inspectOpen, setInspectOpen] = useState(false)
   const [appInspectOpen, setAppInspectOpen] = useState(false)
   const [aiNs, setAiNs] = useState<string>('')
@@ -283,6 +287,77 @@ export default function ClusterDetail() {
     }
   }, [dataByType, statusFilter])
 
+  // ===== 批量操作（无状态 / 有状态 / 守护集） =====
+  useEffect(() => { setWlSel([]) }, [activeType, activeNs])
+
+  const BATCHABLE = ['deployments', 'statefulsets', 'daemonsets']
+  const wlKind = activeType === 'statefulsets' ? 'statefulset' : activeType === 'daemonsets' ? 'daemonset' : 'deployment'
+  const wlTypeLabel = activeType === 'statefulsets' ? '有状态' : activeType === 'daemonsets' ? '守护集' : '无状态'
+
+  const selItems = useMemo(() => {
+    const rows = (finalData as Record<string, ResourceItem[]>)[activeType] || []
+    return rows.filter((r) => wlSel.includes(`${r.namespace}-${r.name}`))
+      .map((r) => ({ namespace: r.namespace, name: r.name }))
+  }, [finalData, activeType, wlSel])
+
+  const BATCH_LABEL: Record<string, string> = {
+    delete: '批量删除', stop: '批量停止', start: '批量启动', scale: '批量改副本', restart: '批量重启',
+  }
+
+  const runWorkloadBatch = async (action: 'delete' | 'stop' | 'start' | 'scale' | 'restart', reps?: number | null) => {
+    if (!selItems.length) { message.warning('请先选择工作负载'); return }
+    try {
+      const d = await batchWorkloadOp(Number(id), { kind: wlKind, action, items: selItems, replicas: reps ?? null, confirm: action === 'delete' })
+      const bad = d.results.filter((x) => !x.success)
+      if (bad.length === 0) message.success(`${BATCH_LABEL[action]}：成功 ${d.ok}/${d.total}`)
+      else message.warning(`${BATCH_LABEL[action]}：成功 ${d.ok}/${d.total}，失败 ${bad.length} 个（${bad.slice(0, 3).map((x) => `${x.namespace}/${x.name}: ${x.message}`).join('；')}${bad.length > 3 ? ' …' : ''}）`)
+      setWlSel([])
+      load()
+    } catch { /* 拦截器已提示 */ }
+  }
+
+  const confirmWorkloadBatch = (action: 'delete' | 'stop') => {
+    if (!selItems.length) { message.warning('请先选择工作负载'); return }
+    const names = selItems.slice(0, 8).map((x) => `${x.namespace}/${x.name}`).join('\n')
+    Modal.confirm({
+      title: `${BATCH_LABEL[action]}：${selItems.length} 个${wlTypeLabel}工作负载？`,
+      content: (
+        <div>
+          <div style={{ whiteSpace: 'pre-line', fontFamily: 'monospace', fontSize: 12, maxHeight: 160, overflow: 'auto', marginBottom: 8 }}>{names}{selItems.length > 8 ? `\n… 共 ${selItems.length} 个` : ''}</div>
+          <div style={{ color: action === 'delete' ? '#cf1322' : '#666' }}>
+            {action === 'delete' ? '删除后全部 Pod 将被回收，不可恢复。' : '停止 = 副本置 0（Pod 全部回收）；之后可「批量启动」恢复原副本数。'}
+          </div>
+        </div>
+      ),
+      okText: action === 'delete' ? '确认删除' : '确认停止',
+      okButtonProps: { danger: action === 'delete' },
+      onOk: () => runWorkloadBatch(action),
+    })
+  }
+
+  const submitBatchReplicas = async () => {
+    if (!batchModal) return
+    if (batchModal === 'scale' && (batchReplicas === null || batchReplicas === undefined)) {
+      message.warning('请填副本数'); return
+    }
+    await runWorkloadBatch(batchModal, batchModal === 'start' ? (batchReplicas ?? null) : batchReplicas)
+    setBatchModal(null)
+  }
+
+  const wlRowSelection = { selectedRowKeys: wlSel, onChange: (keys: Key[]) => setWlSel(keys) }
+
+  const wlBatchBar = BATCHABLE.includes(activeType) && wlSel.length > 0 ? (
+    <Space size={8} wrap style={{ marginBottom: 12 }}>
+      <span>已选 <b>{wlSel.length}</b> 个{wlTypeLabel}</span>
+      {activeType !== 'daemonsets' && <Button size="small" onClick={() => confirmWorkloadBatch('stop')}>批量停止</Button>}
+      {activeType !== 'daemonsets' && <Button size="small" onClick={() => { setBatchReplicas(null); setBatchModal('start') }}>批量启动</Button>}
+      {activeType !== 'daemonsets' && <Button size="small" onClick={() => { setBatchReplicas(1); setBatchModal('scale') }}>批量改副本</Button>}
+      <Button size="small" onClick={() => runWorkloadBatch('restart')}>批量重启</Button>
+      <Button size="small" danger onClick={() => confirmWorkloadBatch('delete')}>批量删除</Button>
+      <Button size="small" type="link" onClick={() => setWlSel([])}>清除选择</Button>
+    </Space>
+  ) : null
+
   // 容器组行：以实时 Pod 列表为准（全 phase），补充快照里的资源 request/limit
   const podsRows = useMemo(
     () => {
@@ -363,7 +438,7 @@ export default function ClusterDetail() {
       label: '无状态',
       children: (
         <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={finalData.deployments}
-          pagination={paginationConfig}
+          pagination={paginationConfig} rowSelection={wlRowSelection}
           columns={replicasColumns} locale={{ emptyText: '无 Deployment' }} />
       ),
     },
@@ -372,7 +447,7 @@ export default function ClusterDetail() {
       label: '有状态',
       children: (
         <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={finalData.statefulsets}
-          pagination={paginationConfig}
+          pagination={paginationConfig} rowSelection={wlRowSelection}
           columns={replicasColumns} locale={{ emptyText: '无 StatefulSet' }} />
       ),
     },
@@ -381,7 +456,7 @@ export default function ClusterDetail() {
       label: '守护集',
       children: (
         <Table rowKey={(r) => `${r.namespace}-${r.name}`} size="small" dataSource={finalData.daemonsets}
-          pagination={paginationConfig}
+          pagination={paginationConfig} rowSelection={wlRowSelection}
           columns={replicasColumns} locale={{ emptyText: '无 DaemonSet' }} />
       ),
     },
@@ -657,6 +732,7 @@ export default function ClusterDetail() {
             style={{ marginBottom: 14 }}
           />
         )}
+        {g.key === 'workloads' && wlBatchBar}
         {tableByType[keyOfType(g.types.includes(activeType) ? activeType : g.types[0])]}
       </div>
     ),
@@ -742,6 +818,21 @@ export default function ClusterDetail() {
         )}
       </Modal>
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
+      <Modal open={!!batchModal} width={420}
+        title={batchModal === 'start' ? `批量启动（${selItems.length} 个${wlTypeLabel}）` : `批量改副本（${selItems.length} 个${wlTypeLabel}）`}
+        onCancel={() => setBatchModal(null)} onOk={submitBatchReplicas}
+        okText={batchModal === 'start' ? '启动' : '应用'}
+        destroyOnClose>
+        <div style={{ marginBottom: 8 }}>目标副本数：</div>
+        <InputNumber min={batchModal === 'start' ? 1 : 0} max={9999} style={{ width: 160 }}
+          value={batchReplicas} onChange={(v) => setBatchReplicas(v as number | null)}
+          placeholder={batchModal === 'start' ? '留空 = 恢复停止前副本数' : '必填'} />
+        <div style={{ marginTop: 10, fontSize: 12, color: '#888' }}>
+          {batchModal === 'start'
+            ? '留空时会恢复「批量停止」前记住的副本数（最多保留 30 天）；没有记录则按 1 个副本启动。'
+            : '所有选中的工作负载都会改成一模一样的副本数。'}
+        </div>
+      </Modal>
       <InspectModal clusterId={Number(id)} clusterName={clusterName} open={inspectOpen} onClose={() => setInspectOpen(false)} />
 
       <Modal title={`应用巡检：${clusterName || id}`} open={appInspectOpen} onCancel={() => setAppInspectOpen(false)}

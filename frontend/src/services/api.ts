@@ -292,6 +292,16 @@ export const getWorkloads = (clusterId: number, namespace = '') =>
   http.get<Workload[]>(`/resources/clusters/${clusterId}/workloads`, { params: { namespace } })
 export const scaleWorkload = (clusterId: number, data: Payload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/scale`, data)
+export interface BatchWorkloadItem { namespace: string; name: string }
+export interface BatchWorkloadResult {
+  results: { namespace: string; name: string; success: boolean; message: string }[]
+  ok: number
+  total: number
+}
+export const batchWorkloadOp = (clusterId: number, data: {
+  kind: string; action: 'delete' | 'stop' | 'start' | 'scale' | 'restart'
+  items: BatchWorkloadItem[]; replicas?: number | null; confirm?: boolean
+}) => http.post<BatchWorkloadResult>(`/resources/clusters/${clusterId}/workloads/batch`, data)
 export const rolloutWorkload = (clusterId: number, data: Payload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/rollout`, data)
 export const getRolloutHistory = (clusterId: number, ns: string, name: string) =>
