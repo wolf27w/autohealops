@@ -311,9 +311,35 @@ def start_server(addr: str) -> None:
         _loop = None
     _server = grpc.server(ThreadPoolExecutor(max_workers=20))
     agent_pb2_grpc.add_AgentServiceServicer_to_server(_Servicer(), _server)
-    _server.add_insecure_port(addr)
+    tls_enabled = bool(getattr(settings, "AGENT_TLS_ENABLED", True))
+    if tls_enabled:
+        # 平台自建 CA 签发服务端证书；要求 agent 出示客户端证书（mTLS）
+        from urllib.parse import urlparse
+        from app.services import agent_pki
+        hosts = []
+        public = (getattr(settings, "AGENT_GATEWAY_PUBLIC_ADDR", "") or "").strip()
+        if public:
+            hosts.append(public.rsplit(":", 1)[0] if ":" in public else public)
+        plat = (getattr(settings, "PLATFORM_PUBLIC_URL", "") or "").strip()
+        if plat:
+            h = urlparse(plat).hostname
+            if h:
+                hosts.append(h)
+        crt, key = agent_pki.ensure_server_cert(hosts)
+        with open(crt, "rb") as f:
+            cert_bytes = f.read()
+        with open(key, "rb") as f:
+            key_bytes = f.read()
+        ca_bytes = agent_pki.ca_cert_pem().encode()
+        creds = grpc.ssl_server_credentials([(key_bytes, cert_bytes)],
+                                            root_certificates=ca_bytes,
+                                            require_client_auth=True)
+        _server.add_secure_port(addr, creds)
+        logger.info("Agent 反向隧道网关已启动（mTLS）: %s（CA 目录 %s）", addr, agent_pki.ca_dir())
+    else:
+        _server.add_insecure_port(addr)
+        logger.warning("Agent 反向隧道网关已启动（明文，仅调试用）: %s", addr)
     _server.start()
-    logger.info("Agent 反向隧道网关已启动: %s", addr)
 
 
 def stop_server() -> None:

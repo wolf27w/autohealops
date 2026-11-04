@@ -233,6 +233,49 @@ async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(requ
     pull_secret = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
     # 拉取凭据挂在主 SA 上（不再另建 SA —— 另建的 SA 没有 RBAC，会导致 agent 读不了 apiserver）
     sa_pull_block = f"\nimagePullSecrets:\n  - name: {pull_secret}" if pull_secret else ""
+    # mTLS（2026-11-04 老板定：不允许明文）：现场签发客户端证书，塞进 Secret 挂给 agent
+    tls_doc = ""
+    tls_args = ""
+    tls_mount = ""
+    if bool(getattr(settings, "AGENT_TLS_ENABLED", True)):
+        import base64
+
+        from app.services import agent_pki
+        cert_pem, key_pem = agent_pki.issue_client_cert(cluster_id)
+        ca_pem = agent_pki.ca_cert_pem()
+
+        def _b64(v: str) -> str:
+            return base64.b64encode(v.encode()).decode()
+
+        tls_doc = (
+            "---\n"
+            "apiVersion: v1\n"
+            "kind: Secret\n"
+            "metadata:\n"
+            "  name: apiops-agent-tls\n"
+            "  namespace: apiops-agent\n"
+            "type: Opaque\n"
+            "data:\n"
+            f"  ca.crt: {_b64(ca_pem)}\n"
+            f"  tls.crt: {_b64(cert_pem)}\n"
+            f"  tls.key: {_b64(key_pem)}\n"
+        )
+        tls_args = (
+            '            - "-ca-file=/tls/ca.crt"\n'
+            '            - "-cert-file=/tls/tls.crt"\n'
+            '            - "-key-file=/tls/tls.key"\n'
+        )
+        tls_mount = (
+            "          volumeMounts:\n"
+            "            - name: tls\n"
+            "              mountPath: /tls\n"
+            "              readOnly: true\n"
+            "      volumes:\n"
+            "        - name: tls\n"
+            "          secret:\n"
+            "            secretName: apiops-agent-tls\n"
+        )
+
     # 多文档 YAML 直接拼字符串（避免 --- 序列化问题）
     docs = f"""apiVersion: v1
 kind: Namespace
@@ -266,7 +309,7 @@ subjects:
   - kind: ServiceAccount
     name: apiops-agent
     namespace: apiops-agent
----
+{tls_doc}---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -294,10 +337,10 @@ spec:
             - "-cluster-id={cluster_id}"
             - "-token={token}"
             - "-watch=true"
-          resources:
+{tls_args}          resources:
             requests: {{ cpu: 100m, memory: 128Mi }}
             limits: {{ cpu: 500m, memory: 256Mi }}
-"""
+{tls_mount}"""
     return {"code": 200, "message": "success", "data": {"yaml": docs}}
 
 

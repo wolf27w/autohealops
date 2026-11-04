@@ -1,7 +1,7 @@
 # Agent-only 纳管架构（需求 / 设计基线）
 
 > 提出：老板 2026-10-21 10:52–11:04 讨论后定方向
-> 整理：小吴　状态：**进行中**（2026-11-04：P3-a 本集群自接入 + agent 版本上报 + 镜像已构建推送；剩 版本灰度/回退、P4 TLS）
+> 整理：小吴　状态：**P1–P4 全部完成**（2026-11-04：自接入 / 版本上报 / 流式 RPC / 升级回退 / mTLS）
 > 现状核实：2026-10-21，以代码为准（`cmd/agent/main.go`、`clients/executor_client.py`、`agent_gateway.py`）
 
 ---
@@ -46,8 +46,8 @@
 | **告警检测（watcher）** | ✅ **已下沉（2026-10-28, `50eba3c`）**：agent 内跑 Pod/Node watcher（策略由平台 config 帧下发），事件经隧道上报，平台统一落库/去重/触发自动处理 | `executor_client.start_watch()` → `StartWatch`；`internal/watcher/{pod_watcher,node_watcher}.go` |
 | in-cluster 自接入（本集群自动登记） | ✅ **已完成（2026-11-04）**：executor 启动 `bootstrap.EnsureInCluster`，幂等键 apiserver 地址，`source=in-cluster`，客户端走 ServiceAccount（不落 kubeconfig） | `internal/bootstrap/incluster.go`、`k8sclient.Manager.MarkInCluster` |
 | agent 版本上报 / 可见 | ✅ **已完成（2026-11-04）**：AgentFrame 增 `version`，注册时上报并落 `clusters.agent_version`，集群列表显示 | `proto/agent.proto`、`agent_gateway.py`、`cmd/agent/main.go`（`-ldflags -X main.version`） |
-| agent 批量升级 / 灰度 / 回退 | ❌ 未实现 | 需按集群改 agent Deployment 镜像（走隧道 apply） |
-| 隧道安全 | ⚠️ **明文 gRPC**（`insecure`）——P4 待做；已验证经内网可连 | `cmd/agent/main.go` → `grpc.WithTransportCredentials(insecure.NewCredentials())` |
+| agent 批量升级 / 灰度 / 回退 | ✅ **已完成（2026-11-04）**：经隧道改 Deployment 镜像并等待重连回报版本；批量顺序滚动；回退=传旧 tag | `api/clusters.py`（`/agent/upgrade`、`/agents/upgrade`） |
+| 隧道安全 | ✅ **mTLS（2026-11-04）**：平台自建 CA 签发服务端/客户端证书，网关 `require_client_auth=True`；agent 用 `-ca-file/-cert-file/-key-file`；明文连接被拒 | `services/agent_pki.py`、`agent_gateway.start_server`、`cmd/agent/main.go` |
 | agent 网关对外可达 | ❌ 仅本机（`AGENT_GATEWAY_ADDR=0.0.0.0:9095`，无外网入口） | `config.py` / 部署清单 |
 
 **结论**：现状是「agent 只能执行命令 + 取日志」的半成品；**agent-only 模式下不会有任何告警**，
@@ -116,3 +116,16 @@ ssh root@192.168.6.149 'docker tag harbor.efreight.cn/ops/apiops-agent:0.1.0 har
 - 底包：`harbor.efreight.cn/ops/python:3.10-slim`（Debian slim，带 CA，方便日后 mTLS）；静态二进制，非 root（uid 1001）。
 - 平台配置（`.env`）：`AGENT_IMAGE` / `AGENT_IMAGE_PULL_SECRET`（私有 harbor 时填目标集群已有的 Secret 名）/ `AGENT_GATEWAY_PUBLIC_ADDR`（agent 能访问的 host:port，不填则按平台域名 + 9095 推导）。
 - 自测（2026-11-04 已通过）：容器在 192.168.6.149 上跑通注册（version=0.1.0）+ 隧道执行 ListNodes + 平台正确记录 `agent_version`。
+
+
+---
+
+## 十、隧道安全（P4，2026-11-04 落地——老板定：平台自建 CA + 不允许明文）
+
+- **CA**：平台首次启动生成 ECDSA P-256 自签 CA（10 年），落在 `data/agent-ca/`（`ca.crt` / `ca.key`，私钥 0600），**已加入 .gitignore，严禁入库**。
+- **服务端证书**：网关启动时用 CA 签发 `server.crt/server.key`（2 年），SAN 取自 `AGENT_GATEWAY_PUBLIC_ADDR` + `PLATFORM_PUBLIC_URL` + localhost/127.0.0.1；SAN 变化或临期 30 天会自动重签。
+- **客户端证书**：每次渲染 `install.yaml` 时为该集群现场签发（CN=`apiops-agent-<cluster_id>`，5 年，EKU clientAuth），随 Secret `apiops-agent-tls` 下发，挂载到 `/tls`。
+- **网关**：`grpc.ssl_server_credentials(..., require_client_auth=True)` → 没有客户端证书的连接直接握手失败（明文 agent 会报 `error reading server preface: EOF`）。
+- **agent**：`-ca-file / -cert-file / -key-file`（+ 可选 `-server-name`）；未配置时退回明文并打印告警（**仅本地调试**）。
+- 开关：`AGENT_TLS_ENABLED`（默认 true）、`AGENT_CA_DIR`（默认 `data/agent-ca`）。
+- 验证（2026-11-04）：本地 agent 带证书 → 注册 v0.2.0、隧道 ListNodes 50 节点；不带证书 → 握手失败、3s 重连循环。

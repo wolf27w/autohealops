@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -51,6 +54,10 @@ func main() {
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig 路径（空=in-cluster，回退 ~/.kube/config）")
 	watch := flag.Bool("watch", true, "是否在 agent 内跑告警检测（Pod/Node watcher → 经隧道上报平台）")
 	whitelist := flag.String("whitelist", defaultWhitelist, "命令白名单")
+	caFile := flag.String("ca-file", "", "平台 CA 证书（mTLS；为空则明文，仅调试用）")
+	certFile := flag.String("cert-file", "", "agent 客户端证书（mTLS）")
+	keyFile := flag.String("key-file", "", "agent 客户端私钥（mTLS）")
+	serverName := flag.String("server-name", "", "TLS SNI/校验用主机名（默认取 -platform 的 host）")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
 
@@ -85,8 +92,34 @@ func main() {
 	}
 	defer bridge.Close()
 
-	// 连平台 gateway（反向隧道）
-	conn, err := grpc.NewClient(*platform, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 连平台 gateway（反向隧道）：默认 mTLS；未给证书时退回明文并告警（仅本地调试）
+	dialOpts := []grpc.DialOption{}
+	if *caFile != "" && *certFile != "" && *keyFile != "" {
+		caPEM, e1 := os.ReadFile(*caFile)
+		if e1 != nil {
+			fmt.Fprintf(os.Stderr, "读取 CA 失败: %v\n", e1)
+			os.Exit(1)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			fmt.Fprintln(os.Stderr, "CA 证书解析失败")
+			os.Exit(1)
+		}
+		clientCert, e2 := tls.LoadX509KeyPair(*certFile, *keyFile)
+		if e2 != nil {
+			fmt.Fprintf(os.Stderr, "加载客户端证书失败: %v\n", e2)
+			os.Exit(1)
+		}
+		tcfg := &tls.Config{RootCAs: pool, Certificates: []tls.Certificate{clientCert}, MinVersion: tls.VersionTLS12}
+		if *serverName != "" {
+			tcfg.ServerName = *serverName
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tcfg)))
+	} else {
+		fmt.Fprintln(os.Stderr, "[agent] 警告：未配置 -ca-file/-cert-file/-key-file，隧道为明文（仅限本地调试）")
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	conn, err := grpc.NewClient(*platform, dialOpts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "连接平台失败: %v\n", err)
 		os.Exit(1)

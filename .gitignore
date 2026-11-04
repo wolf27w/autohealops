@@ -33,3 +33,6 @@ backups/
 .idea/
 .vscode/
 .DS_Store
+
+# Agent 隧道 PKI（平台自建 CA 私钥，严禁入库）
+data/agent-ca/

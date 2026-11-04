@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # Agent 接入（M3 / P3）：镜像、镜像拉取凭据、网关对外地址
     #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 k8s-executor/Dockerfile.agent）
-    AGENT_IMAGE: str = "harbor.efreight.cn/ops/apiops-agent:0.1.2"
+    AGENT_IMAGE: str = "harbor.efreight.cn/ops/apiops-agent:0.2.0"
     #   AGENT_IMAGE_PULL_SECRET：目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
     AGENT_IMAGE_PULL_SECRET: str = ""
     #   平台对外地址（生成 agent 一键安装命令 / 推导网关地址用；集群侧需能访问）
@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     #   网关监听地址 / 对目标集群可见的地址（host:port）
     AGENT_GATEWAY_ADDR: str = "0.0.0.0:9095"
     AGENT_GATEWAY_PUBLIC_ADDR: str = ""
+    #   mTLS（2026-11-04 老板定：不允许明文）：true=网关只接受带客户端证书的 TLS 连接
+    AGENT_TLS_ENABLED: bool = True
+    #   平台自建 CA 目录（相对路径按仓库根解析；私钥 0600，不进 git）
+    AGENT_CA_DIR: str = "data/agent-ca"
 
     # 镜像仓库（R3）：列仓库标签用。可选全局只读凭据；或 REGISTRY_CREDS 按 host 配（JSON）
     #   例：REGISTRY_CREDS={"harbor.efreight.cn":{"username":"ro","password":"***"}}
