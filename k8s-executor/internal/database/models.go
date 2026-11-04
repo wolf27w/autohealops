@@ -7,35 +7,40 @@ import (
 
 // Cluster K8s 集群（与 api-server clusters 表一致）
 type Cluster struct {
-	ID                  uint      `gorm:"primaryKey" json:"id"`
-	Name                string    `gorm:"size:100;uniqueIndex;not null" json:"name"`
-	Description         string    `gorm:"size:500" json:"description"`
-	KubeconfigEncrypted string    `gorm:"type:text;not null" json:"-"`
-	Status              string    `gorm:"size:20;default:unknown" json:"status"`
-	Version             string    `gorm:"size:50" json:"version"`
-	LastCheckAt         *time.Time `gorm:"column:last_check_at" json:"last_check_at"`
-	LastCheckError      string     `gorm:"column:last_check_error;size:255" json:"last_check_error"`
-	MaintenanceWindow   string    `gorm:"type:text" json:"maintenance_window"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                  uint   `gorm:"primaryKey" json:"id"`
+	Name                string `gorm:"size:100;uniqueIndex;not null" json:"name"`
+	Description         string `gorm:"size:500" json:"description"`
+	KubeconfigEncrypted string `gorm:"type:text;not null" json:"-"`
+	Status              string `gorm:"size:20;default:unknown" json:"status"`
+	Version             string `gorm:"size:50" json:"version"`
+	// 接入方式（kubeconfig / in-cluster / agent）与 apiserver 地址（幂等键）
+	Source       string `gorm:"column:source;size:20;default:kubeconfig" json:"source"`
+	APIServerURL string `gorm:"column:api_server_url;size:500;default:''" json:"api_server_url"`
+	// 环境标签（qa/release/prod）
+	EnvTag            string     `gorm:"column:env_tag;size:20;default:prod" json:"env_tag"`
+	LastCheckAt       *time.Time `gorm:"column:last_check_at" json:"last_check_at"`
+	LastCheckError    string     `gorm:"column:last_check_error;size:255" json:"last_check_error"`
+	MaintenanceWindow string     `gorm:"type:text" json:"maintenance_window"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // Alert 故障告警
 type Alert struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	ClusterID    uint      `gorm:"index;not null" json:"cluster_id"`
-	ResourceType string    `gorm:"size:10;not null" json:"resource_type"`
-	ResourceName string    `gorm:"size:200;not null" json:"resource_name"`
-	DeploymentName string `gorm:"size:200;index" json:"deployment_name"`
-	Namespace    string    `gorm:"size:100" json:"namespace"`
-	FaultType    string    `gorm:"size:50;not null" json:"fault_type"`
-	Severity     string    `gorm:"size:10;not null" json:"severity"`
-	Status       string    `gorm:"size:20;index;default:pending" json:"status"`
-	Message      string    `gorm:"type:text" json:"message"`
-	EventCount   int       `gorm:"default:1" json:"event_count"`
-	OccurredAt   *time.Time `json:"occurred_at"`
-	DetectedAt   time.Time `gorm:"index" json:"detected_at"`
-	ResolvedAt   *time.Time `json:"resolved_at"`
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	ClusterID      uint       `gorm:"index;not null" json:"cluster_id"`
+	ResourceType   string     `gorm:"size:10;not null" json:"resource_type"`
+	ResourceName   string     `gorm:"size:200;not null" json:"resource_name"`
+	DeploymentName string     `gorm:"size:200;index" json:"deployment_name"`
+	Namespace      string     `gorm:"size:100" json:"namespace"`
+	FaultType      string     `gorm:"size:50;not null" json:"fault_type"`
+	Severity       string     `gorm:"size:10;not null" json:"severity"`
+	Status         string     `gorm:"size:20;index;default:pending" json:"status"`
+	Message        string     `gorm:"type:text" json:"message"`
+	EventCount     int        `gorm:"default:1" json:"event_count"`
+	OccurredAt     *time.Time `json:"occurred_at"`
+	DetectedAt     time.Time  `gorm:"index" json:"detected_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
 }
 
 // ExecutionLog 修复执行步骤日志
@@ -52,25 +57,25 @@ type ExecutionLog struct {
 
 // ResourceSnapshot 资源状态快照
 type ResourceSnapshot struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	ClusterID      uint      `gorm:"index;not null" json:"cluster_id"`
-	Namespace      string    `gorm:"size:100;index" json:"namespace"`
-	ResourceType   string    `gorm:"size:20;not null" json:"resource_type"`
-	ResourceName   string    `gorm:"size:200;not null" json:"resource_name"`
-	Status         string    `gorm:"size:50" json:"status"`
-	Replicas       int       `json:"replicas"`
-	ReadyReplicas  int       `json:"ready_replicas"`
-	ContainerCount int       `json:"container_count"`
-	ImageVersion   string    `gorm:"size:200" json:"image_version"`
-	CPUUsage       string    `gorm:"size:20" json:"cpu_usage"`
-	MemoryUsage    string    `gorm:"size:20" json:"memory_usage"`
-	CPURequest     string    `gorm:"size:20" json:"cpu_request"`
-	CPULimit       string    `gorm:"size:20" json:"cpu_limit"`
-	MemoryRequest  string    `gorm:"size:20" json:"memory_request"`
-	MemoryLimit    string    `gorm:"size:20" json:"memory_limit"`
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	ClusterID      uint       `gorm:"index;not null" json:"cluster_id"`
+	Namespace      string     `gorm:"size:100;index" json:"namespace"`
+	ResourceType   string     `gorm:"size:20;not null" json:"resource_type"`
+	ResourceName   string     `gorm:"size:200;not null" json:"resource_name"`
+	Status         string     `gorm:"size:50" json:"status"`
+	Replicas       int        `json:"replicas"`
+	ReadyReplicas  int        `json:"ready_replicas"`
+	ContainerCount int        `json:"container_count"`
+	ImageVersion   string     `gorm:"size:200" json:"image_version"`
+	CPUUsage       string     `gorm:"size:20" json:"cpu_usage"`
+	MemoryUsage    string     `gorm:"size:20" json:"memory_usage"`
+	CPURequest     string     `gorm:"size:20" json:"cpu_request"`
+	CPULimit       string     `gorm:"size:20" json:"cpu_limit"`
+	MemoryRequest  string     `gorm:"size:20" json:"memory_request"`
+	MemoryLimit    string     `gorm:"size:20" json:"memory_limit"`
 	UpdateTime     *time.Time `json:"update_time"` // 工作负载最后更新时间（k8s）
-	CreatedAt      time.Time `json:"created_at"`
-	SnapshotTime   time.Time `gorm:"index" json:"snapshot_time"`
+	CreatedAt      time.Time  `json:"created_at"`
+	SnapshotTime   time.Time  `gorm:"index" json:"snapshot_time"`
 }
 
 // QuotaSnapshot 命名空间配额快照
@@ -155,4 +160,4 @@ func (QuotaSnapshot) TableName() string    { return "quota_snapshots" }
 func (CustomTask) TableName() string       { return "custom_tasks" }
 func (CustomTaskLog) TableName() string    { return "custom_task_logs" }
 func (PodMetric) TableName() string        { return "pod_metrics" }
-func (AlertPolicy) TableName() string     { return "alert_policies" }
+func (AlertPolicy) TableName() string      { return "alert_policies" }

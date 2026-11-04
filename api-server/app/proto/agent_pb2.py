@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61gent.proto\x12\x05\x61gent\"}\n\nAgentFrame\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x12\n\ncluster_id\x18\x02 \x01(\x03\x12\r\n\x05token\x18\x03 \x01(\t\x12\x0e\n\x06req_id\x18\x04 \x01(\t\x12\x0e\n\x06method\x18\x05 \x01(\t\x12\x0f\n\x07payload\x18\x06 \x01(\x0c\x12\r\n\x05\x65rror\x18\x07 \x01(\t2B\n\x0c\x41gentService\x12\x32\n\x06Tunnel\x12\x11.agent.AgentFrame\x1a\x11.agent.AgentFrame(\x01\x30\x01\x42\x39Z7github.com/autohealops/k8s-executor/proto/agent;agentpbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61gent.proto\x12\x05\x61gent\"\x8e\x01\n\nAgentFrame\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x12\n\ncluster_id\x18\x02 \x01(\x03\x12\r\n\x05token\x18\x03 \x01(\t\x12\x0e\n\x06req_id\x18\x04 \x01(\t\x12\x0e\n\x06method\x18\x05 \x01(\t\x12\x0f\n\x07payload\x18\x06 \x01(\x0c\x12\r\n\x05\x65rror\x18\x07 \x01(\t\x12\x0f\n\x07version\x18\x08 \x01(\t2B\n\x0c\x41gentService\x12\x32\n\x06Tunnel\x12\x11.agent.AgentFrame\x1a\x11.agent.AgentFrame(\x01\x30\x01\x42\x39Z7github.com/autohealops/k8s-executor/proto/agent;agentpbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,8 +32,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'agent_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z7github.com/autohealops/k8s-executor/proto/agent;agentpb'
-  _globals['_AGENTFRAME']._serialized_start=22
-  _globals['_AGENTFRAME']._serialized_end=147
-  _globals['_AGENTSERVICE']._serialized_start=149
-  _globals['_AGENTSERVICE']._serialized_end=215
+  _globals['_AGENTFRAME']._serialized_start=23
+  _globals['_AGENTFRAME']._serialized_end=165
+  _globals['_AGENTSERVICE']._serialized_start=167
+  _globals['_AGENTSERVICE']._serialized_end=233
 # @@protoc_insertion_point(module_scope)

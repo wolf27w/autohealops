@@ -5,11 +5,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"encoding/json"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -17,8 +17,8 @@ import (
 
 	"github.com/autohealops/k8s-executor/internal/agentbridge"
 	"github.com/autohealops/k8s-executor/internal/watcher"
-	"go.uber.org/zap"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/client-go/kubernetes"
@@ -26,7 +26,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-const defaultWhitelist = "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon,drain"
+const defaultWhitelist = "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon,drain,label,taint"
+
+// version 由构建时注入：-ldflags "-X main.version=<tag>"
+var version = "dev"
 
 func buildRestConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig != "" {
@@ -48,7 +51,13 @@ func main() {
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig 路径（空=in-cluster，回退 ~/.kube/config）")
 	watch := flag.Bool("watch", true, "是否在 agent 内跑告警检测（Pod/Node watcher → 经隧道上报平台）")
 	whitelist := flag.String("whitelist", defaultWhitelist, "命令白名单")
+	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	if *clusterID == 0 {
 		fmt.Fprintln(os.Stderr, "必须指定 -cluster-id")
@@ -123,10 +132,10 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	}
 
 	// 注册
-	if err := send(&agentpb.AgentFrame{Type: "register", ClusterId: clusterID, Token: token}); err != nil {
+	if err := send(&agentpb.AgentFrame{Type: "register", ClusterId: clusterID, Token: token, Version: version}); err != nil {
 		return err
 	}
-	fmt.Printf("[agent] 已向平台注册集群 %d，等待指令\n", clusterID)
+	fmt.Printf("[agent] 已向平台注册集群 %d（version=%s），等待指令\n", clusterID, version)
 
 	// 告警检测（P2）：watcher 在 agent 内跑，事件经隧道上报平台，平台统一写库/触发处理
 	var pw *watcher.PodWatcher

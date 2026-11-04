@@ -20,4 +20,5 @@ message AgentFrame {
   string method = 5;      // 隧道方法名（如 ExecuteCommand / GetPodLogs），对应 ExecutorService 的 rpc 名
   bytes payload = 6;      // 该方法请求或响应的序列化 protobuf（对应 executor.proto 的消息）
   string error = 7;       // 错误信息（type=error 或 response 失败时）
+  string version = 8;     // 注册：agent 版本（构建时写入，平台侧用于版本可见/灰度）
 }

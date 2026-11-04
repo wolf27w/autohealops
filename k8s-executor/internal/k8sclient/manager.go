@@ -20,7 +20,7 @@ type ClusterClient struct {
 	ID            uint
 	Clientset     *kubernetes.Clientset
 	MetricsClient *metricsclientset.Clientset // metrics-server（可为 nil，未安装则跳过指标采集）
-	RestConfig    *rest.Config               // 供 remotecommand（ExecInPod）使用
+	RestConfig    *rest.Config                // 供 remotecommand（ExecInPod）使用
 }
 
 // Manager 多集群客户端池（并发安全）
@@ -29,6 +29,8 @@ type Manager struct {
 	clients map[uint]*ClusterClient
 	// getKubeconfig 回调：从数据库加载并解密 kubeconfig（由 main 注入，避免循环依赖）
 	getKubeconfig func(ctx context.Context, clusterID uint) (string, error)
+	// inCluster 标记「平台自身所在集群」：不走 kubeconfig，直接用 ServiceAccount
+	inCluster map[uint]bool
 }
 
 // NewManager 创建客户端池
@@ -36,6 +38,7 @@ func NewManager(getKubeconfig func(ctx context.Context, clusterID uint) (string,
 	return &Manager{
 		clients:       make(map[uint]*ClusterClient),
 		getKubeconfig: getKubeconfig,
+		inCluster:     make(map[uint]bool),
 	}
 }
 
@@ -57,6 +60,19 @@ func NewClusterClient(clusterID uint, kubeconfigJSON string) (*ClusterClient, er
 		metricsClient = mc
 	}
 	return &ClusterClient{ID: clusterID, Clientset: clientset, MetricsClient: metricsClient, RestConfig: restConfig}, nil
+}
+
+// newClientFromRest 用现成 rest.Config 构建客户端（in-cluster 用）
+func newClientFromRest(clusterID uint, rc *rest.Config) (*ClusterClient, error) {
+	clientset, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		return nil, classifyErr("clientset 创建失败", err)
+	}
+	var mc *metricsclientset.Clientset
+	if m, err := metricsclientset.NewForConfig(rc); err == nil {
+		mc = m
+	}
+	return &ClusterClient{ID: clusterID, Clientset: clientset, MetricsClient: mc, RestConfig: rc}, nil
 }
 
 // buildRestConfig 解析 kubeconfig 并构建 REST config（显式选择 context）
@@ -117,7 +133,6 @@ func (m *Manager) ImpersonatedClient(ctx context.Context, clusterID uint, user s
 	return &ClusterClient{ID: clusterID, Clientset: clientset, MetricsClient: nil, RestConfig: cfg}, nil
 }
 
-
 // pickContext 选择 kubeconfig 中的 context：
 // 优先取与 clusterID 同名的 context，其次取第一个；无则返回空（用 current-context）
 func pickContext(raw *api.Config, clusterID uint) string {
@@ -160,12 +175,38 @@ func classifyErr(prefix string, err error) error {
 	}
 }
 
+// MarkInCluster 标记该集群为「本集群」：客户端用 in-cluster 配置（ServiceAccount，自动轮转）
+func (m *Manager) MarkInCluster(clusterID uint) {
+	m.mu.Lock()
+	m.inCluster[clusterID] = true
+	m.mu.Unlock()
+}
+
 // GetClient 从缓存获取客户端；不存在则从数据库加载 kubeconfig 创建
 func (m *Manager) GetClient(ctx context.Context, clusterID uint) (*ClusterClient, error) {
 	m.mu.RLock()
 	c, ok := m.clients[clusterID]
 	m.mu.RUnlock()
 	if ok {
+		return c, nil
+	}
+
+	m.mu.RLock()
+	inCluster := m.inCluster[clusterID]
+	m.mu.RUnlock()
+	if inCluster {
+		rc, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("本集群 in-cluster 配置不可用: %w", err)
+		}
+		rc.QPS, rc.Burst = 50, 100
+		c, err = newClientFromRest(clusterID, rc)
+		if err != nil {
+			return nil, err
+		}
+		m.mu.Lock()
+		m.clients[clusterID] = c
+		m.mu.Unlock()
 		return c, nil
 	}
 

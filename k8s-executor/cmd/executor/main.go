@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/autohealops/k8s-executor/internal/bootstrap"
 	"github.com/autohealops/k8s-executor/internal/config"
 	"github.com/autohealops/k8s-executor/internal/database"
 	execgrpc "github.com/autohealops/k8s-executor/internal/grpc"
@@ -53,6 +54,13 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 5.5 本集群自动接入（P3-a）：仅在集群内运行时生效（本地开发 / 集群外自动跳过）
+	if id, err := bootstrap.EnsureInCluster(ctx, manager, logger); err != nil {
+		logger.Warn("本集群自动接入失败", zap.Error(err))
+	} else if id > 0 {
+		logger.Info("本集群已纳入管理", zap.Uint("cluster", id))
+	}
 
 	// 6. watch 管理器 + 启动所有集群监听
 	watcher.InitAlertNotify(cfg.APIURL, cfg.InternalToken, logger)

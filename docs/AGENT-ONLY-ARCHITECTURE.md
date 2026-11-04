@@ -1,7 +1,7 @@
 # Agent-only 纳管架构（需求 / 设计基线）
 
 > 提出：老板 2026-10-21 10:52–11:04 讨论后定方向
-> 整理：小吴　状态：**进行中**（2026-10-28：P2 告警检测下沉 + P1 全方法反向代理已完成；剩 P3/P4）
+> 整理：小吴　状态：**进行中**（2026-11-04：P3-a 本集群自接入 + agent 版本上报 + 镜像已构建推送；剩 版本灰度/回退、P4 TLS）
 > 现状核实：2026-10-21，以代码为准（`cmd/agent/main.go`、`clients/executor_client.py`、`agent_gateway.py`）
 
 ---
@@ -44,9 +44,10 @@
 | **agent 支持的方法** | ⚠️ **只有 2 个**：`ExecuteCommand`、`GetPodLogs` | `cmd/agent/main.go` → `handleRequest()` 的 switch；其余走 `default: agent 暂不支持的方法` |
 | **api-server 走 agent 的调用** | ⚠️ 只有 2 处 | `clients/executor_client.py` 的 `_agent_call`（execute_command、get_pod_logs）；`get_pod_status` / `list_pods` / `list_workloads` / `query_prometheus` / `StartWatch` 等仍直连集群 |
 | **告警检测（watcher）** | ✅ **已下沉（2026-10-28, `50eba3c`）**：agent 内跑 Pod/Node watcher（策略由平台 config 帧下发），事件经隧道上报，平台统一落库/去重/触发自动处理 | `executor_client.start_watch()` → `StartWatch`；`internal/watcher/{pod_watcher,node_watcher}.go` |
-| in-cluster 自接入（本集群自动登记） | ❌ 未实现 | 无启动 upsert；`clusters.source` 字段已预留 |
-| agent 版本管理 / 自动升级 / 回退 | ❌ 未实现 | 只有 `AGENT_IMAGE` 常量用于 install.yaml |
-| 隧道安全 | ⚠️ **明文 gRPC**（`insecure`），当前仅 127.0.0.1 使用 | `cmd/agent/main.go` → `grpc.WithTransportCredentials(insecure.NewCredentials())` |
+| in-cluster 自接入（本集群自动登记） | ✅ **已完成（2026-11-04）**：executor 启动 `bootstrap.EnsureInCluster`，幂等键 apiserver 地址，`source=in-cluster`，客户端走 ServiceAccount（不落 kubeconfig） | `internal/bootstrap/incluster.go`、`k8sclient.Manager.MarkInCluster` |
+| agent 版本上报 / 可见 | ✅ **已完成（2026-11-04）**：AgentFrame 增 `version`，注册时上报并落 `clusters.agent_version`，集群列表显示 | `proto/agent.proto`、`agent_gateway.py`、`cmd/agent/main.go`（`-ldflags -X main.version`） |
+| agent 批量升级 / 灰度 / 回退 | ❌ 未实现 | 需按集群改 agent Deployment 镜像（走隧道 apply） |
+| 隧道安全 | ⚠️ **明文 gRPC**（`insecure`）——P4 待做；已验证经内网可连 | `cmd/agent/main.go` → `grpc.WithTransportCredentials(insecure.NewCredentials())` |
 | agent 网关对外可达 | ❌ 仅本机（`AGENT_GATEWAY_ADDR=0.0.0.0:9095`，无外网入口） | `config.py` / 部署清单 |
 
 **结论**：现状是「agent 只能执行命令 + 取日志」的半成品；**agent-only 模式下不会有任何告警**，
@@ -92,3 +93,26 @@
 - 与 **D1 凭据到期通知** 互补：走完 agent-only 后，kubeconfig 只剩兜底用途，D1 仍建议保留（防兜底凭据过期）；
 - 与 **P2 cordon/drain 审批隔离**、**节点诊断** 无冲突：这些都走"平台侧决策 + 集群侧执行"，
   agent 化后执行通道换成隧道，决策逻辑不变。
+
+
+---
+
+## 九、Agent 镜像构建 / 推送（2026-11-04 落地）
+
+```bash
+# 1) 本机交叉编译（不需要目标机装 Go）
+cd k8s-executor
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+  -ldflags "-s -w -X main.version=0.1.0" -o /tmp/apiops-agent ./cmd/agent
+
+# 2) 传到有 docker 的机器（192.168.6.149 已验证）
+scp /tmp/apiops-agent Dockerfile.agent root@192.168.6.149:/tmp/agent-build/
+ssh root@192.168.6.149 'cd /tmp/agent-build && mv apiops-agent agent && docker build -f Dockerfile.agent -t harbor.efreight.cn/ops/apiops-agent:0.1.0 .'
+
+# 3) 推送
+ssh root@192.168.6.149 'docker tag harbor.efreight.cn/ops/apiops-agent:0.1.0 harbor.efreight.cn/ops/apiops-agent:latest && docker push harbor.efreight.cn/ops/apiops-agent:0.1.0 && docker push harbor.efreight.cn/ops/apiops-agent:latest'
+```
+
+- 底包：`harbor.efreight.cn/ops/python:3.10-slim`（Debian slim，带 CA，方便日后 mTLS）；静态二进制，非 root（uid 1001）。
+- 平台配置（`.env`）：`AGENT_IMAGE` / `AGENT_IMAGE_PULL_SECRET`（私有 harbor 时填目标集群已有的 Secret 名）/ `AGENT_GATEWAY_PUBLIC_ADDR`（agent 能访问的 host:port，不填则按平台域名 + 9095 推导）。
+- 自测（2026-11-04 已通过）：容器在 192.168.6.149 上跑通注册（version=0.1.0）+ 隧道执行 ListNodes + 平台正确记录 `agent_version`。

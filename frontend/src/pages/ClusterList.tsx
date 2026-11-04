@@ -195,7 +195,9 @@ export default function ClusterList() {
             if (r.source !== 'agent') return '-'
             const m: Record<string, { c: string; t: string }> = { pending: { c: 'orange', t: '等待连接' }, connected: { c: 'green', t: '已连接' }, disconnected: { c: 'red', t: '已断开' }, revoked: { c: 'default', t: '已吊销' } }
             const x = m[v] || { c: 'default', t: v || '-' }
-            return <Tag color={x.c}>{x.t}</Tag>
+            const ver = r.agent_version ? ` v${r.agent_version.replace(/^v/, '')}` : ''
+            const tip = r.agent_version ? `agent 版本 ${r.agent_version}` : '尚未上报版本（旧版 agent 或未连接）'
+            return <Tooltip title={tip}><Tag color={x.c}>{x.t}{ver}</Tag></Tooltip>
           } },
           { title: '创建时间', dataIndex: 'created_at' },
           {

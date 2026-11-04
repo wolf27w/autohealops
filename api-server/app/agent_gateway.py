@@ -29,8 +29,8 @@ _server: grpc.Server | None = None
 _loop = None
 
 
-async def _verify_and_mark(cluster_id: int, token: str) -> str:
-    """校验 agent 令牌（按集群 sha256 哈希），通过则标记 connected + 心跳；返回空串=成功"""
+async def _verify_and_mark(cluster_id: int, token: str, version: str = "") -> str:
+    """校验 agent 令牌（按集群 sha256 哈希），通过则标记 connected + 心跳 + 版本；返回空串=成功"""
     import hashlib
     from datetime import datetime
     from app.core.database import async_session
@@ -45,6 +45,8 @@ async def _verify_and_mark(cluster_id: int, token: str) -> str:
                 return "token 无效"
             c.agent_status = "connected"
             c.agent_last_seen_at = datetime.now()
+            if version:
+                c.agent_version = version[:50]
             await s.commit()
         return ""
     except Exception as e:  # noqa: BLE001
@@ -140,7 +142,7 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                         if _loop:
                             try:
                                 err = asyncio.run_coroutine_threadsafe(
-                                    _verify_and_mark(f.cluster_id, f.token), _loop
+                                    _verify_and_mark(f.cluster_id, f.token, f.version), _loop
                                 ).result(timeout=8)
                             except Exception as e:  # noqa: BLE001
                                 err = f"验证异常: {e}"
@@ -155,7 +157,7 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                         with _agents_lock:
                             _agents[a.cluster_id] = a
                         a.out.put(agent_pb2.AgentFrame(type="register_ack"))
-                        logger.info("agent 已接入 cluster=%s", a.cluster_id)
+                        logger.info("agent 已接入 cluster=%s version=%s", a.cluster_id, f.version or "-")
                         # P2：把告警策略下发给 agent（agent 内 watcher 用；agent 连不到平台库）
                         _push_config(a)
                     elif f.type == "response":

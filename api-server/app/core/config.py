@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     JVM_JATTACH_URL: str = "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
     JVM_JATTACH_PATH: str = "/tmp/.apiops-jattach"
 
+    # Agent 接入（M3 / P3）：镜像、镜像拉取凭据、网关对外地址
+    #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 k8s-executor/Dockerfile.agent）
+    AGENT_IMAGE: str = "harbor.efreight.cn/ops/apiops-agent:0.1.0"
+    #   AGENT_IMAGE_PULL_SECRET：目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
+    AGENT_IMAGE_PULL_SECRET: str = ""
+    #   网关监听地址 / 对目标集群可见的地址（host:port）
+    AGENT_GATEWAY_ADDR: str = "0.0.0.0:9095"
+    AGENT_GATEWAY_PUBLIC_ADDR: str = ""
+
     # 镜像仓库（R3）：列仓库标签用。可选全局只读凭据；或 REGISTRY_CREDS 按 host 配（JSON）
     #   例：REGISTRY_CREDS={"harbor.efreight.cn":{"username":"ro","password":"***"}}
     REGISTRY_USERNAME: str = ""

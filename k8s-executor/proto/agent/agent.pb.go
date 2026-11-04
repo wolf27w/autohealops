@@ -30,6 +30,7 @@ type AgentFrame struct {
 	Method        string                 `protobuf:"bytes,5,opt,name=method,proto3" json:"method,omitempty"`                         // 隧道方法名（如 ExecuteCommand / GetPodLogs），对应 ExecutorService 的 rpc 名
 	Payload       []byte                 `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`                       // 该方法请求或响应的序列化 protobuf（对应 executor.proto 的消息）
 	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                           // 错误信息（type=error 或 response 失败时）
+	Version       string                 `protobuf:"bytes,8,opt,name=version,proto3" json:"version,omitempty"`                       // 注册：agent 版本（构建时写入，平台侧用于版本可见/灰度）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -113,11 +114,18 @@ func (x *AgentFrame) GetError() string {
 	return ""
 }
 
+func (x *AgentFrame) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
 var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\"\xb4\x01\n" +
+	"\vagent.proto\x12\x05agent\"\xce\x01\n" +
 	"\n" +
 	"AgentFrame\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1d\n" +
@@ -127,7 +135,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x06req_id\x18\x04 \x01(\tR\x05reqId\x12\x16\n" +
 	"\x06method\x18\x05 \x01(\tR\x06method\x12\x18\n" +
 	"\apayload\x18\x06 \x01(\fR\apayload\x12\x14\n" +
-	"\x05error\x18\a \x01(\tR\x05error2B\n" +
+	"\x05error\x18\a \x01(\tR\x05error\x12\x18\n" +
+	"\aversion\x18\b \x01(\tR\aversion2B\n" +
 	"\fAgentService\x122\n" +
 	"\x06Tunnel\x12\x11.agent.AgentFrame\x1a\x11.agent.AgentFrame(\x010\x01B9Z7github.com/autohealops/k8s-executor/proto/agent;agentpbb\x06proto3"
 

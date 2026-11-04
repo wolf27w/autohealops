@@ -216,8 +216,27 @@ async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(requ
         if not c.agent_token_hash or _hash_token(token) != c.agent_token_hash:
             return {"code": 403, "message": "token 无效", "data": None}
     from app.core.config import settings
-    gateway_addr = (getattr(settings, "AGENT_GATEWAY_PUBLIC_ADDR", "") or "").strip() or getattr(settings, "AGENT_GATEWAY_ADDR", "0.0.0.0:9095")
-    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "apiops-agent:latest"
+    # 网关地址：优先用显式配置的对外地址；否则按平台域名推导（同一主机 + 9095），
+    # 绝不能把监听地址 0.0.0.0 直接发给 agent（agent 侧连不上）
+    gateway_addr = (getattr(settings, "AGENT_GATEWAY_PUBLIC_ADDR", "") or "").strip()
+    if not gateway_addr:
+        from urllib.parse import urlparse
+        host = urlparse(_public_base_url()).hostname or "localhost"
+        gateway_addr = f"{host}:9095"
+    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/apiops-agent:latest"
+    pull_secret = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
+    sa_name = "apiops-agent-pull" if pull_secret else "apiops-agent"
+    pull_secret_doc = ""
+    if pull_secret:
+        pull_secret_doc = f"""---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: apiops-agent-pull
+  namespace: apiops-agent
+imagePullSecrets:
+  - name: {pull_secret}
+"""
     # 多文档 YAML 直接拼字符串（避免 --- 序列化问题）
     docs = f"""apiVersion: v1
 kind: Namespace
@@ -251,7 +270,7 @@ subjects:
   - kind: ServiceAccount
     name: apiops-agent
     namespace: apiops-agent
----
+{pull_secret_doc}---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -269,14 +288,16 @@ spec:
       labels:
         app: apiops-agent
     spec:
-      serviceAccountName: apiops-agent
+      serviceAccountName: {sa_name}
       containers:
         - name: agent
           image: {image}
+          imagePullPolicy: IfNotPresent
           args:
             - "-platform={gateway_addr}"
             - "-cluster-id={cluster_id}"
             - "-token={token}"
+            - "-watch=true"
           resources:
             requests: {{ cpu: 100m, memory: 128Mi }}
             limits: {{ cpu: 500m, memory: 256Mi }}
