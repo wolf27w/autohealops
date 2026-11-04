@@ -2843,6 +2843,71 @@
         "summary": "Agent Onboard"
       }
     },
+    "/api/v1/clusters/agent/image": {
+      "get": {
+        "description": "当前平台推荐的 agent 镜像（升级向导默认值）",
+        "operationId": "get_api_v1_clusters_agent_image",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agent Default Image"
+      }
+    },
+    "/api/v1/clusters/agents/upgrade": {
+      "post": {
+        "description": "批量升级（滚动：逐个改镜像并等重新注册）；body: {cluster_ids: [], image?, wait?}",
+        "operationId": "post_api_v1_clusters_agents_upgrade",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agents Batch Upgrade"
+      }
+    },
     "/api/v1/clusters/import-multi": {
       "post": {
         "description": "多 context 批量接入：kubeconfig + 勾选的 context 名列表 → 每个 context 建一条 Cluster",
@@ -3157,6 +3222,66 @@
           }
         ],
         "summary": "Agent Revoke"
+      }
+    },
+    "/api/v1/clusters/{cluster_id}/agent/upgrade": {
+      "post": {
+        "description": "升级/回退单个集群的 agent（改 Deployment 镜像，等待重新注册回报新版本）",
+        "operationId": "post_api_v1_clusters_cluster_id_agent_upgrade",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agent Upgrade"
       }
     },
     "/api/v1/clusters/{cluster_id}/health-check": {

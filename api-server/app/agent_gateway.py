@@ -292,11 +292,13 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
             a.alive = False
             a.fail_streams("agent 隧道断开")
             with _agents_lock:
-                if _agents.get(a.cluster_id) is a:
+                still = _agents.get(a.cluster_id) is not a
+                if not still:
                     _agents.pop(a.cluster_id, None)
-            if _loop:
+            # 滚动升级期间同一集群可能短时存在两条隧道：只有「确实没有别的连接」才标离线
+            if not still and _loop:
                 asyncio.run_coroutine_threadsafe(_mark_disconnected(a.cluster_id), _loop)
-            logger.info("agent 断开 cluster=%s", a.cluster_id)
+            logger.info("agent 断开 cluster=%s（仍有其他连接=%s）", a.cluster_id, still)
 
 
 def start_server(addr: str) -> None:

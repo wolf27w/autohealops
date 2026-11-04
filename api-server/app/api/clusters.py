@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 """集群管理 API"""
+import logging
+import time
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from app.clients.executor_client import executor_client
+from app.core.config import settings
 from app.core.database import async_session
 from app.core.security import encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_any_user, require_operator
 from app.models import Alert, Cluster, Task
 from app.services import user_permission_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/clusters")
 
@@ -225,18 +231,8 @@ async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(requ
         gateway_addr = f"{host}:9095"
     image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/apiops-agent:latest"
     pull_secret = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
-    sa_name = "apiops-agent-pull" if pull_secret else "apiops-agent"
-    pull_secret_doc = ""
-    if pull_secret:
-        pull_secret_doc = f"""---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: apiops-agent-pull
-  namespace: apiops-agent
-imagePullSecrets:
-  - name: {pull_secret}
-"""
+    # 拉取凭据挂在主 SA 上（不再另建 SA —— 另建的 SA 没有 RBAC，会导致 agent 读不了 apiserver）
+    sa_pull_block = f"\nimagePullSecrets:\n  - name: {pull_secret}" if pull_secret else ""
     # 多文档 YAML 直接拼字符串（避免 --- 序列化问题）
     docs = f"""apiVersion: v1
 kind: Namespace
@@ -247,7 +243,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: apiops-agent
-  namespace: apiops-agent
+  namespace: apiops-agent{sa_pull_block}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -270,7 +266,7 @@ subjects:
   - kind: ServiceAccount
     name: apiops-agent
     namespace: apiops-agent
-{pull_secret_doc}---
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -288,7 +284,7 @@ spec:
       labels:
         app: apiops-agent
     spec:
-      serviceAccountName: {sa_name}
+      serviceAccountName: apiops-agent
       containers:
         - name: agent
           image: {image}
@@ -303,6 +299,109 @@ spec:
             limits: {{ cpu: 500m, memory: 256Mi }}
 """
     return {"code": 200, "message": "success", "data": {"yaml": docs}}
+
+
+# ==================== Agent 版本管理（P3-b，2026-11-04） ====================
+# 升级 = 改目标集群内 apiops-agent Deployment 的镜像（经隧道下发）→ Pod 重启 → 重新注册时回报新版本。
+# 回退 = 同一个接口传旧 tag（平台不猜"回退到哪个"，避免歧义）。
+
+_AGENT_NS = "apiops-agent"
+_AGENT_DEPLOY = "apiops-agent"
+_AGENT_CONTAINER = "agent"
+
+
+async def _upgrade_one(cluster_id: int, image: str, wait_seconds: int) -> dict:
+    """改一个集群的 agent 镜像并等待重新注册；返回 previous/new version 与是否重连成功"""
+    import asyncio
+    import yaml as _yaml
+
+    async with async_session() as s:
+        c = await s.get(Cluster, cluster_id)
+        if c is None:
+            return {"cluster_id": cluster_id, "ok": False, "error": "集群不存在"}
+        if (c.source or "") != "agent":
+            return {"cluster_id": cluster_id, "ok": False, "error": "该集群不是 agent 接入方式"}
+        prev = c.agent_version or ""
+
+    r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id,
+                                    "deployment", _AGENT_NS, _AGENT_DEPLOY)
+    if not r.get("success"):
+        return {"cluster_id": cluster_id, "ok": False, "previous_version": prev,
+                "error": f"读取 agent Deployment 失败：{r.get('error')}"}
+    try:
+        doc = _yaml.safe_load(r.get("yaml") or "") or {}
+    except _yaml.YAMLError as e:
+        return {"cluster_id": cluster_id, "ok": False, "previous_version": prev, "error": f"解析 YAML 失败：{e}"}
+    containers = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    target = next((x for x in containers if x.get("name") == _AGENT_CONTAINER), containers[0] if containers else None)
+    if not target:
+        return {"cluster_id": cluster_id, "ok": False, "previous_version": prev, "error": "agent Deployment 里没有容器"}
+    old_image = target.get("image") or ""
+    if old_image == image:
+        return {"cluster_id": cluster_id, "ok": True, "previous_version": prev, "new_version": prev,
+                "image": image, "reconnected": True, "unchanged": True}
+
+    target["image"] = image
+    new_yaml = _yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    try:
+        r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id,
+                                         "deployment", _AGENT_NS, _AGENT_DEPLOY, new_yaml)
+        if not r2.get("success"):
+            return {"cluster_id": cluster_id, "ok": False, "previous_version": prev, "old_image": old_image,
+                    "error": f"应用失败：{r2.get('error')}"}
+    except Exception as e:  # noqa: BLE001 改镜像会让 agent 自己重启，回包可能拿不到
+        logger.warning("agent 升级回包异常（可能已提交）cluster=%s: %s", cluster_id, e)
+
+    new_version, reconnected = "", False
+    deadline = time.time() + max(10, wait_seconds)
+    while time.time() < deadline:
+        await asyncio.sleep(2)
+        async with async_session() as s:
+            c = await s.get(Cluster, cluster_id)
+            if c and c.agent_status == "connected" and (c.agent_version or "") != prev:
+                new_version, reconnected = c.agent_version or "", True
+                break
+    return {"cluster_id": cluster_id, "ok": reconnected, "previous_version": prev, "new_version": new_version,
+            "old_image": old_image, "image": image, "reconnected": reconnected,
+            "error": "" if reconnected else f"{max(10, wait_seconds)}s 内未等待到 agent 以新版本重连"}
+
+
+@router.get("/agent/image")
+async def agent_default_image(user=Depends(require_admin)):
+    """当前平台推荐的 agent 镜像（升级向导默认值）"""
+    return {"code": 200, "message": "success", "data": {"image": settings.AGENT_IMAGE}}
+
+
+@router.post("/{cluster_id}/agent/upgrade")
+async def agent_upgrade(cluster_id: int, payload: dict | None = None, user=Depends(require_admin)):
+    """升级/回退单个集群的 agent（改 Deployment 镜像，等待重新注册回报新版本）"""
+    payload = payload or {}
+    image = (payload.get("image") or settings.AGENT_IMAGE or "").strip()
+    if not image:
+        return {"code": 400, "message": "image 必填（或配置 AGENT_IMAGE）", "data": None}
+    res = await _upgrade_one(cluster_id, image, int(payload.get("wait") or 60))
+    return {"code": 200 if res.get("ok") else 500,
+            "message": "success" if res.get("ok") else res.get("error", "升级失败"), "data": res}
+
+
+@router.post("/agents/upgrade")
+async def agents_batch_upgrade(payload: dict, user=Depends(require_admin)):
+    """批量升级（滚动：逐个改镜像并等重新注册）；body: {cluster_ids: [], image?, wait?}"""
+    import asyncio
+    ids = [int(x) for x in (payload.get("cluster_ids") or [])]
+    if not ids:
+        return {"code": 400, "message": "cluster_ids 不能为空", "data": None}
+    image = (payload.get("image") or settings.AGENT_IMAGE or "").strip()
+    if not image:
+        return {"code": 400, "message": "image 必填（或配置 AGENT_IMAGE）", "data": None}
+    wait_seconds = int(payload.get("wait") or 60)
+    results = []
+    for cid in ids:
+        results.append(await _upgrade_one(cid, image, wait_seconds))
+        await asyncio.sleep(1)
+    ok = sum(1 for x in results if x.get("ok"))
+    return {"code": 200, "message": f"成功 {ok}/{len(results)}",
+            "data": {"image": image, "ok": ok, "total": len(results), "results": results}}
 
 
 @router.post("/{cluster_id}/agent/revoke")

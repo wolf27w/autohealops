@@ -75,6 +75,15 @@ export const parseClusterKubeconfig = (kubeconfig: string) => http.post('/cluste
 export const importMultiClusters = (data: { kubeconfig: string; contexts: string[]; env_tag: string }) => http.post('/clusters/import-multi', data)
 // Agent 接入（M3）：生成令牌 + 安装命令
 export const agentOnboardCluster = (data: { name: string; env_tag: string; description?: string }) => http.post('/clusters/agent-onboard', data)
+export interface AgentUpgradeResult {
+  cluster_id: number; ok: boolean; previous_version?: string; new_version?: string
+  old_image?: string; image?: string; reconnected?: boolean; unchanged?: boolean; error?: string
+}
+export const getAgentImage = () => http.get<{ image: string }>('/clusters/agent/image')
+export const agentUpgrade = (clusterId: number, data: { image?: string; wait?: number }) =>
+  http.post<AgentUpgradeResult>(`/clusters/${clusterId}/agent/upgrade`, data)
+export const agentsBatchUpgrade = (data: { cluster_ids: number[]; image?: string; wait?: number }) =>
+  http.post<{ image: string; ok: number; total: number; results: AgentUpgradeResult[] }>('/clusters/agents/upgrade', data)
 // 吊销 Agent 令牌
 export const revokeClusterAgent = (id: number) => http.post(`/clusters/${id}/agent/revoke`)
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)

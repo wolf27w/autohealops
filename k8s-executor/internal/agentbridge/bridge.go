@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"time"
 
 	"github.com/autohealops/k8s-executor/internal/config"
@@ -60,10 +61,18 @@ type Bridge struct {
 // in-cluster 模式没有 kubeconfig 文件，只能这样回填 SA token/CA）。
 func kubeconfigFromRest(rc *rest.Config) (string, error) {
 	const name = "agent"
+	// in-cluster 配置里 CA 常常是「文件路径」（rc.CAFile），不是内联数据；
+	// 合成 kubeconfig 必须把文件内容读进来，否则集群内 agent 调 apiserver 会 x509 unknown authority。
+	caData := rc.CAData
+	if len(caData) == 0 && rc.CAFile != "" {
+		if b, err := os.ReadFile(rc.CAFile); err == nil {
+			caData = b
+		}
+	}
 	cfg := clientcmdapi.NewConfig()
 	cfg.Clusters[name] = &clientcmdapi.Cluster{
 		Server:                   rc.Host,
-		CertificateAuthorityData: rc.CAData,
+		CertificateAuthorityData: caData,
 		InsecureSkipTLSVerify:    rc.Insecure,
 	}
 	cfg.AuthInfos[name] = &clientcmdapi.AuthInfo{

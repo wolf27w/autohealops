@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown, Checkbox, Alert, Typography } from 'antd'
 import { PlusOutlined, ReloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters, agentOnboardCluster } from '../services/api'
+import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters, agentOnboardCluster, getAgentImage, agentUpgrade, agentsBatchUpgrade } from '../services/api'
 import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
@@ -51,6 +51,13 @@ export default function ClusterList() {
   const [agentName, setAgentName] = useState('')
   const [agentEnv, setAgentEnv] = useState('prod')
   const [agentResult, setAgentResult] = useState<{ id: number; token: string; install_command: string } | null>(null)
+  // Agent 升级 / 回退（2026-11-04）
+  const [agentUpOpen, setAgentUpOpen] = useState(false)
+  const [agentUpTarget, setAgentUpTarget] = useState<ClusterWithExtra | null>(null)
+  const [agentUpImage, setAgentUpImage] = useState('')
+  const [agentUpIds, setAgentUpIds] = useState<number[]>([])
+  const [agentUpBusy, setAgentUpBusy] = useState(false)
+  const [agentUpResult, setAgentUpResult] = useState<string>('')
   const [agentBusy, setAgentBusy] = useState(false)
 
   const load = () => {
@@ -145,12 +152,43 @@ export default function ClusterList() {
     } catch { /* 拦截器已提示 */ } finally { setBatchBusy(false) }
   }
 
+  const openAgentUpgrade = (target: ClusterWithExtra | null) => {
+    setAgentUpTarget(target)
+    setAgentUpIds(target ? [Number(target.id)] : [])
+    setAgentUpResult('')
+    setAgentUpOpen(true)
+    getAgentImage().then((d) => setAgentUpImage(d?.image || '')).catch(() => {})
+  }
+
+  const submitAgentUpgrade = async () => {
+    const ids = agentUpTarget ? [Number(agentUpTarget.id)] : agentUpIds
+    if (!ids.length) { message.warning('请选择要升级的集群'); return }
+    setAgentUpBusy(true)
+    setAgentUpResult('升级中：会滚动重启 agent Pod 并等待其以新版本重连，最长约 90 秒…')
+    try {
+      if (agentUpTarget) {
+        const r = await agentUpgrade(Number(agentUpTarget.id), { image: agentUpImage || undefined, wait: 90 })
+        setAgentUpResult(`集群 ${agentUpTarget.name}：${r.previous_version || '-'} → ${r.new_version || '(未重连)'}\n镜像：${r.image}${r.error ? `\n错误：${r.error}` : ''}`)
+        if (r.ok) message.success('升级完成')
+      } else {
+        const r = await agentsBatchUpgrade({ cluster_ids: ids, image: agentUpImage || undefined, wait: 90 })
+        setAgentUpResult(`成功 ${r.ok}/${r.total}：\n` + r.results.map((x) => {
+          const nm = clusters.find((c) => Number(c.id) === x.cluster_id)?.name || x.cluster_id
+          return `${nm}：${x.previous_version || '-'} → ${x.new_version || '(未重连)'}${x.error ? `（${x.error}）` : ''}`
+        }).join('\n'))
+        message.success(`完成：成功 ${r.ok}/${r.total}`)
+      }
+      load()
+    } catch { /* 拦截器已提示 */ } finally { setAgentUpBusy(false) }
+  }
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加集群</Button>
         <Button onClick={() => { setBatchOpen(true); setBatchKc(''); setBatchCtxs([]); setBatchSel([]); setBatchEnv('prod') }}>批量接入（多 context）</Button>
         <Button onClick={() => { setAgentOpen(true); setAgentName(''); setAgentEnv('prod'); setAgentResult(null) }}>Agent 接入</Button>
+        <Button onClick={() => openAgentUpgrade(null)}>Agent 升级 / 回退</Button>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       </Space>
       <Table
@@ -208,11 +246,13 @@ export default function ClusterList() {
                   items: [
                     { key: 'health', label: '健康检查' },
                     { key: 'edit', label: '编辑' },
+                    ...(record.source === 'agent' ? [{ key: 'agentUpgrade', label: '升级 / 回退 Agent' }] : []),
                     { type: 'divider' as const },
                     { key: 'delete', label: '删除', danger: true },
                   ],
                   onClick: ({ key }) => {
-                    if (key === 'health') handleHealthCheck(record.id)
+                    if (key === 'agentUpgrade') openAgentUpgrade(record as ClusterWithExtra)
+                    else if (key === 'health') handleHealthCheck(record.id)
                     else if (key === 'edit') openEdit(record)
                     else if (key === 'delete') Modal.confirm({
                       title: `确认删除集群「${record.name}」？`,
@@ -284,6 +324,36 @@ export default function ClusterList() {
       </Modal>
 
       {/* 批量接入（多 context） */}
+      <Modal title={agentUpTarget ? `升级 / 回退 Agent · ${agentUpTarget.name}` : 'Agent 批量升级 / 回退'}
+        open={agentUpOpen} onCancel={() => setAgentUpOpen(false)} onOk={submitAgentUpgrade}
+        okText="开始升级" confirmLoading={agentUpBusy} width={620} destroyOnClose>
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="升级会滚动重启目标集群的 apiops-agent Pod（短暂断开），平台等它用新版本重连；回退 = 填旧 tag（例如 .../apiops-agent:0.1.1）。" />
+        <div style={{ marginBottom: 6 }}>目标镜像：</div>
+        <Input value={agentUpImage} onChange={(e) => setAgentUpImage(e.target.value)}
+          placeholder="harbor.efreight.cn/ops/apiops-agent:<版本>" />
+        {!agentUpTarget && (
+          <>
+            <div style={{ margin: '12px 0 6px' }}>选择集群（仅 agent 接入方式）：</div>
+            {clusters.filter((c) => c.source === 'agent').length === 0
+              ? <Alert type="warning" showIcon message="当前没有 agent 接入的集群" />
+              : (
+                <Checkbox.Group
+                  style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                  value={agentUpIds}
+                  onChange={(v) => setAgentUpIds(v as number[])}
+                  options={clusters.filter((c) => c.source === 'agent').map((c) => ({
+                    value: Number(c.id),
+                    label: `${c.name}（${(c as ClusterWithExtra).agent_status || '-'} v${((c as ClusterWithExtra).agent_version || '-').replace(/^v/, '')}）`,
+                  }))}
+                />
+              )}
+          </>
+        )}
+        {agentUpResult && (
+          <pre style={{ marginTop: 12, background: '#f6f8fa', padding: 8, borderRadius: 6, fontSize: 12, whiteSpace: 'pre-wrap' }}>{agentUpResult}</pre>
+        )}
+      </Modal>
       <Modal title="批量接入（kubeconfig 多 context）" open={batchOpen} onCancel={() => setBatchOpen(false)}
         footer={[
           <Button key="cancel" onClick={() => setBatchOpen(false)}>取消</Button>,
