@@ -13140,7 +13140,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/workloads/batch": {
       "post": {
-        "description": "批量操作工作负载（无状态/有状态/守护集，2026-11-04）\n\nbody: {\n  \"kind\": \"deployment|statefulset|daemonset\",\n  \"action\": \"delete|stop|start|scale|restart\",\n  \"items\": [{\"namespace\": \"ns\", \"name\": \"name\"}],\n  \"replicas\": 2,      # scale 必填；start 可选（不传=恢复停止前副本数）\n  \"confirm\": true      # delete 必传\n}\n- stop=副本置 0 并记住原副本（Redis 30 天）；start=恢复副本\n- restart=滚动重启；scale=统一改副本；delete=删除",
+        "description": "批量操作工作负载（无状态/有状态/守护集，2026-11-04）\n\nbody: {\n  \"kind\": \"deployment|statefulset|daemonset\",\n  \"action\": \"delete|scale|restart\",\n  \"items\": [{\"namespace\": \"ns\", \"name\": \"name\"}],\n  \"replicas\": 2,      # scale 必填（0 = 停止）\n  \"confirm\": true      # delete 必传\n}\n- scale：统一改副本，0=停止、N=启动/扩缩容；改为 0 时记住原副本（Redis 30 天，列表接口回带 last_replicas）\n- restart：滚动重启；delete：删除",
         "operationId": "post_api_v1_resources_clusters_cluster_id_workloads_batch",
         "parameters": [
           {

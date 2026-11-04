@@ -585,7 +585,7 @@ async def apply_workload_yaml(cluster_id: int, kind: str, namespace: str, name: 
 # 可通过「对象/工作负载」接口操作的工作负载类型
 _WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset", "cronjob", "pod"}
 # 批量操作（2026-11-04）
-_BATCH_WORKLOAD_ACTIONS = {"delete", "stop", "start", "scale", "restart"}
+_BATCH_WORKLOAD_ACTIONS = {"delete", "scale", "restart"}
 _BATCH_SCALABLE_KINDS = {"deployment", "statefulset"}
 _BATCH_RESTARTABLE_KINDS = {"deployment", "statefulset", "daemonset"}
 
@@ -618,13 +618,13 @@ async def batch_workload_op(cluster_id: int, payload: dict, user=Depends(require
 
     body: {
       "kind": "deployment|statefulset|daemonset",
-      "action": "delete|stop|start|scale|restart",
+      "action": "delete|scale|restart",
       "items": [{"namespace": "ns", "name": "name"}],
-      "replicas": 2,      # scale 必填；start 可选（不传=恢复停止前副本数）
+      "replicas": 2,      # scale 必填（0 = 停止）
       "confirm": true      # delete 必传
     }
-    - stop=副本置 0 并记住原副本（Redis 30 天）；start=恢复副本
-    - restart=滚动重启；scale=统一改副本；delete=删除
+    - scale：统一改副本，0=停止、N=启动/扩缩容；改为 0 时记住原副本（Redis 30 天，列表接口回带 last_replicas）
+    - restart：滚动重启；delete：删除
     """
     kind = (payload.get("kind") or "").strip()
     action = (payload.get("action") or "").strip()
@@ -634,29 +634,30 @@ async def batch_workload_op(cluster_id: int, payload: dict, user=Depends(require
     if kind not in _WORKLOAD_KINDS:
         return _bad(f"不支持的负载类型 {kind}")
     if action not in _BATCH_WORKLOAD_ACTIONS:
-        return _bad(f"不支持的动作 {action}（可选 delete/stop/start/scale/restart）")
+        return _bad(f"不支持的动作 {action}（可选 delete/scale/restart）")
     if not isinstance(items, list) or not items:
         return _bad("items 不能为空")
     if len(items) > 200:
         return _bad("单次最多 200 个工作负载")
-    if action in ("stop", "start", "scale") and kind not in _BATCH_SCALABLE_KINDS:
-        return _bad(f"{kind} 不支持停止/启动/改副本（只支持 deployment / statefulset）")
+    if action == "scale" and kind not in _BATCH_SCALABLE_KINDS:
+        return _bad(f"{kind} 不支持改副本（只支持 deployment / statefulset）")
     if action == "restart" and kind not in _BATCH_RESTARTABLE_KINDS:
         return _bad(f"{kind} 不支持重启（只支持 deployment / statefulset / daemonset）")
     if action == "delete" and not payload.get("confirm"):
         return _bad("删除需要 confirm=true")
+
     replicas = payload.get("replicas")
-    if replicas is not None and str(replicas) != "":
+    if action != "scale":
+        replicas = None
+    else:
+        if replicas is None or str(replicas) == "":
+            return _bad("批量改副本需要 replicas（0 = 停止）")
         try:
             replicas = int(replicas)
         except (TypeError, ValueError):
             return _bad("replicas 必须是整数")
         if replicas < 0:
             return _bad("replicas 不能为负")
-    else:
-        replicas = None
-    if action == "scale" and replicas is None:
-        return _bad("批量改副本需要 replicas")
 
     # 逐命名空间鉴权
     denied_ns = []
@@ -666,9 +667,9 @@ async def batch_workload_op(cluster_id: int, payload: dict, user=Depends(require
     if denied_ns:
         return {"code": 403, "message": f"无权限操作命名空间：{', '.join(sorted(denied_ns))}", "data": None}
 
-    # stop 需要当前副本数（用于记住恢复值）
+    # 缩到 0 时要记住原副本数（用于之后恢复）
     current: dict[tuple, int] = {}
-    if action == "stop":
+    if action == "scale":
         lr = await executor_client.acall(executor_client.list_workloads, cluster_id, "")
         if lr.get("success"):
             for w in lr.get("workloads") or []:
@@ -687,21 +688,19 @@ async def batch_workload_op(cluster_id: int, payload: dict, user=Depends(require
         elif action == "restart":
             r = await executor_client.acall(executor_client.rollout_workload, cluster_id, kind, ns, name, "restart", 0)
             detail = r.get("message") or r.get("error") or ""
-        elif action == "stop":
-            prev = current.get((kind, ns, name)) or 0
-            r = await executor_client.acall(executor_client.scale_workload, cluster_id, kind, ns, name, 0)
-            if r.get("success") and prev > 0:
-                await _remember_prev_replicas(cluster_id, kind, ns, name, prev)
-            detail = (r.get("message") or r.get("error") or "") + (f"（停止前副本 {prev}）" if prev else "")
-        elif action == "start":
-            target = replicas if replicas is not None else await _recall_prev_replicas(cluster_id, kind, ns, name)
-            r = await executor_client.acall(executor_client.scale_workload, cluster_id, kind, ns, name, int(target))
-            if r.get("success"):
-                await _forget_prev_replicas(cluster_id, kind, ns, name)
-            detail = (r.get("message") or r.get("error") or "") + f"（目标副本 {target}）"
         else:  # scale
+            prev = current.get((kind, ns, name)) or 0
             r = await executor_client.acall(executor_client.scale_workload, cluster_id, kind, ns, name, int(replicas))
-            detail = (r.get("message") or r.get("error") or "") + f"（目标副本 {replicas}）"
+            if r.get("success"):
+                if replicas == 0 and prev > 0:
+                    await _remember_prev_replicas(cluster_id, kind, ns, name, prev)
+                elif replicas > 0:
+                    await _forget_prev_replicas(cluster_id, kind, ns, name)
+            base_msg = r.get("message") or r.get("error") or ""
+            if replicas == 0:
+                detail = base_msg + (f"（停止前副本 {prev}）" if prev > 0 else "")
+            else:
+                detail = base_msg + ("（启动）" if prev == 0 else "") + f"（目标副本 {replicas}）"
         results.append({"namespace": ns, "name": name, "success": bool(r.get("success")), "message": detail.strip()})
 
     ok = sum(1 for x in results if x["success"])
@@ -717,14 +716,6 @@ async def _remember_prev_replicas(cluster_id: int, kind: str, ns: str, name: str
         await redis_pool.set(f"workload:prev_replicas:{cluster_id}:{kind}:{ns}:{name}", str(replicas), ex=30 * 86400)
     except Exception:  # noqa: BLE001 Redis 不可用不影响停止
         pass
-
-
-async def _recall_prev_replicas(cluster_id: int, kind: str, ns: str, name: str) -> int:
-    try:
-        v = await redis_pool.get(f"workload:prev_replicas:{cluster_id}:{kind}:{ns}:{name}")
-        return int(v) if v else 1
-    except Exception:  # noqa: BLE001
-        return 1
 
 
 async def _forget_prev_replicas(cluster_id: int, kind: str, ns: str, name: str) -> None:
@@ -851,7 +842,19 @@ async def list_workloads(cluster_id: int, namespace: str = "", user=Depends(requ
     r = await executor_client.acall(executor_client.list_workloads, cluster_id, namespace)
     if not r.get("success"):
         return {"code": 500, "message": r.get("error", "查询失败"), "data": None}
-    return {"code": 200, "message": "success", "data": r.get("workloads", [])}
+    wls = r.get("workloads", [])
+    # 附带「上次停止前副本数」：改副本为 0 时平台会记住原值，方便前端直接回填恢复
+    zero = [w for w in wls if int(w.get("replicas") or 0) == 0]
+    if zero:
+        try:
+            keys = [f"workload:prev_replicas:{cluster_id}:{w.get('kind')}:{w.get('namespace')}:{w.get('name')}" for w in zero]
+            vals = await redis_pool.mget(keys)
+            for w, v in zip(zero, vals):
+                if v:
+                    w["last_replicas"] = int(v)
+        except Exception:  # noqa: BLE001 Redis 不可用不影响列表
+            pass
+    return {"code": 200, "message": "success", "data": wls}
 
 
 @router.post("/clusters/{cluster_id}/workloads/scale")
