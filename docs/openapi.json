@@ -3130,7 +3130,7 @@
     },
     "/api/v1/clusters/{cluster_id}/agent/install.yaml": {
       "get": {
-        "description": "Agent 接入向导：渲染一键安装清单（含令牌；仅 admin，校验 token 哈希后返回）",
+        "description": "Agent 接入向导：渲染一键安装清单（**集群侧直接拉取，不需要登录**）\n\n鉴权只靠接入令牌（sha256 比对，可吊销）：集群里的运维/CI 没有平台账号，\n`kubectl apply -f <url>?token=...` 必须能匿名取到清单，否则接入走不通。\n令牌泄露面 = 该集群 agent 的安装能力（含一张客户端证书），吊销即时失效。",
         "operationId": "get_api_v1_clusters_cluster_id_agent_install_yaml",
         "parameters": [
           {
@@ -3173,11 +3173,6 @@
             "description": "Validation Error"
           }
         },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "summary": "Agent Install Yaml"
       }
     },

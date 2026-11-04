@@ -36,6 +36,9 @@ PUBLIC_ALLOWLIST = {
     ("POST", "/api/v1/webhooks/dingtalk/callback"),       # 机器人回调验签
     ("POST", "/api/v1/webhooks/feishu/callback"),         # 飞书验签
     ("POST", "/api/v1/webhooks/wechat/callback"),         # 企微验签
+    # agent 一键安装清单：集群侧 kubectl 拉取，只能靠接入令牌（sha256 比对、可吊销），
+    # 没有平台账号；泄漏面=该集群 agent 安装能力，吊销即时失效
+    ("GET", "/api/v1/clusters/{cluster_id}/agent/install.yaml"),
 }
 
 

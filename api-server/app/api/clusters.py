@@ -3,7 +3,7 @@
 import logging
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
 
 from app.clients.executor_client import executor_client
@@ -211,16 +211,25 @@ async def agent_onboard(payload: dict, user=Depends(require_admin)):
 
 
 @router.get("/{cluster_id}/agent/install.yaml")
-async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(require_admin)):
-    """Agent 接入向导：渲染一键安装清单（含令牌；仅 admin，校验 token 哈希后返回）"""
+async def agent_install_yaml(cluster_id: int, token: str = ""):
+    """Agent 接入向导：渲染一键安装清单（**集群侧直接拉取，不需要登录**）
+
+    鉴权只靠接入令牌（sha256 比对，可吊销）：集群里的运维/CI 没有平台账号，
+    `kubectl apply -f <url>?token=...` 必须能匿名取到清单，否则接入走不通。
+    令牌泄露面 = 该集群 agent 的安装能力（含一张客户端证书），吊销即时失效。
+    """
+    # 注意：这里必须返回「裸 YAML + 正确的 HTTP 状态码」——
+    # kubectl apply -f <url> 只认 YAML 正文，包成 {"code":200,"data":...} 会解析失败；
+    # 失败也必须是 4xx，否则 kubectl 会把错误正文当 YAML 解析。
     if not token:
-        return {"code": 400, "message": "token 必填", "data": None}
+        return Response("token 必填", status_code=400, media_type="text/plain")
     async with async_session() as session:
         c = await session.get(Cluster, cluster_id)
         if not c:
-            return {"code": 404, "message": "集群不存在", "data": None}
+            return Response("集群不存在", status_code=404, media_type="text/plain")
         if not c.agent_token_hash or _hash_token(token) != c.agent_token_hash:
-            return {"code": 403, "message": "token 无效", "data": None}
+            return Response("token 无效或已吊销", status_code=403, media_type="text/plain")
+    logger.info("agent 安装清单被拉取 cluster=%s", cluster_id)
     from app.core.config import settings
     # 网关地址：优先用显式配置的对外地址；否则按平台域名推导（同一主机 + 9095），
     # 绝不能把监听地址 0.0.0.0 直接发给 agent（agent 侧连不上）
@@ -230,6 +239,7 @@ async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(requ
         host = urlparse(_public_base_url()).hostname or "localhost"
         gateway_addr = f"{host}:9095"
     image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/apiops-agent:latest"
+    ns = (getattr(settings, "AGENT_NAMESPACE", "") or "apiops-agent").strip() or "apiops-agent"
     pull_secret = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
     # 拉取凭据挂在主 SA 上（不再另建 SA —— 另建的 SA 没有 RBAC，会导致 agent 读不了 apiserver）
     sa_pull_block = f"\nimagePullSecrets:\n  - name: {pull_secret}" if pull_secret else ""
@@ -253,7 +263,7 @@ async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(requ
             "kind: Secret\n"
             "metadata:\n"
             "  name: apiops-agent-tls\n"
-            "  namespace: apiops-agent\n"
+            f"  namespace: {ns}\n"
             "type: Opaque\n"
             "data:\n"
             f"  ca.crt: {_b64(ca_pem)}\n"
@@ -280,13 +290,13 @@ async def agent_install_yaml(cluster_id: int, token: str = "", user=Depends(requ
     docs = f"""apiVersion: v1
 kind: Namespace
 metadata:
-  name: apiops-agent
+  name: {ns}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: apiops-agent
-  namespace: apiops-agent{sa_pull_block}
+  namespace: {ns}{sa_pull_block}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -308,13 +318,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: apiops-agent
-    namespace: apiops-agent
+    namespace: {ns}
 {tls_doc}---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: apiops-agent
-  namespace: apiops-agent
+  namespace: {ns}
   labels:
     app: apiops-agent
 spec:
@@ -341,14 +351,14 @@ spec:
             requests: {{ cpu: 100m, memory: 128Mi }}
             limits: {{ cpu: 500m, memory: 256Mi }}
 {tls_mount}"""
-    return {"code": 200, "message": "success", "data": {"yaml": docs}}
+    return Response(docs, media_type="application/yaml")
 
 
 # ==================== Agent 版本管理（P3-b，2026-11-04） ====================
 # 升级 = 改目标集群内 apiops-agent Deployment 的镜像（经隧道下发）→ Pod 重启 → 重新注册时回报新版本。
 # 回退 = 同一个接口传旧 tag（平台不猜"回退到哪个"，避免歧义）。
 
-_AGENT_NS = "apiops-agent"
+_AGENT_NS = "apiops-agent"  # 兼容默认值；实际取 settings.AGENT_NAMESPACE
 _AGENT_DEPLOY = "apiops-agent"
 _AGENT_CONTAINER = "agent"
 
@@ -366,8 +376,9 @@ async def _upgrade_one(cluster_id: int, image: str, wait_seconds: int) -> dict:
             return {"cluster_id": cluster_id, "ok": False, "error": "该集群不是 agent 接入方式"}
         prev = c.agent_version or ""
 
+    agent_ns = (getattr(settings, "AGENT_NAMESPACE", "") or _AGENT_NS).strip() or _AGENT_NS
     r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id,
-                                    "deployment", _AGENT_NS, _AGENT_DEPLOY)
+                                    "deployment", agent_ns, _AGENT_DEPLOY)
     if not r.get("success"):
         return {"cluster_id": cluster_id, "ok": False, "previous_version": prev,
                 "error": f"读取 agent Deployment 失败：{r.get('error')}"}
@@ -388,7 +399,7 @@ async def _upgrade_one(cluster_id: int, image: str, wait_seconds: int) -> dict:
     new_yaml = _yaml.safe_dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
     try:
         r2 = await executor_client.acall(executor_client.apply_workload_yaml, cluster_id,
-                                         "deployment", _AGENT_NS, _AGENT_DEPLOY, new_yaml)
+                                         "deployment", agent_ns, _AGENT_DEPLOY, new_yaml)
         if not r2.get("success"):
             return {"cluster_id": cluster_id, "ok": False, "previous_version": prev, "old_image": old_image,
                     "error": f"应用失败：{r2.get('error')}"}

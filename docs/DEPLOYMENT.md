@@ -116,3 +116,41 @@ kubectl rollout restart deployment/ai-service
 - `ENCRYPTION_KEY` 用于加密 kubeconfig，**一旦定下不可更改**（否则已存 kubeconfig 解不开）。
 - 跨语言格式（Python ↔ Go）严格一致，改动加密实现后必须通过 `make crypto-test`。
 - 详见 [docs/ENCRYPTION.md](ENCRYPTION.md)。
+
+## Agent 隧道 PKI（mTLS）持久化与备份（2026-11-04）
+
+平台自建 CA 用于签发网关服务端证书和每个 agent 的客户端证书，**必须持久化并备份**，否则平台重装/换容器后：
+
+- 网关会生成新 CA → 所有已装 agent 的客户端证书全部失效（握手被拒）；
+- 只能重建 CA 并给每个集群**重新下发 install.yaml**。
+
+### 1. 持久化
+
+| 部署形态 | 做法 |
+|---|---|
+| 本机 / 物理机 | 保持 `data/agent-ca/` 在磁盘上即可（默认路径）；建议放到数据盘 |
+| Docker | `-v /data/autohealops/agent-ca:/app/data/agent-ca` |
+| Kubernetes | 挂 PVC 到 `/app/data/agent-ca`（重启/滚动发布不丢） |
+
+路径可用 `AGENT_CA_DIR` 覆盖（相对路径按仓库根解析）。启动时若发现 CA 是**新建**的，日志会打 `ERROR`：说明 CA 丢了，需重新下发 agent。
+
+### 2. 备份（建议纳入定时任务）
+
+```bash
+./scripts/backup_agent_ca.sh                 # 默认 ~/autohealops-backup/agent-ca
+./scripts/backup_agent_ca.sh /mnt/nas/ah-ca  # 指定异地目录
+```
+
+产物是 `agent-ca-<时间戳>.tgz`（600），含 `ca.crt/ca.key/server.crt/server.key`。
+**恢复**：`tar -xzf agent-ca-<ts>.tgz -C <仓库根>/data`（保持目录名 `agent-ca`），重启 api-server。
+`ca.key` 属于最高敏感级，别放 git、别进普通文件共享。
+
+### 3. 接入前置（常见卡点）
+
+- **镜像拉取凭据**：`AGENT_IMAGE_PULL_SECRET=eft-image-auth` 时，该 Secret 必须**已存在于 agent 命名空间**（默认 `apiops-agent`）。不存在 → Pod `ImagePullBackOff`。
+  ```bash
+  kubectl -n default get secret eft-image-auth -o yaml \
+    | sed 's/namespace: default/namespace: apiops-agent/' | kubectl apply -f -
+  ```
+- **命名空间**：`AGENT_NAMESPACE`（默认 `apiops-agent`）。若目标集群已有现成的拉取 Secret 环境，可改成那个命名空间，省一次复制。
+- **install.yaml 是匿名的**：集群侧 `kubectl apply -f <平台地址>/api/v1/clusters/<id>/agent/install.yaml?token=<token>` 不需要平台账号，只校验接入令牌（可吊销）。返回裸 YAML + 正确状态码（令牌错 → 403）。

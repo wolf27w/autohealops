@@ -325,7 +325,11 @@ def start_server(addr: str) -> None:
             h = urlparse(plat).hostname
             if h:
                 hosts.append(h)
+        ca_existed = (agent_pki.ca_dir() / "ca.crt").exists()
         crt, key = agent_pki.ensure_server_cert(hosts)
+        if not ca_existed:
+            logger.error("平台 CA 是本次新建的：所有已下发 agent 的客户端证书都会失效，"
+                         "请确认 CA 目录（%s）已持久化，并给每个集群重新下发 install.yaml", agent_pki.ca_dir())
         with open(crt, "rb") as f:
             cert_bytes = f.read()
         with open(key, "rb") as f:

@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     AGENT_GATEWAY_PUBLIC_ADDR: str = ""
     #   mTLS（2026-11-04 老板定：不允许明文）：true=网关只接受带客户端证书的 TLS 连接
     AGENT_TLS_ENABLED: bool = True
+    #   agent 部署所在的命名空间（若该命名空间已有镜像拉取 Secret，可避免再复制一份）
+    AGENT_NAMESPACE: str = "apiops-agent"
     #   平台自建 CA 目录（相对路径按仓库根解析；私钥 0600，不进 git）
     AGENT_CA_DIR: str = "data/agent-ca"
 
