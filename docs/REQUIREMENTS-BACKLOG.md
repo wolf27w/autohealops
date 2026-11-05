@@ -930,3 +930,47 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 
 - 两者在「数据库监控」页**统一展示**，带来源徽标；指标/慢 SQL 同一套表、同一套趋势图口径。
 - 现有 `cluster_db_connections`（平台存凭据 + 经隧道临时查询）保留为**按需排查**入口，不做长期采集。
+
+**命名规则（老板 2026-11-05 定：名称以 agent 配置为准）**
+- agent 配置里每项必须有 `key`（稳定标识）和可选 `name`（显示名，缺省=key）：
+  ```json
+  {"key":"biz-mysql","name":"业务库(MySQL)","type":"mysql","host":"...","username":"...","password":"..."}
+  ```
+- 平台侧唯一键 = **(cluster_id, source_key)**；显示名 = 配置里的 `name`（没有则 `key`）。
+- 页面上展示为「名称 + 来源集群」，避免两个集群都有 `biz-mysql` 时混淆。
+- 改名不影响归属（key 不变 → 更新同一条记录）；key 改了视为新数据库。
+- 直连库沿用现有 `db_connections.name`（全局唯一），来源标记 `direct`。
+
+### R7 Agent 侧配置主机（虚拟机）并 SSH 代采 — 1~1.5d（老板 2026-11-05 定）
+
+**背景**：外部集群内网的虚拟机，平台 SSH 不可达；但 agent 在集群内，能连同网段 VM。
+凭据（SSH 私钥）留在对方集群（Secret 挂载），平台不保存。
+
+**配置（agent 侧）**
+```yaml
+# Secret 挂载
+# hosts.json
+[
+  {"key":"biz-app-01","name":"业务应用 01","address":"192.168.10.21","port":22,
+   "user":"ops","processes":[{"name":"java","path":"/opt/app/bin/start.sh"}]}
+]
+# agent 启动参数：-host-config=/etc/agent-host/hosts.json -ssh-key=/etc/agent-host/id_rsa
+```
+
+**采集与上报**
+- agent 每 60 秒 SSH 执行 `ps -eo pid,pcpu,pmem,rss,args`，按 `processes[].path` 匹配：
+  是否在跑 / PID / CPU% / 内存 MB / 状态翻转
+- 隧道方法 `HostMetrics` 上报（含 `key`、采集时间、每进程结果、错误）
+- SSH 连不上 → 上报 `error`，平台标记该主机 `unreachable` 并触发通知（与现有 host_monitor 口径一致）
+
+**平台侧**
+- `hosts` 增加 `source`（direct/agent）、`cluster_id`、`source_key`，唯一键 `(cluster_id, source_key)`
+- agent 首次上报自动建记录（**不存 SSH 凭据**）；名称取 agent 配置的 `name`，展示带「来源集群」徽标
+- 「主机管理」页统一展示直连主机 + agent 主机，可按来源筛选
+
+**验收**
+- agent 配 2 台 VM → 平台主机管理页出现两条 `来源=agent` 记录，进程状态/CPU/内存正常刷新
+- 停掉某进程 → 60 秒内状态变「未运行」并通知
+- 平台库里查不到 SSH 私钥
+
+**与现有 SSH 直连纳管的关系**：两者并存，直连用于平台可达的机器；agent 用于外部内网机器。
