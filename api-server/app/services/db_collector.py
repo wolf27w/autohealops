@@ -22,6 +22,19 @@ from app.models import DBMetricSnapshot, DBConnection, SlowSQLRecord
 logger = get_logger("api-server.db_collector")
 
 # MySQL 慢 SQL 查询（performance_schema，按 digest 聚合，AVG_TIMER_WAIT 单位皮秒）
+# ⚠️ 必须按连接的库名过滤：performance_schema 是整个 MySQL 实例级的，
+# 不过滤会把同实例里其它库（如已废弃的 api_ops / nacos）的慢 SQL 也采进来。
+MYSQL_SLOW_SQL_SCHEMA = """
+SELECT DIGEST, DIGEST_TEXT, SCHEMA_NAME, COUNT_STAR,
+       SUM_TIMER_WAIT / 1000000000 AS sum_ms,
+       MAX_TIMER_WAIT / 1000000000 AS max_ms
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SCHEMA_NAME = %s
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 200
+"""
+
+# 未指定库名时的旧口径（实例级全量）
 MYSQL_SLOW_SQL = """
 SELECT DIGEST, DIGEST_TEXT, SCHEMA_NAME, COUNT_STAR,
        SUM_TIMER_WAIT / 1000000000 AS sum_ms,
@@ -72,7 +85,10 @@ async def _mysql_collect(conn_info: dict, threshold_sec: float) -> list[dict]:
         return []
     try:
         async with conn.cursor() as cur:
-            await cur.execute(MYSQL_SLOW_SQL)
+            if conn_info.get("database"):
+                await cur.execute(MYSQL_SLOW_SQL_SCHEMA, (conn_info["database"],))
+            else:
+                await cur.execute(MYSQL_SLOW_SQL)
             rows = await cur.fetchall()
         return [
             {

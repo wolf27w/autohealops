@@ -11835,6 +11835,86 @@
         "summary": "Apply Pod Yaml"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/events": {
+      "get": {
+        "description": "工作负载维度的历史事件（平台自存 k8s_events，默认最近 7 天）\n\n包含：① 工作负载对象自身的事件；② 其所有 Pod 的事件（Pod 名以 `<name>-` 开头）。\n解决「Pod 重建后旧事件跟着旧 Pod 对象一起消失」的问题。",
+        "operationId": "get_api_v1_resources_clusters_cluster_id_namespaces_namespace_workloads_kind_name_events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "title": "Hours",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Workload Events"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/logs": {
       "get": {
         "description": "聚合日志（R5）：拉取 Deployment 下所有 Pod 的日志（最多 60 个，tail 截断）",

@@ -348,6 +348,14 @@ export const getClusterPods = (clusterId: number, namespace = '') =>
 // 单个 Pod 的事件（k8s Event）
 export const getPodEvents = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/events`)
+// 工作负载维度的历史事件（平台自存 k8s_events，默认最近 7 天；含其下所有 Pod 的事件）
+export interface WorkloadEventRow {
+  type: string; reason: string; message: string; count: number
+  resource_kind: string; resource_name: string; first_timestamp: string; last_timestamp: string
+}
+export const getWorkloadEventHistory = (clusterId: number, kind: string, ns: string, name: string, hours = 168) =>
+  http.get<{ hours: number; events: WorkloadEventRow[] }>(
+    `/resources/clusters/${clusterId}/namespaces/${ns}/workloads/${kind}/${name}/events`, { params: { hours } })
 // Pod 详情（含容器组内容）
 export const getPodDetail = (clusterId: number, ns: string, pod: string) =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/detail`)

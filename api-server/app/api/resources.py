@@ -7,7 +7,7 @@ import yaml
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.clients.executor_client import executor_client
 from app.core.database import async_session
@@ -357,6 +357,45 @@ async def pod_events(cluster_id: int, namespace: str, pod_name: str, user=Depend
         logger.warning("取 Pod 历史事件失败 cluster=%s ns=%s pod=%s: %s", cluster_id, namespace, pod_name, e)
 
     return {"code": 200, "message": "success", "data": {"events": r.get("events", []), "history": history}}
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/events")
+async def workload_events(cluster_id: int, namespace: str, kind: str, name: str,
+                          hours: int = 168, user=Depends(require_any_user)):
+    """工作负载维度的历史事件（平台自存 k8s_events，默认最近 7 天）
+
+    包含：① 工作负载对象自身的事件；② 其所有 Pod 的事件（Pod 名以 `<name>-` 开头）。
+    解决「Pod 重建后旧事件跟着旧 Pod 对象一起消失」的问题。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    hours = max(1, min(hours, 24 * 30))
+    since = datetime.now() - timedelta(hours=hours)
+    try:
+        from app.models import K8sEvent
+        async with async_session() as session:
+            rows = list((await session.execute(
+                select(K8sEvent).where(
+                    K8sEvent.cluster_id == cluster_id,
+                    K8sEvent.namespace == namespace,
+                    K8sEvent.last_seen >= since,
+                    or_(
+                        K8sEvent.resource_name == name,
+                        K8sEvent.resource_name.like(f"{name}-%"),
+                    ),
+                ).order_by(K8sEvent.last_seen.desc()).limit(500)
+            )).scalars())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("取工作负载历史事件失败 cluster=%s %s/%s/%s: %s", cluster_id, kind, namespace, name, e)
+        rows = []
+    return {"code": 200, "message": "success", "data": {
+        "hours": hours,
+        "events": [{
+            "type": e.type, "reason": e.reason, "message": e.message, "count": e.count,
+            "resource_kind": e.resource_kind, "resource_name": e.resource_name,
+            "first_timestamp": str(e.first_seen or ""), "last_timestamp": str(e.last_seen or ""),
+        } for e in rows],
+    }}
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/detail")
