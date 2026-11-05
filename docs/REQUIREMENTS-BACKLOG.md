@@ -703,8 +703,31 @@
 2. **路由**：任何要调用 agent 的入口先查 Redis 归属 → owner 是自己则本地执行；否则转发到 owner 副本的
    内部 gRPC 端点（unary 直转，流式用双向流代理，覆盖 ExecutePlan / BatchExecute / ExecPodStream）。
 3. **状态写库**：`agent_status / agent_last_seen_at` 只由 owner 副本写，避免多副本互相覆盖。
-4. **前置改造（重要）**：多副本共享 PKI —— 现在 CA 私钥在 RWO PVC 上，N 个副本无法同时签发客户端证书。
-   需改成 RWX 存储（NFS/CephFS）或把 CA 私钥放 Secret 挂载；服务端证书 SAN 用 Service 名，各副本共用。
+4. **前置改造：PKI 用 Secret 挂载（老板 2026-11-05 定）**
+
+   现状：`agent_pki` 在 `AGENT_CA_DIR`（RWO PVC）上**自动生成** CA + 服务端证书；
+   多副本时各副本会各自生成 → CA 分裂，已下发 agent 全废。所以必须改成「共享且只读」。
+
+   **目标形态**
+   - Secret `autohealops-agent-ca`（ns autohealops，Opaque）只放 **CA 一对**：`ca.crt` / `ca.key`
+     （客户端证书签名必须用 CA 私钥，所以私钥躲不开）。
+   - 以 **readOnly** 挂到各副本的 `AGENT_CA_DIR`（`/var/lib/autohealops/agent-ca`）。
+   - `agent_pki` 改为：**只读使用**挂载的 CA，**禁止自动生成**（目录没有 CA 就直接报错，提示先初始化）。
+   - **服务端证书不放进 Secret**：每个副本启动时用挂载的 CA **在内存/emptyDir 里现签**一份
+     （SAN = `AGENT_GATEWAY_PUBLIC_ADDR` 的 host + Service 名 + localhost）。
+     各副本证书不同但同一 CA、同一 SAN，agent 全都认——这样既不需要写 Secret，也能各副本独立轮换。
+   - agent 的客户端证书仍按集群**现场签发**（拉 install.yaml 时）；现在改成「读挂载的 CA 私钥在内存签」，
+     不落盘。
+
+   **初始化与轮换**
+   - 首次：一次性生成 CA 并写 Secret（`kubectl create secret generic ... --from-file=ca.crt --from-file=ca.key`），
+     或用一个 Job 生成；**不要**让 Pod 自动生成。
+   - 轮换 CA = 换 Secret → 所有已下发 agent 的客户端证书失效 → 需逐集群重新拉 install.yaml（这是 CA 的固有代价，
+     与现在一致）。
+   - RBAC 收紧：只允许 api-server 的 ServiceAccount `get` 这个 Secret（CA 私钥能签任意客户端证书）。
+
+   **清单改动**：`k8s/pvc-agent-ca.yaml` → `k8s/secret-agent-ca.example.yaml`；Deployment 挂 Secret（readOnly）
+   + `emptyDir` 给服务端证书；`AGENT_CA_DIR` 保持不变。
 5. **可观测**：Redis 归属表加 TTL 监控，归属漂移/隧道双写要有日志与指标。
 
 估时：2–3d（不含 PKI 存储改造，约 +0.5d）。
