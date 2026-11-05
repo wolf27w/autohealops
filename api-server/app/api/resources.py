@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """资源配额 API"""
+import asyncio
 import json
 import logging
 import re
+import time
 import yaml
 from datetime import datetime, timedelta
 
@@ -43,33 +45,78 @@ async def overview(cluster_id: int, user=Depends(require_any_user)):
 
 # ==================== 实时数据（Redis 实时层 + DB 持久层） ====================
 # 口径（老板 2026-11-05）：实时数据以 Redis 为热点层，DB 为持久层。
-# 读：Redis 命中直接返回；未命中就实时（executor/隧道）取一次并回填 Redis；实时失败才回落 DB。
-RT_TTL_SECONDS = 5
+# 读：Redis 命中即刻返回（不阻塞）；未命中先用 DB 数据秒回，同时后台实时刷新。
+# 这样「进集群」不用等实时拉取（生产集群实时取要 ~1s）。
+RT_TTL_SECONDS = 90     # 缓存保留时间
+RT_FRESH_SECONDS = 5    # 5 秒内算新鲜；超过则后台刷新（先返回旧数据，不阻塞）
+_rt_refreshing: set[str] = set()
+
+
+async def _rt_store(key: str, data) -> None:
+    try:
+        await redis_pool.set(key, json.dumps({"ts": time.time(), "data": data}, ensure_ascii=False, default=str),
+                             ex=RT_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _rt_load(key: str, fetch, fallback):
+    """实时取，失败回落 DB"""
+    try:
+        data = await fetch()
+        if data:
+            return data
+    except Exception as e:  # noqa: BLE001
+        logger.warning("实时数据获取失败 key=%s: %s", key, e)
+    try:
+        return await fallback()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("回落数据库也失败 key=%s: %s", key, e)
+        return []
+
+
+async def _rt_refresh(key: str, fetch, fallback) -> None:
+    try:
+        data = await _rt_load(key, fetch, fallback)
+        await _rt_store(key, data)
+    finally:
+        _rt_refreshing.discard(key)
 
 
 async def _rt_cached(key: str, fetch, fallback):
-    """Redis 优先 → 实时取 → 回填 Redis → 实时失败回落数据库"""
+    """Redis 优先 → 旧数据先返、后台刷新 → 未命中用 DB 秒回 → 同步实时取（最后兑底）"""
     try:
-        cached = await redis_pool.get(key)
-        if cached:
-            return json.loads(cached)
-    except Exception:  # noqa: BLE001 Redis 不可用则降级直查
-        pass
+        raw = await redis_pool.get(key)
+    except Exception:  # noqa: BLE001
+        raw = None
+    if raw:
+        try:
+            obj = json.loads(raw)
+            ts, data = float(obj.get("ts") or 0), obj.get("data")
+        except Exception:  # noqa: BLE001
+            ts, data = 0, None
+        if data is not None:
+            # 过期了就在后台刷新，本次照样秒回（stale-while-revalidate）
+            if time.time() - ts > RT_FRESH_SECONDS and key not in _rt_refreshing:
+                _rt_refreshing.add(key)
+                asyncio.create_task(_rt_refresh(key, fetch, fallback))
+            return data
+
+    # 未命中：先用 DB 数据秒回（有则），后台换成实时数据
     data = None
     try:
-        data = await fetch()
+        data = await fallback()
     except Exception as e:  # noqa: BLE001
-        logger.warning("实时数据获取失败 key=%s: %s", key, e)
-    if not data:
-        try:
-            data = await fallback()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("实时失败回落数据库也失败 key=%s: %s", key, e)
-            data = data or []
-    try:
-        await redis_pool.set(key, json.dumps(data, ensure_ascii=False, default=str), ex=RT_TTL_SECONDS)
-    except Exception:  # noqa: BLE001
-        pass
+        logger.warning("数据库回落失败 key=%s: %s", key, e)
+    if data:
+        await _rt_store(key, data)
+        if key not in _rt_refreshing:
+            _rt_refreshing.add(key)
+            asyncio.create_task(_rt_refresh(key, fetch, fallback))
+        return data
+
+    data = await _rt_load(key, fetch, fallback)
+    await _rt_store(key, data)
     return data
 
 
