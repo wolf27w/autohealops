@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import Alert, AlertPolicy, Cluster, PodMetric, QuotaSnapshot, ResourceSnapshot
+from app.models import Alert, AlertPolicy, Cluster, K8sEvent, PodMetric, QuotaSnapshot, ResourceSnapshot
 
 logger = get_logger("api-server.agent_alert")
 
@@ -236,6 +236,8 @@ async def handle_event(cluster_id: int, method: str, payload: bytes) -> None:
         await handle_pod_metrics(ev)
     elif method == "CollectSnapshot":
         await handle_collect_snapshot(ev)
+    elif method == "Events":
+        await handle_events(ev)
     else:
         logger.debug("未识别的 agent 事件 method=%s", method)
 
@@ -357,6 +359,63 @@ async def handle_collect_snapshot(ev: dict) -> None:
         logger.info("agent 快照落库 cluster=%s quota=%d resource=%d", cid, len(qobjs), len(robjs))
     except Exception as e:  # noqa: BLE001
         logger.warning("agent 快照落库失败 cluster=%s: %s", cid, e)
+
+
+async def handle_events(ev: dict) -> None:
+    """agent 上报的 k8s 事件（method=Events）→ upsert k8s_events（按 cluster_id+uid 幂等）。
+
+    k8s 默认 event-ttl 只有 1 小时，重启/过期就没了；平台自存 7 天。
+    """
+    rows = ev.get("events") or []
+    if not isinstance(rows, list) or not rows:
+        return
+    cid = int(ev.get("cluster_id") or 0)
+    vals = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        uid = str(r.get("uid") or "")
+        if not uid:
+            continue
+        try:
+            vals.append({
+                "cluster_id": cid, "uid": uid,
+                "namespace": str(r.get("namespace") or ""),
+                "resource_kind": str(r.get("resource_kind") or ""),
+                "resource_name": str(r.get("resource_name") or ""),
+                "reason": str(r.get("reason") or ""),
+                "type": str(r.get("type") or ""),
+                "message": str(r.get("message") or ""),
+                "count": int(r.get("count") or 0),
+                "first_seen": _parse_dt(r.get("first_seen")),
+                "last_seen": _parse_dt(r.get("last_seen")),
+            })
+        except (TypeError, ValueError):
+            continue
+    if not vals:
+        return
+    try:
+        from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+        async with async_session() as session:
+            for i in range(0, len(vals), 500):
+                stmt = mysql_insert(K8sEvent).values(vals[i:i + 500])
+                stmt = stmt.on_duplicate_key_update(
+                    namespace=stmt.inserted.namespace,
+                    resource_kind=stmt.inserted.resource_kind,
+                    resource_name=stmt.inserted.resource_name,
+                    reason=stmt.inserted.reason,
+                    type=stmt.inserted.type,
+                    message=stmt.inserted.message,
+                    count=stmt.inserted.count,
+                    first_seen=stmt.inserted.first_seen,
+                    last_seen=stmt.inserted.last_seen,
+                )
+                await session.execute(stmt)
+            await session.commit()
+        logger.info("agent 事件落库 cluster=%s 共 %d 条", cid, len(vals))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent 事件落库失败 cluster=%s: %s", cid, e)
 
 
 async def build_agent_config(cluster_id: int) -> dict:

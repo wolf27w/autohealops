@@ -22,6 +22,27 @@ _LOG_TABLES = [
 ]
 
 
+async def cleanup_k8s_events(days: int = 7, batch_size: int = 5000) -> int:
+    """清理超过保留期的 k8s 历史事件（按 last_seen）；返回删除行数"""
+    days = max(1, days)
+    cutoff = datetime.now() - timedelta(days=days)
+    total = 0
+    async with async_session() as session:
+        while True:
+            r = await session.execute(
+                text(f"DELETE FROM k8s_events WHERE last_seen < :cut LIMIT {batch_size}"),
+                {"cut": cutoff},
+            )
+            await session.commit()
+            n = int(r.rowcount or 0)
+            total += n
+            if n < batch_size:
+                break
+    if total:
+        logger.info("k8s 事件清理：删除 %d 条（保留 %d 天）", total, days)
+    return total
+
+
 async def cleanup_logs(days: int = 30, batch_size: int = 5000) -> dict:
     """清理超过保留期的日志类数据（audit 除外）；返回 {表名: 删除行数}"""
     days = max(1, days)

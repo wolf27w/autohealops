@@ -38,7 +38,7 @@ data:
 
   # ---------- Agent 接入（★ 部署前必须按现场改）----------
   # 被管集群能拉到的 agent 镜像
-  AGENT_IMAGE: "harbor.efreight.cn/ops/autohealops-agent:0.2.2"
+  AGENT_IMAGE: "harbor.efreight.cn/ops/autohealops-agent:0.2.5"
   AGENT_NAMESPACE: "autohealops"
   # 目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
   AGENT_IMAGE_PULL_SECRET: ""

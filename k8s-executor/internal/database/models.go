@@ -139,6 +139,24 @@ type PodMetric struct {
 	SampledAt   time.Time `gorm:"index" json:"sampled_at"`
 }
 
+// K8sEvent k8s 事件历史（平台自存）：k8s 默认 event-ttl 只有 1 小时，重启/过期后事件就没了，
+// 这里每 60s 采集一次并 upsert，保留 7 天，供「容器历史事件」查询。
+type K8sEvent struct {
+	ID           uint64     `gorm:"primaryKey" json:"id"`
+	ClusterID    uint       `gorm:"uniqueIndex:uk_k8s_event;index" json:"cluster_id"`
+	UID          string     `gorm:"size:64;uniqueIndex:uk_k8s_event" json:"uid"`
+	Namespace    string     `gorm:"size:100;index" json:"namespace"`
+	ResourceKind string     `gorm:"size:40;index" json:"resource_kind"`
+	ResourceName string     `gorm:"size:200;index" json:"resource_name"`
+	Reason       string     `gorm:"size:100" json:"reason"`
+	Type         string     `gorm:"size:20" json:"type"`
+	Message      string     `gorm:"type:text" json:"message"`
+	Count        int32      `json:"count"`
+	FirstSeen    *time.Time `json:"first_seen"`
+	LastSeen     *time.Time `gorm:"index" json:"last_seen"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
 // AlertPolicy 告警策略（与 api-server alert_policies 表一致）
 type AlertPolicy struct {
 	ID                uint   `gorm:"primaryKey" json:"id"`
@@ -160,4 +178,5 @@ func (QuotaSnapshot) TableName() string    { return "quota_snapshots" }
 func (CustomTask) TableName() string       { return "custom_tasks" }
 func (CustomTaskLog) TableName() string    { return "custom_task_logs" }
 func (PodMetric) TableName() string        { return "pod_metrics" }
+func (K8sEvent) TableName() string         { return "k8s_events" }
 func (AlertPolicy) TableName() string      { return "alert_policies" }

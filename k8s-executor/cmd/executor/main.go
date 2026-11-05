@@ -12,6 +12,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/bootstrap"
 	"github.com/autohealops/k8s-executor/internal/config"
 	"github.com/autohealops/k8s-executor/internal/database"
+	"github.com/autohealops/k8s-executor/internal/eventstore"
 	execgrpc "github.com/autohealops/k8s-executor/internal/grpc"
 	"github.com/autohealops/k8s-executor/internal/health"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
@@ -78,6 +79,9 @@ func main() {
 	// 7.5 Pod 指标采集（CPU/内存/网络，每分钟全量，保留 3 天）
 	metricsCollector := metrics.NewCollector(manager, logger)
 	metricsCollector.StartCollectScheduler(ctx)
+
+	// k8s 事件历史（k8s 默认只留 1h，这里自存 7 天）
+	eventstore.NewCollector(manager, logger).StartScheduler(ctx)
 
 	// 8. 脚本执行器
 	scriptRunner := script.NewRunner(manager, logger)

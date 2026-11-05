@@ -19,6 +19,7 @@ import (
 
 	"github.com/autohealops/k8s-executor/internal/agentbridge"
 	"github.com/autohealops/k8s-executor/internal/agentdb"
+	"github.com/autohealops/k8s-executor/internal/eventstore"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/metrics"
 	"github.com/autohealops/k8s-executor/internal/quota"
@@ -187,6 +188,10 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	// 配额 + 资源快照上报（对齐 config 接入：agent 在集群内采集，经隧道上报平台落库）
 	stopQuota := startQuotaPush(ctx, mc, send, uint(clusterID), logger)
 	defer stopQuota()
+
+	// k8s 事件历史上报（k8s 默认只留 1h；平台自存 7 天，供历史事件回溯）
+	stopEvents := startEventPush(ctx, mc, send, uint(clusterID), logger)
+	defer stopEvents()
 
 	// 告警检测（P2）：watcher 在 agent 内跑，事件经隧道上报平台，平台统一写库/触发处理
 	var pw *watcher.PodWatcher
@@ -434,6 +439,43 @@ func startMetricsPush(ctx context.Context, mc *k8sclient.ClusterClient, send fun
 	return func() { close(done) }
 }
 
+// startEventPush 启动 k8s 事件上报：启动即采一次，之后每 60s；只上报最近 15 分钟活跃事件。
+func startEventPush(ctx context.Context, client *k8sclient.ClusterClient, send func(*agentpb.AgentFrame) error,
+	clusterID uint, logger *zap.Logger) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		push := func() {
+			rows, err := eventstore.CollectEventsOnce(ctx, client, clusterID, time.Now())
+			if err != nil || len(rows) == 0 {
+				if err != nil {
+					logger.Debug("事件采集失败", zap.Error(err))
+				}
+				return
+			}
+			payload, err := json.Marshal(map[string]any{"events": rows})
+			if err != nil {
+				return
+			}
+			if err := send(&agentpb.AgentFrame{Type: "event", Method: "Events", Payload: payload}); err != nil {
+				logger.Debug("事件上报失败（隧道可能已断）", zap.Error(err))
+			}
+		}
+		push()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				push()
+			}
+		}
+	}()
+	return func() { close(done) }
+}
 // startQuotaPush 启动配额 + 资源快照上报循环：启动即采一次，之后每 60s 采集一次，
 // 把配额/资源快照经隧道 event 帧（method=CollectSnapshot）上报平台，由平台落库。
 func startQuotaPush(ctx context.Context, client *k8sclient.ClusterClient, send func(*agentpb.AgentFrame) error,

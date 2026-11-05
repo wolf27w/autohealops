@@ -334,7 +334,29 @@ async def pod_events(cluster_id: int, namespace: str, pod_name: str, user=Depend
     r = await executor_client.acall(executor_client.get_pod_events, cluster_id, namespace, pod_name)
     if not r.get("success"):
         return {"code": 500, "message": r.get("error", "事件获取失败"), "data": None}
-    return {"code": 200, "message": "success", "data": {"events": r.get("events", [])}}
+
+    # 历史事件：平台自存（k8s 默认 event-ttl 只有 1 小时，容器重启/过期后就看不到）
+    history: list[dict] = []
+    try:
+        from app.models import K8sEvent
+        async with async_session() as session:
+            rows = list((await session.execute(
+                select(K8sEvent).where(
+                    K8sEvent.cluster_id == cluster_id,
+                    K8sEvent.namespace == namespace,
+                    K8sEvent.resource_name == pod_name,
+                    K8sEvent.resource_kind == "Pod",
+                ).order_by(K8sEvent.last_seen.desc()).limit(200)
+            )).scalars())
+            history = [{
+                "type": e.type, "reason": e.reason, "message": e.message, "count": e.count,
+                "first_timestamp": str(e.first_seen or ""), "last_timestamp": str(e.last_seen or ""),
+                "source": "history",
+            } for e in rows]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("取 Pod 历史事件失败 cluster=%s ns=%s pod=%s: %s", cluster_id, namespace, pod_name, e)
+
+    return {"code": 200, "message": "success", "data": {"events": r.get("events", []), "history": history}}
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/detail")

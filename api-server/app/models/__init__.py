@@ -23,6 +23,7 @@ from app.models.decision import DecisionPolicy, DecisionResult
 from app.models.diagnosis import AIDiagnosisResult, DiagnosisFailure
 from app.models.diagnostic import DiagnosticReport, DiagnosticTask
 from app.models.execution import ExecutionLog
+from app.models.k8s_event import K8sEvent
 from app.models.knowledge import KnowledgeEntry
 from app.models.log_alert_rule import LogAlertRule
 from app.models.log_source import LogSource
@@ -104,6 +105,7 @@ __all__ = [
     "DiagnosticTask",
     "DiagnosticReport",
     "DBConnection",
+    "K8sEvent",
     "ClusterDbConnection",
     "RepairPlan",
     "ExecutionLog",

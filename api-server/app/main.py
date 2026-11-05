@@ -132,6 +132,12 @@ async def _maintenance_loop() -> None:
                     logger.info("日志保留清理完成：%s", r)
             except Exception as e:  # noqa: BLE001
                 logger.warning("日志保留清理 异常: %s", e)
+            # k8s 事件历史（平台自存）：保留 7 天
+            try:
+                from app.services.data_retention_service import cleanup_k8s_events
+                await cleanup_k8s_events(7)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("k8s 事件清理 异常: %s", e)
 
 
 # 后台循环 task（模块级引用，防 GC）
