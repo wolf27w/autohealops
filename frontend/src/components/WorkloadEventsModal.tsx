@@ -60,7 +60,8 @@ export default function WorkloadEventsModal({ target, onClose }: {
           ) },
           { title: '原因', dataIndex: 'reason', width: 150 },
           { title: '消息', dataIndex: 'message', render: (v: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{v}</span> },
-          { title: '次数', dataIndex: 'count', width: 80 },
+          { title: '次数', dataIndex: 'count', width: 90 },
+          { title: '首次发生', dataIndex: 'first_timestamp', width: 165, render: fmt },
           { title: '最后发生', dataIndex: 'last_timestamp', width: 165, render: fmt },
         ]}
         locale={{ emptyText: <Empty description="该时间段没有事件" /> }}
