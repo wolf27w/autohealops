@@ -783,3 +783,86 @@
 - 每条建议输出：`规则命中 + 依据（指标/文本） + 优化动作 + 风险提示`；
   可选：对 TopN digest 执行 `EXPLAIN`（只读，需账号权限）拿执行计划要点。
 - 与 3.1 打通：慢 SQL 优化点可作为异常点的一种（level=warning，metric=slow_sql）。
+
+
+---
+
+## 2026-11-05 需求细化（可直接开发的版本）
+
+> 说明：把当天讨论的需求补上「验收标准 / 技术落点 / 拆分 / 估时 / 风险」，便于排期与验收。
+
+### R1 PostgreSQL 支持（经 agent 查库 + 健康采集）— 0.5~1d
+
+**验收**
+- 配置 `db_type=postgres` 的连接后，只读 SQL 能返回列/行（NULL、时间、数字类型正确）
+- 健康检查返回：版本、连接数/上限、活跃连接、事务提交/回滚、锁等待、库/表大小 TOP10、慢 SQL TOP5
+- `pg_stat_statements` 未安装时不报错，该项返回「不可用」
+
+**落点**
+- `k8s-executor/go.mod`：引入 `github.com/jackc/pgx/v5/stdlib`（**需联网拉包，待批准**）
+- `internal/agentdb/query.go`：按 `db_type` 选驱动（`mysql` / `pgx`）；结果归一化（[]byte→string、time→RFC3339）复用
+- `internal/agentdb/health.go`：新增 PG 分支（`pg_stat_activity` / `pg_stat_statements` / `pg_database_size`）
+- 前端连接表单已支持 postgres，无需改
+
+**风险**：依赖引入；只读账号权限可能不足（缺权限时降级返回「不可用」而不是失败）
+
+### R2 多副本不影响接入 — 3~4d
+
+**验收**
+- api-server 跑 3 副本，agent 随机连任一副本；任意请求（列表/终端/日志流/计划执行）都成功，不再出现「无在线 agent」
+- 任一副本重启或滚动升级，agent 3 秒内重连；期间其它副本请求自动转发到 owner
+- agent Deployment 允许 2 副本时：**不产生重复告警、不产生重复采集数据**
+
+**拆分**
+| 步骤 | 内容 | 估时 |
+|---|---|---|
+| ① PKI Secret 化 | CA 放 Secret 只读挂载；`agent_pki` 禁止自动生成；各副本用 CA 现签 server 证书（同 CA/同 SAN） | 0.5d |
+| ② Redis 归属 + unary 转发 | `agent:owner:{cid}` TTL 30s、心跳 10s 续期；内部 gRPC 转发端点；owner 独占写 `agent_status/last_seen` | 1d |
+| ③ 流式转发 | ExecutePlan / BatchExecute / ExecPodStream 走双向流代理 | 1d |
+| ④ agent 选主 | K8s Lease（优先）或 Redis 锁；仅 leader 跑 watcher + 采集上报，其余只承接无状态执行 | 0.5~1d |
+
+**前置**：平台自身在 k8s 内运行（本地开发不受影响）；RBAC 允许平台 SA 读写该 Secret。
+
+### R3 数据库监控增强 — 2~3d
+
+**R3.1 异常点（1d）**
+- 验收：给出一条结构化异常列表，形如 `{level, metric, current, threshold, message, suggestion}`；阈值可在系统设置里改；平台直连库与 agent 集群库都能看
+- 规则：连接使用率、buffer pool 命中率、临时表落盘比例、当前/累计锁等待、死锁增长、慢查询速率、表空间增长、连接失败率
+- 落点：`services/db_anomaly_service.py`；`GET /db-connections/{id}/anomalies`；`GET /clusters/{id}/db-connections/{conn_id}/anomalies`；DBMonitor 顶部卡片；集群数据库面板
+
+**R3.2 慢 SQL 时间维度（0.5~1d）**
+- 验收：可按时间段（今天/昨天/自定义）查 TopN；同一 digest 的耗时/次数曲线；两个时间段 TopN 对比
+- 数据已具备（`slow_sql_records.sampled_at`），只需查询与展示
+
+**R3.3 慢 SQL 优化建议（1d）**
+- 验收：每条慢 SQL 给出「命中规则 + 依据 + 优化动作 + 风险提示」，至少覆盖：全表扫描、临时表落盘、filesort、锁等待、`LIKE '%x%'`、`SELECT *`、大 IN、函数包列
+- 可选：对 TopN 执行 `EXPLAIN`（只读，需权限）返回执行计划要点
+- 输出可作为 R3.1 的一种异常点（`metric=slow_sql`）
+
+### R4 集群内数据库纳入「数据库监控」页 — 1~1.5d（新增）
+
+**问题**：agent 集群里的库存在 `cluster_db_connections`，只有「集群详情 → 集群数据库」弹窗能看到；数据库监控页只列 `db_connections`，两套割裂。
+
+**验收**
+- 数据库监控页统一列出「平台直连库」+「集群内库」，带来源徽标（直连/集群内）
+- 集群内库也能看：指标、慢 SQL、异常点、健康检查
+- 集群内库的定时采集（走 agent DbHealth）落 `db_metric_snapshots`，与直连库同口径
+
+**落点**：列表接口聚合两表（返回 `source`）；采集调度增加「集群内库」分支（经隧道）；前端按 source 分组。
+
+### R5 接入凭证 5 小时未连接自动清理 — 0.2d
+
+- 定时任务每 10 分钟：`agent_status='pending'` 且 `created_at < now()-5h` → 删除该集群记录（令牌随之失效）
+- 日志留痕：删除时记录 cluster_id/name/token 前缀，便于审计
+
+### 建议排期
+
+| 顺序 | 项 | 理由 |
+|---|---|---|
+| 1 | R5（0.2d） | 独立、风险低，先清悬挂凭证 |
+| 2 | R3.1 异常点（1d） | 业务感知最强，规则引擎后续被 R3.3 复用 |
+| 3 | R3.3 慢 SQL 建议（1d） | 与 3.1 同一套规则框架 |
+| 4 | R3.2 慢 SQL 时间维度（0.5~1d） | 纯查询/展示 |
+| 5 | R4 集群内库并入监控（1~1.5d） | 统一入口，依赖 R3 |
+| 6 | R1 PostgreSQL（0.5~1d） | 需批准依赖 |
+| 7 | R2 多副本（3~4d） | 改动最大，单独排期 |
