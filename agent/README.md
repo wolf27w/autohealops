@@ -33,18 +33,44 @@ Agent 的 Go 源码在 **`k8s-executor/cmd/agent`**（入口）以及它依赖�
 > 如果确实要求源码也物理搬过来，需要把整个仓库改成「单 module 根在仓库根」
 > 或把共享包从 `internal/` 提升到 `pkg/` 并拆多 module，属于较大重构（约半天，改动面大）。
 
-## 构建
+## 生产镜像怎么出
+
+**当前 Mac 上没跑 docker**，所以生产镜像走「本机交叉编译 → 远端 docker 构建 → 推送」：
 
 ```bash
-# 交叉编译（本机 macOS → linux/amd64 静态二进制）
-make -C agent build VERSION=0.2.7
-
-# 打镜像（需在有 docker 的机器上；参考 docs/AGENT-ONLY-ARCHITECTURE.md 的 scp 流程）
-make -C agent image VERSION=0.2.7 IMAGE=harbor.efreight.cn/ops/autohealops-agent
-
-# 推送
-make -C agent push VERSION=0.2.7 IMAGE=harbor.efreight.cn/ops/autohealops-agent
+make -C agent remote-image VERSION=0.2.7
+# 默认远端 root@192.168.6.149，可覆盖：
+# make -C agent remote-image VERSION=0.2.7 REMOTE=root@1.2.3.4 REMOTE_DIR=/tmp/agent-build
 ```
+
+这条命令依次做：
+1. `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build`（产物 `agent/build/agent`，静态二进制）
+2. `scp` 二进制 + `Dockerfile` 到远端 `/tmp/agent-build/`
+3. 远端 `docker build` → `tag` → `push`（`:VERSION` 和 `:latest` 两个 tag）
+
+等价的手工流程（脚本没装/想一步步看时）：
+
+```bash
+make -C agent build VERSION=0.2.7
+ssh root@192.168.6.149 'mkdir -p /tmp/agent-build'
+scp agent/build/agent agent/Dockerfile root@192.168.6.149:/tmp/agent-build/
+ssh root@192.168.6.149 'cd /tmp/agent-build && docker build -f Dockerfile \
+  -t harbor.efreight.cn/ops/autohealops-agent:0.2.7 . \
+  && docker tag harbor.efreight.cn/ops/autohealops-agent:0.2.7 harbor.efreight.cn/ops/autohealops-agent:latest \
+  && docker push harbor.efreight.cn/ops/autohealops-agent:0.2.7 \
+  && docker push harbor.efreight.cn/ops/autohealops-agent:latest'
+```
+
+**本机有 docker 时**（换到装了 docker 的机器）：
+
+```bash
+make -C agent image VERSION=0.2.7   # 打镜像
+make -C agent push  VERSION=0.2.7   # 推送（自动带 latest）
+```
+
+> 平台自身的三个服务（api-server / ai-service / k8s-executor / frontend）用
+> `./scripts/release_platform.sh --version <tag>` 构建+推送+滚动发布，同样需要 docker 环境；
+> 在没有 docker 的机器上请到构建机执行。
 
 ## 配置
 
