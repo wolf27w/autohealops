@@ -13,10 +13,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// 采样与保留配置（保留 3 天，每分钟采样）
+// 采样与保留配置（保留 7 天，每分钟采样）
 const (
 	collectInterval = 1 * time.Minute
-	retentionDays   = 3
+	retentionDays   = 7
 	cleanupInterval = 1 * time.Hour
 
 	// 脏数据防护：metrics-server 偶发返回异常 CPU（累计值/单位错乱，实测单 Pod 报数万核）。
@@ -60,7 +60,7 @@ func NewCollector(manager *k8sclient.Manager, logger *zap.Logger) *Collector {
 func (c *Collector) StartCollectScheduler(ctx context.Context) {
 	go c.runCollectLoop(ctx)
 	go c.runCleanupLoop(ctx)
-	c.logger.Info("指标采集调度器已启动（每 60s，保留 3 天）")
+	c.logger.Info("指标采集调度器已启动（每 60s，保留 7 天）")
 }
 
 func (c *Collector) runCollectLoop(ctx context.Context) {
@@ -228,7 +228,7 @@ func fetchSummary(ctx context.Context, client *k8sclient.ClusterClient, nodeName
 	return &sum, nil
 }
 
-// cleanup 删除保留期（3 天）前的指标
+// cleanup 删除保留期（7 天）前的指标
 func (c *Collector) cleanup() {
 	cutoff := time.Now().Add(-retentionDays * 24 * time.Hour)
 	res := database.GetDB().Where("sampled_at < ?", cutoff).Delete(&database.PodMetric{})

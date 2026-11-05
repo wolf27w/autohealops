@@ -126,7 +126,7 @@ type CustomTaskLog struct {
 	ErrorMessage string     `gorm:"type:text" json:"error_message"`
 }
 
-// PodMetric Pod 指标采样（每 1 分钟全量采样，保留 3 天自动清理）
+// PodMetric Pod 指标采样（每 1 分钟全量采样，保留 7 天自动清理）
 type PodMetric struct {
 	ID          uint64    `gorm:"primaryKey" json:"id"`
 	ClusterID   uint      `gorm:"index;not null" json:"cluster_id"`

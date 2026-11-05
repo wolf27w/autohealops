@@ -1023,7 +1023,7 @@ function PodMetricsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: ()
     <Drawer title={`Pod 监控：${pod.name}`} open={!!pod} onClose={onClose} width={720}>
       <Space style={{ marginBottom: 12 }}>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={[
-          { value: '1h', label: '1小时' }, { value: '24h', label: '24小时' }, { value: '72h', label: '3天' },
+          { value: '1h', label: '1小时' }, { value: '24h', label: '24小时' }, { value: '72h', label: '3天' }, { value: '168h', label: '7天' },
         ]} />
       </Space>
       {loading ? <Empty description="加载中..." /> : points.length === 0 ? <Empty description="暂无指标数据" /> : (
