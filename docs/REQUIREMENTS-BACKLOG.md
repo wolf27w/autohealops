@@ -744,3 +744,42 @@
 **当前实现约束（代码事实）**
 - `api-server` 强制单副本：`agent_gateway._agents` 是进程内字典；`k8s/deployments.yaml` 已按单副本 + Recreate 配置。
 - agent 的 `install.yaml` 目前 `replicas: 1`，且 `-watch=true`。
+
+### 3) 数据库监控增强（老板 2026-11-05：先记需求）
+
+**现状（代码事实）**
+- 采集已经很全：11 类 / 57 个指标（连接、吞吐、缓存、内存、查询质量、InnoDB、锁等待、表空间、配置、速率）
+  + 慢 SQL（`slow_sql_records`，含 `sampled_at` 时间戳、digest、执行次数、平均/最大耗时）。
+- 但页面只是「指标平铺 + 趋势 + 慢 SQL TopN」，**没有规则判定**，所以看不到异常点。
+- 「异常」目前只有 **AI 诊断报告**（整篇结论），非结构化；且只覆盖平台直连的 `db_connections`，
+  **agent 集群内的数据库没有这条路**。
+
+**3.1 异常点（结构化）**
+- `db_anomaly_service` 规则引擎：对最新一次采集按阈值/趋势评估，输出
+  `{level: critical|warning, metric, current, threshold, message, suggestion}`。
+- 规则覆盖：连接使用率、buffer pool 命中率、临时表落盘比例、当前/累计锁等待、死锁增长、
+  慢查询速率、表空间增长、连接失败率。
+- 阈值可配置（系统设置里一份 JSON，按库覆盖可选）。
+- 接口：`GET /db-connections/{id}/anomalies`（平台直连库）、
+  `GET /clusters/{id}/db-connections/{conn_id}/anomalies`（agent 集群库，复用 DbHealth）。
+- UI：数据库监控页顶部「异常点」卡片（红/黄分级 + 建议）；集群数据库面板同步展示。
+- 可选：异常点接入 `db_alert_service` 形成告警（现在只有「连不上」告警）。
+
+**3.2 慢 SQL 的时间维度**
+- 数据侧已具备：`slow_sql_records.sampled_at` 是采集时间点（每 5 分钟一批）。
+- 缺的是查询与展示：
+  - 按时间段筛选（今天/昨天/自定义区间）看该时段的 TopN 慢 SQL；
+  - 同一 digest 的耗时/次数演进曲线（识别「突然变慢」）；
+  - 时段对比（两个时间段 TopN 差异，定位新出现的慢 SQL）；
+  - 保留期：沿用快照/指标 7 天口径（超期清理）。
+
+**3.3 慢 SQL 优化点与建议（结构化，不依赖 AI）**
+- 规则识别（读 `performance_schema` 指标 + SQL 文本特征）：
+  - 全表扫描（`Select_scan` / `Handler_read_rnd_next` 增长）→ 建议加索引/补索引前缀；
+  - 临时表落盘（`Created_tmp_disk_tables` 占比高）→ 减小结果集 / 避免大排序；
+  - filesort 明显（`Sort_merge_passes`）→ 索引顺序与 ORDER BY 对齐；
+  - 锁等待/死锁关联的 SQL → 缩短事务、调整更新顺序；
+  - 文本特征：`LIKE '%x%'`、`SELECT *`、大 `IN`、函数包裹列（隐式转换）、`OR` 拆分等。
+- 每条建议输出：`规则命中 + 依据（指标/文本） + 优化动作 + 风险提示`；
+  可选：对 TopN digest 执行 `EXPLAIN`（只读，需账号权限）拿执行计划要点。
+- 与 3.1 打通：慢 SQL 优化点可作为异常点的一种（level=warning，metric=slow_sql）。
