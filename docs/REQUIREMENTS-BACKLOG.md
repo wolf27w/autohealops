@@ -1143,3 +1143,36 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 - 页面能按场景看到模板、切换版本、预览渲染结果
 
 **估时**：数据模型+迁移 0.5d；ai-service 路由与片段展开 0.5~1d；前端改造 1~1.5d。
+
+### R11 诊断模板路由可配置（R10 的最小可用版，老板 2026-11-05 定：先做这个）— 0.5d
+
+**问题（实测告警数据）**
+- 现有选模板逻辑是 if/else 写死 4 个名字，**其余全部兜底到「节点压力」模板**。
+- 实测 16 种 fault_type 中，有 **8 种（共 131 条告警）用错模板**：
+  `TerminatingStuck(75)`、`PodRestartProbeFail(38)`、`PodRestartOOM(7)`、`NodeCordoned(4)`、
+  `CreateContainerError(3)`、`ContainerMemHigh(2)`、`CreateContainerConfigError(1)`、`DBConnFailed(1)`。
+- 另外：**页面新建的模板不会被用到**（没有路由指向），只能改现有 5 个名字的内容。
+
+**方案（最小改动，不动表结构）**
+- 系统设置新增 `diagnosis_template_routing`（JSON），形如：
+  ```json
+  {
+    "exact": {"CrashLoopBackOff":"pod_crash_diagnosis", "TerminatingStuck":"pod_crash_diagnosis",
+              "NodeCordoned":"node_pressure_diagnosis", "DBConnFailed":"db_diagnose"},
+    "prefix": {"PodRestart":"pod_crash_diagnosis"},
+    "default": "default_diagnosis"
+  }
+  ```
+- `ai-service` 选模板改为：读配置 → **exact 精确匹配 → prefix 前缀匹配 → default**；
+  配置缺失时回退内置默认表（即上面这份，保证不改配置也能修掉当前的错配）。
+- 新增 `default_diagnosis` 模板（通用排障），**不再用节点模板兜底**。
+- 命中结果与未命中都写日志；未命中时诊断结果里带 `template_missed: true` 提示。
+
+**验收**
+- 把 `TerminatingStuck` 路由到 `pod_crash_diagnosis` 后，该故障诊断走 pod 模板（看日志/结果）
+- 在系统设置里新增一条映射（如 `ContainerMemHigh → application_diagnosis`）→ **不重启即生效**
+- 未知 fault_type → 用 `default_diagnosis`，不再错用 node 模板
+- 页面新建的模板，只要在路由里配上名字就能被诊断用到
+
+**与 R10 的关系**：R11 是 R10 的先行子集（先让「配置化路由 + 能用新模板」跑起来）；
+R10 落地后，这份 JSON 迁移成 `prompt_routing` 表并加场景/灰度/预览，语义不变。
