@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # Agent 接入（M3 / P3）：镜像、镜像拉取凭据、网关对外地址
     #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 k8s-executor/Dockerfile.agent）
-    AGENT_IMAGE: str = "harbor.efreight.cn/ops/autohealops-agent:0.2.1"
+    AGENT_IMAGE: str = "harbor.efreight.cn/ops/autohealops-agent:0.2.2"
     #   AGENT_IMAGE_PULL_SECRET：目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
     AGENT_IMAGE_PULL_SECRET: str = ""
     #   平台对外地址（生成 agent 一键安装命令 / 推导网关地址用；集群侧需能访问）
