@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode, type Key } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
 import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress, InputNumber } from 'antd'
-import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, FilterOutlined, MoreOutlined, SearchOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers, batchWorkloadOp, getWorkloads } from '../services/api'
@@ -105,6 +105,7 @@ export default function ClusterDetail() {
   // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
   const [podList, setPodList] = useState<ClusterPod[]>([])
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
+  const [searchText, setSearchText] = useState('')
   const [page, setPage] = useState(1)
   // 批量操作（2026-11-04）：无状态 / 有状态 / 守护集
   const [wlSel, setWlSel] = useState<Key[]>([])
@@ -134,8 +135,8 @@ export default function ClusterDetail() {
     setSearchParams(next, { replace: true })
   }
 
-  // 切换命名空间/类型/状态筛选时重置分页到第 1 页
-  useEffect(() => { setPage(1) }, [activeNs, activeType, statusFilter])
+  // 切换命名空间/类型/状态筛选/搜索时重置分页到第 1 页
+  useEffect(() => { setPage(1) }, [activeNs, activeType, statusFilter, searchText])
 
   const paginationConfig = {
     current: page,
@@ -237,7 +238,13 @@ export default function ClusterDetail() {
     return namespaces.filter((n) => n.namespace === activeNs)
   }, [activeNs, namespaces])
 
-  // 按类型聚合当前选中 namespace 的数据
+  // 名称/命名空间搜索（模糊，不区分大小写）
+  const matchName = (name: string, ns: string) => {
+    const q = searchText.trim().toLowerCase()
+    return !q || (name || '').toLowerCase().includes(q) || (ns || '').toLowerCase().includes(q)
+  }
+
+  // 按类型聚合当前选中 namespace 的数据（含名称搜索）
   const dataByType = useMemo(() => {
     const result: Record<string, ResourceItem[]> = {
       deployments: [], statefulsets: [], cronjobs: [], daemonsets: [], pods: [],
@@ -245,12 +252,14 @@ export default function ClusterDetail() {
     for (const ns of filteredNs) {
       for (const type of ['deployments', 'statefulsets', 'cronjobs', 'daemonsets', 'pods'] as const) {
         for (const item of ns[type] || []) {
+          if (!matchName(item.name, ns.namespace)) continue
           result[type].push({ ...item, namespace: ns.namespace })
         }
       }
     }
     return result
-  }, [filteredNs])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredNs, searchText])
 
   // 前端展示类型 → 后端资源 kind（用于跳转服务详情）
   const tabKind = (r: ResourceItem) => {
@@ -375,14 +384,15 @@ export default function ClusterDetail() {
     () => {
       const snap: Record<string, Partial<ResourceItem>> = {}
       for (const p of (dataByType.pods || [])) snap[`${p.namespace}-${p.name}`] = p
-      return podList.map((p) => {
+      return podList.filter((p) => matchName(p.name, p.namespace)).map((p) => {
         const s = snap[`${p.namespace}-${p.name}`] || {}
         return { ...p, status: p.status || p.phase || (p.ready ? 'Running' : 'Pending'),
           cpu_request: s.cpu_request, memory_request: s.memory_request,
           cpu_limit: s.cpu_limit, memory_limit: s.memory_limit }
       })
     },
-    [podList, dataByType.pods],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [podList, dataByType.pods, searchText],
   )
 
   // 「状态」列表头：筛选图标放在文字前面（避免看着像挂在“更新时间”上）
@@ -770,6 +780,15 @@ export default function ClusterDetail() {
           <Tabs activeKey={groupOfType(activeType)} onChange={(k) => changeType(GROUPS.find((g) => g.key === k)!.types[0])} items={tabItems}
             tabBarExtraContent={(
               <Space size={8}>
+                <Input
+                  size="small"
+                  allowClear
+                  placeholder="搜索名称"
+                  prefix={<SearchOutlined />}
+                  style={{ width: 180 }}
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                />
                 <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
                 <Select
                   size="small"
