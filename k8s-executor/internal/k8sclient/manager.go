@@ -75,6 +75,11 @@ func newClientFromRest(clusterID uint, rc *rest.Config) (*ClusterClient, error) 
 	return &ClusterClient{ID: clusterID, Clientset: clientset, MetricsClient: mc, RestConfig: rc}, nil
 }
 
+// NewClusterClientFromRest 用现成 rest.Config 构建客户端（agent 模式：集群内直接用 rc/cs）
+func NewClusterClientFromRest(clusterID uint, rc *rest.Config) (*ClusterClient, error) {
+	return newClientFromRest(clusterID, rc)
+}
+
 // buildRestConfig 解析 kubeconfig 并构建 REST config（显式选择 context）
 func buildRestConfig(clusterID uint, kubeconfigJSON string) (*rest.Config, error) {
 	cfg, err := clientcmd.NewClientConfigFromBytes([]byte(kubeconfigJSON))

@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import Alert, AlertPolicy, Cluster
+from app.models import Alert, AlertPolicy, Cluster, PodMetric
 
 logger = get_logger("api-server.agent_alert")
 
@@ -216,8 +216,55 @@ async def handle_event(cluster_id: int, method: str, payload: bytes) -> None:
         await handle_alert_event(ev)
     elif method == "AlertResolve":
         await handle_resolve_event(ev)
+    elif method == "PodMetrics":
+        await handle_pod_metrics(ev)
     else:
         logger.debug("未识别的 agent 事件 method=%s", method)
+
+
+async def handle_pod_metrics(ev: dict) -> None:
+    """agent 上报的 Pod 指标（method=PodMetrics）→ 落库 pod_metrics。
+
+    agent 集群没有平台侧采集器，agent 在集群内采集（metrics-server + kubelet summary），
+    经隧道 event 帧上报到这里，由平台统一写库——与平台侧 executor 直连 DB 时语义一致。
+    payload 形如 {rows: [{cluster_id, namespace, pod_name, cpu_usage, memory_usage, network_rx, network_tx, sampled_at}, ...]}
+    """
+    rows = ev.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        return
+    cid = int(ev.get("cluster_id") or 0)
+    now = datetime.now()
+    objs = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        ns = str(r.get("namespace") or "")
+        name = str(r.get("pod_name") or "")
+        if not ns or not name:
+            continue
+        try:
+            cpu = float(r.get("cpu_usage") or 0)
+            mem = int(r.get("memory_usage") or 0)
+            rx = int(r.get("network_rx") or 0)
+            tx = int(r.get("network_tx") or 0)
+        except (TypeError, ValueError):
+            continue
+        objs.append(PodMetric(
+            cluster_id=int(r.get("cluster_id") or cid),
+            namespace=ns, pod_name=name,
+            cpu_usage=cpu, memory_usage=mem,
+            network_rx=rx, network_tx=tx,
+            sampled_at=_parse_dt(r.get("sampled_at")) or now,
+        ))
+    if not objs:
+        return
+    try:
+        async with async_session() as session:
+            session.add_all(objs)
+            await session.commit()
+        logger.info("agent 指标落库 cluster=%s 共 %d 条", cid, len(objs))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent 指标落库失败 cluster=%s: %s", cid, e)
 
 
 async def build_agent_config(cluster_id: int) -> dict:

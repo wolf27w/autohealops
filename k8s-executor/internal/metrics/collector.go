@@ -113,6 +113,17 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 		c.logger.Warn("指标采集：获取集群客户端失败", zap.Uint("cluster", clusterID), zap.Error(err))
 		return
 	}
+	metrics := CollectClusterOnce(ctx, client, clusterID, c.logger)
+	if len(metrics) > 0 {
+		if err := database.GetDB().Create(&metrics).Error; err != nil {
+			c.logger.Error("指标写入失败", zap.Uint("cluster", clusterID), zap.Error(err))
+		}
+	}
+}
+
+// CollectClusterOnce 采集单集群全部 Pod 指标（纯采集，不落库）。
+// 平台侧 executor 落库用；agent 模式在集群内采集后经隧道上报，由 api-server 落库。
+func CollectClusterOnce(ctx context.Context, client *k8sclient.ClusterClient, clusterID uint, logger *zap.Logger) []database.PodMetric {
 	now := time.Now()
 
 	// 1. CPU / 内存（metrics.k8s.io）
@@ -120,7 +131,7 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 	if client.MetricsClient != nil {
 		pmList, err := client.MetricsClient.MetricsV1beta1().PodMetricses("").List(ctx, metav1.ListOptions{})
 		if err != nil {
-			c.logger.Debug("指标采集：PodMetrics 获取失败（可能未装 metrics-server）",
+			logger.Debug("指标采集：PodMetrics 获取失败（可能未装 metrics-server）",
 				zap.Uint("cluster", clusterID), zap.Error(err))
 		} else {
 			for i := range pmList.Items {
@@ -143,9 +154,9 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 	netMap := make(map[string]*podNet)
 	if nodes, err := client.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); err == nil {
 		for _, node := range nodes.Items {
-			sum, err := c.fetchSummary(ctx, client, node.Name)
+			sum, err := fetchSummary(ctx, client, node.Name)
 			if err != nil {
-				c.logger.Debug("指标采集：kubelet summary 获取失败",
+				logger.Debug("指标采集：kubelet summary 获取失败",
 					zap.Uint("cluster", clusterID), zap.String("node", node.Name), zap.Error(err))
 				continue
 			}
@@ -165,7 +176,7 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 		}
 	}
 
-	// 3. 合并写入
+	// 3. 合并
 	keys := make(map[string]bool, len(usageMap)+len(netMap))
 	for k := range usageMap {
 		keys[k] = true
@@ -179,12 +190,12 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 		m := database.PodMetric{ClusterID: clusterID, Namespace: ns, PodName: name, SampledAt: now}
 		if u, ok := usageMap[k]; ok {
 			if u.cpu > maxSanePodCPU {
-				c.logger.Warn("指标采集：Pod CPU 采样异常已丢弃",
+				logger.Warn("指标采集：Pod CPU 采样异常已丢弃",
 					zap.Uint("cluster", clusterID), zap.String("pod", k), zap.Float64("cpu", u.cpu))
 				u.cpu = 0
 			}
 			if u.mem > maxSanePodMemBytes {
-				c.logger.Warn("指标采集：Pod 内存采样异常已丢弃",
+				logger.Warn("指标采集：Pod 内存采样异常已丢弃",
 					zap.Uint("cluster", clusterID), zap.String("pod", k), zap.Int64("mem", u.mem))
 				u.mem = 0
 			}
@@ -197,15 +208,11 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 		}
 		metrics = append(metrics, m)
 	}
-	if len(metrics) > 0 {
-		if err := database.GetDB().Create(&metrics).Error; err != nil {
-			c.logger.Error("指标写入失败", zap.Uint("cluster", clusterID), zap.Error(err))
-		}
-	}
+	return metrics
 }
 
 // fetchSummary 通过 API server 代理访问 kubelet /stats/summary
-func (c *Collector) fetchSummary(ctx context.Context, client *k8sclient.ClusterClient, nodeName string) (*Summary, error) {
+func fetchSummary(ctx context.Context, client *k8sclient.ClusterClient, nodeName string) (*Summary, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	data, err := client.Clientset.CoreV1().RESTClient().Get().

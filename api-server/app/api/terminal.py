@@ -12,26 +12,13 @@ from sqlalchemy import select
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.security import decode_jwt
-from app.proto import executor_pb2, executor_pb2_grpc
+from app.clients.executor_client import _get_stub
+from app.proto import executor_pb2
 from app.services import user_permission_service
 
 router = APIRouter(prefix="/api/v1")
 
 logger = get_logger("api-server.terminal")
-
-# 懒初始化 gRPC channel/stub
-_channel = None
-_stub = None
-
-
-def _get_stub():
-    global _channel, _stub
-    if _stub is None:
-        import grpc
-        from app.core.config import settings
-        _channel = grpc.insecure_channel(settings.K8S_EXECUTOR_GRPC_ADDR)
-        _stub = executor_pb2_grpc.ExecutorServiceStub(_channel)
-    return _stub
 
 
 async def _resolve_user(token: str):

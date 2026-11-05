@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/autohealops/k8s-executor/internal/agentbridge"
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
+	"github.com/autohealops/k8s-executor/internal/metrics"
 	"github.com/autohealops/k8s-executor/internal/watcher"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
 	"go.uber.org/zap"
@@ -81,6 +83,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "创建 clientset 失败: %v\n", err)
 		os.Exit(1)
 	}
+	// 指标采集客户端（metrics-server + kubelet summary）：agent 在集群内采集，经隧道上报平台落库
+	mc, err := k8sclient.NewClusterClientFromRest(uint(*clusterID), rc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "构建指标客户端失败: %v\n", err)
+		os.Exit(1)
+	}
 	// P1：agent 进程内起一个真实的 ExecutorService，隧道请求按方法名原样转发 →
 	// 33 个 unary RPC 全部可用（原先只有 ExecuteCommand/GetPodLogs 两个）
 	logger, _ := zap.NewProduction()
@@ -137,7 +145,7 @@ func main() {
 
 	// 断线自动重连
 	for ctx.Err() == nil {
-		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, *watch, logger); err != nil {
+		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, mc, *watch, logger); err != nil {
 			fmt.Fprintf(os.Stderr, "[agent] 隧道断开: %v，3s 后重连\n", err)
 		}
 		select {
@@ -149,7 +157,7 @@ func main() {
 }
 
 func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, token string,
-	bridge *agentbridge.Bridge, cs *kubernetes.Clientset, enableWatch bool, logger *zap.Logger) error {
+	bridge *agentbridge.Bridge, cs *kubernetes.Clientset, mc *k8sclient.ClusterClient, enableWatch bool, logger *zap.Logger) error {
 	client := agentpb.NewAgentServiceClient(conn)
 	stream, err := client.Tunnel(ctx)
 	if err != nil {
@@ -169,6 +177,10 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 		return err
 	}
 	fmt.Printf("[agent] 已向平台注册集群 %d（version=%s），等待指令\n", clusterID, version)
+
+	// 指标上报（agent 集群无平台侧采集器 → agent 在集群内采集 Pod 指标，经隧道上报平台落库）
+	stopMetrics := startMetricsPush(ctx, mc, send, uint(clusterID), logger)
+	defer stopMetrics()
 
 	// 告警检测（P2）：watcher 在 agent 内跑，事件经隧道上报平台，平台统一写库/触发处理
 	var pw *watcher.PodWatcher
@@ -366,4 +378,42 @@ func splitCSV(s string) []string {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// startMetricsPush 启动指标上报循环：启动即采一次，之后每 60s 采集一次，
+// 把 Pod 指标经隧道 event 帧（method=PodMetrics）上报平台，由平台落库。
+// 返回停止函数（隧道断开时调用）。
+func startMetricsPush(ctx context.Context, mc *k8sclient.ClusterClient, send func(*agentpb.AgentFrame) error,
+	clusterID uint, logger *zap.Logger) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		push := func() {
+			rows := metrics.CollectClusterOnce(ctx, mc, clusterID, logger)
+			if len(rows) == 0 {
+				return
+			}
+			payload, err := json.Marshal(map[string]any{"rows": rows})
+			if err != nil {
+				logger.Warn("指标序列化失败", zap.Error(err))
+				return
+			}
+			if err := send(&agentpb.AgentFrame{Type: "event", Method: "PodMetrics", Payload: payload}); err != nil {
+				logger.Debug("指标上报失败（隧道可能已断）", zap.Error(err))
+			}
+		}
+		push()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				push()
+			}
+		}
+	}()
+	return func() { close(done) }
 }
