@@ -196,7 +196,7 @@ async def pod_metrics(cluster_id: int, namespace: str, pod_name: str, range: str
     """Pod 指标时间序列（CPU/内存/网络，按时间桶聚合）"""
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
-    range_map = {"1h": (3600, 60), "24h": (86400, 300), "72h": (259200, 900), "168h": (604800, 3600)}
+    range_map = {"10m": (600, 60), "1h": (3600, 60), "24h": (86400, 300), "72h": (259200, 900), "168h": (604800, 3600)}
     seconds, step = range_map.get(range, range_map["1h"])
     since = datetime.now() - timedelta(seconds=seconds)
     bucket = func.from_unixtime(func.floor(func.unix_timestamp(PodMetric.sampled_at) / step) * step)
