@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/autohealops/k8s-executor/internal/agentbridge"
+	"github.com/autohealops/k8s-executor/internal/agentdb"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/metrics"
 	"github.com/autohealops/k8s-executor/internal/quota"
@@ -354,9 +355,19 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	}
 }
 
-// handleRequest 把隧道请求转给进程内 ExecutorService（P1：全方法反向代理，不再逐方法 switch）
+// handleRequest 把隧道请求转给进程内 ExecutorService（P1：全方法反向代理，不再逐方法 switch）；
+// QueryDatabase 例外：由 agent 在集群内直接连数据库执行（不经 executor）。
 func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.AgentFrame) *agentpb.AgentFrame {
 	resp := &agentpb.AgentFrame{Type: "response", ReqId: f.ReqId, Method: f.Method}
+	if f.Method == "QueryDatabase" {
+		out, err := agentdb.HandleQuery(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
 	out, err := bridge.Call(ctx, f.Method, f.Payload)
 	if err != nil {
 		resp.Error = err.Error()

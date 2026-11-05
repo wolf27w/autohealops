@@ -221,6 +221,13 @@ export const getNamespaces = (clusterId: number) => http.get(`/resources/cluster
 export const getNamespaceDeployments = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/deployments`)
 export const triggerCollect = (clusterId: number) => http.post(`/resources/clusters/${clusterId}/collect`)
 
+// 集群内数据库（经 agent 查对方集群数据库）
+export interface ClusterDbConn { id: number; cluster_id: number; name: string; db_type: string; host: string; port: number; database: string; username: string; password_set: boolean }
+export const listClusterDbConnections = (clusterId: number) => http.get<ClusterDbConn[]>(`/clusters/${clusterId}/db-connections`)
+export const createClusterDbConnection = (clusterId: number, data: Record<string, unknown>) => http.post<ClusterDbConn>(`/clusters/${clusterId}/db-connections`, data)
+export const deleteClusterDbConnection = (clusterId: number, connId: number) => http.delete(`/clusters/${clusterId}/db-connections/${connId}`)
+export const queryClusterDb = (clusterId: number, connId: number, sql: string) => http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/clusters/${clusterId}/db-connections/${connId}/query`, { sql })
+
 // ============ 知识库 ============
 export const searchKnowledge = (q: string, topK: number = 5) => http.get('/knowledge/search', { params: { q, top_k: topK } })
 export const getKnowledgeList = () => http.get<KnowledgeEntry[]>('/knowledge')

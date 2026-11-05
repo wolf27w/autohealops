@@ -14,6 +14,7 @@ import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYa
 import WorkloadMountsPanel from '../components/WorkloadMountsPanel'
 import PodDetailDrawer from '../components/PodDetailDrawer'
 import TerminalModal from '../components/TerminalModal'
+import ClusterDbModal from '../components/ClusterDbModal'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../components/ConfigObjectYamlModal'
 import ConfigObjectInfoModal from '../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../components/ConfigObjectDataModal'
@@ -112,6 +113,7 @@ export default function ClusterDetail() {
   const [scaleOpen, setScaleOpen] = useState(false)
   const [batchReplicas, setBatchReplicas] = useState<number>(1)
   const [inspectOpen, setInspectOpen] = useState(false)
+  const [dbOpen, setDbOpen] = useState(false)
   const [appInspectOpen, setAppInspectOpen] = useState(false)
   const [aiNs, setAiNs] = useState<string>('')
   const [aiKinds, setAiKinds] = useState<string[]>([])
@@ -769,6 +771,7 @@ export default function ClusterDetail() {
         <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
         <Button size="small" onClick={() => navigate(`/node-management?cluster=${id}`)}>集群节点</Button>
         <Button size="small" onClick={() => navigate(`/resource-governance?cluster=${id}`)}>资源治理</Button>
+        <Button size="small" onClick={() => setDbOpen(true)}>集群数据库</Button>
         <Button size="small" onClick={() => { setAiResult(null); setAiNs(activeNs && activeNs !== '_all_' ? activeNs : ''); setAiKinds([]); setAppInspectOpen(true) }}>应用巡检</Button>
         <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>集群巡检</Button>
       </div>
@@ -829,6 +832,7 @@ export default function ClusterDetail() {
       </Card>
 
       <PodMetricsDrawer pod={metricsPod} onClose={() => setMetricsPod(null)} />
+      <ClusterDbModal clusterId={dbOpen ? Number(id) : null} onClose={() => setDbOpen(false)} />
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />

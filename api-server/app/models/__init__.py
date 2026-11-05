@@ -16,6 +16,7 @@ from app.models.approval_flow import ApprovalFlow, DEFAULT_FLOW_NAME, DEFAULT_FL
 from app.models.audit import AuditRecord
 from app.models.batch import BatchOperation, BatchOperationItem
 from app.models.cluster import Cluster
+from app.models.cluster_db_connection import ClusterDbConnection
 from app.models.custom_task import CustomTask, CustomTaskLog
 from app.models.db_connection import DBConnection
 from app.models.decision import DecisionPolicy, DecisionResult
@@ -103,6 +104,7 @@ __all__ = [
     "DiagnosticTask",
     "DiagnosticReport",
     "DBConnection",
+    "ClusterDbConnection",
     "RepairPlan",
     "ExecutionLog",
     "RepairVerification",
