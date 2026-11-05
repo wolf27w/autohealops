@@ -205,13 +205,21 @@ async def agent_onboard(payload: dict, user=Depends(require_admin)):
         await session.commit()
         await session.refresh(cl)
     base = _public_base_url().rstrip("/")
-    install_command = f"kubectl apply -f {base}/api/v1/clusters/{cl.id}/agent/install.yaml?token={token}"
+    from urllib.parse import quote
+    _img = (getattr(settings, "AGENT_IMAGE", "") or "").strip()
+    _ns = (getattr(settings, "AGENT_NAMESPACE", "") or "autohealops").strip() or "autohealops"
+    # 安装地址里显式带 image / namespace，运维可按环境自行修改后再执行
+    install_command = (
+        f"kubectl apply -f {base}/api/v1/clusters/{cl.id}/agent/install.yaml"
+        f"?token={token}&image={quote(_img, safe='')}&namespace={quote(_ns, safe='')}"
+    )
     return {"code": 200, "message": "success", "data": {
         "id": cl.id, "name": cl.name, "token": token, "install_command": install_command}}
 
 
 @router.get("/{cluster_id}/agent/install.yaml")
-async def agent_install_yaml(cluster_id: int, token: str = ""):
+async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", namespace: str = "",
+                           pull_secret: str = ""):
     """Agent 接入向导：渲染一键安装清单（**集群侧直接拉取，不需要登录**）
 
     鉴权只靠接入令牌（sha256 比对，可吊销）：集群里的运维/CI 没有平台账号，
@@ -238,9 +246,26 @@ async def agent_install_yaml(cluster_id: int, token: str = ""):
         from urllib.parse import urlparse
         host = urlparse(_public_base_url()).hostname or "localhost"
         gateway_addr = f"{host}:9095"
-    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/autohealops-agent:latest"
-    ns = (getattr(settings, "AGENT_NAMESPACE", "") or "autohealops").strip() or "autohealops"
-    pull_secret = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
+    # 镜像 / 命名空间 / 拉取凭据：请求参数优先（按环境自定义），否则用全局配置
+    import re as _re
+    image = (image or getattr(settings, "AGENT_IMAGE", "") or "").strip() or "harbor.efreight.cn/ops/autohealops-agent:latest"
+    ns = (namespace or getattr(settings, "AGENT_NAMESPACE", "") or "autohealops").strip() or "autohealops"
+    pull_secret = (pull_secret or getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
+    # 防注入：镜像只允许常见字符；ns / secret 必须是 DNS-1123 label
+    if not _re.fullmatch(r"[A-Za-z0-9._/:@-]{1,200}", image):
+        return Response("image 非法", status_code=400, media_type="text/plain")
+    for _label, _val in (("namespace", ns), ("pull_secret", pull_secret)):
+        if _val and not _re.fullmatch(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?", _val):
+            return Response(f"{_label} 非法（需 DNS-1123）", status_code=400, media_type="text/plain")
+    # 记住本集群实际使用的 ns / 镜像（agent 升级、版本管理必须按这个 ns 找 Deployment）
+    try:
+        async with async_session() as _s:
+            _c = await _s.get(Cluster, cluster_id)
+            if _c and (_c.agent_namespace != ns or _c.agent_image != image):
+                _c.agent_namespace, _c.agent_image = ns, image
+                await _s.commit()
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("记录集群 agent ns/image 失败 cluster=%s: %s", cluster_id, _e)
     # 拉取凭据挂在主 SA 上（不再另建 SA —— 另建的 SA 没有 RBAC，会导致 agent 读不了 apiserver）
     sa_pull_block = f"\nimagePullSecrets:\n  - name: {pull_secret}" if pull_secret else ""
     # mTLS（2026-11-04 老板定：不允许明文）：现场签发客户端证书，塞进 Secret 挂给 agent
@@ -384,7 +409,7 @@ async def _upgrade_one(cluster_id: int, image: str, wait_seconds: int) -> dict:
             return {"cluster_id": cluster_id, "ok": False, "error": "该集群不是 agent 接入方式"}
         prev = c.agent_version or ""
 
-    agent_ns = (getattr(settings, "AGENT_NAMESPACE", "") or _AGENT_NS).strip() or _AGENT_NS
+    agent_ns = ((c.agent_namespace or "").strip() or (getattr(settings, "AGENT_NAMESPACE", "") or _AGENT_NS).strip() or _AGENT_NS)
     r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id,
                                     "deployment", agent_ns, _AGENT_DEPLOY)
     if not r.get("success"):

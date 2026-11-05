@@ -34,6 +34,9 @@ class Cluster(Base):
     agent_status: Mapped[str] = mapped_column(String(20), default="", server_default="")  # '' / pending / connected / disconnected / revoked
     agent_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     agent_version: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    # 该集群接入时使用的命名空间 / 镜像（接入地址可带参数按环境覆盖；升级时用这个 ns）
+    agent_namespace: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    agent_image: Mapped[str] = mapped_column(String(200), default="", server_default="")
     # 维护窗口配置 JSON：{"enabled": true, "start": "02:00", "end": "04:00", "days": "1,2,3,4,5"}
     maintenance_window: Mapped[str] = mapped_column(Text, default="{}")
     # 云原生 RBAC（专项 B）：接入状态
