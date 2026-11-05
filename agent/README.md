@@ -33,6 +33,28 @@ Agent 的 Go 源码在 **`k8s-executor/cmd/agent`**（入口）以及它依赖�
 > 如果确实要求源码也物理搬过来，需要把整个仓库改成「单 module 根在仓库根」
 > 或把共享包从 `internal/` 提升到 `pkg/` 并拆多 module，属于较大重构（约半天，改动面大）。
 
+## 用户自己构建（只要有 Docker，不需要 Go）
+
+```bash
+# 仓库根目录执行（构建上下文必须是仓库根：agent 与 executor 共用 Go module）
+docker build -f agent/Dockerfile -t autohealops-agent:latest .
+
+# 指定版本 / 国内镜像 / 自定义基础镜像
+docker build -f agent/Dockerfile \
+  --build-arg VERSION=0.2.7 \
+  --build-arg GO_IMAGE=golang:1.26-alpine \
+  --build-arg BASE_IMAGE=debian:bookworm-slim \
+  --build-arg GOPROXY=https://goproxy.cn,direct \
+  -t autohealops-agent:0.2.7 .
+```
+
+- 多阶段构建：容器内 `go build`（版本号通过 `--build-arg VERSION=` 注入），运行层是 debian slim
+- `go.mod` 要求 Go ≥ 1.26.6；基础镜像里的 Go 版本不够时会由 `GOTOOLCHAIN=auto` 自动拉取
+- 内网/国内环境可换 `GO_IMAGE` / `BASE_IMAGE`（如 `m.daocloud.io/docker.io/library/...`）
+- 需要能访问 Go module 代理（`GOPROXY`），完全离线环境请先 `go mod vendor` 再改 Dockerfile 用 `-mod=vendor`
+
+**已验证**：在构建机上从源码构建成功（镜像 224MB），`/app/agent -version` 输出 `0.2.7`。
+
 ## 生产镜像怎么出
 
 **当前 Mac 上没跑 docker**，所以生产镜像走「本机交叉编译 → 远端 docker 构建 → 推送」：

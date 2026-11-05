@@ -1,22 +1,54 @@
-# AutoHealOps agent 镜像（反向隧道 + 集群内执行 + 告警检测下沉）
+# ============================================================
+# AutoHealOps Agent 镜像 —— 自包含构建（只要有 Docker + 源码即可，无需本机 Go）
 #
-# 构建方式（推荐）：本机交叉编译 → 传到有 docker 的机器上 build（不依赖目标机 Go 环境）
-#   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-#     -ldflags "-s -w -X main.version=<版本>" -o /tmp/apiops-agent ./cmd/agent
-#   scp /tmp/apiops-agent Dockerfile.agent root@host:/tmp/agent-build/
-#   docker build -f Dockerfile.agent -t harbor.efreight.cn/ops/apiops-agent:<版本> .
+#   docker build -f agent/Dockerfile -t autohealops-agent:latest .
+#   # 指定版本 / 换基础镜像（内网或国内环境）：
+#   docker build -f agent/Dockerfile \
+#     --build-arg VERSION=0.2.7 \
+#     --build-arg GO_IMAGE=golang:1.22-alpine \
+#     --build-arg BASE_IMAGE=debian:bookworm-slim \
+#     --build-arg GOPROXY=https://goproxy.cn,direct \
+#     -t autohealops-agent:0.2.7 .
 #
-# 说明：静态二进制；底包用 harbor 内已有的 debian 系 slim（带 CA，方便日后 mTLS）。
-FROM harbor.efreight.cn/ops/python:3.10-slim
+# 注意：构建上下文是**仓库根目录**（因为 agent 与 executor 共用 Go module / internal 包）。
+# ============================================================
+ARG GO_IMAGE=golang:1.26-alpine
+ARG BASE_IMAGE=debian:bookworm-slim
 
-LABEL org.opencontainers.image.title="apiops-agent" \
-      org.opencontainers.image.description="AutoHealOps cluster agent (reverse tunnel, in-cluster executor, watcher)"
+# ---------- 构建阶段：从源码编译 ----------
+FROM ${GO_IMAGE} AS builder
 
-RUN groupadd -g 1001 agent && useradd -u 1001 -g agent -m -s /bin/sh agent \
-    && mkdir -p /app && chown -R agent:agent /app
+# 国内网络可换：https://goproxy.cn,direct
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
+# 允许自动拉取 go.mod 要求的工具链版本（go.mod 里可能高于基础镜像）
+ENV GOTOOLCHAIN=auto
+
+WORKDIR /src
+# 先只拷依赖清单，命中缓存
+COPY k8s-executor/go.mod k8s-executor/go.sum ./
+RUN go mod download
+
+# 再拷源码（agent 与 executor 同模块，必须整份拷贝）
+COPY k8s-executor/ ./
+
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+      -ldflags "-s -w -X main.version=${VERSION}" \
+      -o /out/agent ./cmd/agent
+
+# ---------- 运行阶段 ----------
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="autohealops-agent" \
+      org.opencontainers.image.description="AutoHealOps cluster agent (reverse tunnel, in-cluster executor, watcher, db bridge)"
+
+RUN (command -v groupadd >/dev/null && groupadd -g 1001 agent || true) \
+    && (command -v useradd >/dev/null && useradd -u 1001 -g agent -m -s /bin/sh agent || true) \
+    && mkdir -p /app && chown -R 1001:1001 /app
 
 WORKDIR /app
-COPY --chown=agent:agent agent /app/agent
+COPY --from=builder --chown=1001:1001 /out/agent /app/agent
 RUN chmod +x /app/agent
 
 USER 1001
