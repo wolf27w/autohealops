@@ -124,9 +124,9 @@ async def _maintenance_loop() -> None:
                 from app.services.data_retention_service import cleanup_logs
                 from app.services.system_setting_service import get_setting
                 try:
-                    _log_days = int(await get_setting("log_retention_days", "30") or 30)
+                    _log_days = int(await get_setting("log_retention_days", "7") or 7)
                 except (TypeError, ValueError):
-                    _log_days = 30
+                    _log_days = 7
                 r = await cleanup_logs(max(1, _log_days))
                 if any(r.values()):
                     logger.info("日志保留清理完成：%s", r)
