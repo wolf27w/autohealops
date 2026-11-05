@@ -84,6 +84,19 @@ async def _maintenance_loop() -> None:
                     logger.info("慢 SQL 采集完成：%d 条", n)
             except Exception as e:  # noqa: BLE001
                 logger.warning("慢SQL采集 异常: %s", e)
+        # 指标分层：每 10 分钟降采样 + 每小时清理（原始 1 天 / 聚合 7 天）
+        if loop_count % 20 == 0:
+            try:
+                from app.services.metrics_rollup import rollup_5m
+                await rollup_5m()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("指标降采样 异常: %s", e)
+        if loop_count % 120 == 0:
+            try:
+                from app.services.metrics_rollup import cleanup_metrics
+                await cleanup_metrics()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("指标清理 异常: %s", e)
         # 资源快照清理：首次启动清理一次 + 每天一次（2880 个 30s 周期）
         if loop_count == 1 or loop_count % 2880 == 0:
             try:

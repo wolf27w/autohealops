@@ -9,7 +9,7 @@ import yaml
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 
 from app.clients.executor_client import executor_client
 from app.core.database import async_session
@@ -282,6 +282,32 @@ async def pod_metrics(cluster_id: int, namespace: str, pod_name: str, range: str
     range_map = {"10m": (600, 60), "1h": (3600, 60), "24h": (86400, 300), "72h": (259200, 900), "168h": (604800, 3600)}
     seconds, step = range_map.get(range, range_map["1h"])
     since = datetime.now() - timedelta(seconds=seconds)
+
+    # 指标分层：>24h 的档位读 5 分钟聚合表（原始只保 1 天）
+    if range in ("72h", "168h"):
+        async with async_session() as session:
+            rows = (await session.execute(text(
+                "SELECT bucket_at, cpu_avg, mem_avg, net_rx_max, net_tx_max FROM pod_metrics_5m "
+                "WHERE cluster_id=:c AND namespace=:ns AND pod_name=:p AND bucket_at >= :since "
+                "ORDER BY bucket_at"
+            ), {"c": cluster_id, "ns": namespace, "p": pod_name, "since": since})).all()
+        buckets: dict[int, dict] = {}
+        for b, cpu, mem, rx, tx in rows:
+            key = int(b.timestamp() // step * step)
+            cur = buckets.setdefault(key, {"cpu": [], "mem": [], "rx": 0, "tx": 0})
+            cur["cpu"].append(float(cpu or 0))
+            cur["mem"].append(int(mem or 0))
+            cur["rx"] = max(cur["rx"], int(rx or 0))
+            cur["tx"] = max(cur["tx"], int(tx or 0))
+        points = [{
+            "sampled_at": datetime.fromtimestamp(k).strftime("%Y-%m-%d %H:%M:%S"),
+            "cpu_usage": round(sum(v["cpu"]) / len(v["cpu"]), 4) if v["cpu"] else 0,
+            "memory_usage": int(sum(v["mem"]) / len(v["mem"])) if v["mem"] else 0,
+            "network_rx": v["rx"], "network_tx": v["tx"],
+        } for k, v in sorted(buckets.items())]
+        return {"code": 200, "message": "success",
+                "data": {"range": range, "step_seconds": step, "points": points, "source": "5m"}}
+
     bucket = func.from_unixtime(func.floor(func.unix_timestamp(PodMetric.sampled_at) / step) * step)
     async with async_session() as session:
         result = await session.execute(
