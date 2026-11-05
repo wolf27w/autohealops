@@ -20,6 +20,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/agentbridge"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/metrics"
+	"github.com/autohealops/k8s-executor/internal/quota"
 	"github.com/autohealops/k8s-executor/internal/watcher"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
 	"go.uber.org/zap"
@@ -181,6 +182,10 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	// 指标上报（agent 集群无平台侧采集器 → agent 在集群内采集 Pod 指标，经隧道上报平台落库）
 	stopMetrics := startMetricsPush(ctx, mc, send, uint(clusterID), logger)
 	defer stopMetrics()
+
+	// 配额 + 资源快照上报（对齐 config 接入：agent 在集群内采集，经隧道上报平台落库）
+	stopQuota := startQuotaPush(ctx, mc, send, uint(clusterID), logger)
+	defer stopQuota()
 
 	// 告警检测（P2）：watcher 在 agent 内跑，事件经隧道上报平台，平台统一写库/触发处理
 	var pw *watcher.PodWatcher
@@ -401,6 +406,50 @@ func startMetricsPush(ctx context.Context, mc *k8sclient.ClusterClient, send fun
 			}
 			if err := send(&agentpb.AgentFrame{Type: "event", Method: "PodMetrics", Payload: payload}); err != nil {
 				logger.Debug("指标上报失败（隧道可能已断）", zap.Error(err))
+			}
+		}
+		push()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				push()
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+// startQuotaPush 启动配额 + 资源快照上报循环：启动即采一次，之后每 60s 采集一次，
+// 把配额/资源快照经隧道 event 帧（method=CollectSnapshot）上报平台，由平台落库。
+func startQuotaPush(ctx context.Context, client *k8sclient.ClusterClient, send func(*agentpb.AgentFrame) error,
+	clusterID uint, logger *zap.Logger) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		push := func() {
+			res, err := quota.CollectClusterQuotaOnce(ctx, client, clusterID, time.Now())
+			if err != nil {
+				logger.Debug("配额/快照采集失败", zap.Error(err))
+				return
+			}
+			if len(res.QuotaSnapshots) == 0 && len(res.ResourceSnapshots) == 0 {
+				return
+			}
+			payload, err := json.Marshal(map[string]any{
+				"quota_snapshots":    res.QuotaSnapshots,
+				"resource_snapshots": res.ResourceSnapshots,
+			})
+			if err != nil {
+				logger.Warn("快照序列化失败", zap.Error(err))
+				return
+			}
+			if err := send(&agentpb.AgentFrame{Type: "event", Method: "CollectSnapshot", Payload: payload}); err != nil {
+				logger.Debug("快照上报失败（隧道可能已断）", zap.Error(err))
 			}
 		}
 		push()

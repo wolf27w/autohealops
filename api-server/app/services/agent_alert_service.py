@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import Alert, AlertPolicy, Cluster, PodMetric
+from app.models import Alert, AlertPolicy, Cluster, PodMetric, QuotaSnapshot, ResourceSnapshot
 
 logger = get_logger("api-server.agent_alert")
 
@@ -218,6 +218,8 @@ async def handle_event(cluster_id: int, method: str, payload: bytes) -> None:
         await handle_resolve_event(ev)
     elif method == "PodMetrics":
         await handle_pod_metrics(ev)
+    elif method == "CollectSnapshot":
+        await handle_collect_snapshot(ev)
     else:
         logger.debug("未识别的 agent 事件 method=%s", method)
 
@@ -265,6 +267,80 @@ async def handle_pod_metrics(ev: dict) -> None:
         logger.info("agent 指标落库 cluster=%s 共 %d 条", cid, len(objs))
     except Exception as e:  # noqa: BLE001
         logger.warning("agent 指标落库失败 cluster=%s: %s", cid, e)
+
+
+async def handle_collect_snapshot(ev: dict) -> None:
+    """agent 上报的配额 + 资源快照（method=CollectSnapshot）→ 落库。
+
+    agent 集群没有平台侧采集器，agent 在集群内采集（与平台 executor 的 quota.CollectClusterQuota
+    同口径），经隧道 event 帧上报到这里，由平台统一写 quota_snapshots / resource_snapshots。
+    """
+    cid = int(ev.get("cluster_id") or 0)
+    now = datetime.now()
+    qs = ev.get("quota_snapshots") or []
+    rs = ev.get("resource_snapshots") or []
+    qobjs, robjs = [], []
+
+    for r in qs:
+        if not isinstance(r, dict):
+            continue
+        try:
+            qobjs.append(QuotaSnapshot(
+                cluster_id=cid,
+                namespace=str(r.get("namespace") or ""),
+                cpu_limit=str(r.get("cpu_limit") or "0"),
+                cpu_used=str(r.get("cpu_used") or "0"),
+                memory_limit=str(r.get("memory_limit") or "0"),
+                memory_used=str(r.get("memory_used") or "0"),
+                pod_limit=int(r.get("pod_limit") or 0),
+                pod_used=int(r.get("pod_used") or 0),
+                pvc_limit=int(r.get("pvc_limit") or 0),
+                pvc_used=int(r.get("pvc_used") or 0),
+                service_limit=int(r.get("service_limit") or 0),
+                service_used=int(r.get("service_used") or 0),
+                snapshot_time=_parse_dt(r.get("snapshot_time")) or now,
+            ))
+        except (TypeError, ValueError):
+            continue
+
+    for r in rs:
+        if not isinstance(r, dict):
+            continue
+        try:
+            robjs.append(ResourceSnapshot(
+                cluster_id=cid,
+                namespace=str(r.get("namespace") or ""),
+                resource_type=str(r.get("resource_type") or ""),
+                resource_name=str(r.get("resource_name") or ""),
+                status=str(r.get("status") or ""),
+                replicas=int(r.get("replicas") or 0),
+                ready_replicas=int(r.get("ready_replicas") or 0),
+                container_count=int(r.get("container_count") or 0),
+                image_version=str(r.get("image_version") or ""),
+                cpu_usage=str(r.get("cpu_usage") or ""),
+                memory_usage=str(r.get("memory_usage") or ""),
+                cpu_request=str(r.get("cpu_request") or ""),
+                cpu_limit=str(r.get("cpu_limit") or ""),
+                memory_request=str(r.get("memory_request") or ""),
+                memory_limit=str(r.get("memory_limit") or ""),
+                update_time=_parse_dt(r.get("update_time")) if r.get("update_time") else None,
+                snapshot_time=_parse_dt(r.get("snapshot_time")) or now,
+            ))
+        except (TypeError, ValueError):
+            continue
+
+    if not qobjs and not robjs:
+        return
+    try:
+        async with async_session() as session:
+            if qobjs:
+                session.add_all(qobjs)
+            if robjs:
+                session.add_all(robjs)
+            await session.commit()
+        logger.info("agent 快照落库 cluster=%s quota=%d resource=%d", cid, len(qobjs), len(robjs))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent 快照落库失败 cluster=%s: %s", cid, e)
 
 
 async def build_agent_config(cluster_id: int) -> dict:

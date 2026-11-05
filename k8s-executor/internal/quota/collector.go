@@ -25,20 +25,46 @@ func NewCollector(manager *k8sclient.Manager, logger *zap.Logger) *Collector {
 	return &Collector{manager: manager, logger: logger}
 }
 
-// CollectClusterQuota 采集单集群配额快照
+// CollectResult 单集群一次采集的结果（纯数据，不落库）。
+// 平台侧 executor 落库用；agent 模式在集群内采集后经隧道上报，由 api-server 落库。
+type CollectResult struct {
+	QuotaSnapshots    []database.QuotaSnapshot
+	ResourceSnapshots []database.ResourceSnapshot
+}
+
+// CollectClusterQuota 采集单集群配额快照并落库（平台侧 executor 用）
 func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) error {
 	client, err := c.manager.GetClient(ctx, clusterID)
 	if err != nil {
 		return err
 	}
-	cs := client.Clientset
+	res, err := CollectClusterQuotaOnce(ctx, client, clusterID, time.Now())
+	if err != nil {
+		return err
+	}
 	db := database.GetDB()
-	now := time.Now()
+	if len(res.QuotaSnapshots) > 0 {
+		if err := db.Create(&res.QuotaSnapshots).Error; err != nil {
+			return err
+		}
+	}
+	if len(res.ResourceSnapshots) > 0 {
+		if err := db.Create(&res.ResourceSnapshots).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CollectClusterQuotaOnce 采集单集群配额 + 资源快照（纯采集，不落库）。
+func CollectClusterQuotaOnce(ctx context.Context, client *k8sclient.ClusterClient, clusterID uint, now time.Time) (*CollectResult, error) {
+	cs := client.Clientset
+	res := &CollectResult{}
 
 	// 1. Node 汇总（总数/就绪数 + CPU/内存容量）
 	nodes, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	readyCount := 0
 	for _, n := range nodes.Items {
@@ -59,7 +85,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 			}
 		}
 	}
-	db.Create(&database.QuotaSnapshot{
+	res.QuotaSnapshots = append(res.QuotaSnapshots, database.QuotaSnapshot{
 		ClusterID:    clusterID,
 		Namespace:    "_cluster_",
 		CPULimit:     cpuCap,
@@ -72,19 +98,17 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 	})
 
 	// 2. 所有 namespace 的 ResourceQuota
-	quotas, err := cs.CoreV1().ResourceQuotas("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if quotas, err := cs.CoreV1().ResourceQuotas("").List(ctx, metav1.ListOptions{}); err == nil {
 		for _, q := range quotas.Items {
 			snap := parseResourceQuota(q)
 			snap.ClusterID = clusterID
 			snap.SnapshotTime = now
-			db.Create(&snap)
+			res.QuotaSnapshots = append(res.QuotaSnapshots, snap)
 		}
 	}
 
 	// 3. 无状态 Deployment 资源计数
-	deployments, err := cs.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if deployments, err := cs.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err == nil {
 		for _, d := range deployments.Items {
 			replicas := 0
 			if d.Spec.Replicas != nil {
@@ -96,7 +120,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 					ut = c.LastUpdateTime.Time
 				}
 			}
-			db.Create(&database.ResourceSnapshot{
+			res.ResourceSnapshots = append(res.ResourceSnapshots, database.ResourceSnapshot{
 				ClusterID:     clusterID,
 				Namespace:     d.Namespace,
 				ResourceType:  "deployment",
@@ -111,8 +135,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 	}
 
 	// 4. 有状态 StatefulSet 资源计数
-	statefulsets, err := cs.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if statefulsets, err := cs.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{}); err == nil {
 		for _, s := range statefulsets.Items {
 			replicas := 0
 			if s.Spec.Replicas != nil {
@@ -124,7 +147,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 					ut = c.LastTransitionTime.Time
 				}
 			}
-			db.Create(&database.ResourceSnapshot{
+			res.ResourceSnapshots = append(res.ResourceSnapshots, database.ResourceSnapshot{
 				ClusterID:     clusterID,
 				Namespace:     s.Namespace,
 				ResourceType:  "statefulset",
@@ -139,11 +162,10 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 	}
 
 	// 5. 定时任务 CronJob 资源计数
-	cronjobs, err := cs.BatchV1().CronJobs("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if cronjobs, err := cs.BatchV1().CronJobs("").List(ctx, metav1.ListOptions{}); err == nil {
 		for _, c := range cronjobs.Items {
 			ut := c.CreationTimestamp.Time
-			db.Create(&database.ResourceSnapshot{
+			res.ResourceSnapshots = append(res.ResourceSnapshots, database.ResourceSnapshot{
 				ClusterID:    clusterID,
 				Namespace:    c.Namespace,
 				ResourceType: "cronjob",
@@ -156,8 +178,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 	}
 
 	// 6. 守护集 DaemonSet 资源计数
-	daemonsets, err := cs.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if daemonsets, err := cs.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{}); err == nil {
 		for _, ds := range daemonsets.Items {
 			ut := ds.CreationTimestamp.Time
 			for _, c := range ds.Status.Conditions {
@@ -165,7 +186,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 					ut = c.LastTransitionTime.Time
 				}
 			}
-			db.Create(&database.ResourceSnapshot{
+			res.ResourceSnapshots = append(res.ResourceSnapshots, database.ResourceSnapshot{
 				ClusterID:     clusterID,
 				Namespace:     ds.Namespace,
 				ResourceType:  "daemonset",
@@ -180,8 +201,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 	}
 
 	// 7. Pod 状态 + 资源限制（requests/limits）+ 集群 Pod 总数（kubectl get pods -A 口径）
-	pods, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if pods, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{}); err == nil {
 		podTotal := len(pods.Items)
 		podRunning := 0
 		for _, p := range pods.Items {
@@ -189,7 +209,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 				podRunning++
 			}
 			cpuReq, cpuLim, memReq, memLim := sumPodResources(&p)
-			db.Create(&database.ResourceSnapshot{
+			res.ResourceSnapshots = append(res.ResourceSnapshots, database.ResourceSnapshot{
 				ClusterID:      clusterID,
 				Namespace:      p.Namespace,
 				ResourceType:   "pod",
@@ -205,7 +225,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 		}
 		// 集群级 Pod 总数快照（namespace=_pods_，PodLimit=总数，PodUsed=Running 数），
 		// 供 dashboard 概览用真实口径展示（不依赖分批落库的 resource_snapshots 计数）
-		db.Create(&database.QuotaSnapshot{
+		res.QuotaSnapshots = append(res.QuotaSnapshots, database.QuotaSnapshot{
 			ClusterID:    clusterID,
 			Namespace:    "_pods_",
 			PodLimit:     podTotal,
@@ -213,7 +233,7 @@ func (c *Collector) CollectClusterQuota(ctx context.Context, clusterID uint) err
 			SnapshotTime: now,
 		})
 	}
-	return nil
+	return res, nil
 }
 
 // sumPodResources 汇总 Pod 所有容器的资源 requests/limits（空=未设置）
@@ -308,7 +328,7 @@ func parseResourceQuota(q corev1.ResourceQuota) database.QuotaSnapshot {
 func (c *Collector) CollectAllClusters(ctx context.Context) {
 	db := database.GetDB()
 	var clusters []database.Cluster
-	// agent 接入的集群没有 kubeconfig，配额采集跳过（避免每次报错）
+	// agent 接入的集群没有 kubeconfig，配额采集跳过（agent 侧自行采集上报）
 	if err := db.Where("COALESCE(source, '') <> ?", "agent").Find(&clusters).Error; err != nil {
 		return
 	}
