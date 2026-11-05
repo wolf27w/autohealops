@@ -7,7 +7,9 @@
 四个服务各有 Dockerfile：`api-server/Dockerfile`、`ai-service/Dockerfile`、`k8s-executor/Dockerfile`、`frontend/Dockerfile`。
 本地/单机可用 `docker-compose.yml` 一键起（依赖外部 MySQL/Redis `192.168.6.99`）。
 
-K8s 侧清单在 `k8s/`：`deployments.yaml`（4 个 Deployment + 探针 + 反亲和）、`services.yaml`、`ingress.yaml`、`configmap.yaml`、`secret.yaml`、`hpa.yaml`、`pdb.yaml`、`networkpolicy.yaml`。
+K8s 侧清单在 `k8s/`：`deployments.yaml`（4 个 Deployment）、`services.yaml`、`ingress.yaml`、`configmap.yaml`、`secret.example.yaml`、`pvc-agent-ca.yaml`、`hpa.yaml`、`pdb.yaml`、`networkpolicy.yaml`。
+
+配置物料不要手改：`./scripts/gen-k8s-config.sh --check` 从项目根 `.env` 生成 `k8s/generated/{configmap,secret}.yaml`（已 gitignore），并做覆盖度校验。详见 `k8s/README.md`。
 
 ## 2. 发布（滚动）
 

@@ -1,0 +1,24 @@
+# 平台自建 CA 持久卷（agent 隧道 mTLS）
+#
+# 存什么：
+#   ca.crt / ca.key          —— 平台 CA（签发所有 agent 客户端证书 + 网关服务端证书）
+#   server.crt / server.key  —— 网关服务端证书（SAN 来自 AGENT_GATEWAY_PUBLIC_ADDR）
+#
+# ⚠️ 为什么必须持久化：
+#   CA 私钥一旦丢失，已下发到各集群的 agent 客户端证书全部失效，
+#   需要逐个集群重新拉 install.yaml 重装。
+#
+# ⚠️ 为什么是 RWO：api-server 目前单副本（agent 网关连接表在进程内）。
+#   以后若拆出独立网关 Deployment 并扩副本，要换 RWX。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: autohealops-agent-ca
+  namespace: autohealops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+  # 有默认 StorageClass 时可省略；需要指定时取消注释：
+  # storageClassName: standard

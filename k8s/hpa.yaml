@@ -1,24 +1,30 @@
-# HPA：api-server 与 ai-service 自动扩缩容（k8s-executor 固定单副本，不做 HPA）
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: api-server-hpa
-  namespace: autohealops
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: api-server
-  minReplicas: 3
-  maxReplicas: 5
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
----
+# HPA：ai-service 自动扩缩容
+#
+# ⚠️ api-server 暂不做 HPA（原配置 min 3 / max 5 / CPU 70% 已撤）：
+#    agent 反向隧道网关的连接注册表在进程内（api-server/app/agent_gateway.py 的 _agents），
+#    api-server 多副本时 agent 只会挂在其中一个 Pod 上，其它副本的隧道调用找不到连接 → 失败。
+#    要做 api-server 多副本，必须先把 agent 网关拆成独立 Deployment（单副本）+ 各副本经网关转发；
+#    拆完再启用下面这段（已注释保留）：
+#
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: api-server-hpa
+#   namespace: autohealops
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: api-server
+#   minReplicas: 2
+#   maxReplicas: 5
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 70
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

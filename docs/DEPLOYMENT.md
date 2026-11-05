@@ -44,6 +44,26 @@ curl http://localhost:8080/health
 
 ## 方式二：Kubernetes
 
+### 配置注入原则（务必先看）
+
+**Pod 里没有 `.env` 文件**。三个服务都优先读环境变量（pydantic-settings / viper），
+所以集群部署只需要 ConfigMap + Secret：
+
+- **非敏感项** → ConfigMap（`k8s/configmap.yaml`）
+- **敏感项**（连接串里的密码、JWT/加密密钥、仓库凭据）→ Secret（`autohealops-secrets`）
+- Deployment 一律 `envFrom` 整包注入，**不要**在 Deployment 里逐个写 `env`（漏一项就会静默用默认值）
+
+实际部署用生成器，避免「.env 改了、集群配置没跟上」：
+
+```bash
+./scripts/gen-k8s-config.sh           # 从项目根 .env 生成 k8s/generated/{configmap,secret}.yaml
+./scripts/gen-k8s-config.sh --check   # 生成 + YAML/API 校验
+```
+
+生成器会做**覆盖度校验**：把 `api-server/ai-service` 的 `Settings` 字段和 Go 端
+`v.GetString(...)` 全部解析出来，逐个确认在生成物里有归属，缺一项直接报错退出。
+生成物在 `k8s/generated/`（`.gitignore` 忽略）——真实密钥不进 git。
+
 ### 清单说明
 
 `k8s/` 目录：
@@ -51,32 +71,58 @@ curl http://localhost:8080/health
 | 文件 | 说明 |
 |---|---|
 | namespace.yaml | autohealops 命名空间 |
-| configmap-*.yaml | 各服务环境变量（DATABASE_URL、PROMETHEUS_URL 等） |
-| secret.yaml | 敏感配置（ENCRYPTION_KEY、JWT_SECRET_KEY、AI Key）base64 |
-| deployment-*.yaml | 各服务 Deployment |
-| service-*.yaml | 各服务 Service |
+| configmap.yaml | 三个服务各自的非敏感配置（含集群内 Service 地址） |
+| secret.example.yaml | 敏感配置**模板**（占位值，不能直接上线） |
+| deployments.yaml | 4 个 Deployment（探针 + envFrom + agent CA 卷） |
+| services.yaml | 各服务 Service（含 agent 网关 9095、日志流 9099） |
+| pvc-agent-ca.yaml | 平台自建 CA 持久卷（agent 隧道 mTLS 用） |
 | ingress.yaml | 入口（/ → frontend，/api/v1 → api-server） |
-| hpa-*.yaml | api-server/ai-service 自动扩缩容 |
+| hpa.yaml | ai-service 自动扩缩容（api-server 暂不做 HPA，见下） |
 | pdb.yaml | Pod 中断预算 |
 | networkpolicy.yaml | 网络策略（ai-service/executor 只允许 api-server 入站） |
 | backup-cronjob.yaml | 每日备份 |
 
 ### 关键部署约束
 
-1. **k8s-executor 固定 1 副本**：有状态 watcher，多副本会重复 watch 同一集群导致告警重复，**不配置 HPA**。
-2. **数据库 migration 由 api-server 统一管理**：api-server 启动时执行 `alembic upgrade head`，k8s-executor/ai-service 启动时不建表。
-3. **备份必须包含 ENCRYPTION_KEY**：否则恢复后 kubeconfig 密文无法解密。
+1. **api-server 固定 1 副本**：agent 反向隧道网关的连接注册表在进程内
+   （`api-server/app/agent_gateway.py` 的 `_agents`）。多副本时 agent 只挂在其中一个 Pod，
+   其它副本转发不到 → 调用失败。要 api-server 多副本 HA，必须先把网关拆成独立 Deployment（未实施）。
+   因此 `strategy` 用 `Recreate`（agent CA 是 RWO 卷，滚动更新会卡在挂载上）。
+2. **k8s-executor 固定 1 副本**：有状态 watcher，多副本会重复 watch 同一集群导致告警重复，**不配置 HPA**。
+3. **`autohealops-agent-ca` PVC 必须持久化**：CA 私钥丢了 → 所有已下发 agent 的客户端证书失效，
+   要逐集群重新拉 install.yaml。
+4. **agent 网关地址（`AGENT_GATEWAY_PUBLIC_ADDR`）是 mTLS 证书 SAN 的来源**：
+   改地址后必须重启 api-server 才会重签服务端证书，否则 agent 报
+   `certificate is valid for <旧地址>, not <新地址>`。
+5. **数据库 migration 由 api-server 统一管理**：api-server 启动时执行 `alembic upgrade head`。
+6. **备份必须包含 ENCRYPTION_KEY**：否则恢复后 kubeconfig 密文无法解密。
 
 ### 部署
 
 ```bash
+./scripts/gen-k8s-config.sh --check
+
 kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/configmap-*.yaml
-kubectl apply -f k8s/secret.yaml
-kubectl apply -f k8s/deployment-*.yaml
-kubectl apply -f k8s/service-*.yaml
+kubectl apply -f k8s/pvc-agent-ca.yaml
+kubectl apply -f k8s/generated/configmap.yaml
+kubectl apply -f k8s/generated/secret.yaml
+kubectl apply -f k8s/deployments.yaml
+kubectl apply -f k8s/services.yaml
+kubectl apply -f k8s/hpa.yaml -f k8s/pdb.yaml -f k8s/networkpolicy.yaml
 kubectl apply -f k8s/ingress.yaml
 ```
+
+> `k8s/configmap.yaml` 是人工维护的模板（占位 `REPLACE_ME`），
+> `k8s/generated/configmap.yaml` 是从本机 `.env` 生成的真实值版本。
+> **只 apply 其中一个**（同名 ConfigMap，后 apply 的覆盖前一个）；推荐用 generated。
+
+### 对外暴露 agent 网关（9095）
+
+被管集群的 agent 主动连平台 9095，所以这个端口必须让外部集群可达，三选一：
+
+1. `type: NodePort`（简单，如 `30905`；`AGENT_GATEWAY_PUBLIC_ADDR=<节点IP>:30905`）
+2. `type: LoadBalancer`（云环境）
+3. 保持 ClusterIP + 外层 nginx/SamWaf 做 **TCP 四层**转发（不要 HTTP 反代，gRPC 长连接）
 
 ## 备份与恢复
 

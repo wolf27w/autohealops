@@ -1,5 +1,6 @@
 # 配置文件（含密钥，勿提交）
 .env
+.env.bak-*
 
 # Python
 __pycache__/
@@ -36,3 +37,6 @@ backups/
 
 # Agent 隧道 PKI（平台自建 CA 私钥，严禁入库）
 data/agent-ca/
+
+# 从 .env 生成的 K8s 配置物料（含真实密钥，严禁入库）
+k8s/generated/

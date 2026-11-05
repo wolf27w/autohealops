@@ -1,18 +1,26 @@
+# ============================================================
 # 各服务 Deployment
+#
+# 配置注入规则：
+#   - 非敏感项 → ConfigMap（configmap.yaml）
+#   - 敏感项   → Secret autohealops-secrets（secret.example.yaml / 生成的 secret.yaml）
+#   - 一律用 envFrom 整包注入，不在 Deployment 里逐个写 env（避免漏项漂移）
+#   - Pod 里没有 .env 文件：pydantic-settings / viper 都优先读环境变量
+# ============================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api-server
   namespace: autohealops
 spec:
-  replicas: 3
+  # ⚠️ 必须单副本：agent 反向隧道网关的连接注册表在进程内（agent_gateway._agents），
+  #    多副本时 agent 只挂在其中一个 Pod 上，其余副本转发不到 → 调用失败。
+  #    要做 api-server 多副本 HA，需先把网关拆成独立 Deployment（尚未实施）。
+  replicas: 1
   revisionHistoryLimit: 5
   progressDeadlineSeconds: 600
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app: api-server
@@ -21,15 +29,6 @@ spec:
       labels:
         app: api-server
     spec:
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchExpressions:
-                  - key: app
-                    operator: In
-                    values: [api-server]
-              topologyKey: kubernetes.io/hostname
       containers:
         - name: api-server
           image: autohealops/api-server:latest
@@ -40,17 +39,11 @@ spec:
           envFrom:
             - configMapRef:
                 name: api-server-config
-          env:
-            - name: ENCRYPTION_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: autohealops-secrets
-                  key: ENCRYPTION_KEY
-            - name: JWT_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: autohealops-secrets
-                  key: JWT_SECRET_KEY
+            - secretRef:
+                name: autohealops-secrets
+          volumeMounts:
+            - name: agent-ca
+              mountPath: /var/lib/autohealops/agent-ca
           livenessProbe:
             httpGet:
               path: /health
@@ -72,6 +65,12 @@ spec:
             limits:
               cpu: 500m
               memory: 1Gi
+      volumes:
+        # 平台自建 CA（签发 agent 客户端证书 + 网关服务端证书）
+        # 必须持久化：丢了 → 所有已下发 agent 的证书失效，要逐集群重装
+        - name: agent-ca
+          persistentVolumeClaim:
+            claimName: autohealops-agent-ca
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -98,15 +97,14 @@ spec:
           image: autohealops/k8s-executor:latest
           ports:
             - containerPort: 9090
+              name: grpc
+            - containerPort: 9099
+              name: logstream
           envFrom:
             - configMapRef:
                 name: k8s-executor-config
-          env:
-            - name: ENCRYPTION_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: autohealops-secrets
-                  key: ENCRYPTION_KEY
+            - secretRef:
+                name: autohealops-secrets
           livenessProbe:
             tcpSocket:
               port: 9090
@@ -156,22 +154,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ai-service-config
-          env:
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: autohealops-secrets
-                  key: OPENAI_API_KEY
-            - name: DEEPSEEK_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: autohealops-secrets
-                  key: DEEPSEEK_API_KEY
-            - name: CLAUDE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: autohealops-secrets
-                  key: CLAUDE_API_KEY
+            - secretRef:
+                name: autohealops-secrets
           livenessProbe:
             httpGet:
               path: /live

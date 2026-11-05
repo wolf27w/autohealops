@@ -1,14 +1,60 @@
-# 各服务 ConfigMap（非敏感环境变量）
+# ============================================================
+# 非敏感配置（ConfigMap）
+#
+# ⚠️ 规则：凡是「连接串/密码/密钥/凭据」一律进 Secret（k8s/secret.example.yaml），
+#    这里只放可以公开看的东西。
+#
+# 本文件是人工维护的模板；实际部署推荐用
+#     ./scripts/gen-k8s-config.sh
+# 从项目根 .env 生成 k8s/generated/{configmap,secret}.yaml（.gitignore 忽略），
+# 避免「.env 改了、集群配置没跟上」。
+# ============================================================
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: api-server-config
   namespace: autohealops
 data:
-  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
-  REDIS_URL: "redis://:REPLACE_ME@192.168.6.99:6379/0"
+  # ---------- 服务间通信（集群内 DNS，不能是 localhost）----------
   K8S_EXECUTOR_GRPC_ADDR: "k8s-executor:9090"
+  # executor 日志流 HTTP（P1-R5）；默认值 localhost:9099 在 Pod 里会指向自己
+  EXECUTOR_LOGSTREAM_ADDR: "http://k8s-executor:9099"
   AI_SERVICE_HTTP_ADDR: "http://ai-service:9000"
+  EXECUTOR_MAX_CONCURRENCY: "8"
+
+  # ---------- JWT（非密钥参数）----------
+  JWT_ALGORITHM: "HS256"
+  JWT_EXPIRE_HOURS: "24"
+
+  # ---------- 通用 ----------
+  LOG_LEVEL: "INFO"
+  # 前端实际访问域名（留空=使用代码内开发默认白名单）
+  CORS_ORIGINS: "https://autohealops.example.com"
+  COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon,drain,label,taint"
+
+  # ---------- JVM 诊断（容器无 JDK 工具时注入 jattach）----------
+  JVM_JATTACH_URL: "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
+  JVM_JATTACH_PATH: "/tmp/.autohealops-jattach"
+
+  # ---------- Agent 接入（★ 部署前必须按现场改）----------
+  # 被管集群能拉到的 agent 镜像
+  AGENT_IMAGE: "harbor.efreight.cn/ops/autohealops-agent:0.2.1"
+  AGENT_NAMESPACE: "autohealops"
+  # 目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
+  AGENT_IMAGE_PULL_SECRET: ""
+  # 网关监听地址（Pod 内）
+  AGENT_GATEWAY_ADDR: "0.0.0.0:9095"
+  # ★ 被管集群能访问到的地址 host:port
+  #   例：autohealops.example.com:9095（域名）或 1.2.3.4:30905（NodePort）
+  #   注意：mTLS 服务端证书 SAN 取这个 host，换地址必须重启 api-server 才会重签证书
+  AGENT_GATEWAY_PUBLIC_ADDR: "REPLACE_ME.example.com:9095"
+  # ★ 平台对外 URL（生成 agent 一键安装命令用；集群侧必须能访问）
+  PLATFORM_PUBLIC_URL: "http://REPLACE_ME.example.com:8080"
+  # mTLS：true=只接受带客户端证书的连接（false 仅限本地调试）
+  AGENT_TLS_ENABLED: "true"
+  # 平台自建 CA 目录 —— 必须挂持久卷（PVC autohealops-agent-ca），
+  # 丢了会让所有已下发 agent 的客户端证书失效
+  AGENT_CA_DIR: "/var/lib/autohealops/agent-ca"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -16,9 +62,13 @@ metadata:
   name: k8s-executor-config
   namespace: autohealops
 data:
-  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
   GRPC_PORT: "9090"
-  COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,label,taint"
+  # 实时日志跟随 HTTP 端口（与 gRPC 同进程）
+  LOGSTREAM_ADDR: ":9099"
+  LOG_LEVEL: "INFO"
+  # 写入告警后回调平台立即处理（X-Internal-Token 复用 JWT_SECRET_KEY）
+  API_SERVER_URL: "http://api-server:8080"
+  COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon,drain,label,taint"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -26,8 +76,9 @@ metadata:
   name: ai-service-config
   namespace: autohealops
 data:
-  DATABASE_URL: "mysql+aiomysql://root:root@192.168.6.99:3306/autohealops"
-  EMBEDDING_MODEL: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  LOG_LEVEL: "INFO"
+  # 可观测性（复用现有基础设施，留空=不用）
   PROMETHEUS_URL: ""
-  ES_URL: ""
-  ES_INDEX_PATTERN: "k8s-*"
+  # AI 成本控制（0=不限制）
+  DAILY_COST_LIMIT: "0"
+  SINGLE_ALERT_COST_LIMIT: "0"
