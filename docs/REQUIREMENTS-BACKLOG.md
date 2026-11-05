@@ -898,10 +898,13 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 > `key` 是稳定标识（同一集群内唯一），平台据此把多次上报归到同一个数据库记录。
 
 **采集与上报**
-- agent 每 `N` 分钟（默认 5 分钟，可配 `-db-interval`）采集每个库：
+- agent 每 **10 秒**（老板 2026-11-05 定，可配 `-db-interval`）采集每个库的**指标**；
+  慢 SQL 在同一上报里带上，但内部按 **60 秒** 采一次（performance_schema 全量 digest 查询较重，
+  跟着 10 秒跑会把 DB 本身拖慢）——如要改，`-db-slow-interval` 可配。
   - 通用：版本、连接数/上限、活跃连接、锁等待、慢查询累计、库/表大小 TOP10
   - MySQL：`SHOW GLOBAL STATUS` + `performance_schema`（慢 SQL TOP5）
-  - PostgreSQL：`pg_stat_activity` / `pg_stat_statements` / `pg_database_size`（**依赖 pgx 驱动，见 R1**）
+  - PostgreSQL：`pg_stat_activity` / `pg_stat_statements` / `pg_database_size`
+  （**老板已批准引入 `jackc/pgx` 驱动**，见 R1）
 - 经隧道上报：新增隧道方法 `DbMetrics`，payload = `{cluster_id, dbs:[{key, type, metrics:{...}, slow_sql:[...] }]}`
 - 采集失败只上报 `error`，不中断其它库；平台侧记录 `last_error`。
 
@@ -919,6 +922,11 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 
 **估时**：MySQL 路径 1d（可复用现有 HandleHealth 采集逻辑）；PG 0.5d（依赖 R1 驱动）；平台落库+UI 0.5d。
 
-**与现有 `cluster_db_connections` 的关系**
-- 保留现有「平台侧配置 + 经隧道临时查询」作为**按需排查**入口（不落库、即时返回）。
-- 长期监控走本方案（agent 自采自报）。
+**两种数据库来源并存（老板 2026-11-05 定）**
+| 来源 | 配置在哪 | 采集方式 | 凭据存哪 |
+|---|---|---|---|
+| **直连**（本地/网络可达的库）| 平台「数据库连接管理」 | api-server 直连采集（现有 `db_collector`）| 平台库（加密） |
+| **agent**（外部集群内的库）| agent 侧 Secret / env | agent 在集群内采集后经隧道上报 | **只在对方集群** |
+
+- 两者在「数据库监控」页**统一展示**，带来源徽标；指标/慢 SQL 同一套表、同一套趋势图口径。
+- 现有 `cluster_db_connections`（平台存凭据 + 经隧道临时查询）保留为**按需排查**入口，不做长期采集。
