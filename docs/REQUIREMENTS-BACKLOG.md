@@ -1067,3 +1067,27 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 | 8.6 SFTP 上传下载（默认 /tmp、进度、目录白名单、审计）| 1~1.5d |
 | 8.5 会话录制 + 回放页 + 清理 | 1.5~2d |
 | 联调/自测 | 1d |
+
+### R9 主机采集支持密码认证（改用 asyncssh）— 0.5d（老板 2026-11-05 定：走 B 方案）
+
+**现状（Bug，2026-11-05 实测确认）**
+- `api-server/app/services/host_monitor_service.py` 的 `ssh_ps()` 用系统 `ssh -o BatchMode=yes`，
+  只支持 `-i <私钥路径>`；**保存的 `ssh_password_encrypted` 从未被使用**（代码里既没有 sshpass，也没有 SSH 库）。
+- 结果：配置密码认证的主机**永远 Permission denied → 一直离线**。
+  实测：7 台主机（192.168.6.41/42/236/237/183/13/14）全部 offline，只有 192.168.6.36 因为本机有免密密钥才 online。
+- 附带问题：这 7 台 `process_paths` 为空 → 即使连上也只显示 online，不监控任何进程（需补配置）。
+
+**改法（老板定：B 方案，改代码而不是铺公钥）**
+- 引入 `asyncssh`（已批准，与 R8 共用），`ssh_ps()` 改为 asyncssh 连接：
+  - 认证优先级：保存的私钥内容（`ssh_key_encrypted`，R8 新增）→ 私钥路径（兼容）→ 保存的密码
+  - 仍执行 `ps -eo pid,pcpu,pmem,rss,args`，解析逻辑不变
+- 连接失败要区分原因并落库/展示：`认证失败`（password/publickey） vs `网络不可达` vs `超时`，
+  不要统一显示「离线」——现在这个问题就是「认证失败被当成离线」，排查困难。
+- `hosts` 增加 `last_error` 字段（varchar 255），页面悬停显示。
+
+**验收**
+- 配置密码的主机能在 60 秒内变 online，进程状态正常刷新
+- 故意填错密码 → 状态显示「离线（认证失败）」而不是干巴巴的离线
+- 断网 → 显示「离线（连接超时）」
+
+**估时**：0.5d（含错误分类与页面提示）。
