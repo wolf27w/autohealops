@@ -668,3 +668,38 @@
 **未做（影响集群/部署）**：A2 agent 托管更新、A3 M1 集群内自注册、A4 M2 下发动作、A6 平台生产部署。
 **已取消**：R2.3 / JMX Exporter（老板 2026-10-16）。
 **已核实暂缓**：M7 时区（全链路 CST 一致，无 bug）。
+
+---
+
+## 2026-11-05 新增需求（老板：先不开发，记入需求）
+
+### 1) PostgreSQL 支持（经 agent 查库 / 健康采集）
+
+- 现状：`internal/agentdb` 只接了 MySQL 驱动（`go-sql-driver/mysql`，随 gorm 传递依赖已在 go.mod）。
+- 需求：支持 PostgreSQL 的「查询」与「健康采集」。
+- 前置：需要给 agent 引入 Go 驱动（建议 `github.com/jackc/pgx/v5`，或 `lib/pq`），**需要联网拉依赖**，按老板「不擅自装包」原则待批准。
+- 落地要点：agent 侧按 `db_type` 选驱动；健康采集按 PG 的口径重写（`pg_stat_activity` / `pg_stat_statements` /
+  `pg_database_size` / 锁等待），前端复用「集群数据库」面板。
+
+### 2) 多副本不影响接入（平台侧 + agent 侧）
+
+**目标**：api-server、agent 都能多副本运行（高可用），且不产生重复上报 / 接入不一致。
+
+**问题拆解（两类，别混）**
+- **A. agent 多副本**（被管集群里 `replicas>1`）：多个 agent 都会跑 watcher + 推指标/快照/事件 →
+  **重复告警、重复数据**；且同一个 cluster_id 有多条隧道，平台只保留最后一条，路由不确定。
+- **B. 服务端多副本**（api-server `replicas>1`）：每个副本各有一份「cluster→隧道」注册表；
+  agent 连到副本 A，请求落到副本 B 就找不到 → **接入不一致**（不是重复上报）。
+
+**方案（二选一，均待开发）**
+| 方案 | 做法 | 解决 | 估时 |
+|---|---|---|---|
+| 一（推荐） | 把 agent 网关拆成独立 Deployment（单副本有状态），api-server 变无状态可多副本；网关故障由 K8s 拉起，agent 自动重连 | B | 1–2d |
+| 二 | api-server 多副本 + Redis 记录「cluster_id → 所属副本」，跨副本调用内部转发（含流式） | B（且网关也能多副本） | 2–3d |
+
+**agent 侧多副本（A）**：需要选主/租约（K8s Lease 或 Redis 锁），只让一个副本跑 watcher 与采集，
+其它副本只承接无状态执行（exec/日志/YAML），避免重复告警与重复数据。~0.5–1d。
+
+**当前实现约束（代码事实）**
+- `api-server` 强制单副本：`agent_gateway._agents` 是进程内字典；`k8s/deployments.yaml` 已按单副本 + Recreate 配置。
+- agent 的 `install.yaml` 目前 `replicas: 1`，且 `-watch=true`。
