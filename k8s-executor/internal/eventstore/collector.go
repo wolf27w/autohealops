@@ -30,6 +30,14 @@ func CollectEventsOnce(ctx context.Context, client *k8sclient.ClusterClient, clu
 		return nil, err
 	}
 	since := now.Add(-activeWindow)
+	// Pod 事件用 ownerReferences 精确关联工作负载（Pod→ReplicaSet→Deployment / STS / DS）
+	owners := map[string][2]string{}
+	for i := range evs.Items {
+		if evs.Items[i].InvolvedObject.Kind == "Pod" {
+			owners = resolveOwners(ctx, client)
+			break
+		}
+	}
 	out := make([]database.K8sEvent, 0, len(evs.Items))
 	for i := range evs.Items {
 		e := &evs.Items[i]
@@ -54,6 +62,8 @@ func CollectEventsOnce(ctx context.Context, client *k8sclient.ClusterClient, clu
 			Namespace:    e.InvolvedObject.Namespace,
 			ResourceKind: e.InvolvedObject.Kind,
 			ResourceName: e.InvolvedObject.Name,
+			OwnerKind:    owners[e.InvolvedObject.Namespace+"/"+e.InvolvedObject.Name][0],
+			OwnerName:    owners[e.InvolvedObject.Namespace+"/"+e.InvolvedObject.Name][1],
 			Reason:       e.Reason,
 			Type:         e.Type,
 			Message:      e.Message,
@@ -133,6 +143,44 @@ func (c *Collector) cleanup() {
 	}
 }
 
+// resolveOwners 构建 Pod → 工作负载 映射（Pod 的 ownerReferences 可能是 ReplicaSet，
+// ReplicaSet 的 owner 才是 Deployment，所以要多跳一层）。
+func resolveOwners(ctx context.Context, client *k8sclient.ClusterClient) map[string][2]string {
+	out := map[string][2]string{}
+	rsOwner := map[string]string{}
+	if rsList, err := client.Clientset.AppsV1().ReplicaSets("").List(ctx, metav1.ListOptions{}); err == nil {
+		for _, r := range rsList.Items {
+			for _, o := range r.OwnerReferences {
+				if o.Kind == "Deployment" {
+					rsOwner[r.Namespace+"/"+r.Name] = o.Name
+				}
+			}
+		}
+	}
+	if pods, err := client.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{}); err == nil {
+		for _, p := range pods.Items {
+			key := p.Namespace + "/" + p.Name
+			for _, o := range p.OwnerReferences {
+				switch o.Kind {
+				case "ReplicaSet":
+					if d, ok := rsOwner[p.Namespace+"/"+o.Name]; ok {
+						out[key] = [2]string{"deployment", d}
+					} else {
+						out[key] = [2]string{"replicaset", o.Name}
+					}
+				case "StatefulSet":
+					out[key] = [2]string{"statefulset", o.Name}
+				case "DaemonSet":
+					out[key] = [2]string{"daemonset", o.Name}
+				case "Job", "CronJob":
+					out[key] = [2]string{"job", o.Name}
+				}
+			}
+		}
+	}
+	return out
+}
+
 // Upsert 按 (cluster_id, uid) 幂等写入；count/last_seen/message 取最新
 func Upsert(db *gorm.DB, rows []database.K8sEvent) {
 	if len(rows) == 0 {
@@ -144,6 +192,8 @@ func Upsert(db *gorm.DB, rows []database.K8sEvent) {
 			"namespace":     gorm.Expr("VALUES(namespace)"),
 			"resource_kind": gorm.Expr("VALUES(resource_kind)"),
 			"resource_name": gorm.Expr("VALUES(resource_name)"),
+			"owner_kind":    gorm.Expr("VALUES(owner_kind)"),
+			"owner_name":    gorm.Expr("VALUES(owner_name)"),
 			"reason":        gorm.Expr("VALUES(reason)"),
 			"type":          gorm.Expr("VALUES(type)"),
 			"message":       gorm.Expr("VALUES(message)"),

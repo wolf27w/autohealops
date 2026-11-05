@@ -21,6 +21,9 @@ class K8sEvent(Base):
     namespace: Mapped[str] = mapped_column(String(100), index=True, default="")
     resource_kind: Mapped[str] = mapped_column(String(40), index=True, default="")
     resource_name: Mapped[str] = mapped_column(String(200), index=True, default="")
+    # 事件所属工作负载（Pod 事件经 ownerReferences 解析：Pod→ReplicaSet→Deployment / StatefulSet / DaemonSet）
+    owner_kind: Mapped[str] = mapped_column(String(40), index=True, default="")
+    owner_name: Mapped[str] = mapped_column(String(200), index=True, default="")
     reason: Mapped[str] = mapped_column(String(100), default="")
     type: Mapped[str] = mapped_column(String(20), default="")  # Normal / Warning
     message: Mapped[str] = mapped_column(Text, default="")

@@ -9,7 +9,7 @@ import yaml
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 
 from app.clients.executor_client import executor_client
 from app.core.database import async_session
@@ -453,7 +453,11 @@ async def workload_events(cluster_id: int, namespace: str, kind: str, name: str,
                     K8sEvent.namespace == namespace,
                     K8sEvent.last_seen >= since,
                     or_(
-                        K8sEvent.resource_name == name,
+                        # ① 工作负载自身的事件
+                        and_(K8sEvent.resource_kind == kind.capitalize(), K8sEvent.resource_name == name),
+                        # ② 其下 Pod 的事件（ownerReferences 精确关联）
+                        and_(K8sEvent.owner_kind == kind.lower(), K8sEvent.owner_name == name),
+                        # ③ 兜底：按 Pod 名前缀（老数据没有 owner 字段）
                         K8sEvent.resource_name.like(f"{name}-%"),
                     ),
                 ).order_by(K8sEvent.last_seen.desc()).limit(500)

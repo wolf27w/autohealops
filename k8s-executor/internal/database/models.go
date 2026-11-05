@@ -148,6 +148,9 @@ type K8sEvent struct {
 	Namespace    string     `gorm:"size:100;index" json:"namespace"`
 	ResourceKind string     `gorm:"size:40;index" json:"resource_kind"`
 	ResourceName string     `gorm:"size:200;index" json:"resource_name"`
+	// 事件所属工作负载（Pod 事件经 ownerReferences 解析）
+	OwnerKind    string     `gorm:"size:40;index" json:"owner_kind"`
+	OwnerName    string     `gorm:"size:200;index" json:"owner_name"`
 	Reason       string     `gorm:"size:100" json:"reason"`
 	Type         string     `gorm:"size:20" json:"type"`
 	Message      string     `gorm:"type:text" json:"message"`
