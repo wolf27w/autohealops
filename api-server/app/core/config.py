@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     JVM_JATTACH_PATH: str = "/tmp/.autohealops-jattach"
 
     # Agent 接入（M3 / P3）：镜像、镜像拉取凭据、网关对外地址
-    #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 k8s-executor/Dockerfile.agent）
+    #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 agent/Dockerfile）
     AGENT_IMAGE: str = "harbor.efreight.cn/ops/autohealops-agent:0.2.7"
     #   AGENT_IMAGE_PULL_SECRET：目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
     AGENT_IMAGE_PULL_SECRET: str = "autohealops"

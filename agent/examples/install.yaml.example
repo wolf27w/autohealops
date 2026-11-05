@@ -1,0 +1,111 @@
+# 一键安装清单样例（平台会按集群动态渲染；此文件仅用于理解结构，请勿直接 apply）
+#
+# 真实地址：GET {PLATFORM_PUBLIC_URL}/api/v1/clusters/{id}/agent/install.yaml?token=***&image=<镜像>&pull_secret=<凭据名>
+#   - token        必填，接入令牌（可吊销）
+#   - image        可选，覆盖默认镜像
+#   - pull_secret  可选，覆盖默认拉取凭据名（默认 autohealops）
+#   - namespace    固定（平台 AGENT_NAMESPACE，不可改）
+#
+# 平台若配置了 AGENT_REGISTRY_USERNAME / AGENT_REGISTRY_PASSWORD，会在最前面自动生成一个
+# kubernetes.io/dockerconfigjson Secret（name = pull_secret），下面用注释表示。
+---
+#（自动生成时才有）apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: autohealops
+#   namespace: autohealops
+# type: kubernetes.io/dockerconfigjson
+# data:
+#   .dockerconfigjson: <base64>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autohealops
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autohealops-agent
+  namespace: autohealops
+imagePullSecrets:
+  - name: autohealops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: autohealops-agent
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["users", "groups", "serviceaccounts"]
+    verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autohealops-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: autohealops-agent
+subjects:
+  - kind: ServiceAccount
+    name: autohealops-agent
+    namespace: autohealops
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: autohealops-agent-tls
+  namespace: autohealops
+type: Opaque
+data:
+  ca.crt: <base64>
+  tls.crt: <base64>
+  tls.key: <base64>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autohealops-agent
+  namespace: autohealops
+  labels:
+    app: autohealops-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: autohealops-agent
+  template:
+    metadata:
+      labels:
+        app: autohealops-agent
+    spec:
+      serviceAccountName: autohealops-agent
+      containers:
+        - name: agent
+          image: harbor.efreight.cn/ops/autohealops-agent:0.2.7
+          args:
+            - "-platform=autohealops.example.com:9095"
+            - "-cluster-id=999025"
+            - "-token=<接入令牌>"
+            - "-watch=true"
+            - "-ca-file=/tls/ca.crt"
+            - "-cert-file=/tls/tls.crt"
+            - "-key-file=/tls/tls.key"
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: tls
+          secret:
+            secretName: autohealops-agent-tls

@@ -106,8 +106,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags "-s -w -X main.version=0.1.0" -o /tmp/autohealops-agent ./cmd/agent
 
 # 2) 传到有 docker 的机器（192.168.6.149 已验证）
-scp /tmp/autohealops-agent Dockerfile.agent root@192.168.6.149:/tmp/agent-build/
-ssh root@192.168.6.149 'cd /tmp/agent-build && mv autohealops-agent agent && docker build -f Dockerfile.agent -t harbor.efreight.cn/ops/autohealops-agent:0.1.0 .'
+scp /tmp/autohealops-agent agent/Dockerfile root@192.168.6.149:/tmp/agent-build/
+ssh root@192.168.6.149 'cd /tmp/agent-build && mv autohealops-agent agent && docker build -f Dockerfile -t harbor.efreight.cn/ops/autohealops-agent:0.1.0 .'
 
 # 3) 推送
 ssh root@192.168.6.149 'docker tag harbor.efreight.cn/ops/autohealops-agent:0.1.0 harbor.efreight.cn/ops/autohealops-agent:latest && docker push harbor.efreight.cn/ops/autohealops-agent:0.1.0 && docker push harbor.efreight.cn/ops/autohealops-agent:latest'

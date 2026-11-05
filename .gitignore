@@ -40,3 +40,6 @@ data/agent-ca/
 
 # 从 .env 生成的 K8s 配置物料（含真实密钥，严禁入库）
 k8s/generated/
+
+# Agent 构建产物
+agent/build/
