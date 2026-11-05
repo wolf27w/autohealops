@@ -382,7 +382,7 @@ export default function ClusterList() {
       </Modal>
 
       {/* Agent 接入向导 */}
-      <Modal title="Agent 接入（KubeSphere 风格）" open={agentOpen} onCancel={() => setAgentOpen(false)}
+      <Modal title="Agent 接入" open={agentOpen} onCancel={() => setAgentOpen(false)}
         footer={null} width={680}>
         {!agentResult ? (
           <Form layout="vertical">
