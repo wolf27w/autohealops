@@ -82,6 +82,32 @@ async def delete_db_connection(cluster_id: int, conn_id: int, user=Depends(requi
     return {"code": 200, "message": "success", "data": None}
 
 
+@router.post("/clusters/{cluster_id}/db-connections/{conn_id}/health")
+async def db_health(cluster_id: int, conn_id: int, user=Depends(require_admin)):
+    """一键数据库健康采集（经 agent 在集群内执行）：版本/连接/运行时长/慢查询/锁等待/表空间/慢SQL TOP"""
+    async with async_session() as session:
+        c = await session.get(ClusterDbConnection, conn_id)
+    if not c or c.cluster_id != cluster_id:
+        return {"code": 404, "message": "连接不存在", "data": None}
+
+    from app import agent_gateway
+    if not agent_gateway.is_connected(cluster_id):
+        return {"code": 503, "message": "该集群 agent 不在线，无法采集", "data": None}
+
+    req = {
+        "db_type": c.db_type, "host": c.host, "port": c.port,
+        "database": c.database, "username": c.username,
+        "password": decrypt_aes256_gcm(c.password_encrypted) if c.password_encrypted else "",
+    }
+    try:
+        resp = agent_gateway.call(cluster_id, "DbHealth", json.dumps(req).encode(), timeout=45.0)
+        data = json.loads(resp.decode() or "{}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("经 agent 采数据库健康失败 cluster=%s conn=%s: %s", cluster_id, conn_id, e)
+        return {"code": 500, "message": f"采集失败：{e}", "data": None}
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.post("/clusters/{cluster_id}/db-connections/{conn_id}/query")
 async def query_db(cluster_id: int, conn_id: int, payload: dict, user=Depends(require_admin)):
     """下发 SQL 由 agent 在集群内执行（只读白名单：select/show/describe/explain）"""

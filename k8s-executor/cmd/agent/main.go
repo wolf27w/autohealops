@@ -364,6 +364,15 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 // QueryDatabase 例外：由 agent 在集群内直接连数据库执行（不经 executor）。
 func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.AgentFrame) *agentpb.AgentFrame {
 	resp := &agentpb.AgentFrame{Type: "response", ReqId: f.ReqId, Method: f.Method}
+	if f.Method == "DbHealth" {
+		out, err := agentdb.HandleHealth(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
 	if f.Method == "QueryDatabase" {
 		out, err := agentdb.HandleQuery(ctx, f.Payload)
 		if err != nil {

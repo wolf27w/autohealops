@@ -227,6 +227,17 @@ export const listClusterDbConnections = (clusterId: number) => http.get<ClusterD
 export const createClusterDbConnection = (clusterId: number, data: Record<string, unknown>) => http.post<ClusterDbConn>(`/clusters/${clusterId}/db-connections`, data)
 export const deleteClusterDbConnection = (clusterId: number, connId: number) => http.delete(`/clusters/${clusterId}/db-connections/${connId}`)
 export const queryClusterDb = (clusterId: number, connId: number, sql: string) => http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/clusters/${clusterId}/db-connections/${connId}/query`, { sql })
+export interface DbHealthData {
+  db_type?: string; database?: string; version?: string
+  uptime_seconds?: number; threads_connected?: number; threads_running?: number
+  max_connections?: number; max_used_connections?: number
+  queries?: number; commits?: number; rollbacks?: number; slow_queries?: number; row_lock_waits?: number
+  lock_waits?: number
+  top_tables?: { table: string; rows: number; size_mb: number }[]
+  top_slow?: { sql_text: string; exec_count: number; avg_ms: number; max_ms: number }[]
+}
+export const getClusterDbHealth = (clusterId: number, connId: number) =>
+  http.post<DbHealthData>(`/clusters/${clusterId}/db-connections/${connId}/health`)
 
 // ============ 知识库 ============
 export const searchKnowledge = (q: string, topK: number = 5) => http.get('/knowledge/search', { params: { q, top_k: topK } })

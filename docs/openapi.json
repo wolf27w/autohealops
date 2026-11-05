@@ -3423,6 +3423,58 @@
         "summary": "Delete Db Connection"
       }
     },
+    "/api/v1/clusters/{cluster_id}/db-connections/{conn_id}/health": {
+      "post": {
+        "description": "一键数据库健康采集（经 agent 在集群内执行）：版本/连接/运行时长/慢查询/锁等待/表空间/慢SQL TOP",
+        "operationId": "post_api_v1_clusters_cluster_id_db_connections_conn_id_health",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Db Health"
+      }
+    },
     "/api/v1/clusters/{cluster_id}/db-connections/{conn_id}/query": {
       "post": {
         "description": "下发 SQL 由 agent 在集群内执行（只读白名单：select/show/describe/explain）",
