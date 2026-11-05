@@ -6,13 +6,14 @@ import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers, batchWorkloadOp, getWorkloads } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers, batchWorkloadOp, getWorkloads } from '../services/api'
 import type { ClusterPod } from '../services/api'
 import type { ProactiveScanResult } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
 import WorkloadYamlModal, { type WorkloadTarget } from '../components/WorkloadYamlModal'
 import WorkloadMountsPanel from '../components/WorkloadMountsPanel'
 import PodDetailDrawer from '../components/PodDetailDrawer'
+import TerminalModal from '../components/TerminalModal'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../components/ConfigObjectYamlModal'
 import ConfigObjectInfoModal from '../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../components/ConfigObjectDataModal'
@@ -810,7 +811,7 @@ export default function ClusterDetail() {
 
       <PodMetricsDrawer pod={metricsPod} onClose={() => setMetricsPod(null)} />
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
-      <ExecPodModal pod={execTarget} onClose={() => setExecTarget(null)} />
+      <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
       <PodDetailDrawer pod={detailPod} onClose={() => setDetailPod(null)} />
@@ -1084,59 +1085,6 @@ function PodLogsDrawer({ pod, onClose }: { pod: PodTarget | null; onClose: () =>
         pod={streamOpen && pod ? { clusterId: pod.clusterId, namespace: pod.namespace, name: pod.name } : null}
         onClose={() => setStreamOpen(false)} />
     </Drawer>
-  )
-}
-
-// 进入容器执行命令弹窗
-function ExecPodModal({ pod, onClose }: { pod: PodTarget | null; onClose: () => void }) {
-  const [command, setCommand] = useState('')
-  const [container, setContainer] = useState('')
-  const [containers, setContainers] = useState<string[]>([])
-  const [output, setOutput] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const run = async () => {
-    if (!command.trim()) return
-    setLoading(true)
-    try {
-      const d = (await execPod(pod!.clusterId, pod!.namespace, pod!.name, command.trim(), container)) as { output?: string }
-      setOutput(d?.output || '(无输出)')
-    } catch {
-      setOutput('执行失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-  useEffect(() => { setCommand(''); setContainer(''); setOutput(''); setContainers([]) }, [pod])
-
-  // 打开时拉取容器列表（默认选第一个），避免“看不到容器”
-  useEffect(() => {
-    if (!pod) return
-    getPodContainers(pod.clusterId, pod.namespace, pod.name)
-      .then((d) => {
-        const list = (d as unknown as { containers?: string[] })?.containers || []
-        setContainers(list)
-        if (list.length) setContainer((c) => c || list[0])
-      })
-      .catch(() => setContainers([]))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pod])
-
-  if (!pod) return null
-  return (
-    <Modal title={`进入容器：${pod.name}`} open={!!pod} onCancel={onClose} footer={null} width={820}>
-      <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
-        <Select placeholder="容器（默认第一个）" value={container || undefined} onChange={(v) => setContainer(v || '')}
-          style={{ width: 220 }} allowClear
-          options={containers.map((c) => ({ label: c, value: c }))} />
-        <Input placeholder="只读命令：ps aux / env / df -h / free -m / ls / cat 等" value={command}
-          onChange={(e) => setCommand(e.target.value)} onPressEnter={run} />
-        <Button type="primary" onClick={run} loading={loading}>执行</Button>
-      </Space.Compact>
-      <pre style={{ maxHeight: '50vh', overflow: 'auto', background: '#1e1e1e', color: '#0f0', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-        {output || '输入命令后执行，结果在此显示'}
-      </pre>
-    </Modal>
   )
 }
 
