@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     AGENT_IMAGE: str = "harbor.efreight.cn/ops/autohealops-agent:0.2.7"
     #   AGENT_IMAGE_PULL_SECRET：目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
     AGENT_IMAGE_PULL_SECRET: str = "autohealops"
+    #   接入时自动创建 imagePullSecrets 用的仓库凭据（留空则不创建，要求目标集群已存在同名 Secret）
+    AGENT_REGISTRY_USERNAME: str = ""
+    AGENT_REGISTRY_PASSWORD: str = ""
     #   平台对外地址（生成 agent 一键安装命令 / 推导网关地址用；集群侧需能访问）
     PLATFORM_PUBLIC_URL: str = ""
     #   网关监听地址 / 对目标集群可见的地址（host:port）

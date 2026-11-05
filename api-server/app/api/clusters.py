@@ -269,6 +269,30 @@ async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", 
         logger.warning("记录集群 agent ns/image 失败 cluster=%s: %s", cluster_id, _e)
     # 拉取凭据挂在主 SA 上（不再另建 SA —— 另建的 SA 没有 RBAC，会导致 agent 读不了 apiserver）
     sa_pull_block = f"\nimagePullSecrets:\n  - name: {pull_secret}" if pull_secret else ""
+
+    # 可选：自动创建镜像拉取凭据（需要平台配置仓库账号密码；留空则要求目标集群已有同名 Secret）
+    registry_secret_doc = ""
+    _ru = (getattr(settings, "AGENT_REGISTRY_USERNAME", "") or getattr(settings, "REGISTRY_USERNAME", "") or "").strip()
+    _rp = (getattr(settings, "AGENT_REGISTRY_PASSWORD", "") or getattr(settings, "REGISTRY_PASSWORD", "") or "").strip()
+    if pull_secret and _ru and _rp:
+        import base64 as _b64
+        import json as _json2
+        _host = image.split("/")[0] if ("/" in image and ("." in image.split("/")[0] or ":" in image.split("/")[0])) else "docker.io"
+        _cfg = _json2.dumps({"auths": {_host: {
+            "username": _ru, "password": _rp,
+            "auth": _b64.b64encode(f"{_ru}:{_rp}".encode()).decode(),
+        }}})
+        registry_secret_doc = (
+            "apiVersion: v1\n"
+            "kind: Secret\n"
+            "metadata:\n"
+            f"  name: {pull_secret}\n"
+            f"  namespace: {ns}\n"
+            "type: kubernetes.io/dockerconfigjson\n"
+            "data:\n"
+            f"  .dockerconfigjson: {_b64.b64encode(_cfg.encode()).decode()}\n"
+            "---\n"
+        )
     # mTLS（2026-11-04 老板定：不允许明文）：现场签发客户端证书，塞进 Secret 挂给 agent
     tls_doc = ""
     tls_args = ""
@@ -318,7 +342,7 @@ kind: Namespace
 metadata:
   name: {ns}
 ---
-apiVersion: v1
+{registry_secret_doc}apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: autohealops-agent

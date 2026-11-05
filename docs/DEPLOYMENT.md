@@ -193,7 +193,9 @@ kubectl rollout restart deployment/ai-service
 
 ### 3. 接入前置（常见卡点）
 
-- **镜像拉取凭据**：`AGENT_IMAGE_PULL_SECRET=autohealops` 时，该 Secret 必须**已存在于 agent 命名空间**（默认 `autohealops-agent`）。不存在 → Pod `ImagePullBackOff`。
+- **镜像拉取凭据**：`AGENT_IMAGE_PULL_SECRET`（默认 `autohealops`）。
+  - 平台配了 `AGENT_REGISTRY_USERNAME` / `AGENT_REGISTRY_PASSWORD` → 生成的 `install.yaml` **自动创建**该 docker-registry Secret；
+  - 未配 → 要求目标集群 agent 命名空间里**已存在**同名 Secret，否则 Pod `ImagePullBackOff`。
   ```bash
   kubectl -n default get secret autohealops -o yaml \
     | sed 's/namespace: default/namespace: autohealops-agent/' | kubectl apply -f -
