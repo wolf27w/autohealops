@@ -1176,3 +1176,52 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 
 **与 R10 的关系**：R11 是 R10 的先行子集（先让「配置化路由 + 能用新模板」跑起来）；
 R10 落地后，这份 JSON 迁移成 `prompt_routing` 表并加场景/灰度/预览，语义不变。
+
+### R12 应用故障分类体系（把「应用错误」变成可记录的 fault_type）— 1.5~2d（老板 2026-11-05 提）
+
+**问题**
+- K8s 故障类型是**有限枚举**（CrashLoopBackOff / OOMKilled / NodeNotReady…），好记录、好路由。
+- 应用错误是**日志文本**，没有标准类型。现状：所有应用日志告警统一写成 `fault_type="LogKeyword"`，
+  导致 —— ① 告警列表看不出是哪类问题；② 无法按类型路由到不同诊断提示词（R11）；③ 统计无意义。
+
+**方案：规则归一化（文本 → 标准 fault_type）**
+
+1. **规则表扩展**：`log_alert_rules` 增加
+   - `fault_type`（命中后写入的故障类型，默认 `LogKeyword` 兼容老数据）
+   - `category`（app / db / infra / business，用于分组统计）
+   - `priority`（同一日志命中多条时取最高）
+   - `sample_pattern`（正则，用于从日志里抽取关键行做证据）
+
+2. **内置应用故障分类（可一键导入，可按环境改）**
+
+| 标准 fault_type | 典型特征 |
+|---|---|
+| `AppOOM` | OutOfMemoryError / Java heap space / cannot allocate memory |
+| `AppCrash` | Segmentation fault / core dumped / panic: |
+| `AppConnRefused` | Connection refused / dial tcp .* connect: refused |
+| `AppTimeout` | timeout / timed out / DeadlineExceeded / Read timed out |
+| `AppSQL` | SQLException / Deadlock found / Lock wait timeout / too many connections |
+| `AppConfigError` | No such file or directory / config not found / missing env |
+| `AppPermission` | Permission denied / AccessDenied / 403 Forbidden |
+| `AppDependency` | 502/503/504 / upstream connect error / No route to host |
+| `AppBusiness` | 自定义业务错误码（按项目配） |
+| `LogKeyword` | 兜底：只命中关键词但归不了类 |
+
+3. **写入告警**：命中规则 → `alerts.fault_type = 规则.fault_type`，`message` 带命中关键词 + 首行堆栈；
+   同一 Pod/服务 5 分钟内多类命中 → 合并取最高优先级（沿用现有告警合并口径）。
+
+4. **诊断路由**：R11 的路由表直接支持这些类型（如 `AppSQL → db_diagnose`、`AppOOM → pod_crash_diagnosis`），
+   提示词里通过 `{app_error_type}` + `{log_snippet}` 变量让模型聚焦。
+
+5. **前端**
+   - 日志告警规则页：增加「故障类型 / 分类 / 优先级 / 样例正则」字段
+   - 提供「导入内置规则」按钮（按语言栈选择：Java / Go / Node / Python）
+   - 告警列表与仪表盘支持按「应用错误类型」聚合（替代现在清一色 LogKeyword）
+
+**验收**
+- 造 3 条日志（OOM、连接拒绝、SQL 死锁）→ 分别生成 `AppOOM` / `AppConnRefused` / `AppSQL` 三类告警
+- 同一 Pod 同时命中 OOM 与 Timeout → 只保留一条（取高优先级），不重复建单
+- 告警列表能按应用错误类型筛选；仪表盘有分布图
+- 对应类型能路由到指定诊断模板（配合 R11）
+
+**估时**：表结构+内置规则库 0.5d；扫描与合并逻辑 0.5d；前端规则页与聚合 0.5~1d。
