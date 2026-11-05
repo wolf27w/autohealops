@@ -866,3 +866,59 @@
 | 5 | R4 集群内库并入监控（1~1.5d） | 统一入口，依赖 R3 |
 | 6 | R1 PostgreSQL（0.5~1d） | 需批准依赖 |
 | 7 | R2 多副本（3~4d） | 改动最大，单独排期 |
+
+### R6 Agent 侧配置数据库并主动上报（老板 2026-11-05 定，替代平台存凭据的思路）— 1.5~2d
+
+**背景/动机**
+- agent 的目的是方便接入**外部集群**；外部集群里的数据库也要纳入监控。
+- 老板要求：**数据库连接信息配置在 agent 侧**（MySQL 配 MySQL 账号密码；PostgreSQL 配 PG 账号密码），
+  agent 自己扫描数据库信息，**主动上报**平台做统计/监控。
+- 安全收益：数据库凭据**不出对方集群**，平台库里不存外部库密码。
+
+**配置方式（agent 侧）**
+```yaml
+# 方式一（推荐）：Secret 挂载 JSON 文件，agent 用 -db-config 指定路径
+# kubectl -n autohealops create secret generic agent-db-config --from-file=dbs.json
+env:
+  - name: AGENT_DB_CONFIG_FILE
+    value: /etc/agent-db/dbs.json
+---
+# dbs.json
+[
+  {"key":"biz-mysql","type":"mysql","host":"mysql.default.svc","port":3306,
+   "database":"biz","username":"monitor","password":"***"},
+  {"key":"biz-pg","type":"postgres","host":"pg.default.svc","port":5432,
+   "database":"biz","username":"monitor","password":"***"}
+]
+```
+```yaml
+# 方式二：直接环境变量（简单场景）
+AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
+```
+> `key` 是稳定标识（同一集群内唯一），平台据此把多次上报归到同一个数据库记录。
+
+**采集与上报**
+- agent 每 `N` 分钟（默认 5 分钟，可配 `-db-interval`）采集每个库：
+  - 通用：版本、连接数/上限、活跃连接、锁等待、慢查询累计、库/表大小 TOP10
+  - MySQL：`SHOW GLOBAL STATUS` + `performance_schema`（慢 SQL TOP5）
+  - PostgreSQL：`pg_stat_activity` / `pg_stat_statements` / `pg_database_size`（**依赖 pgx 驱动，见 R1**）
+- 经隧道上报：新增隧道方法 `DbMetrics`，payload = `{cluster_id, dbs:[{key, type, metrics:{...}, slow_sql:[...] }]}`
+- 采集失败只上报 `error`，不中断其它库；平台侧记录 `last_error`。
+
+**平台侧落地**
+- `db_connections` 增加 `source`（direct/agent）+ `cluster_id` + `agent_db_key`（唯一键 cluster_id+agent_db_key）：
+  agent 首次上报自动创建一条 `source=agent` 的记录（**不存密码**），后续按 key upsert。
+- 指标写入现有 `db_metric_snapshots`（增加 `source` 列，值 `agent`），慢 SQL 写入 `slow_sql_records`（同样标记来源）。
+- 「数据库监控」页统一展示直连库 + agent 库，带来源徽标（**满足 R4**）。
+- 页面上对 agent 库禁用「手动查询」（因为没有凭据）；健康检查/异常点照常可用（用最新上报数据，不走隧道实时查）。
+
+**验收**
+- agent 侧配 1 个 MySQL + 1 个 PG → 平台数据库监控页出现两条 `来源=agent` 的记录，指标曲线连续
+- 断开隧道时记录变灰/标 stale，恢复后自动续上
+- 平台库里查不到外部库的密码
+
+**估时**：MySQL 路径 1d（可复用现有 HandleHealth 采集逻辑）；PG 0.5d（依赖 R1 驱动）；平台落库+UI 0.5d。
+
+**与现有 `cluster_db_connections` 的关系**
+- 保留现有「平台侧配置 + 经隧道临时查询」作为**按需排查**入口（不落库、即时返回）。
+- 长期监控走本方案（agent 自采自报）。
