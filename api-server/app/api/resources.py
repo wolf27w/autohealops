@@ -41,12 +41,48 @@ async def overview(cluster_id: int, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": data}
 
 
+# ==================== 实时数据（Redis 实时层 + DB 持久层） ====================
+# 口径（老板 2026-11-05）：实时数据以 Redis 为热点层，DB 为持久层。
+# 读：Redis 命中直接返回；未命中就实时（executor/隧道）取一次并回填 Redis；实时失败才回落 DB。
+RT_TTL_SECONDS = 5
+
+
+async def _rt_cached(key: str, fetch, fallback):
+    """Redis 优先 → 实时取 → 回填 Redis → 实时失败回落数据库"""
+    try:
+        cached = await redis_pool.get(key)
+        if cached:
+            return json.loads(cached)
+    except Exception:  # noqa: BLE001 Redis 不可用则降级直查
+        pass
+    data = None
+    try:
+        data = await fetch()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("实时数据获取失败 key=%s: %s", key, e)
+    if not data:
+        try:
+            data = await fallback()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("实时失败回落数据库也失败 key=%s: %s", key, e)
+            data = data or []
+    try:
+        await redis_pool.set(key, json.dumps(data, ensure_ascii=False, default=str), ex=RT_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        pass
+    return data
+
+
 @router.get("/clusters/{cluster_id}/detail")
 async def cluster_detail(cluster_id: int, user=Depends(require_any_user)):
-    """集群详情：namespace 下的 pod 状态 + deployment 副本数"""
+    """集群详情：namespace 下的 pod 状态 + deployment 副本数（Redis 实时层，扩容几秒内可见）"""
     if denied := await _deny_cluster(user, cluster_id):
         return denied
-    data = await resource_service.get_cluster_detail(cluster_id)
+    data = await _rt_cached(
+        f"rt:cluster:{cluster_id}:detail:v1",
+        lambda: resource_service.get_cluster_detail_realtime(cluster_id),
+        lambda: resource_service.get_cluster_detail(cluster_id),
+    )
     return {"code": 200, "message": "success", "data": data}
 
 

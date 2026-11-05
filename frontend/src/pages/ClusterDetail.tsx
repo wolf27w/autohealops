@@ -161,6 +161,16 @@ export default function ClusterDetail() {
 
   useEffect(load, [id])
 
+  // 实时刷新集群详情（服务端 Redis 实时层，5s 一次）：扩容/缩容后几秒内可见
+  useEffect(() => {
+    const t = setInterval(() => {
+      getClusterDetail(Number(id))
+        .then((d) => setNamespaces(d as NamespaceDetail[]))
+        .catch(() => { /* 轮询失败不影响页面 */ })
+    }, 5000)
+    return () => clearInterval(t)
+  }, [id])
+
   // 实时 Pod 信息（创建时间/重启/节点）：拉 k8s 实时列表，按 命名空间/名称 合并到容器组表
   // （DB 快照无创建时间；namespace 空=全部）
   const loadLivePods = () => {

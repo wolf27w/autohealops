@@ -10541,7 +10541,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/detail": {
       "get": {
-        "description": "集群详情：namespace 下的 pod 状态 + deployment 副本数",
+        "description": "集群详情：namespace 下的 pod 状态 + deployment 副本数（Redis 实时层，扩容几秒内可见）",
         "operationId": "get_api_v1_resources_clusters_cluster_id_detail",
         "parameters": [
           {

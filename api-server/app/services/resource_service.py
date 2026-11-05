@@ -187,8 +187,39 @@ async def get_cluster_detail(cluster_id: int) -> list[dict]:
     return list(ns_map.values())
 
 
+async def get_cluster_detail_realtime(cluster_id: int) -> list[dict]:
+    """实时版集群详情（Redis 未命中时用，走 executor/隧道，不读快照）"""
+    return await _cluster_detail_live(cluster_id)
+
+
+async def _latest_pod_resources(cluster_id: int) -> dict[str, dict]:
+    """最近快照里每个 Pod 的 requests/limits（给实时列表合并用；取不到不影响实时性）"""
+    since = datetime.now() - timedelta(minutes=10)
+    out: dict[str, dict] = {}
+    try:
+        async with async_session() as session:
+            subq = (
+                select(func.max(ResourceSnapshot.id).label("max_id"))
+                .where(ResourceSnapshot.cluster_id == cluster_id,
+                       ResourceSnapshot.resource_type == "pod",
+                       ResourceSnapshot.snapshot_time >= since)
+                .group_by(ResourceSnapshot.namespace, ResourceSnapshot.resource_name)
+            ).subquery()
+            rows = list((await session.execute(
+                select(ResourceSnapshot).join(subq, ResourceSnapshot.id == subq.c.max_id)
+            )).scalars())
+        for s in rows:
+            out[f"{s.namespace}/{s.resource_name}"] = {
+                "cpu_request": s.cpu_request, "cpu_limit": s.cpu_limit,
+                "memory_request": s.memory_request, "memory_limit": s.memory_limit,
+            }
+    except Exception as e:  # noqa: BLE001
+        logger.debug("取 Pod 资源快照失败 cluster=%s: %s", cluster_id, e)
+    return out
+
+
 async def _cluster_detail_live(cluster_id: int) -> list[dict]:
-    """实时构建集群详情（无快照时兜底）：工作负载列表 + Pod 列表都走 executor（agent 集群即隧道）"""
+    """实时构建集群详情（工作负载 + Pod 都走 executor/隧道；CPU/内存从最近快照合并）"""
     from app.clients.executor_client import executor_client
 
     kind_key = {"deployment": "deployments", "statefulset": "statefulsets",
@@ -217,12 +248,16 @@ async def _cluster_detail_live(cluster_id: int) -> list[dict]:
         logger.warning("实时取工作负载失败 cluster=%s: %s", cluster_id, e)
 
     try:
+        res_map = await _latest_pod_resources(cluster_id)
         p = await executor_client.acall(executor_client.list_pods, cluster_id, "")
         for x in (p.get("pods") or []) if p.get("success") else []:
-            bucket(x.get("namespace") or "default")["pods"].append({
+            ns = x.get("namespace") or "default"
+            r = res_map.get(f"{ns}/{x.get('name')}") or {}
+            bucket(ns)["pods"].append({
                 "name": x.get("name"),
                 "status": x.get("status") or x.get("phase") or "",
-                "cpu_request": "", "cpu_limit": "", "memory_request": "", "memory_limit": "",
+                "cpu_request": r.get("cpu_request", ""), "cpu_limit": r.get("cpu_limit", ""),
+                "memory_request": r.get("memory_request", ""), "memory_limit": r.get("memory_limit", ""),
             })
     except Exception as e:  # noqa: BLE001
         logger.warning("实时取 Pod 列表失败 cluster=%s: %s", cluster_id, e)
