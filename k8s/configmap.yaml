@@ -41,7 +41,7 @@ data:
   AGENT_IMAGE: "harbor.efreight.cn/ops/autohealops-agent:0.2.7"
   AGENT_NAMESPACE: "autohealops"
   # 目标集群里已存在的 imagePullSecrets 名称（harbor 私有仓库时需要）
-  AGENT_IMAGE_PULL_SECRET: ""
+  AGENT_IMAGE_PULL_SECRET: "autohealops"
   # 网关监听地址（Pod 内）
   AGENT_GATEWAY_ADDR: "0.0.0.0:9095"
   # ★ 被管集群能访问到的地址 host:port
