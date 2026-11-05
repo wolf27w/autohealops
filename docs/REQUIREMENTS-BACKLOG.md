@@ -719,12 +719,18 @@
    - agent 的客户端证书仍按集群**现场签发**（拉 install.yaml 时）；现在改成「读挂载的 CA 私钥在内存签」，
      不落盘。
 
-   **初始化与轮换**
-   - 首次：一次性生成 CA 并写 Secret（`kubectl create secret generic ... --from-file=ca.crt --from-file=ca.key`），
-     或用一个 Job 生成；**不要**让 Pod 自动生成。
-   - 轮换 CA = 换 Secret → 所有已下发 agent 的客户端证书失效 → 需逐集群重新拉 install.yaml（这是 CA 的固有代价，
-     与现在一致）。
-   - RBAC 收紧：只允许 api-server 的 ServiceAccount `get` 这个 Secret（CA 私钥能签任意客户端证书）。
+   **初始化与轮换（老板 2026-11-05 定：只能从「集群管理」生成）**
+   - **生成入口只有一个**：平台「集群管理」里的 CA / 接入证书管理（API + UI）。
+     平台用自身 ServiceAccount 写 Secret `autohealops-agent-ca`；**禁止** Pod 启动时自动生成（多副本会 CA 分裂），
+     **禁止**把 `kubectl create secret` 当常规流程（仅应急手册保留）。
+   - **未使用的自动清理**：平台生成的接入凭证（pending 集群记录 + 接入令牌 + 客户端证书），
+     **5 小时内没有 agent 建立连接 → 自动删除**（后台定时任务，每 10 分钟扫一次）。
+     目的：不留悬挂的令牌/证书，减少泄露面。
+   - 轮换 CA = 平台生成新 CA 并更新 Secret → 已下发 agent 的客户端证书全部失效 → 需逐集群重新拉 install.yaml
+     （CA 固有代价，与现状一致）。
+   - RBAC：平台 SA 需要该 namespace 下 Secret 的 create/update/get；其它主体**不给** get
+     （能读 CA 私钥就能签任意客户端证书）。
+   - 本地开发（平台跑在 Mac 上、不在集群内）：仍用本地目录，且仅 dev 允许自动生成。
 
    **清单改动**：`k8s/pvc-agent-ca.yaml` → `k8s/secret-agent-ca.example.yaml`；Deployment 挂 Secret（readOnly）
    + `emptyDir` 给服务端证书；`AGENT_CA_DIR` 保持不变。
