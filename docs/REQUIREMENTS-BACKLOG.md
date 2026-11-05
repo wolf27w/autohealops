@@ -1091,3 +1091,55 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 - 断网 → 显示「离线（连接超时）」
 
 **估时**：0.5d（含错误分类与页面提示）。
+
+### R10 提示词按场景体系化管理 — 2~3d（老板 2026-11-05 提）
+
+**现状问题（代码事实）**
+- `ai-service/app/services/diagnosis_service.py` 用 **if/else 硬编码** 选模板：
+  `application_diagnosis` / `sql_optimization` / `pod_crash_diagnosis` / `node_pressure_diagnosis`，
+  且**兜底是 node 模板** → 未知 fault_type 会拿节点模板去诊断，结论必然跑偏。
+- 模板只有 `category`（diagnosis / repair_plan / risk_assessment / verification），没有「场景」概念；
+  新增场景必须改代码；无灰度、无版本对比、无片段复用（输出格式/红线在每个模板里重复）。
+
+**目标体系（三层）**
+| 层 | 内容 | 存哪 |
+|---|---|---|
+| **① 公共片段** | 输出格式约定、红线（只给方案不执行）、术语、证据引用要求 | 新表 `prompt_fragments`，模板用 `{{fragment:key}}` 引用 |
+| **② 场景模板** | 角色设定 + 变量集 + 该场景分析要点 | `prompt_templates` 加 `scene` 字段 |
+| **③ 路由规则** | fault_type / 场景 → 用哪个模板（可配优先级、可覆盖） | 新表 `prompt_routing` |
+
+**场景划分（建议）**
+| scene | 判定依据 | 模板 | 状态 |
+|---|---|---|---|
+| `pod` | CrashLoopBackOff / OOMKilled / ImagePullBackOff / PendingTimeout | pod_diagnosis（原 pod_crash_diagnosis） | 已有，改造 |
+| `node` | NodeNotReady / MemoryPressure / DiskPressure / PIDPressure | node_diagnosis | 已有，改造 |
+| `workload` | 服务级：可用性下降、副本异常、探针失败、发布后异常 | workload_diagnosis（原 application_diagnosis） | 已有 |
+| `database` | 数据库连接/锁/慢SQL/表空间 | db_diagnosis（原 db_diagnose） | 已有（2026-11-05 模板化） |
+| `cluster` | 集群容量/调度失败/组件异常 | cluster_diagnosis | **新增** |
+| `platform` | 平台自身异常（可选） | platform_diagnosis | 路线图 |
+| —（动作类） | 不属诊断：生成修复方案 / 风险评估 / 验证 | repair_plan / risk_assessment / verification | 已有 |
+
+**路由规则（替代硬编码）**
+- 新表 `prompt_routing`：`(match_type: fault_type|scene, match_value, match_mode: exact|prefix|default, template_name, priority, enabled)`
+- 查找顺序：精确 → 前缀 → 默认；**默认不能再用 node 模板**，用 `default_diagnosis`（通用排障）
+- 未命中路由 → 记录日志并落库（便于补规则），页面显示「未命中路由」告警
+
+**变量契约**
+- 统一变量集：`cluster_name / namespace / resource_kind / resource_name / fault_type / severity /
+  metrics / logs / events / describe_yaml / kb_hits`
+- 模板声明 `variables` + **必填校验**（如 resource_name 缺失 → 直接报错，不发空 prompt）
+- `sample_vars`（JSON）供前端「预览渲染」用
+
+**前端（AI 配置 → 提示词）改造**
+- 左侧按场景分组树（诊断 / 动作 / 其他），右侧编辑
+- 每个场景：选模板版本、启用/停用、**灰度比例**（按百分比分流到新版本）
+- 「预览渲染」：填样例变量看最终 prompt；「版本对比」：diff
+- 「试跑」：选一条真实告警跑一次（手动触发，控制成本）
+- 显示每个版本的效果（采纳率/满意度，基于 AIEffectivenessStat）
+
+**验收**
+- 新增一个 fault_type 只改配置（路由表）就能用新模板，无需改代码
+- 未知 fault_type 走 `default_diagnosis`，不再错用 node 模板
+- 页面能按场景看到模板、切换版本、预览渲染结果
+
+**估时**：数据模型+迁移 0.5d；ai-service 路由与片段展开 0.5~1d；前端改造 1~1.5d。
