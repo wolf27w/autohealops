@@ -207,10 +207,11 @@ async def agent_onboard(payload: dict, user=Depends(require_admin)):
     base = _public_base_url().rstrip("/")
     from urllib.parse import quote
     _img = (getattr(settings, "AGENT_IMAGE", "") or "").strip()
+    _pull = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
     # 安装地址里显式带 image，运维可按环境自行修改后再执行（namespace 固定）
     install_command = (
         f"kubectl apply -f {base}/api/v1/clusters/{cl.id}/agent/install.yaml"
-        f"?token={token}&image={quote(_img, safe='')}"
+        f"?token={token}&image={quote(_img, safe='')}&pull_secret={quote(_pull, safe='')}"
     )
     return {"code": 200, "message": "success", "data": {
         "id": cl.id, "name": cl.name, "token": token, "install_command": install_command}}
@@ -259,8 +260,10 @@ async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", 
     try:
         async with async_session() as _s:
             _c = await _s.get(Cluster, cluster_id)
-            if _c and (_c.agent_namespace != ns or _c.agent_image != image):
+            if _c and (_c.agent_namespace != ns or _c.agent_image != image
+                       or (_c.agent_pull_secret or "") != pull_secret):
                 _c.agent_namespace, _c.agent_image = ns, image
+                _c.agent_pull_secret = pull_secret
                 await _s.commit()
     except Exception as _e:  # noqa: BLE001
         logger.warning("记录集群 agent ns/image 失败 cluster=%s: %s", cluster_id, _e)
