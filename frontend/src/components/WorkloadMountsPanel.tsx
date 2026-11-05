@@ -1,6 +1,6 @@
-// 工作负载「配置」面板（KubeSphere 风格）：
+// 工作负载「配置」面板：
 //   存储     —— 统一的卷列表（配置字典/密钥/PVC/临时卷），每卷显示挂载点（容器 → 路径），可添加/编辑/移除
-//   环境变量 —— env 批量编辑器（KubeSphere 风格：逐行填/删，整份保存）+ envFrom 注入
+//   环境变量 —— env 批量编辑器（逐行填/删，整份保存）+ envFrom 注入
 // props.onlySection 传 'storage' | 'env' 时只渲染单块，不传则内部用 Tabs
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Space, Table, Tag, Modal, Form, Select, Input, Switch, Popconfirm, message, Empty, Spin, Typography, Alert, Tabs, Radio, Divider } from 'antd'
@@ -425,7 +425,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
         </Form>
       </Modal>
 
-      {/* 环境变量批量编辑（KubeSphere 风格：逐行编辑，整份保存） */}
+      {/* 环境变量批量编辑（逐行编辑，整份保存） */}
       <Modal title="编辑环境变量" open={envEdit.open} forceRender onCancel={() => setEnvEdit({ open: false, container: '', rows: [] })}
         onOk={submitEnvEdit} confirmLoading={submitting} okText="保存" width={900}>
         <Space style={{ marginBottom: 10 }} wrap>

@@ -378,7 +378,7 @@ export const editWorkloadMount = (clusterId: number, kind: string, ns: string, n
 export interface EnvPayload { container: string; name: string; old_name?: string; value?: string; value_from?: { type: 'configMap' | 'secret' | 'field' | 'resource'; name?: string; key?: string; field_path?: string; resource?: string } }
 export const upsertWorkloadEnv = (clusterId: number, kind: string, ns: string, name: string, data: EnvPayload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/env`, data)
-// 批量替换某容器环境变量（KubeSphere 风格编辑器整份保存）
+// 批量替换某容器环境变量编辑器整份保存）
 export interface EnvEntryRow { name?: string; value?: string; value_from?: EnvPayload['value_from'] }
 export const replaceWorkloadEnv = (clusterId: number, kind: string, ns: string, name: string, data: { container: string; envs: EnvEntryRow[] }) =>
   http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/env`, data)

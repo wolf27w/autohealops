@@ -12745,7 +12745,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/objects/{kind}/apply": {
       "post": {
-        "description": "按结构化对象（body.object 为 k8s 对象 JSON）创建/更新（需操作员权限）\n\n用于 KubeSphere 风格的结构化创建表单：前端拼好对象，后端转 YAML 后 server-side apply。",
+        "description": "按结构化对象（body.object 为 k8s 对象 JSON）创建/更新（需操作员权限）\n\n用于 结构化创建表单：前端拼好对象，后端转 YAML 后 server-side apply。",
         "operationId": "post_api_v1_resources_clusters_cluster_id_objects_kind_apply",
         "parameters": [
           {
@@ -14174,7 +14174,7 @@
         "summary": "Upsert Env"
       },
       "put": {
-        "description": "批量替换某容器的环境变量（KubeSphere 风格批量编辑器用）。\n\nbody: container, envs:[{name, value?, value_from?{type,name,key,field_path,resource}}]\nenvs 为该容器**完整**的 env 列表（逐行编辑后整份保存）；空数组=清空。",
+        "description": "批量替换某容器的环境变量批量编辑器用）。\n\nbody: container, envs:[{name, value?, value_from?{type,name,key,field_path,resource}}]\nenvs 为该容器**完整**的 env 列表（逐行编辑后整份保存）；空数组=清空。",
         "operationId": "put_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_env",
         "parameters": [
           {
@@ -14763,7 +14763,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/service-info": {
       "get": {
-        "description": "从工作负载提取 Service 自动带出信息：选择器 + 容器端口（KubeSphere 指定工作负载用）",
+        "description": "从工作负载提取 Service 自动带出信息：选择器 + 容器端口（指定工作负载用）",
         "operationId": "get_api_v1_resources_clusters_cluster_id_workloads_kind_namespace_name_service_info",
         "parameters": [
           {

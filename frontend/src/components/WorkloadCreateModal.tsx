@@ -1,4 +1,4 @@
-// 创建工作负载（无状态/有状态/守护集/定时任务）：KubeSphere 风格结构化表单 → 拼 YAML 创建
+// 创建工作负载（无状态/有状态/守护集/定时任务）：结构化表单 → 拼 YAML 创建
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, InputNumber, Switch, Collapse, Divider, message } from 'antd'
 import { applyWorkload } from '../services/api'

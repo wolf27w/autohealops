@@ -83,6 +83,28 @@ DEFAULT_TEMPLATES = [
         "user_prompt_template": "请诊断以下应用状态：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n状态信息：{status_info}\n容器内采集信息（进程/环境变量/磁盘/内存/端口）：\n{exec_output}\n最近事件（describe events）：\n{recent_events}",
     },
     {
+        "name": "db_diagnose",
+        "category": "db_diagnose",
+        "system_prompt": (
+            "你是数据库运维专家。基于提供的数据库健康指标和慢SQL进行分析，**严格按下面三段结构**返回JSON："
+            "{\"conclusion\": \"总体结论（数据库当前健康状况，一段话）\", "
+            "\"root_cause\": \"主要问题根因（结合指标/慢SQL，说明为何发生）\", "
+            "\"suggestions\": [ {\"title\": \"优化项标题（简短）\", "
+            "\"detail\": \"为什么这么优化（一句话）\", "
+            "\"sql_before\": \"优化前的问题SQL（没有则空字符串）\", "
+            "\"sql_after\": \"优化后的SQL：如建索引/改写查询（可直接执行，仅为建议）\", "
+            "\"impact\": \"优化前→后对比，尽量含耗时，如 单次 2400s → 0.03s / 扫描行数 X → Y\"} ]}。\n"
+            "要求：\n"
+            "1) suggestions 必须是对象数组（每项含 title/detail/sql_before/sql_after/impact 五个字段）；\n"
+            "2) 每条建议要具体到对象与动作（表名/字段/索引名/参数）；sql_after 要给可直接执行的语句；\n"
+            "3) impact 明标记为预计（无实测时写「预计」），不要编造精确数字，能估算才写。\n"
+            "【红线】只输出诊断结论与优化建议，绝不执行任何修改（不跑变更、不删数据、不重启），具体操作由 DBA 人工执行。"
+        ),
+        "user_prompt_template": (
+            "数据库类型：{db_type}\n数据库名称：{db_name}\n健康指标：\n{health}\n慢SQL Top：\n{slow_sql}"
+        ),
+    },
+    {
         "name": "sql_optimization",
         "category": "diagnosis",
         "system_prompt": "你是一个数据库性能优化专家。请分析慢SQL并给出优化建议，返回JSON格式。JSON必须包含字段：root_cause（慢SQL原因）、suggestions（优化建议数组，如加索引/SQL改写/参数调优/分页优化）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",

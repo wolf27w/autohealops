@@ -32,7 +32,7 @@
 
 ## 集群侧待办（需部署 exporter）
 
-在 K8s 集群部署 exporter（Prometheus Operator 的 ServiceMonitor 模式，KubeSphere 会自动发现）：
+在 K8s 集群部署 exporter（Prometheus Operator 的 ServiceMonitor 模式，业界同类产品 会自动发现）：
 
 ```bash
 # 以 redis_exporter 为例（其余类似）
@@ -40,7 +40,7 @@ kubectl create deployment redis-exporter --image=oliver006/redis_exporter:latest
   --namespace=ops -- /redis_exporter --redis.addr=redis://redis-0.redis:6379
 kubectl expose deployment redis-exporter --namespace=ops --port=9121
 
-# ServiceMonitor 让 Prometheus 抓取（KubeSphere 环境）：
+# ServiceMonitor 让 Prometheus 抓取（业界同类产品 环境）：
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

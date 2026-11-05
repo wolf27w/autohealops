@@ -185,7 +185,25 @@ async def db_diagnose(payload: dict):
     from app.services.model_adapter import call_with_fallback
     import json as _json
 
-    system = (
+    # 提示词优先用「提示词模板」页里的 db_diagnose（可前端编辑），取不到才用内置默认
+    system = None
+    user_tpl = None
+    try:
+        from sqlalchemy import select
+        from app.core.database import async_session
+        from app.models import PromptTemplate
+        async with async_session() as _s:
+            _r = await _s.execute(select(PromptTemplate).where(
+                PromptTemplate.name == "db_diagnose", PromptTemplate.is_active.is_(True)))
+            _tpl = _r.scalar_one_or_none()
+        if _tpl:
+            system = _tpl.system_prompt
+            user_tpl = _tpl.user_prompt_template
+    except Exception as _e:  # noqa: BLE001
+        pass
+
+    if not system:
+        system = (
         "你是数据库运维专家。基于提供的数据库健康指标和慢SQL进行分析，**严格按下面三段结构**返回JSON："
         "{\"conclusion\": \"总体结论（数据库当前健康状况，一段话）\", "
         "\"root_cause\": \"主要问题根因（结合指标/慢SQL，说明为何发生）\", "
@@ -199,13 +217,18 @@ async def db_diagnose(payload: dict):
         "2) 每条建议要具体到对象与动作（表名/字段/索引名/参数）；sql_after 要给可直接执行的语句；\n"
         "3) impact 明标记为预计（无实测时写「预计」），不要编造精确数字，能估算才写。\n"
         "【红线】只输出诊断结论与优化建议，绝不执行任何修改（不跑变更、不删数据、不重启），具体操作由 DBA 人工执行。"
-    )
-    user = (
-        f"数据库类型：{payload.get('db_type', '')}\n"
-        f"数据库名称：{payload.get('db_name', '')}\n"
-        f"健康指标：\n{payload.get('health', '')}\n"
-        f"慢SQL Top：\n{payload.get('slow_sql', '')}"
-    )
+        )
+
+    if not user_tpl:
+        user_tpl = ("数据库类型：{db_type}\n数据库名称：{db_name}\n健康指标：\n{health}\n慢SQL Top：\n{slow_sql}")
+    from app.services.prompt_engine import render_template
+    user = render_template(user_tpl, {
+        "db_type": payload.get("db_type", ""),
+        "db_name": payload.get("db_name", ""),
+        "health": payload.get("health", ""),
+        "slow_sql": payload.get("slow_sql", ""),
+        "severity": payload.get("severity", "medium"),
+    })
     try:
         resp, model = await call_with_fallback(system, user, "db_diagnose", payload.get("severity", "medium"))
     except Exception as e:  # noqa: BLE001

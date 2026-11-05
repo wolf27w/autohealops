@@ -691,7 +691,7 @@ async def object_update_spec(cluster_id: int, kind: str, namespace: str, name: s
 async def object_apply(cluster_id: int, kind: str, payload: dict, user=Depends(require_operator)):
     """按结构化对象（body.object 为 k8s 对象 JSON）创建/更新（需操作员权限）
 
-    用于 KubeSphere 风格的结构化创建表单：前端拼好对象，后端转 YAML 后 server-side apply。
+    用于 结构化创建表单：前端拼好对象，后端转 YAML 后 server-side apply。
     """
     import yaml as _yaml
     if kind not in _CONFIG_OBJECT_KINDS:
@@ -725,7 +725,7 @@ async def workload_yaml(cluster_id: int, kind: str, namespace: str, name: str, u
 
 @router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/service-info")
 async def workload_service_info(cluster_id: int, kind: str, namespace: str, name: str, user=Depends(require_any_user)):
-    """从工作负载提取 Service 自动带出信息：选择器 + 容器端口（KubeSphere 指定工作负载用）"""
+    """从工作负载提取 Service 自动带出信息：选择器 + 容器端口（指定工作负载用）"""
     import yaml as _yaml
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
@@ -1626,7 +1626,7 @@ async def upsert_env(cluster_id: int, kind: str, namespace: str, name: str,
 @router.put("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/env")
 async def replace_env(cluster_id: int, kind: str, namespace: str, name: str,
                       payload: dict, user=Depends(require_operator)):
-    """批量替换某容器的环境变量（KubeSphere 风格批量编辑器用）。
+    """批量替换某容器的环境变量批量编辑器用）。
 
     body: container, envs:[{name, value?, value_from?{type,name,key,field_path,resource}}]
     envs 为该容器**完整**的 env 列表（逐行编辑后整份保存）；空数组=清空。
