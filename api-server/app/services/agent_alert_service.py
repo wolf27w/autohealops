@@ -32,19 +32,35 @@ NODE_DEDUP_WINDOW_MINUTES = 5
 
 
 def _parse_dt(v) -> datetime | None:
+    """解析 agent 上行时间：支持 RFC3339（带 Z / 时区偏移）→ 统一转成本机时区（naive）。
+
+    ⚠️ 关键：agent 容器默认是 UTC，若直接丢掉时区偏移会把 UTC 时间当本地时间存，
+    导致 agent 采集的数据比 config 采集的相差 8 小时。必须按时区换算。
+    """
     if not v:
         return None
     if isinstance(v, datetime):
-        return v
-    s = str(v).replace("Z", "")
-    # Go time.Time 可能带纳秒/时区偏移，截断到秒后容错解析
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
+        dt = v
+    else:
+        s = str(v).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = None
         try:
-            dt = datetime.strptime(s[:26] if "%f" in fmt else s[:19], fmt)
-            return dt.replace(tzinfo=None)
+            dt = datetime.fromisoformat(s)
         except ValueError:
-            continue
-    return None
+            # 兼容 "2026-11-05 03:50:01" 这类无时区格式
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    dt = datetime.strptime(s[:26], fmt)
+                    break
+                except ValueError:
+                    continue
+        if dt is None:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)  # 转本机时区后去掉 tzinfo
+    return dt
 
 
 async def _in_maintenance_window(cluster_id: int) -> bool:

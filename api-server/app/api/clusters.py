@@ -351,7 +351,11 @@ spec:
             - "-cluster-id={cluster_id}"
             - "-token={token}"
             - "-watch=true"
-{tls_args}          resources:
+{tls_args}          env:
+            # 统一时区（agent 容器默认 UTC，会让上报时间戳差 8 小时）
+            - name: TZ
+              value: Asia/Shanghai
+          resources:
             requests: {{ cpu: 100m, memory: 128Mi }}
             limits: {{ cpu: 500m, memory: 256Mi }}
 {tls_mount}"""
