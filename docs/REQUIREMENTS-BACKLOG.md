@@ -691,11 +691,23 @@
 - **B. 服务端多副本**（api-server `replicas>1`）：每个副本各有一份「cluster→隧道」注册表；
   agent 连到副本 A，请求落到副本 B 就找不到 → **接入不一致**（不是重复上报）。
 
-**方案（二选一，均待开发）**
-| 方案 | 做法 | 解决 | 估时 |
-|---|---|---|---|
-| 一（推荐） | 把 agent 网关拆成独立 Deployment（单副本有状态），api-server 变无状态可多副本；网关故障由 K8s 拉起，agent 自动重连 | B | 1–2d |
-| 二 | api-server 多副本 + Redis 记录「cluster_id → 所属副本」，跨副本调用内部转发（含流式） | B（且网关也能多副本） | 2–3d |
+**方案选定：二（老板 2026-11-05 定）—— api-server（含网关）多副本 + Redis 归属 + 跨副本转发**
+
+> 否决方案一（拆网关单副本）：只是把单点从 api-server 挪到 gateway，网关仍是 SPOF + 吞吐瓶颈，
+> 且没满足「多副本」这个要求本身。
+
+设计要点：
+1. **归属注册**：agent 注册成功后，副本写 Redis `agent:owner:{cluster_id}` = `{pod, addr, ts}`，
+   TTL 30s、心跳每 10s 续期；断开时仅当 owner 是自己才删除。同一集群短时多连接（滚动升级）保留
+   「多连接」语义，不互相覆盖。
+2. **路由**：任何要调用 agent 的入口先查 Redis 归属 → owner 是自己则本地执行；否则转发到 owner 副本的
+   内部 gRPC 端点（unary 直转，流式用双向流代理，覆盖 ExecutePlan / BatchExecute / ExecPodStream）。
+3. **状态写库**：`agent_status / agent_last_seen_at` 只由 owner 副本写，避免多副本互相覆盖。
+4. **前置改造（重要）**：多副本共享 PKI —— 现在 CA 私钥在 RWO PVC 上，N 个副本无法同时签发客户端证书。
+   需改成 RWX 存储（NFS/CephFS）或把 CA 私钥放 Secret 挂载；服务端证书 SAN 用 Service 名，各副本共用。
+5. **可观测**：Redis 归属表加 TTL 监控，归属漂移/隧道双写要有日志与指标。
+
+估时：2–3d（不含 PKI 存储改造，约 +0.5d）。
 
 **agent 侧多副本（A）**：需要选主/租约（K8s Lease 或 Redis 锁），只让一个副本跑 watcher 与采集，
 其它副本只承接无状态执行（exec/日志/YAML），避免重复告警与重复数据。~0.5–1d。
