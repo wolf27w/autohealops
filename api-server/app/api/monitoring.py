@@ -148,3 +148,32 @@ async def cluster_range(cluster_id: int, promql: str, minutes: int = 30, step: i
     if not r.get("success"):
         return {"code": 500, "message": r.get("error"), "data": None}
     return {"code": 200, "message": "success", "data": {"series": r["series"]}}
+
+@router.get("/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/metrics")
+async def workload_metrics(cluster_id: int, kind: str, namespace: str, name: str,
+                           range: str = "1h", user=Depends(require_any_user)):
+    """工作负载级监控（R15）：Deployment/StatefulSet/DaemonSet × 容器，跨 Pod 重建拼接。
+
+    - 数据源：集群自带 Prometheus（**平台不落库**）
+    - CPU/内存：每容器一条线（指标本身带 container 标签）
+    - 网络：只有 Pod 级（容器共享 netns），前端按"该 Pod 是否单容器"决定拆或合并
+    - range：10m / 1h / 6h / 24h / 72h / 168h（上限 7 天，受集群 Prometheus retention 限制）
+    """
+    if not await user_permission_service.check_cluster_permission(user, cluster_id):
+        return {"code": 403, "message": "无权限访问该集群", "data": None}
+    spec = prometheus_service.WORKLOAD_RANGE.get(range)
+    if not spec:
+        return {"code": 400, "message": "range 仅支持 10m/1h/6h/24h/72h/168h", "data": None}
+    if prometheus_service.workload_owner_selector(kind, namespace, name) is None:
+        return {"code": 400, "message": f"不支持的 kind: {kind}（仅 deployment/statefulset/daemonset）", "data": None}
+    minutes, step = spec
+    r = await prometheus_service.workload_metrics(cluster_id, kind, namespace, name, minutes, step)
+    if not r.get("ok"):
+        return {"code": 500, "message": r.get("error") or "查询失败", "data": None}
+    return {"code": 200, "message": "success", "data": {
+        "kind": kind, "namespace": namespace, "name": name,
+        "range": range, "step_seconds": step,
+        "cpu": r["cpu"], "memory": r["memory"],
+        "net_rx": r["net_rx"], "net_tx": r["net_tx"],
+        "pod_container_count": r["pod_container_count"],
+    }}

@@ -269,6 +269,96 @@ def _sel(namespace: str, pod: str, container: str) -> str:
     return ",".join(sel)
 
 
+# ==================== 工作负载级监控（R15，只读 Prometheus） ====================
+# 归属：Deployment 的 Pod 属主是 ReplicaSet（owner_name = <deploy>-<hash>），
+# 没有 kube_replicaset_owner 指标 → 用 RS 名前缀正则；StatefulSet/DaemonSet 直接按 owner_name。
+_WORKLOAD_OWNER = {
+    "deployment": ("ReplicaSet", "{name}-[a-z0-9]+", "=~"),
+    "statefulset": ("StatefulSet", "{name}", "="),
+    "daemonset": ("DaemonSet", "{name}", "="),
+}
+
+WORKLOAD_RANGE = {
+    "10m": (600, 60), "1h": (3600, 60), "6h": (21600, 300),
+    "24h": (86400, 300), "72h": (259200, 900), "168h": (604800, 3600),
+}
+
+
+def workload_owner_selector(kind: str, namespace: str, name: str) -> str | None:
+    """构造 kube_pod_owner 选择器；kind 不支持时返回 None。"""
+    spec = _WORKLOAD_OWNER.get((kind or "").lower())
+    if not spec:
+        return None
+    owner_kind, owner_re, op = spec
+    owner_name = owner_re.format(name=name)
+    return f'namespace="{namespace}",owner_kind="{owner_kind}",owner_name{op}"{owner_name}"'
+
+
+def workload_promql(kind: str, namespace: str, name: str, metric: str) -> str | None:
+    """工作负载级 PromQL（每容器 CPU/内存；网络为 Pod 级，靠 owner 归属）。
+
+    metric: cpu / memory / net_rx / net_tx / pod_container_count
+    """
+    sel = workload_owner_selector(kind, namespace, name)
+    if not sel:
+        return None
+    owner = f'kube_pod_owner{{{sel}}}'
+    join = f'* on(namespace,pod) group_left(owner_name) {owner}'
+    if metric == "cpu":
+        return (f'sum by (container) (rate(container_cpu_usage_seconds_total'
+                f'{{namespace="{namespace}",container!="",container!="POD"}}[5m]) {join})')
+    if metric == "memory":
+        return (f'sum by (container) (container_memory_working_set_bytes'
+                f'{{namespace="{namespace}",container!="",container!="POD"}} {join})')
+    # 网络指标没有 container 标签（cAdvisor 只在 pause 沙箱上报）→ 只能到 Pod 级
+    if metric == "net_rx":
+        return (f'sum by (pod) (rate(container_network_receive_bytes_total'
+                f'{{namespace="{namespace}"}}[5m]) {join})')
+    if metric == "net_tx":
+        return (f'sum by (pod) (rate(container_network_transmit_bytes_total'
+                f'{{namespace="{namespace}"}}[5m]) {join})')
+    if metric == "pod_container_count":
+        return (f'count by (pod) (container_cpu_usage_seconds_total'
+                f'{{namespace="{namespace}",container!="",container!="POD"}} {join})')
+    return None
+
+
+async def workload_metrics(cluster_id: int, kind: str, namespace: str, name: str,
+                           minutes: int = 60, step: int = 60) -> dict:
+    """工作负载级指标：跨 Pod 重建拼接（按容器聚合），网络按 Pod。
+
+    返回 {ok, error, cpu:[{container, values}], memory:[...], net_rx:[{pod, values}], net_tx:[...],
+          pod_container_count:{pod: n}}
+    """
+    specs = {
+        "cpu": "cpu", "memory": "memory", "net_rx": "net_rx", "net_tx": "net_tx",
+        "pod_container_count": "pod_container_count",
+    }
+    out: dict = {"ok": True, "error": "", "cpu": [], "memory": [], "net_rx": [], "net_tx": [],
+                 "pod_container_count": {}}
+    for key, metric in specs.items():
+        promql = workload_promql(kind, namespace, name, metric)
+        if not promql:
+            return {"ok": False, "error": f"不支持的 kind: {kind}", "cpu": [], "memory": [],
+                    "net_rx": [], "net_tx": [], "pod_container_count": {}}
+        if metric == "pod_container_count":
+            r = await query(cluster_id, promql)
+            if not r.get("success"):
+                return {**out, "ok": False, "error": r.get("error", "查询失败")}
+            out["pod_container_count"] = {
+                x["metric"].get("pod"): int(float(x.get("value") or 0)) for x in r.get("result", [])
+                if x["metric"].get("pod")
+            }
+            continue
+        r = await query_range(cluster_id, promql, minutes, step)
+        if not r.get("success"):
+            return {**out, "ok": False, "error": r.get("error", "查询失败")}
+        label = "container" if metric in ("cpu", "memory") else "pod"
+        out[key] = [{"name": (x.get("metric") or {}).get(label, ""), "values": x.get("values", [])}
+                    for x in r.get("series", [])]
+    return out
+
+
 def _pod_sel(namespace: str = "", pod: str = "") -> str:
     """网络类指标的 Pod 级选择器（这些指标没有 container 标签，不能带 container 过滤）"""
     sel = []

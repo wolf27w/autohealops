@@ -234,6 +234,9 @@ async def handle_event(cluster_id: int, method: str, payload: bytes) -> None:
         await handle_resolve_event(ev)
     elif method == "PodMetrics":
         await handle_pod_metrics(ev)
+    elif method == "DbMetrics":
+        from app.services.db_agent_service import handle_db_metrics
+        await handle_db_metrics(int(cluster_id), ev.get("rows") or [])
     elif method == "CollectSnapshot":
         await handle_collect_snapshot(ev)
     elif method == "Events":

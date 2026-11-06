@@ -11,6 +11,7 @@ import JvmDiagModal from '../components/JvmDiagModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import WorkloadMountsPanel from '../components/WorkloadMountsPanel'
 import WorkloadEventsModal from '../components/WorkloadEventsModal'
+import WorkloadMetricsDrawer from '../components/WorkloadMetricsDrawer'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
   getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers, getClusterPods } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
@@ -86,6 +87,7 @@ export default function ServiceDetail() {
   const [liveWs, setLiveWs] = useState(false)
   const [events, setEvents] = useState<WorkloadEvent[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
+  const [wlMetricsOpen, setWlMetricsOpen] = useState(false)
 
   const clusterId = Number(id)
 
@@ -299,6 +301,7 @@ export default function ServiceDetail() {
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/clusters/${id}`)}>返回</Button>
         <span style={{ fontSize: 16, fontWeight: 'bold' }}>{clusterName || `集群 ${id}`} / {KIND_LABEL[kind] || kind} / {name}</span>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        <Button onClick={() => setWlMetricsOpen(true)}>监控</Button>
         <Button onClick={() => setEventsOpen(true)}>历史事件</Button>
       </Space>
 
@@ -434,6 +437,10 @@ export default function ServiceDetail() {
       </Card>
 
       <PodMetricsDrawer pod={metricsPod} onClose={() => setMetricsPod(null)} />
+      <WorkloadMetricsDrawer
+        target={wlMetricsOpen ? { clusterId, kind, namespace, name } : null}
+        onClose={() => setWlMetricsOpen(false)}
+      />
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <WorkloadEventsModal

@@ -36,7 +36,14 @@ class DBConnection(Base):
     inspect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 定时巡检 cron（分 时 日 月 周；空=不定时，仅手动点击巡检）
     inspect_cron: Mapped[str] = mapped_column(String(100), default="")
-    status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/connected/failed
+    status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/connected/failed/removed
+    # ---- agent 来源（R6，2026-11-06）----
+    # direct = 平台直连采集（凭据存平台）；agent = agent 侧配置后上报（平台不存凭据）
+    source: Mapped[str] = mapped_column(String(20), default="direct", server_default="direct")
+    cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True)      # agent 库归属集群
+    agent_db_key: Mapped[str | None] = mapped_column(String(100), nullable=True)  # agent 配置里的稳定 key
+    last_error: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
