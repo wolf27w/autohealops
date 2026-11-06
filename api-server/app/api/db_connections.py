@@ -142,21 +142,15 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
         return {"code": 404, "message": "连接不存在", "data": None}
     if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
         return {"code": 403, "message": "无权限访问该数据库", "data": None}
-    if (getattr(c, "source", "direct") or "direct") != "agent":
-        return {"code": 400, "message": "仅 agent 接入的库支持平台查询（直连库请用客户端执行）", "data": None}
-    if not c.cluster_id or not c.agent_db_key:
-        return {"code": 400, "message": "该库缺少 agent 归属信息（cluster_id/key）", "data": None}
+    ok_ready, why = _db_ready(c)
+    if not ok_ready:
+        return {"code": 400, "message": why, "data": None}
 
     started = time.time()
     ok, err = True, ""
     data: dict = {"columns": [], "rows": [], "truncated": False}
     try:
-        from app import agent_gateway
-        raw = await asyncio.to_thread(
-            agent_gateway.call, int(c.cluster_id), "QueryDatabaseByKey",
-            json.dumps({"key": c.agent_db_key, "sql": sql}).encode(), 40.0,
-        )
-        data = json.loads(raw)
+        data = await _run_sql(c, sql)
     except Exception as e:  # noqa: BLE001
         ok, err = False, str(e)
     elapsed = round(time.time() - started, 3)
@@ -168,7 +162,7 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
         await audit_service.create_audit_record(
             f"dbquery-{uuid.uuid4().hex[:12]}",
             trigger_snapshot=json.dumps({
-                "mode": "db_query", "source": "agent", "cluster_id": c.cluster_id,
+                "mode": "db_query", "source": (c.source or "direct"), "cluster_id": c.cluster_id,
                 "agent_db_key": c.agent_db_key, "db": c.name,
             }, ensure_ascii=False),
             execution_detail=json.dumps({
@@ -184,24 +178,34 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
     return {"code": 200, "message": "success", "data": data}
 
 
-def _agent_db_ready(c: DBConnection):
-    """agent 库校验：返回 (ok, 错误消息)"""
-    if (getattr(c, "source", "direct") or "direct") != "agent":
-        return False, "仅 agent 接入的库支持平台查询（直连库请用客户端执行）"
-    if not c.cluster_id or not c.agent_db_key:
-        return False, "该库缺少 agent 归属信息（cluster_id/key）"
+def _db_ready(c: DBConnection):
+    """库是否支持平台操作：agent 库（需 key）或直连 mysql（平台有账密）。"""
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        if not c.cluster_id or not c.agent_db_key:
+            return False, "该库缺少 agent 归属信息（cluster_id/key）"
+        return True, ""
+    if (c.db_type or "mysql").lower() != "mysql":
+        return False, f"直连执行暂只支持 mysql（当前 {c.db_type}）"
+    if not c.password_encrypted and not c.readonly_password_encrypted:
+        return False, "直连库缺少密码（无法连接）"
     return True, ""
 
 
-async def _agent_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: bool = False,
-                     timeout: float = 40.0) -> dict:
-    from app import agent_gateway
-    raw = await asyncio.to_thread(
-        agent_gateway.call, int(c.cluster_id), "QueryDatabaseByKey",
-        json.dumps({"key": c.agent_db_key, "sql": sql, "limit": limit, "allow_write": allow_write}).encode(),
-        timeout,
-    )
-    return json.loads(raw)
+async def _run_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: bool = False,
+                   timeout: float = 40.0) -> dict:
+    """执行 SQL：agent 库走隧道，直连库由平台直接连（两种来源共用一套控制台）。"""
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        from app import agent_gateway
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(c.cluster_id), "QueryDatabaseByKey",
+            json.dumps({"key": c.agent_db_key, "sql": sql, "limit": limit, "allow_write": allow_write}).encode(),
+            timeout,
+        )
+        return json.loads(raw)
+    from app.services import db_direct_service
+    if allow_write:
+        return await db_direct_service.exec_sql(c, sql)
+    return await db_direct_service.query(c, sql, limit)
 
 
 async def _audit_sql(user, c: DBConnection, sql: str, elapsed: float, rows: int,
@@ -236,7 +240,7 @@ async def get_schema(conn_id: int, user=Depends(require_any_user)):
         return {"code": 404, "message": "连接不存在", "data": None}
     if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
         return {"code": 403, "message": "无权限访问该数据库", "data": None}
-    ok, why = _agent_db_ready(c)
+    ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
 
@@ -245,12 +249,16 @@ async def get_schema(conn_id: int, user=Depends(require_any_user)):
         return {"code": 200, "message": "success", "data": hit[1]}
 
     try:
-        from app import agent_gateway
-        raw = await asyncio.to_thread(
-            agent_gateway.call, int(c.cluster_id), "DbSchemaByKey",
-            json.dumps({"key": c.agent_db_key}).encode(), 30.0,
-        )
-        data = json.loads(raw)
+        if (getattr(c, "source", "direct") or "direct") == "agent":
+            from app import agent_gateway
+            raw = await asyncio.to_thread(
+                agent_gateway.call, int(c.cluster_id), "DbSchemaByKey",
+                json.dumps({"key": c.agent_db_key}).encode(), 30.0,
+            )
+            data = json.loads(raw)
+        else:
+            from app.services import db_direct_service
+            data = await db_direct_service.schema(c)
         # 系统库不进补全候选（否则 3000 张系统表会淹没业务表）
         sys_dbs = {"information_schema", "performance_schema", "mysql", "sys"}
         for key in ("tables", "views", "routines", "events"):
@@ -269,17 +277,21 @@ async def get_object_ddl(conn_id: int, kind: str, name: str, db: str = "",
         c = await session.get(DBConnection, conn_id)
     if not c:
         return {"code": 404, "message": "连接不存在", "data": None}
-    ok, why = _agent_db_ready(c)
+    ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
     try:
-        from app import agent_gateway
-        raw = await asyncio.to_thread(
-            agent_gateway.call, int(c.cluster_id), "DbObjectDDL",
-            json.dumps({"key": c.agent_db_key, "kind": kind, "db": db or c.database, "name": name}).encode(),
-            30.0,
-        )
-        return {"code": 200, "message": "success", "data": json.loads(raw)}
+        if (getattr(c, "source", "direct") or "direct") == "agent":
+            from app import agent_gateway
+            raw = await asyncio.to_thread(
+                agent_gateway.call, int(c.cluster_id), "DbObjectDDL",
+                json.dumps({"key": c.agent_db_key, "kind": kind, "db": db or c.database, "name": name}).encode(),
+                30.0,
+            )
+            return {"code": 200, "message": "success", "data": json.loads(raw)}
+        from app.services import db_direct_service
+        return {"code": 200, "message": "success",
+                "data": await db_direct_service.ddl(c, kind, db or c.database, name)}
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"获取 DDL 失败：{e}", "data": None}
 
@@ -293,7 +305,7 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
         return {"code": 404, "message": "连接不存在", "data": None}
     if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
         return {"code": 403, "message": "无权限访问该数据库", "data": None}
-    ok, why = _agent_db_ready(c)
+    ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
     scope = (payload.get("scope") or "db").lower()
@@ -301,14 +313,19 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
     if scope == "table" and not table:
         return {"code": 400, "message": "导出单表需要指定表名", "data": None}
     try:
-        from app import agent_gateway
-        raw = await asyncio.to_thread(
-            agent_gateway.call, int(c.cluster_id), "DbExport",
-            json.dumps({"key": c.agent_db_key, "db": c.database, "table": table if scope == "table" else "",
-                        "rows": int(payload.get("rows") or 1000)}).encode(),
-            120.0,
-        )
-        return {"code": 200, "message": "success", "data": json.loads(raw)}
+        rows = int(payload.get("rows") or 1000)
+        if (getattr(c, "source", "direct") or "direct") == "agent":
+            from app import agent_gateway
+            raw = await asyncio.to_thread(
+                agent_gateway.call, int(c.cluster_id), "DbExport",
+                json.dumps({"key": c.agent_db_key, "db": c.database, "table": table if scope == "table" else "",
+                            "rows": rows}).encode(),
+                120.0,
+            )
+            return {"code": 200, "message": "success", "data": json.loads(raw)}
+        from app.services import db_direct_service
+        return {"code": 200, "message": "success",
+                "data": await db_direct_service.export_sql(c, c.database, table if scope == "table" else "", rows)}
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"导出失败：{e}", "data": None}
 
@@ -327,7 +344,7 @@ async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin
         c = await session.get(DBConnection, conn_id)
     if not c:
         return {"code": 404, "message": "连接不存在", "data": None}
-    ok, why = _agent_db_ready(c)
+    ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
 
@@ -336,14 +353,19 @@ async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin
     started = time.time()
     result, err = {}, ""
     try:
-        from app import agent_gateway
-        raw = await asyncio.to_thread(
-            agent_gateway.call, int(c.cluster_id), "DbImport",
-            json.dumps({"key": c.agent_db_key, "db": (payload.get("db") or c.database),
-                        "table": table, "format": fmt, "content": content}).encode(),
-            180.0,
-        )
-        result = json.loads(raw)
+        if (getattr(c, "source", "direct") or "direct") == "agent":
+            from app import agent_gateway
+            raw = await asyncio.to_thread(
+                agent_gateway.call, int(c.cluster_id), "DbImport",
+                json.dumps({"key": c.agent_db_key, "db": (payload.get("db") or c.database),
+                            "table": table, "format": fmt, "content": content}).encode(),
+                180.0,
+            )
+            result = json.loads(raw)
+        else:
+            from app.services import db_direct_service
+            result = await db_direct_service.import_content(
+                c, payload.get("db") or c.database, table, fmt, content)
     except Exception as e:  # noqa: BLE001
         err = str(e)
     elapsed = round(time.time() - started, 2)
@@ -370,14 +392,14 @@ async def exec_connection(conn_id: int, payload: dict, user=Depends(require_admi
         c = await session.get(DBConnection, conn_id)
     if not c:
         return {"code": 404, "message": "连接不存在", "data": None}
-    ok, why = _agent_db_ready(c)
+    ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
 
     started = time.time()
     data, err = {}, ""
     try:
-        data = await _agent_sql(c, sql, limit=200, allow_write=True, timeout=60.0)
+        data = await _run_sql(c, sql, limit=200, allow_write=True, timeout=60.0)
     except Exception as e:  # noqa: BLE001
         err = str(e)
     elapsed = round(time.time() - started, 3)
@@ -403,14 +425,14 @@ async def download_query(conn_id: int, payload: dict, user=Depends(require_any_u
         return {"code": 404, "message": "连接不存在", "data": None}
     if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
         return {"code": 403, "message": "无权限访问该数据库", "data": None}
-    ok, why = _agent_db_ready(c)
+    ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
 
     started = time.time()
     data, err = {}, ""
     try:
-        data = await _agent_sql(c, sql, limit=5000, allow_write=False, timeout=90.0)
+        data = await _run_sql(c, sql, limit=5000, allow_write=False, timeout=90.0)
     except Exception as e:  # noqa: BLE001
         err = str(e)
     elapsed = round(time.time() - started, 3)

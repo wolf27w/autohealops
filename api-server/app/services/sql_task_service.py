@@ -199,8 +199,9 @@ async def execute_task(task_id: int, dry_run: bool = False) -> dict:
         if not conn:
             result["error"] = "数据库连接不存在"
             return result
-        if (getattr(conn, "source", "direct") or "direct") != "agent":
-            result["error"] = "仅 agent 接入的库支持定时任务"
+        is_agent = (getattr(conn, "source", "direct") or "direct") == "agent"
+        if not is_agent and (conn.db_type or "mysql").lower() != "mysql":
+            result["error"] = f"直连库定时任务暂只支持 mysql（当前 {conn.db_type}）"
             return result
 
         sql = (task.sql or "").strip()
@@ -209,7 +210,11 @@ async def execute_task(task_id: int, dry_run: bool = False) -> dict:
             result["error"] = "定时任务只允许只读 SQL（select/show/describe/explain/with）"
             return result
 
-        data = await agent_query(int(conn.cluster_id), conn.agent_db_key or "", sql, timeout=90.0)
+        if is_agent:
+            data = await agent_query(int(conn.cluster_id), conn.agent_db_key or "", sql, timeout=90.0)
+        else:
+            from app.services import db_direct_service
+            data = await db_direct_service.query(conn, sql, MAX_ROWS)
         columns = data.get("columns") or []
         rows = data.get("rows") or []
         if len(rows) > MAX_ROWS:

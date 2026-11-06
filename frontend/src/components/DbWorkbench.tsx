@@ -77,6 +77,8 @@ export default function DbWorkbench({
   const [res, setRes] = useState<Result | null>(null)
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
   const isAgent = (cur?.source || 'direct') === 'agent'
+  // 直连库也支持平台执行（平台存账密，直接连库）；目前直连仅 mysql
+  const canSql = !!cur && (isAgent || (cur.db_type || 'mysql').toLowerCase() === 'mysql')
   const head = useMemo(() => (sql.trim().split(/\s+/)[0] || '').toLowerCase(), [sql])
   const isRead = READ_HEADS.has(head)
   const filtered = useMemo(() => {
@@ -500,7 +502,7 @@ export default function DbWorkbench({
               <Switch size="small" checked={!!cur.collect_enabled} onChange={(v) => onToggleCollect(cur, v)} />
               <Tooltip title="巡检开关（关闭后不参与诊断报告生成）"><span style={{ fontSize: 12, color: '#8c8c8c' }}>巡检</span></Tooltip>
               <Switch size="small" checked={!!cur.inspect_enabled} onChange={(v) => onToggleInspect(cur, v)} />
-              {!isAgent && <Tag color="orange">直连库：平台不代执行 SQL</Tag>}
+              {!isAgent && <Tag color="cyan">直连库（平台直连执行）</Tag>}
             </Space>
 
             <div style={{ position: 'relative' }}>
@@ -513,7 +515,7 @@ export default function DbWorkbench({
                   setSelLen(Math.max(0, (el.selectionEnd ?? 0) - (el.selectionStart ?? 0)))
                 }}
                 onBlur={() => setTimeout(() => setSugg(null), 120)}
-                disabled={!isAgent}
+                disabled={!canSql}
                 placeholder={'select * from information_schema.tables limit 10\n-- 或 update t set c=1 where id=1'}
                 style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 130 }}
                 onKeyDown={(e) => {
@@ -529,7 +531,7 @@ export default function DbWorkbench({
                     syncSuggest(sql, el.selectionStart ?? 0)
                     return
                   }
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && isAgent && sql.trim() && isRead) run(false)
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canSql && sql.trim() && isRead) run(false)
                 }}
               />
               <div ref={mirrorRef} style={{
@@ -563,21 +565,21 @@ export default function DbWorkbench({
 
             <Space wrap>
               {isRead ? (
-                <Button type="primary" loading={busy} disabled={!isAgent || !sql.trim()} onClick={() => run(false)}>
+                <Button type="primary" loading={busy} disabled={!canSql || !sql.trim()} onClick={() => run(false)}>
                   执行（Ctrl/Cmd+Enter）
                 </Button>
               ) : (
                 <Popconfirm title="确认执行写操作？" description="将真实修改数据库，无法自动回滚。"
                   okText="确认执行" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => run(true)}>
-                  <Button danger loading={busy} disabled={!isAgent || !sql.trim()}>执行（写）</Button>
+                  <Button danger loading={busy} disabled={!canSql || !sql.trim()}>执行（写）</Button>
                 </Popconfirm>
               )}
-              <Button icon={<DownloadOutlined />} disabled={!isAgent || !sql.trim() || !isRead} onClick={download}>下载 CSV</Button>
-              <Button icon={<ClockCircleOutlined />} disabled={!isAgent} onClick={() => openTasks()}>定时任务</Button>
-              <Button icon={<ExportOutlined />} disabled={!isAgent} onClick={() => doExport('db')}>导出库</Button>
+              <Button icon={<DownloadOutlined />} disabled={!canSql || !sql.trim() || !isRead} onClick={download}>下载 CSV</Button>
+              <Button icon={<ClockCircleOutlined />} disabled={!canSql} onClick={() => openTasks()}>定时任务</Button>
+              <Button icon={<ExportOutlined />} disabled={!canSql} onClick={() => doExport('db')}>导出库</Button>
               <Popconfirm title="导入 SQL/CSV 会真实写库，确定继续？"
                 onConfirm={() => { const el = document.getElementById('db-import-file') as HTMLInputElement | null; el?.click() }}>
-                <Button icon={<ImportOutlined />} disabled={!isAgent}>导入</Button>
+                <Button icon={<ImportOutlined />} disabled={!canSql}>导入</Button>
               </Popconfirm>
               <input id="db-import-file" type="file" accept=".sql,.csv" style={{ display: 'none' }}
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.currentTarget.value = '' }} />
