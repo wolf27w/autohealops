@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message, Tabs, Alert } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined, TableOutlined, EyeOutlined, FunctionOutlined, FieldTimeOutlined, ExportOutlined, ImportOutlined } from '@ant-design/icons'
-import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
+import { testDBConnection, execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
   id: number
@@ -96,6 +96,8 @@ export default function DbWorkbench({
   const [tasks, setTasks] = useState<SqlTaskRow[]>([])
   const [counts, setCounts] = useState<Record<number, number>>({})
   const [selLen, setSelLen] = useState(0)
+  // 连接状态（会话内）：默认断开，点「连接」后建立；切换实例不影响已连接的库
+  const [connState, setConnState] = useState<Record<number, 'off' | 'connecting' | 'on' | 'failed'>>({})
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ table: true, view: true })
   const [editTaskId, setEditTaskId] = useState<number | null>(null)
   const [taskForm] = Form.useForm()
@@ -103,7 +105,7 @@ export default function DbWorkbench({
   // 选中库变化 → 拉一次可见库/表（用于补全，60s 服务端缓存）
   useEffect(() => {
     setSchema(EMPTY_SCHEMA)
-    if (!cur) return
+    if (!cur || connState[cur.id] !== 'on') return
     let alive = true
     getDBSchema(cur.id)
       .then((d) => {
@@ -122,7 +124,7 @@ export default function DbWorkbench({
       })
       .catch(() => setSchema(EMPTY_SCHEMA))
     return () => { alive = false }
-  }, [cur?.id, cur?.source])
+  }, [cur?.id, cur?.source, connState[cur?.id ?? -1]])
 
   const candidates = useMemo(() => {
     const kws = DIALECT_KEYWORDS[(cur?.db_type || 'mysql').toLowerCase()] || BASE_KEYWORDS
@@ -279,6 +281,26 @@ export default function DbWorkbench({
       const x = e as { response?: { data?: { message?: string } }; message?: string }
       setErr(x?.response?.data?.message || x?.message || '导出失败')
     }
+  }
+
+  // ---------- 连接 / 断开 ----------
+  const connect = async (c: ConsoleConn) => {
+    setConnState((m) => ({ ...m, [c.id]: 'connecting' }))
+    try {
+      await testDBConnection(c.id)
+      setConnState((m) => ({ ...m, [c.id]: 'on' }))
+      message.success(`已连接：${c.name}`)
+    } catch {
+      setConnState((m) => ({ ...m, [c.id]: 'failed' }))
+    }
+  }
+
+  const disconnect = (c: ConsoleConn) => {
+    setConnState((m) => ({ ...m, [c.id]: 'off' }))
+    setSchema(EMPTY_SCHEMA)
+    setResults([])
+    setErr('')
+    message.info(`已断开：${c.name}`)
   }
 
   // ---------- 对象 / 导入导出 ----------
@@ -440,7 +462,9 @@ export default function DbWorkbench({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{
                         width: 7, height: 7, borderRadius: 4, flex: '0 0 7px',
-                        background: c.status === 'connected' ? '#52c41a' : c.status === 'failed' ? '#ff4d4f' : '#d9d9d9',
+                        background: connState[c.id] === 'on' ? '#52c41a'
+                          : connState[c.id] === 'failed' ? '#ff4d4f'
+                          : connState[c.id] === 'connecting' ? '#faad14' : '#d9d9d9',
                       }} />
                       <span style={{ fontWeight: active ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.name}>
                         {c.name}
@@ -473,7 +497,9 @@ export default function DbWorkbench({
 
       {/* 中：对象树（表/视图/函数/存储过程/事件） */}
       <div style={{ width: 210, flex: '0 0 210px', borderRight: '1px solid #f0f0f0', paddingRight: 8, overflow: 'auto' }}>
-        {!cur ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择实例" /> : (
+        {!cur ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择实例" />
+          : connState[cur.id] !== 'on' ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未连接" />
+          : (
           <>
             <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>
               {cur.database || '-'} · {schema.tables.length} 表 / {schema.views.length} 视图
@@ -521,7 +547,23 @@ export default function DbWorkbench({
 
       {/* 右：操作条 + SQL + 结果 */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : (
+        {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : connState[cur.id] !== 'on' ? (
+          <div style={{ marginTop: 70, textAlign: 'center' }}>
+            <div style={{ fontSize: 14, marginBottom: 6 }}><b>{cur.name}</b></div>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 14 }}>
+              {cur.host}:{cur.port}{cur.database ? ` / ${cur.database}` : ''}
+            </div>
+            <Space>
+              <Tag color={connState[cur.id] === 'failed' ? 'red' : 'default'}>
+                {connState[cur.id] === 'connecting' ? '连接中…' : connState[cur.id] === 'failed' ? '连接失败' : '未连接'}
+              </Tag>
+              <Button type="primary" loading={connState[cur.id] === 'connecting'} onClick={() => connect(cur)}>连接</Button>
+            </Space>
+            <div style={{ marginTop: 12, fontSize: 12, color: '#bfbfbf' }}>
+              默认断开，点击「连接」后才建立会话（连接成功后加载对象树与 SQL 控制台）
+            </div>
+          </div>
+        ) : (
           <>
             <Space wrap size={6}>
               <b>{cur.name}</b>
@@ -606,6 +648,7 @@ export default function DbWorkbench({
                 执行（Ctrl/Cmd+Enter）
               </Button>
               <Button icon={<DownloadOutlined />} disabled={!canSql || !sql.trim()} onClick={download}>下载 CSV</Button>
+              <Button onClick={() => disconnect(cur)}>断开</Button>
               <Button icon={<ClockCircleOutlined />} disabled={!canSql} onClick={() => openTasks()}>定时任务</Button>
               <Button icon={<ExportOutlined />} disabled={!canSql} onClick={() => doExport('db')}>导出库</Button>
               <Popconfirm title="导入 SQL/CSV 会真实写库，确定继续？"
