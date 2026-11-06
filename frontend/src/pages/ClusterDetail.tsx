@@ -2,11 +2,11 @@
 // 注：按老板要求**去掉「搜索（服务名）」输入框**，只保留命名空间下拉
 import { useEffect, useMemo, useState, type ReactNode, type Key } from 'react'
 import type { PodTarget, MetricPoint } from '../types'
-import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress, InputNumber } from 'antd'
+import { Card, Table, Tag, Button, Space, Select, Tabs, Empty, Drawer, Segmented, Modal, Input, message, Dropdown, Progress, InputNumber, Popconfirm } from 'antd'
 import { ArrowLeftOutlined, FilterOutlined, MoreOutlined, SearchOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
-import { getClusterDetail, getClusters, triggerCollect, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers, batchWorkloadOp, getWorkloads } from '../services/api'
+import { getClusterDetail, getClusters, triggerCollect, cleanupEvicted, getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, inspectCluster, getInspectionReports, downloadInspectionReport, getClusterInspectProgress, getClusterPods, getMiscResources, deleteObject, deleteWorkload, runProactiveScan, getPodContainers, batchWorkloadOp, getWorkloads } from '../services/api'
 import type { ClusterPod } from '../services/api'
 import type { ProactiveScanResult } from '../services/api'
 import PodEventsModal from '../components/PodEventsModal'
@@ -777,6 +777,15 @@ export default function ClusterDetail() {
         <span style={{ fontSize: 16, fontWeight: 700 }}>{clusterName || `集群 ${id}`}</span>
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => triggerCollect(Number(id)).then(() => load())}>刷新采集</Button>
+        <Popconfirm title="清理该集群所有 Evicted Pod？" description="终态对象，删除不影响业务；操作会记录审计。"
+          okText="清理" cancelText="取消"
+          onConfirm={async () => {
+            const r = await cleanupEvicted(Number(id))
+            message.success(`已清理 ${r?.deleted ?? 0} 个 Evicted Pod`)
+            load()
+          }}>
+          <Button size="small" danger>清理 Evicted</Button>
+        </Popconfirm>
         <Button size="small" onClick={() => navigate(`/node-management?cluster=${id}`)}>集群节点</Button>
         <Button size="small" onClick={() => navigate(`/resource-governance?cluster=${id}`)}>资源治理</Button>
         <Button size="small" onClick={() => { setAiResult(null); setAiNs(activeNs && activeNs !== '_all_' ? activeNs : ''); setAiKinds([]); setAppInspectOpen(true) }}>应用巡检</Button>

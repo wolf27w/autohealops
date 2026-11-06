@@ -405,6 +405,23 @@ func (s *Server) GetPodEvents(ctx context.Context, req *pb.GetPodEventsRequest) 
 	return &pb.GetPodEventsResponse{Success: true, Events: events}, nil
 }
 
+// CleanupEvicted 清理已驱逐（Evicted）的 Pod
+func (s *Server) CleanupEvicted(ctx context.Context, req *pb.CleanupEvictedRequest) (*pb.CleanupEvictedResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.CleanupEvictedResponse{Success: false, Error: err.Error()}, nil
+	}
+	n, err := ex.CleanupEvicted(ctx)
+	if err != nil {
+		return &pb.CleanupEvictedResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.CleanupEvictedResponse{
+		Success: true,
+		Deleted: int32(n),
+		Message: fmt.Sprintf("已清理 %d 个 Evicted Pod", n),
+	}, nil
+}
+
 // GetPodDetail Pod 详情（含容器组内容）
 func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) (*pb.GetPodDetailResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)
@@ -439,7 +456,7 @@ func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) 
 		Ready: d.Ready, RestartCount: d.RestartCount, CreatedAt: d.CreatedAt,
 		NodeName: d.NodeName, PodIp: d.PodIP, HostIp: d.HostIP,
 		Containers: conv(d.Containers), InitContainers: conv(d.InitContainers),
-		Volumes: convVols(d.Volumes),
+		Volumes:   convVols(d.Volumes),
 		OwnerKind: d.OwnerKind, OwnerName: d.OwnerName, OwnerNamespace: d.OwnerNamespace,
 	}, nil
 }

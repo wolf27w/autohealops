@@ -48,6 +48,7 @@ const (
 	ExecutorService_GetWorkloadYaml_FullMethodName       = "/executor.ExecutorService/GetWorkloadYaml"
 	ExecutorService_ApplyWorkloadYaml_FullMethodName     = "/executor.ExecutorService/ApplyWorkloadYaml"
 	ExecutorService_DeleteResource_FullMethodName        = "/executor.ExecutorService/DeleteResource"
+	ExecutorService_CleanupEvicted_FullMethodName        = "/executor.ExecutorService/CleanupEvicted"
 	ExecutorService_SetupRBAC_FullMethodName             = "/executor.ExecutorService/SetupRBAC"
 	ExecutorService_ReconcileRoleBindings_FullMethodName = "/executor.ExecutorService/ReconcileRoleBindings"
 	ExecutorService_ListWorkloads_FullMethodName         = "/executor.ExecutorService/ListWorkloads"
@@ -118,6 +119,8 @@ type ExecutorServiceClient interface {
 	ApplyWorkloadYaml(ctx context.Context, in *ApplyWorkloadYamlRequest, opts ...grpc.CallOption) (*ApplyWorkloadYamlResponse, error)
 	// 删除配置类对象（ConfigMap/Secret）
 	DeleteResource(ctx context.Context, in *DeleteResourceRequest, opts ...grpc.CallOption) (*DeleteResourceResponse, error)
+	// 清理已驱逐（Evicted）的 Pod（终态对象，删除不影响业务）
+	CleanupEvicted(ctx context.Context, in *CleanupEvictedRequest, opts ...grpc.CallOption) (*CleanupEvictedResponse, error)
 	// 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
 	SetupRBAC(ctx context.Context, in *SetupRBACRequest, opts ...grpc.CallOption) (*SetupRBACResponse, error)
 	// 项目/成员变更 → reconcile RoleBinding（绑组）
@@ -429,6 +432,16 @@ func (c *executorServiceClient) DeleteResource(ctx context.Context, in *DeleteRe
 	return out, nil
 }
 
+func (c *executorServiceClient) CleanupEvicted(ctx context.Context, in *CleanupEvictedRequest, opts ...grpc.CallOption) (*CleanupEvictedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CleanupEvictedResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_CleanupEvicted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) SetupRBAC(ctx context.Context, in *SetupRBACRequest, opts ...grpc.CallOption) (*SetupRBACResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetupRBACResponse)
@@ -581,6 +594,8 @@ type ExecutorServiceServer interface {
 	ApplyWorkloadYaml(context.Context, *ApplyWorkloadYamlRequest) (*ApplyWorkloadYamlResponse, error)
 	// 删除配置类对象（ConfigMap/Secret）
 	DeleteResource(context.Context, *DeleteResourceRequest) (*DeleteResourceResponse, error)
+	// 清理已驱逐（Evicted）的 Pod（终态对象，删除不影响业务）
+	CleanupEvicted(context.Context, *CleanupEvictedRequest) (*CleanupEvictedResponse, error)
 	// 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
 	SetupRBAC(context.Context, *SetupRBACRequest) (*SetupRBACResponse, error)
 	// 项目/成员变更 → reconcile RoleBinding（绑组）
@@ -684,6 +699,9 @@ func (UnimplementedExecutorServiceServer) ApplyWorkloadYaml(context.Context, *Ap
 }
 func (UnimplementedExecutorServiceServer) DeleteResource(context.Context, *DeleteResourceRequest) (*DeleteResourceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteResource not implemented")
+}
+func (UnimplementedExecutorServiceServer) CleanupEvicted(context.Context, *CleanupEvictedRequest) (*CleanupEvictedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CleanupEvicted not implemented")
 }
 func (UnimplementedExecutorServiceServer) SetupRBAC(context.Context, *SetupRBACRequest) (*SetupRBACResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetupRBAC not implemented")
@@ -1205,6 +1223,24 @@ func _ExecutorService_DeleteResource_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_CleanupEvicted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CleanupEvictedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).CleanupEvicted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_CleanupEvicted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).CleanupEvicted(ctx, req.(*CleanupEvictedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_SetupRBAC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetupRBACRequest)
 	if err := dec(in); err != nil {
@@ -1462,6 +1498,10 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteResource",
 			Handler:    _ExecutorService_DeleteResource_Handler,
+		},
+		{
+			MethodName: "CleanupEvicted",
+			Handler:    _ExecutorService_CleanupEvicted_Handler,
 		},
 		{
 			MethodName: "SetupRBAC",

@@ -62,6 +62,8 @@ service ExecutorService {
   rpc ApplyWorkloadYaml(ApplyWorkloadYamlRequest) returns (ApplyWorkloadYamlResponse);
   // 删除配置类对象（ConfigMap/Secret）
   rpc DeleteResource(DeleteResourceRequest) returns (DeleteResourceResponse);
+  // 清理已驱逐（Evicted）的 Pod（终态对象，删除不影响业务）
+  rpc CleanupEvicted(CleanupEvictedRequest) returns (CleanupEvictedResponse);
 
   // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
   rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
@@ -717,4 +719,16 @@ message ExecPodStreamFrame {
   int32 exit_code = 11;     // 退出码（结束帧）
   bool closed = 12;         // 会话已结束
   string error = 13;        // 错误信息（可选）
+}
+
+message CleanupEvictedRequest {
+  int64 cluster_id = 1;
+  string trace_id = 2;
+}
+
+message CleanupEvictedResponse {
+  bool success = 1;
+  int32 deleted = 2;        // 实际删除数量
+  string message = 3;
+  string error = 4;
 }

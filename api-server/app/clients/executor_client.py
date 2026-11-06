@@ -538,6 +538,20 @@ class ExecutorClient:
             logger.error("get_pod_events 失败: %s", e)
             return {"success": False, "events": [], "error": str(e)}
 
+    def cleanup_evicted(self, cluster_id: int, trace_id: str = "") -> dict:
+        """清理该集群已驱逐（Evicted）的 Pod，返回 {success, deleted, message, error}"""
+        try:
+            resp = _get_stub().CleanupEvicted(
+                executor_pb2.CleanupEvictedRequest(cluster_id=cluster_id),
+                timeout=self.TIMEOUT * 3,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "deleted": int(resp.deleted),
+                    "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("cleanup_evicted 失败: %s", e)
+            return {"success": False, "deleted": 0, "message": "", "error": str(e)}
+
     def get_pod_detail(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
         """Pod 详情（含容器组内容）→ 返回 {success, detail, error}"""
         try:

@@ -266,6 +266,31 @@ async def deployments(cluster_id: int, namespace: str, user=Depends(require_any_
     return {"code": 200, "message": "success", "data": data}
 
 
+@router.post("/clusters/{cluster_id}/pods/evicted/cleanup")
+async def cleanup_evicted(cluster_id: int, user=Depends(require_operator)):
+    """清理该集群已驱逐（Evicted）的 Pod（终态对象，删除无影响；记录审计）。"""
+    if denied := await _deny_cluster(user, cluster_id, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.cleanup_evicted, cluster_id)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error") or "清理失败", "data": None}
+    # 审计
+    try:
+        import json as _json
+        import uuid as _uuid
+        from app.services import audit_service
+        await audit_service.create_audit_record(
+            f"evicted-clean-{_uuid.uuid4().hex[:12]}",
+            trigger_snapshot=_json.dumps({"mode": "cleanup_evicted", "cluster_id": cluster_id}, ensure_ascii=False),
+            execution_detail=_json.dumps({
+                "user": getattr(user, "username", "") or "", "deleted": r.get("deleted", 0),
+            }, ensure_ascii=False),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("清理 Evicted 审计写入失败: %s", e)
+    return {"code": 200, "message": "success", "data": {"deleted": r.get("deleted", 0)}}
+
+
 @router.post("/clusters/{cluster_id}/collect")
 async def collect(cluster_id: int, user=Depends(require_operator)):
     if denied := await _deny_cluster(user, cluster_id, required="operate"):

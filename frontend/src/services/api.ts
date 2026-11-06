@@ -220,6 +220,8 @@ export const getWorkloadEvents = (clusterId: number, params?: PageParams) => htt
 export const getNamespaces = (clusterId: number) => http.get(`/resources/clusters/${clusterId}/namespaces`)
 export const getNamespaceDeployments = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/deployments`)
 export const triggerCollect = (clusterId: number) => http.post(`/resources/clusters/${clusterId}/collect`)
+export const cleanupEvicted = (clusterId: number) =>
+  http.post<{ deleted: number }>(`/resources/clusters/${clusterId}/pods/evicted/cleanup`)
 
 // ============ 知识库 ============
 export const searchKnowledge = (q: string, topK: number = 5) => http.get('/knowledge/search', { params: { q, top_k: topK } })

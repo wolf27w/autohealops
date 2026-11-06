@@ -6369,6 +6369,126 @@ func (x *ExecPodStreamFrame) GetError() string {
 	return ""
 }
 
+type CleanupEvictedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	TraceId       string                 `protobuf:"bytes,2,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CleanupEvictedRequest) Reset() {
+	*x = CleanupEvictedRequest{}
+	mi := &file_proto_executor_proto_msgTypes[89]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CleanupEvictedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CleanupEvictedRequest) ProtoMessage() {}
+
+func (x *CleanupEvictedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[89]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CleanupEvictedRequest.ProtoReflect.Descriptor instead.
+func (*CleanupEvictedRequest) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{89}
+}
+
+func (x *CleanupEvictedRequest) GetClusterId() int64 {
+	if x != nil {
+		return x.ClusterId
+	}
+	return 0
+}
+
+func (x *CleanupEvictedRequest) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+type CleanupEvictedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Deleted       int32                  `protobuf:"varint,2,opt,name=deleted,proto3" json:"deleted,omitempty"` // 实际删除数量
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CleanupEvictedResponse) Reset() {
+	*x = CleanupEvictedResponse{}
+	mi := &file_proto_executor_proto_msgTypes[90]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CleanupEvictedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CleanupEvictedResponse) ProtoMessage() {}
+
+func (x *CleanupEvictedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[90]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CleanupEvictedResponse.ProtoReflect.Descriptor instead.
+func (*CleanupEvictedResponse) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{90}
+}
+
+func (x *CleanupEvictedResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CleanupEvictedResponse) GetDeleted() int32 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
+func (x *CleanupEvictedResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *CleanupEvictedResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_proto_executor_proto protoreflect.FileDescriptor
 
 const file_proto_executor_proto_rawDesc = "" +
@@ -6924,7 +7044,16 @@ const file_proto_executor_proto_rawDesc = "" +
 	" \x01(\fR\x06stderr\x12\x1b\n" +
 	"\texit_code\x18\v \x01(\x05R\bexitCode\x12\x16\n" +
 	"\x06closed\x18\f \x01(\bR\x06closed\x12\x14\n" +
-	"\x05error\x18\r \x01(\tR\x05error2\xb1\x17\n" +
+	"\x05error\x18\r \x01(\tR\x05error\"Q\n" +
+	"\x15CleanupEvictedRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x19\n" +
+	"\btrace_id\x18\x02 \x01(\tR\atraceId\"|\n" +
+	"\x16CleanupEvictedResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\adeleted\x18\x02 \x01(\x05R\adeleted\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error2\x86\x18\n" +
 	"\x0fExecutorService\x12G\n" +
 	"\n" +
 	"StartWatch\x12\x1b.executor.StartWatchRequest\x1a\x1c.executor.StartWatchResponse\x12D\n" +
@@ -6955,7 +7084,8 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\fGetPodEvents\x12\x1d.executor.GetPodEventsRequest\x1a\x1e.executor.GetPodEventsResponse\x12V\n" +
 	"\x0fGetWorkloadYaml\x12 .executor.GetWorkloadYamlRequest\x1a!.executor.GetWorkloadYamlResponse\x12\\\n" +
 	"\x11ApplyWorkloadYaml\x12\".executor.ApplyWorkloadYamlRequest\x1a#.executor.ApplyWorkloadYamlResponse\x12S\n" +
-	"\x0eDeleteResource\x12\x1f.executor.DeleteResourceRequest\x1a .executor.DeleteResourceResponse\x12D\n" +
+	"\x0eDeleteResource\x12\x1f.executor.DeleteResourceRequest\x1a .executor.DeleteResourceResponse\x12S\n" +
+	"\x0eCleanupEvicted\x12\x1f.executor.CleanupEvictedRequest\x1a .executor.CleanupEvictedResponse\x12D\n" +
 	"\tSetupRBAC\x12\x1a.executor.SetupRBACRequest\x1a\x1b.executor.SetupRBACResponse\x12h\n" +
 	"\x15ReconcileRoleBindings\x12&.executor.ReconcileRoleBindingsRequest\x1a'.executor.ReconcileRoleBindingsResponse\x12P\n" +
 	"\rListWorkloads\x12\x1e.executor.ListWorkloadsRequest\x1a\x1f.executor.ListWorkloadsResponse\x12P\n" +
@@ -6978,7 +7108,7 @@ func file_proto_executor_proto_rawDescGZIP() []byte {
 	return file_proto_executor_proto_rawDescData
 }
 
-var file_proto_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
+var file_proto_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 91)
 var file_proto_executor_proto_goTypes = []any{
 	(*StartWatchRequest)(nil),             // 0: executor.StartWatchRequest
 	(*StartWatchResponse)(nil),            // 1: executor.StartWatchResponse
@@ -7069,6 +7199,8 @@ var file_proto_executor_proto_goTypes = []any{
 	(*RecreateWorkloadRequest)(nil),       // 86: executor.RecreateWorkloadRequest
 	(*RecreateWorkloadResponse)(nil),      // 87: executor.RecreateWorkloadResponse
 	(*ExecPodStreamFrame)(nil),            // 88: executor.ExecPodStreamFrame
+	(*CleanupEvictedRequest)(nil),         // 89: executor.CleanupEvictedRequest
+	(*CleanupEvictedResponse)(nil),        // 90: executor.CleanupEvictedResponse
 }
 var file_proto_executor_proto_depIdxs = []int32{
 	19, // 0: executor.GetPodStatusResponse.container_statuses:type_name -> executor.ContainerStatusInfo
@@ -7120,53 +7252,55 @@ var file_proto_executor_proto_depIdxs = []int32{
 	64, // 46: executor.ExecutorService.GetWorkloadYaml:input_type -> executor.GetWorkloadYamlRequest
 	66, // 47: executor.ExecutorService.ApplyWorkloadYaml:input_type -> executor.ApplyWorkloadYamlRequest
 	68, // 48: executor.ExecutorService.DeleteResource:input_type -> executor.DeleteResourceRequest
-	70, // 49: executor.ExecutorService.SetupRBAC:input_type -> executor.SetupRBACRequest
-	73, // 50: executor.ExecutorService.ReconcileRoleBindings:input_type -> executor.ReconcileRoleBindingsRequest
-	76, // 51: executor.ExecutorService.ListWorkloads:input_type -> executor.ListWorkloadsRequest
-	78, // 52: executor.ExecutorService.ScaleWorkload:input_type -> executor.ScaleWorkloadRequest
-	80, // 53: executor.ExecutorService.RolloutWorkload:input_type -> executor.RolloutWorkloadRequest
-	82, // 54: executor.ExecutorService.RolloutHistory:input_type -> executor.RolloutHistoryRequest
-	84, // 55: executor.ExecutorService.UpdateProbe:input_type -> executor.UpdateProbeRequest
-	86, // 56: executor.ExecutorService.RecreateWorkload:input_type -> executor.RecreateWorkloadRequest
-	88, // 57: executor.ExecutorService.ExecPodStream:input_type -> executor.ExecPodStreamFrame
-	1,  // 58: executor.ExecutorService.StartWatch:output_type -> executor.StartWatchResponse
-	3,  // 59: executor.ExecutorService.StopWatch:output_type -> executor.StopWatchResponse
-	5,  // 60: executor.ExecutorService.ExecuteCommand:output_type -> executor.ExecuteCommandResponse
-	7,  // 61: executor.ExecutorService.ExecutePlan:output_type -> executor.ExecutePlanResponse
-	9,  // 62: executor.ExecutorService.RollbackPlan:output_type -> executor.RollbackPlanResponse
-	11, // 63: executor.ExecutorService.HealthCheck:output_type -> executor.HealthCheckResponse
-	13, // 64: executor.ExecutorService.CollectQuota:output_type -> executor.CollectQuotaResponse
-	15, // 65: executor.ExecutorService.RunScript:output_type -> executor.RunScriptResponse
-	17, // 66: executor.ExecutorService.BatchExecute:output_type -> executor.BatchExecuteResponse
-	20, // 67: executor.ExecutorService.GetPodStatus:output_type -> executor.GetPodStatusResponse
-	22, // 68: executor.ExecutorService.RepairImagePull:output_type -> executor.RepairImagePullResponse
-	24, // 69: executor.ExecutorService.GetDeploymentStatus:output_type -> executor.GetDeploymentStatusResponse
-	26, // 70: executor.ExecutorService.ExecInPod:output_type -> executor.ExecInPodResponse
-	29, // 71: executor.ExecutorService.ListDeploymentPods:output_type -> executor.ListDeploymentPodsResponse
-	33, // 72: executor.ExecutorService.ListPodRestartInfo:output_type -> executor.ListPodRestartInfoResponse
-	35, // 73: executor.ExecutorService.QueryPrometheus:output_type -> executor.QueryPrometheusResponse
-	37, // 74: executor.ExecutorService.GetPodLogs:output_type -> executor.GetPodLogsResponse
-	39, // 75: executor.ExecutorService.GetPodYaml:output_type -> executor.GetPodYamlResponse
-	41, // 76: executor.ExecutorService.ApplyPodYaml:output_type -> executor.ApplyPodYamlResponse
-	44, // 77: executor.ExecutorService.ListPods:output_type -> executor.ListPodsResponse
-	50, // 78: executor.ExecutorService.GetPodDetail:output_type -> executor.GetPodDetailResponse
-	52, // 79: executor.ExecutorService.GetWorkloadMounts:output_type -> executor.GetWorkloadMountsResponse
-	59, // 80: executor.ExecutorService.ListMiscResources:output_type -> executor.ListMiscResourcesResponse
-	63, // 81: executor.ExecutorService.GetPodEvents:output_type -> executor.GetPodEventsResponse
-	65, // 82: executor.ExecutorService.GetWorkloadYaml:output_type -> executor.GetWorkloadYamlResponse
-	67, // 83: executor.ExecutorService.ApplyWorkloadYaml:output_type -> executor.ApplyWorkloadYamlResponse
-	69, // 84: executor.ExecutorService.DeleteResource:output_type -> executor.DeleteResourceResponse
-	71, // 85: executor.ExecutorService.SetupRBAC:output_type -> executor.SetupRBACResponse
-	74, // 86: executor.ExecutorService.ReconcileRoleBindings:output_type -> executor.ReconcileRoleBindingsResponse
-	77, // 87: executor.ExecutorService.ListWorkloads:output_type -> executor.ListWorkloadsResponse
-	79, // 88: executor.ExecutorService.ScaleWorkload:output_type -> executor.ScaleWorkloadResponse
-	81, // 89: executor.ExecutorService.RolloutWorkload:output_type -> executor.RolloutWorkloadResponse
-	83, // 90: executor.ExecutorService.RolloutHistory:output_type -> executor.RolloutHistoryResponse
-	85, // 91: executor.ExecutorService.UpdateProbe:output_type -> executor.UpdateProbeResponse
-	87, // 92: executor.ExecutorService.RecreateWorkload:output_type -> executor.RecreateWorkloadResponse
-	88, // 93: executor.ExecutorService.ExecPodStream:output_type -> executor.ExecPodStreamFrame
-	58, // [58:94] is the sub-list for method output_type
-	22, // [22:58] is the sub-list for method input_type
+	89, // 49: executor.ExecutorService.CleanupEvicted:input_type -> executor.CleanupEvictedRequest
+	70, // 50: executor.ExecutorService.SetupRBAC:input_type -> executor.SetupRBACRequest
+	73, // 51: executor.ExecutorService.ReconcileRoleBindings:input_type -> executor.ReconcileRoleBindingsRequest
+	76, // 52: executor.ExecutorService.ListWorkloads:input_type -> executor.ListWorkloadsRequest
+	78, // 53: executor.ExecutorService.ScaleWorkload:input_type -> executor.ScaleWorkloadRequest
+	80, // 54: executor.ExecutorService.RolloutWorkload:input_type -> executor.RolloutWorkloadRequest
+	82, // 55: executor.ExecutorService.RolloutHistory:input_type -> executor.RolloutHistoryRequest
+	84, // 56: executor.ExecutorService.UpdateProbe:input_type -> executor.UpdateProbeRequest
+	86, // 57: executor.ExecutorService.RecreateWorkload:input_type -> executor.RecreateWorkloadRequest
+	88, // 58: executor.ExecutorService.ExecPodStream:input_type -> executor.ExecPodStreamFrame
+	1,  // 59: executor.ExecutorService.StartWatch:output_type -> executor.StartWatchResponse
+	3,  // 60: executor.ExecutorService.StopWatch:output_type -> executor.StopWatchResponse
+	5,  // 61: executor.ExecutorService.ExecuteCommand:output_type -> executor.ExecuteCommandResponse
+	7,  // 62: executor.ExecutorService.ExecutePlan:output_type -> executor.ExecutePlanResponse
+	9,  // 63: executor.ExecutorService.RollbackPlan:output_type -> executor.RollbackPlanResponse
+	11, // 64: executor.ExecutorService.HealthCheck:output_type -> executor.HealthCheckResponse
+	13, // 65: executor.ExecutorService.CollectQuota:output_type -> executor.CollectQuotaResponse
+	15, // 66: executor.ExecutorService.RunScript:output_type -> executor.RunScriptResponse
+	17, // 67: executor.ExecutorService.BatchExecute:output_type -> executor.BatchExecuteResponse
+	20, // 68: executor.ExecutorService.GetPodStatus:output_type -> executor.GetPodStatusResponse
+	22, // 69: executor.ExecutorService.RepairImagePull:output_type -> executor.RepairImagePullResponse
+	24, // 70: executor.ExecutorService.GetDeploymentStatus:output_type -> executor.GetDeploymentStatusResponse
+	26, // 71: executor.ExecutorService.ExecInPod:output_type -> executor.ExecInPodResponse
+	29, // 72: executor.ExecutorService.ListDeploymentPods:output_type -> executor.ListDeploymentPodsResponse
+	33, // 73: executor.ExecutorService.ListPodRestartInfo:output_type -> executor.ListPodRestartInfoResponse
+	35, // 74: executor.ExecutorService.QueryPrometheus:output_type -> executor.QueryPrometheusResponse
+	37, // 75: executor.ExecutorService.GetPodLogs:output_type -> executor.GetPodLogsResponse
+	39, // 76: executor.ExecutorService.GetPodYaml:output_type -> executor.GetPodYamlResponse
+	41, // 77: executor.ExecutorService.ApplyPodYaml:output_type -> executor.ApplyPodYamlResponse
+	44, // 78: executor.ExecutorService.ListPods:output_type -> executor.ListPodsResponse
+	50, // 79: executor.ExecutorService.GetPodDetail:output_type -> executor.GetPodDetailResponse
+	52, // 80: executor.ExecutorService.GetWorkloadMounts:output_type -> executor.GetWorkloadMountsResponse
+	59, // 81: executor.ExecutorService.ListMiscResources:output_type -> executor.ListMiscResourcesResponse
+	63, // 82: executor.ExecutorService.GetPodEvents:output_type -> executor.GetPodEventsResponse
+	65, // 83: executor.ExecutorService.GetWorkloadYaml:output_type -> executor.GetWorkloadYamlResponse
+	67, // 84: executor.ExecutorService.ApplyWorkloadYaml:output_type -> executor.ApplyWorkloadYamlResponse
+	69, // 85: executor.ExecutorService.DeleteResource:output_type -> executor.DeleteResourceResponse
+	90, // 86: executor.ExecutorService.CleanupEvicted:output_type -> executor.CleanupEvictedResponse
+	71, // 87: executor.ExecutorService.SetupRBAC:output_type -> executor.SetupRBACResponse
+	74, // 88: executor.ExecutorService.ReconcileRoleBindings:output_type -> executor.ReconcileRoleBindingsResponse
+	77, // 89: executor.ExecutorService.ListWorkloads:output_type -> executor.ListWorkloadsResponse
+	79, // 90: executor.ExecutorService.ScaleWorkload:output_type -> executor.ScaleWorkloadResponse
+	81, // 91: executor.ExecutorService.RolloutWorkload:output_type -> executor.RolloutWorkloadResponse
+	83, // 92: executor.ExecutorService.RolloutHistory:output_type -> executor.RolloutHistoryResponse
+	85, // 93: executor.ExecutorService.UpdateProbe:output_type -> executor.UpdateProbeResponse
+	87, // 94: executor.ExecutorService.RecreateWorkload:output_type -> executor.RecreateWorkloadResponse
+	88, // 95: executor.ExecutorService.ExecPodStream:output_type -> executor.ExecPodStreamFrame
+	59, // [59:96] is the sub-list for method output_type
+	22, // [22:59] is the sub-list for method input_type
 	22, // [22:22] is the sub-list for extension type_name
 	22, // [22:22] is the sub-list for extension extendee
 	0,  // [0:22] is the sub-list for field type_name
@@ -7183,7 +7317,7 @@ func file_proto_executor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_executor_proto_rawDesc), len(file_proto_executor_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   89,
+			NumMessages:   91,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
