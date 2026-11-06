@@ -1584,10 +1584,11 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 发布弹窗内容：
   - 服务：`<只读>`（当前服务）
   - Jenkins 实例：默认按「集群 → 服务」映射的实例，可切换
-  - **分支**：下拉选择；来源优先级
-    1) Jenkins Job 参数定义里的 choices（`api/json` 的 `parameterDefinitions`，其中 `BRANCH_TAG` 等）
-    2) 配置的 Git 仓库分支列表（如已配 GitLab/Git 凭据）
-    3) 都拿不到 → 允许手输（分支或 tag）
+  - **分支**：下拉选择，**来源 = Jenkins Job 参数定义**（老板 2026-11-06 定）
+    - 调 `GET /job/{name}/api/json?tree=property[parameterDefinitions[name,type,choices]]`
+    - 取「分支参数」（默认 `BRANCH_TAG`，可配）的 `choices` 作为下拉选项
+    - 参数类型是 `ChoiceParameterDefinition` → 直接用；是 `StringParameterDefinition` → 退化为可输入（无列表）
+    - Jenkins 取不到（不可达/无该参数）→ 允许手输，并给出提示
   - 参数名可配置：`服务名参数`（默认 `SERVICE_NAME`/`Issue_command`）、`分支参数`（默认 `BRANCH_TAG`）
 - 触发后：**弹出 pipeline 面板**，按阶段展示（下载代码 → 打包 → 构建镜像 → 推送 → 部署），
   每个阶段可展开看日志；日志**直接取 Jenkins 构建日志**（不是平台自己的执行器日志）
@@ -1595,7 +1596,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 **验收（补充）**
 - 在服务 A 上点发布：弹窗里服务名固定为 A，不出现服务选择器
-- 分支下拉能列出 Jenkins 参数里定义的分支（或配置仓库的分支）；选不到时可手输
+- 分支下拉直接来自 Jenkins 参数 choices（与 Jenkins 页面完全一致）；参数缺失时提示并可手输
 - 构建参数里 `服务名 = A`、`分支 = 选中值`，Jenkins 构建页面能对上
 
 **技术要点**
