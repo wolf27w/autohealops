@@ -423,6 +423,15 @@ func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.A
 		resp.Payload = out
 		return resp
 	}
+	if f.Method == "DbSchemaByKey" {
+		out, err := agentdb.SchemaByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
 	if f.Method == "QueryDatabaseByKey" {
 		out, err := agentdb.QueryByKey(ctx, f.Payload)
 		if err != nil {

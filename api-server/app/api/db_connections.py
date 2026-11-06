@@ -21,6 +21,9 @@ from app.services import user_permission_service
 router = APIRouter(prefix="/api/v1/db-connections")
 logger = logging.getLogger(__name__)
 
+# 表结构缓存：conn_id -> (ts, data)，60s
+_SCHEMA_CACHE: dict[int, tuple[float, dict]] = {}
+
 
 def _safe_int(v, default=0) -> int:
     try:
@@ -204,6 +207,42 @@ async def _audit_sql(user, c: DBConnection, sql: str, elapsed: float, rows: int,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("数据库审计写入失败: %s", e)
+
+
+@router.get("/{conn_id}/schema")
+async def get_schema(conn_id: int, user=Depends(require_any_user)):
+    """SQL 编辑器补全用：返回该库当前账号可见的 databases + tables（仅 agent 库）。
+
+    结果缓存 60s（同一库反复打开编辑器不必每次过隧道）。
+    """
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    ok, why = _agent_db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+
+    hit = _SCHEMA_CACHE.get(conn_id)
+    if hit and (time.time() - hit[0]) < 60:
+        return {"code": 200, "message": "success", "data": hit[1]}
+
+    try:
+        from app import agent_gateway
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(c.cluster_id), "DbSchemaByKey",
+            json.dumps({"key": c.agent_db_key}).encode(), 30.0,
+        )
+        data = json.loads(raw)
+        # 系统库不进补全候选（否则 3000 张系统表会淹没业务表）
+        sys_dbs = {"information_schema", "performance_schema", "mysql", "sys"}
+        data["tables"] = [t for t in (data.get("tables") or []) if (t.get("db") or "") not in sys_dbs]
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"获取表结构失败：{e}", "data": None}
+    _SCHEMA_CACHE[conn_id] = (time.time(), data)
+    return {"code": 200, "message": "success", "data": data}
 
 
 @router.post("/{conn_id}/exec")

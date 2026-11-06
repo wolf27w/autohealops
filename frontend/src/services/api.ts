@@ -506,6 +506,9 @@ export const queryDBConnection = (id: number, sql: string) =>
 // 执行 SQL（DML/DDL，仅 admin；confirm=true 二次确认）
 export const execDBConnection = (id: number, sql: string) =>
   http.post<{ columns?: string[]; rows?: unknown[][]; affected_rows?: number; write?: boolean }>(`/db-connections/${id}/exec`, { sql, confirm: true })
+// SQL 编辑器补全：当前账号可见的 databases + tables（agent 库）
+export const getDBSchema = (id: number) =>
+  http.get<{ databases?: string[]; tables?: { db: string; name: string; type?: string }[] }>(`/db-connections/${id}/schema`)
 // 查询结果导出 CSV（≤5000 行）
 export const downloadDBQuery = (id: number, sql: string) =>
   http.post<Blob>(`/db-connections/${id}/query/download`, { sql }, { responseType: 'blob' })

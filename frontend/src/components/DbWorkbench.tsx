@@ -1,9 +1,9 @@
 // 数据库管理面板（Navicat 式）：左侧实例列表，右上 SQL 编辑，右下结果。
 // 直接嵌在「诊断中心 → 数据库管理」tab 里，不再是弹窗。
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { execDBConnection, queryDBConnection, downloadDBQuery } from '../services/api'
+import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema } from '../services/api'
 
 export interface ConsoleConn {
   id: number
@@ -35,6 +35,29 @@ interface Props {
 
 type Result = { columns?: string[]; rows?: unknown[][]; truncated?: boolean; affected_rows?: number }
 
+// SQL 关键字补全（按数据库类型）
+const BASE_KEYWORDS = [
+  'select', 'from', 'where', 'and', 'or', 'not', 'in', 'exists', 'between', 'like', 'is null', 'is not null',
+  'group by', 'order by', 'having', 'limit', 'offset', 'join', 'left join', 'right join', 'inner join',
+  'outer join', 'on', 'as', 'distinct', 'union', 'union all', 'insert into', 'values', 'update', 'set',
+  'delete from', 'create table', 'alter table', 'drop table', 'truncate table', 'create index', 'drop index',
+  'primary key', 'foreign key', 'show tables', 'show databases', 'show create table', 'describe', 'explain',
+  'count', 'sum', 'avg', 'min', 'max', 'case when', 'then', 'else', 'end', 'begin', 'commit', 'rollback',
+  'with', 'asc', 'desc', 'null', 'default', 'if', 'coalesce', 'cast',
+]
+const DIALECT_KEYWORDS: Record<string, string[]> = {
+  mysql: [...BASE_KEYWORDS, 'auto_increment', 'engine', 'charset', 'collate', 'use', 'database', 'table',
+    'view', 'grant', 'revoke', 'replace into', 'on duplicate key update', 'straight_join', 'force index'],
+  pg: [...BASE_KEYWORDS, 'returning', 'ilike', 'schema', 'sequence', 'materialized view', 'vacuum', 'analyze',
+    'on conflict', 'do update', 'do nothing', 'lateral', 'serial', 'jsonb', 'array'],
+  oracle: [...BASE_KEYWORDS, 'rownum', 'dual', 'nvl', 'nvl2', 'decode', 'varchar2', 'number', 'merge into',
+    'connect by', 'start with', 'sysdate', 'sequence.nextval'],
+}
+
+interface SchemaData { databases: string[]; tables: { db: string; name: string }[] }
+const EMPTY_SCHEMA: SchemaData = { databases: [], tables: [] }
+
+
 const READ_HEADS = new Set(['select', 'show', 'desc', 'describe', 'explain', 'with'])
 
 export default function DbWorkbench({
@@ -46,7 +69,6 @@ export default function DbWorkbench({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [res, setRes] = useState<Result | null>(null)
-
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
   const isAgent = (cur?.source || 'direct') === 'agent'
   const head = useMemo(() => (sql.trim().split(/\s+/)[0] || '').toLowerCase(), [sql])
@@ -55,6 +77,59 @@ export default function DbWorkbench({
     const k = kw.trim().toLowerCase()
     return k ? conns.filter((c) => `${c.name} ${c.database || ''} ${c.db_type || ''}`.toLowerCase().includes(k)) : conns
   }, [conns, kw])
+
+  const [schema, setSchema] = useState<SchemaData>(EMPTY_SCHEMA)
+  const [sugg, setSugg] = useState<{ items: string[]; start: number; end: number; idx: number } | null>(null)
+  const taRef = useRef<{ resizableTextArea?: { textArea: HTMLTextAreaElement } } | null>(null)
+
+  // 选中库变化 → 拉一次可见库/表（用于补全，60s 服务端缓存）
+  useEffect(() => {
+    setSchema(EMPTY_SCHEMA)
+    if (!cur || (cur.source || 'direct') !== 'agent') return
+    let alive = true
+    getDBSchema(cur.id)
+      .then((d) => {
+        if (!alive) return
+        setSchema({
+          databases: (d?.databases || []).filter((x) => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(x)),
+          tables: (d?.tables || []).map((t) => ({ db: t.db, name: t.name })),
+        })
+      })
+      .catch(() => setSchema(EMPTY_SCHEMA))
+    return () => { alive = false }
+  }, [cur?.id, cur?.source])
+
+  const candidates = useMemo(() => {
+    const kws = DIALECT_KEYWORDS[(cur?.db_type || 'mysql').toLowerCase()] || BASE_KEYWORDS
+    const set = new Set<string>()
+    kws.forEach((k) => set.add(k))
+    schema.databases.forEach((x) => set.add(x))
+    schema.tables.forEach((t) => set.add(t.name))
+    return [...set]
+  }, [cur?.db_type, schema])
+
+  const syncSuggest = (text: string, caret: number) => {
+    const before = text.slice(0, caret)
+    const m = before.match(/[A-Za-z0-9_$.]+$/)
+    const word = m ? m[0] : ''
+    if (!word) { setSugg(null); return }
+    const low = word.toLowerCase()
+    const items = candidates.filter((c) => c.toLowerCase().startsWith(low) && c.toLowerCase() !== low).slice(0, 20)
+    if (!items.length) { setSugg(null); return }
+    setSugg({ items, start: caret - word.length, end: caret, idx: 0 })
+  }
+
+  const applySugg = (item: string) => {
+    if (!sugg) return
+    const next = sql.slice(0, sugg.start) + item + sql.slice(sugg.end)
+    setSql(next)
+    setSugg(null)
+    const pos = sugg.start + item.length
+    requestAnimationFrame(() => {
+      const el = taRef.current?.resizableTextArea?.textArea
+      if (el) { el.focus(); el.setSelectionRange(pos, pos) }
+    })
+  }
 
   const reset = () => { setRes(null); setErr('') }
 
@@ -154,16 +229,54 @@ export default function DbWorkbench({
               {!isAgent && <Tag color="orange">直连库：平台不代执行 SQL</Tag>}
             </Space>
 
-            <Input.TextArea
-              value={sql}
-              onChange={(e) => setSql(e.target.value)}
-              disabled={!isAgent}
-              placeholder={'select * from information_schema.tables limit 10\n-- 或 update t set c=1 where id=1'}
-              style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 130 }}
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && isAgent && sql.trim() && isRead) run(false)
-              }}
-            />
+            <div style={{ position: 'relative' }}>
+              <Input.TextArea
+                ref={taRef as never}
+                value={sql}
+                onChange={(e) => { setSql(e.target.value); syncSuggest(e.target.value, e.target.selectionStart ?? 0) }}
+                onBlur={() => setTimeout(() => setSugg(null), 120)}
+                disabled={!isAgent}
+                placeholder={'select * from information_schema.tables limit 10\n-- 或 update t set c=1 where id=1'}
+                style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 130 }}
+                onKeyDown={(e) => {
+                  if (sugg) {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setSugg({ ...sugg, idx: (sugg.idx + 1) % sugg.items.length }); return }
+                    if (e.key === 'ArrowUp') { e.preventDefault(); setSugg({ ...sugg, idx: (sugg.idx - 1 + sugg.items.length) % sugg.items.length }); return }
+                    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applySugg(sugg.items[sugg.idx]); return }
+                    if (e.key === 'Escape') { e.preventDefault(); setSugg(null); return }
+                  }
+                  if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
+                    e.preventDefault()
+                    const el = e.target as HTMLTextAreaElement
+                    syncSuggest(sql, el.selectionStart ?? 0)
+                    return
+                  }
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && isAgent && sql.trim() && isRead) run(false)
+                }}
+              />
+              {sugg && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 20, width: 340,
+                  background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
+                  boxShadow: '0 6px 16px rgba(0,0,0,.12)', maxHeight: 220, overflow: 'auto',
+                }}>
+                  {sugg.items.map((it, i) => (
+                    <div
+                      key={it}
+                      onMouseDown={(e) => { e.preventDefault(); applySugg(it) }}
+                      style={{
+                        padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+                        fontFamily: 'Menlo, Consolas, monospace',
+                        background: i === sugg.idx ? '#e6f4ff' : 'transparent',
+                      }}
+                    >{it}</div>
+                  ))}
+                  <div style={{ padding: '3px 10px', fontSize: 11, color: '#bfbfbf', borderTop: '1px solid #f5f5f5' }}>
+                    ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭
+                  </div>
+                </div>
+              )}
+            </div>
 
             <Space wrap>
               {isRead ? (
