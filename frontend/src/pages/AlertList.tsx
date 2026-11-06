@@ -1,4 +1,5 @@
 // 告警列表页：筛选 + 表格 + 批量解决 + 行展开诊断 + 日志查看（诊断已自动，保留手动重试）
+import { envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge } from 'antd'
@@ -177,7 +178,7 @@ export default function AlertList() {
         }}
         columns={[
           { title: '来源', dataIndex: 'source', render: (v, r: Alert) => v || r.cluster_name || '-' },
-          { title: '环境', dataIndex: 'env_tag', width: 90, render: (v) => v ? <Tag color={v === 'qa' ? 'green' : v === 'release' ? 'orange' : 'red'}>{v}</Tag> : '-' },
+          { title: '环境', dataIndex: 'env_tag', width: 90, render: (v) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
           { title: '资源', dataIndex: 'resource_name' },
           { title: '类型', dataIndex: 'resource_type' },
           { title: '命名空间', dataIndex: 'namespace' },

@@ -1,4 +1,5 @@
 // 工单列表 + 详情抽屉 + 新建工单（N1 平台内部工单）
+import { envLabel, envColor, ENV_OPTIONS } from '../utils/env'
 import { useEffect, useState } from 'react'
 import { Button, Card, Col, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography, DatePicker, message } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -44,6 +45,7 @@ export default function Tickets() {
   const [priority, setPriority] = useState<string | undefined>()
   const [source, setSource] = useState<string | undefined>()
   const [clusterId, setClusterId] = useState<number | undefined>()
+  const [envTag, setEnvTag] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null)
 
@@ -70,6 +72,7 @@ export default function Tickets() {
     if (priority) params.priority = priority
     if (source) params.source = source
     if (clusterId) params.cluster_id = clusterId
+    if (envTag) params.env_tag = envTag
     if (keyword) params.keyword = keyword
     if (dateRange?.[0]) params.created_after = dateRange[0].format('YYYY-MM-DD 00:00:00')
     if (dateRange?.[1]) params.created_before = dateRange[1].format('YYYY-MM-DD 23:59:59')
@@ -89,7 +92,7 @@ export default function Tickets() {
       .catch(() => {})
   }
 
-  useEffect(() => { loadList() }, [page, status, priority, source, clusterId, keyword, dateRange]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadList() }, [page, status, priority, source, clusterId, envTag, keyword, dateRange]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadStats() }, [statYear]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     getUsers().then((d) => setUsers(d ?? [])).catch(() => {})
@@ -170,7 +173,7 @@ export default function Tickets() {
       render: (v: string) => <Tag color={STATUS_COLOR[v]}>{STATUS_LABEL[v] ?? v}</Tag>,
     },
     { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v: string) => v || '-' },
-    { title: '环境', dataIndex: 'env_tag', width: 90, render: (v: string) => v ? <Tag color={v === 'qa' ? 'green' : v === 'release' ? 'orange' : 'red'}>{v}</Tag> : '-' },
+    { title: '环境', dataIndex: 'env_tag', width: 90, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
     { title: '数据库', dataIndex: 'db_name', width: 130, render: (v: string) => v || '-' },
     { title: '资源', dataIndex: 'resource_name', width: 160, render: (v: string) => v || '-' },
     { title: '处理人', dataIndex: 'assignee_name', width: 100, render: (v: string) => v || '-' },
@@ -230,6 +233,9 @@ export default function Tickets() {
           onSearch={(v) => { setKeyword(v); setPage(1) }} />
         <DatePicker.RangePicker value={dateRange}
           onChange={(v) => { setDateRange(v && v[0] && v[1] ? (v as [Dayjs, Dayjs]) : null); setPage(1) }} />
+        <Select allowClear placeholder="环境" style={{ width: 110 }} value={envTag}
+          onChange={(v) => { setEnvTag(v); setPage(1) }}
+          options={ENV_OPTIONS.map((e) => ({ value: e.value, label: e.label }))} />
         <Select allowClear showSearch optionFilterProp="label" placeholder="集群" style={{ width: 180 }}
           value={clusterId} onChange={(v) => { setClusterId(v); setPage(1) }} options={clusterOptions} />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建工单</Button>

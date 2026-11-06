@@ -371,6 +371,7 @@ export interface ActionTimelineItem {
 }
 
 export interface ClusterWaterline {
+  env_tag?: string
   /** 负载均衡（Service type=LoadBalancer）数量 */
   lb_count?: number
   /** 服务总数 */

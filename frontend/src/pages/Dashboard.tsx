@@ -1,6 +1,7 @@
 // 仪表盘 v2：6 段布局（集群/时间筛选 + 全局健康分 + 平台健康 + KPI + 趋势/分布 + 实时告警/排行 + 异常 Pod/DB 健康 + 动作统计/时间线 + 集群水位）
 // 注：按老板口径只按「集群」维度看，不做项目筛选（项目颗粒度太粗）
 // 数据源：GET /api/v1/stats/dashboard?range|start/end&cluster_id（15s 轮询，后端每 10s 预热）+ /stats/platform-health
+import { ENV_OPTIONS, envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -238,7 +239,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               allowClear placeholder="全部环境" style={{ width: 120 }}
               value={env}
               onChange={(v) => setEnv(v)}
-              options={[{ value: 'qa', label: 'qa' }, { value: 'release', label: 'release' }, { value: 'prod', label: 'prod' }]}
+              options={ENV_OPTIONS.map((e) => ({ value: e.value, label: e.label }))}
             />
             <Select
               allowClear placeholder="全部集群" style={{ width: 160 }}
@@ -510,6 +511,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               locale={{ emptyText: <Empty description="暂无集群数据" /> }}
               onRow={(r) => ({ onClick: () => navigate(`/clusters/${r.cluster_id}`), style: { cursor: 'pointer' } })}
               columns={[
+                { title: '环境', dataIndex: 'env_tag', width: 80, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
                 { title: '集群', dataIndex: 'cluster_name', ellipsis: true },
                 { title: 'CPU 水位', dataIndex: 'cpu_pct', width: 130, render: (v: number | null) => v === null || v === undefined ? '-' : (
                   <Progress percent={clampPct(v)} size="small" strokeColor={v >= 80 ? '#ff4d4f' : v >= 60 ? '#faad14' : '#52c41a'} format={(p) => `${p ?? 0}%`} />

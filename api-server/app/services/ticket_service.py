@@ -75,7 +75,8 @@ def _serialize_ticket(t: Ticket, user_map: dict[int, str] | None = None,
         "approval_id": t.approval_id,
         "cluster_id": t.cluster_id,
         "cluster_name": cluster_map.get(t.cluster_id, "") if t.cluster_id else "",
-        "env_tag": env_map.get(t.cluster_id, "") if t.cluster_id else "",
+        "env": (getattr(t, "env", "") or (env_map.get(t.cluster_id, "") if t.cluster_id else "")),
+        "env_tag": (getattr(t, "env", "") or (env_map.get(t.cluster_id, "") if t.cluster_id else "")),
         "db_connection_id": t.db_connection_id,
         "db_name": db_map.get(t.db_connection_id, "") if t.db_connection_id else "",
         "namespace": t.namespace or "",
@@ -863,6 +864,14 @@ async def list_tickets(filters: dict, page: int, page_size: int, user) -> dict:
         conditions.append(Ticket.priority == filters["priority"])
     if filters.get("source"):
         conditions.append(Ticket.source == filters["source"])
+    if filters.get("env_tag"):
+        # 环境维度（R24）：工单自身 env（DB 工单/自动转单）或所属集群环境
+        async with async_session() as _s:
+            _cids = [r for (r,) in (await _s.execute(
+                select(Cluster.id).where(Cluster.env_tag == filters["env_tag"])
+            )).all()]
+        conditions.append(or_(Ticket.env == filters["env_tag"],
+                              Ticket.cluster_id.in_(_cids) if _cids else Ticket.cluster_id == -1))
     if filters.get("cluster_id"):
         conditions.append(Ticket.cluster_id == filters["cluster_id"])
     # 关键词搜索：工单号/标题/资源名/命名空间（排查历史问题常用）

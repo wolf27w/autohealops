@@ -975,6 +975,7 @@ async def _compute_dashboard(
         workloads = r.get("deployment", 0) + r.get("statefulset", 0) + r.get("daemonset", 0) + r.get("cronjob", 0)
         cluster_details.append({
             "id": c.id, "name": c.name, "status": c.status, "version": c.version,
+            "env_tag": getattr(c, "env_tag", "") or "",   # R24 环境维度
             "rbac_mode": c.rbac_mode,
             "namespaces": ns_map.get(c.id, 0),
             "pods": pods_map.get(c.id, {}).get("total") or r.get("pod", 0),
@@ -1000,6 +1001,7 @@ async def _compute_dashboard(
         [{
             "cluster_id": c["id"],
             "cluster_name": c["name"],
+            "env_tag": c.get("env_tag", ""),
             "cpu_pct": c["cpu_pct"],
             "mem_pct": c["mem_pct"],
             "lb_count": c.get("lb_count", 0),

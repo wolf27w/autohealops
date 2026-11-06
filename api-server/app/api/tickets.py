@@ -11,6 +11,7 @@ router = APIRouter(prefix="/api/v1/tickets")
 @router.get("")
 async def list_tickets(status: str | None = None, priority: str | None = None,
                        source: str | None = None, cluster_id: int | None = None,
+                       env_tag: str | None = None,
                        keyword: str | None = None,
                        created_after: str | None = None, created_before: str | None = None,
                        page: int = 1, page_size: int = 20, user=Depends(require_any_user)):
@@ -20,6 +21,7 @@ async def list_tickets(status: str | None = None, priority: str | None = None,
         "priority": priority,
         "source": source,
         "cluster_id": cluster_id,
+        "env_tag": env_tag,
         "keyword": keyword,
         "created_after": created_after,
         "created_before": created_before,
