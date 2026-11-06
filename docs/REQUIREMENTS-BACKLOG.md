@@ -1536,7 +1536,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 |---|---|---|---|
 | mysql | host / port(3306) / database / username / password | host、username 必填；**database 非必填** | 不填库名 = 连接实例但不选默认库（SQL 里需写全名 `db.table`） |
 | pg | host / port(5432) / database / username / password | host、username、database 必填 | 与 mysql 同构，仅默认端口不同 |
-| oracle | 连接方式（Service Name / SID）、host / port(1521)、service_or_sid、username / password、role(默认/ SYSDBA) | host、service/sid、username 必填 | 字段与 mysql/pg 不同：**没有 database 概念**，用 service name 或 SID |
+| oracle | 连接方式（**Service Name / SID / TNS 描述符**）、host / port(1521)、service_or_sid、username / password、role（默认 / SYSDBA / SYSOPER） | host、service/sid、username 必填 | 字段与 mysql/pg 不同：**没有 database 概念**；TNS 描述符直接粘贴完整串 |
 
 **交互**
 - 表单顶部「数据库类型」下拉；切换类型时字段组随之切换，隐藏不相关字段
@@ -1555,7 +1555,15 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 选 oracle：字段变为 Service Name/SID，端口默认 1521
 - 切换类型不会把上一类型的值带过去（除 host/port/username/password 可保留）
 
-**待确认**：oracle 是否需要支持 `SYSDBA/SYSOPER` 角色；TNS 描述符是否要支持（本轮先 Service Name/SID 二选一）
+**老板 2026-11-06 补充（已定）**
+- Oracle **需要支持 `SYSDBA` / `SYSOPER` 角色**（连接串/驱动按 `mode=SYSDBA` 处理）
+- Oracle **需要支持 TNS 描述符**（完整 `(DESCRIPTION=(ADDRESS=...)(CONNECT_DATA=...))` 直接粘贴）
+- 因此 Oracle 的「连接方式」为三选一：`Service Name` / `SID` / `TNS 描述符`
+
+**验收（补充）**
+- 选 `SYSDBA` 能连上（测试连接返回成功，且会话权限符合预期）
+- 粘贴 TNS 描述符能连接（字段校验：以 `(DESCRIPTION=` 开头、括号配对）
+- 切换连接方式时清空上一种方式的残留值
 
 ---
 
@@ -1588,7 +1596,26 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 构建结束状态（成功/失败）与 Jenkins 一致；审计里能查到操作人
 - Jenkins 不可达/凭据错误时有明确提示（不吞异常）
 
-**待确认**：Jenkins 认证用「用户名+API Token」还是「凭据 ID」；是否需要多 Jenkins 实例并存；是否支持回滚到指定构建号
+**认证与「用当前登录用户发布」（老板 2026-11-06 提出）**
+
+现状：平台与 Jenkins 都是 LDAP 登录。希望发布时用**当前平台用户**的身份去触发 Jenkins。
+
+可行方案（按推荐度）：
+
+| 方案 | 做法 | 优点 | 缺点 |
+|---|---|---|---|
+| **A. 每用户 Jenkins API Token（推荐）** | 用户在「个人设置」里填一次 Jenkins API Token（加密存平台）；发布时用该 Token 调 Jenkins | Jenkins 侧看到的就是真实用户，权限/审计天然一致；实现简单 | 每个用户要生成一次 Token |
+| B. 服务账号 + 记录操作人 | 平台用统一服务账号发布，把「平台用户名」写进构建参数/描述 | 零维护 | Jenkins 里看不到真实用户，权限无法按人控制 |
+| C. LDAP 直通（转发用户凭据） | 平台保存用户 LDAP 密码或用其换票据再调 Jenkins | 无需额外交互 | **不能存 LDAP 密码**（安全红线）；Jenkins REST 也没有 SSO 代授权，除非再加 oauth2-proxy/header 认证，成本高 |
+
+**建议**：本轮做 **A**（个人设置里配置 Jenkins API Token，加密存储、只本人可改），
+同时保留 B 作为兜底（未配置 Token 的用户只能用服务账号发布，并在构建描述里标注平台用户名）。
+
+**其它口径**
+- 支持多 Jenkins 实例并存（每个实例一条配置，各自独立凭据/Token）
+- 是否支持「回滚到指定构建号」：先记为 ⏳（本轮先做「重新发布同一分支」）
+
+**待确认**：A 方案的 Token 是每个 Jenkins 实例各配一个，还是同一 Token 复用（推荐按实例分开）
 
 ---
 
@@ -1596,11 +1623,17 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 **目标**：巡检不只查资源，还要查「应用在跑但没人访问」的服务（长期零请求 = 疑似废弃/流量未接入）。
 
-**检测口径**
-- 对象：namespace 下的 Deployment/StatefulSet（运行中、副本 Ready）
-- 指标：过去 N 天（默认 7 天）**外部请求量 ≈ 0**
-  - 优先用入口指标：Ingress/网关请求数（nginx ingress controller / APM / Prometheus `nginx_ingress_controller_requests` 或服务网格指标）
-  - 无入口指标时退化为：Pod 网络入站速率长期低于阈值（需排除探针流量）
+**检测口径（老板 2026-11-06 修订：没有 ingress 指标就走 nginx 日志）**
+- 对象：namespace 下的 **Deployment**（运行中、副本 Ready）；报告里**记录到 Deployment 级别**
+- 数据来源优先级：
+  1. Ingress/网关指标（有则用）
+  2. **前端 nginx 服务的访问日志**（没有 ingress 指标时的主要来源）：
+     配置哪些 Pod/namespace 是 nginx（或按镜像名/容器名识别 `nginx`），
+     采集 access log，按 `host / upstream / 路径` 归到后端 Deployment
+  3. 都没有 → 标「无法判定」，不误报
+- 判定：过去 N 天（默认 7 天）**外部请求量 ≈ 0**
+- **排除探针**：kubelet 探针来源、`/health` `/ready` `/live` `/healthz` 等路径、探针 User-Agent
+- 归因：nginx 日志里的 upstream/host 映射到 Service → Deployment（映射不到的单列「未归因」）
 - **排除探针**：健康检查（readiness/liveness/startup）产生的请求不计入；
   来源过滤：kubelet 探针源 IP、`/health` `/ready` `/live` 等路径、探针 User-Agent
 - 输出：巡检报告新增「疑似僵尸服务」清单（namespace / 服务 / 副本 / 最近请求时间 / 依据）
@@ -1614,6 +1647,8 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 造一个无流量的 Deployment（有探针）→ 巡检报告能列出，且不因探针流量误判为「有请求」
 - 正常业务服务不出现误报
 - 无指标来源的集群显示「无法判定」而不是列出全部服务
+- 有前端 nginx 的集群：能从 access log 统计到后端 Deployment 的请求量，并正确排除探针请求
+- 报告条目包含：namespace / Deployment / 副本数 / 最近一次外部请求时间 / 数据来源（ingress 指标 / nginx 日志）/ 判定依据
 
 ---
 
