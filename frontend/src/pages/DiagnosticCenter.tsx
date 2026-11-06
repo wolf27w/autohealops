@@ -251,6 +251,7 @@ function DBConnections() {
         onDelete={async (c) => { await deleteDBConnection(c.id); load() }}
         onToggleCollect={(c, v) => toggleCollect(c as unknown as DBConnection, v)}
         onToggleInspect={(c, v) => toggleInspect(c as unknown as DBConnection, v)}
+        onReload={load}
       />
 
       <Modal title={diag ? `正在诊断：${diag.name}` : '诊断'} open={!!diag} footer={null} closable={false}

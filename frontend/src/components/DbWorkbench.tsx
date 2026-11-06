@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message, Tabs, Alert } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined, TableOutlined, EyeOutlined, FunctionOutlined, FieldTimeOutlined, ExportOutlined, ImportOutlined } from '@ant-design/icons'
-import { testDBConnection, execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
+import { testDBConnection, listDbGroups, createDbGroup, renameDbGroup, deleteDbGroup, type DbGroupRow, execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
   id: number
@@ -32,6 +32,7 @@ interface Props {
   onDelete: (c: ConsoleConn) => void
   onToggleCollect: (c: ConsoleConn, v: boolean) => void
   onToggleInspect: (c: ConsoleConn, v: boolean) => void
+  onReload?: () => void
 }
 
 type Result = { columns?: string[]; rows?: unknown[][]; truncated?: boolean; affected_rows?: number }
@@ -69,7 +70,7 @@ const READ_HEADS = new Set(['select', 'show', 'desc', 'describe', 'explain', 'wi
 
 export default function DbWorkbench({
   conns, selectedId, onSelect, onAdd, onDiagnose, onTest, onCollect, onEdit, onDelete,
-  onToggleCollect, onToggleInspect,
+  onToggleCollect, onToggleInspect, onReload,
 }: Props) {
   const [kw, setKw] = useState('')
   const [sql, setSql] = useState('')
@@ -101,6 +102,8 @@ export default function DbWorkbench({
   const [connState, setConnState] = useState<Record<number, 'off' | 'connecting' | 'on' | 'failed'>>({})
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ table: true, view: true })
   const [closedGroups, setClosedGroups] = useState<Record<string, boolean>>({})
+  const [dbGroups, setDbGroups] = useState<DbGroupRow[]>([])
+  const [groupModal, setGroupModal] = useState<{ open: boolean; mode: 'create' | 'rename'; id?: number; name: string }>({ open: false, mode: 'create', name: '' })
   const [editTaskId, setEditTaskId] = useState<number | null>(null)
   const [taskForm] = Form.useForm()
 
@@ -300,6 +303,34 @@ export default function DbWorkbench({
     }
   }
 
+  // ---------- 分组 ----------
+  const refreshGroups = async () => {
+    try { setDbGroups((await listDbGroups()) || []) } catch { setDbGroups([]) }
+  }
+  useEffect(() => { refreshGroups() }, [conns.length])
+
+  const saveGroup = async () => {
+    const name = groupModal.name.trim()
+    if (!name) { message.error('分组名不能为空'); return }
+    try {
+      if (groupModal.mode === 'create') await createDbGroup(name)
+      else if (groupModal.id) await renameDbGroup(groupModal.id, name)
+      setGroupModal({ open: false, mode: 'create', name: '' })
+      await refreshGroups()
+      onReload?.()
+      message.success('已保存')
+    } catch { /* 拦截器已提示 */ }
+  }
+
+  const removeGroup = async (g: DbGroupRow) => {
+    try {
+      await deleteDbGroup(g.id)
+      await refreshGroups()
+      onReload?.()
+      message.success(`已删除分组「${g.name}」，组内实例移到未分组`)
+    } catch { /* ignore */ }
+  }
+
   // ---------- 连接 / 断开 ----------
   const connect = async (c: ConsoleConn) => {
     setConnState((m) => ({ ...m, [c.id]: 'connecting' }))
@@ -457,8 +488,11 @@ export default function DbWorkbench({
       {/* 左：实例列表 */}
       <div style={{ width: 280, flex: '0 0 280px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #f0f0f0', paddingRight: 10 }}>
         <Button type="primary" icon={<PlusOutlined />} block style={{ marginBottom: 8 }} onClick={onAdd}>添加数据库连接</Button>
-        <Input.Search size="small" allowClear placeholder="搜索实例 / 库" value={kw}
-          onChange={(e) => setKw(e.target.value)} style={{ marginBottom: 8 }} />
+        <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
+          <Input.Search size="small" allowClear placeholder="搜索实例 / 库" value={kw}
+            onChange={(e) => setKw(e.target.value)} style={{ flex: 1 }} />
+          <Button size="small" onClick={() => setGroupModal({ open: true, mode: 'create', name: '' })}>＋分组</Button>
+        </Space.Compact>
         <div style={{ flex: 1, overflow: 'auto' }}>
           {filtered.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库" /> : (
             <>
@@ -471,6 +505,18 @@ export default function DbWorkbench({
                     style={{ cursor: 'pointer', fontSize: 11, color: '#8c8c8c', padding: '2px 4px', userSelect: 'none' }}
                   >
                     {collapsed ? '▸' : '▾'} {gname}（{items.length}）
+                    {gname !== '未分组' && (() => {
+                      const g = dbGroups.find((x) => x.name === gname)
+                      return g ? (
+                        <span style={{ marginLeft: 6 }}>
+                          <EditOutlined style={{ fontSize: 11, marginRight: 6 }}
+                            onClick={(e) => { e.stopPropagation(); setGroupModal({ open: true, mode: 'rename', id: g.id, name: g.name }) }} />
+                          <Popconfirm title={`删除分组「${g.name}」？组内实例移到未分组`} onConfirm={(e) => { e?.stopPropagation(); removeGroup(g) }}>
+                            <DeleteOutlined style={{ fontSize: 11 }} onClick={(e) => e.stopPropagation()} />
+                          </Popconfirm>
+                        </span>
+                      ) : null
+                    })()}
                   </div>
                   {!collapsed && items.map((c) => {
                     const active = c.id === selectedId
@@ -737,6 +783,23 @@ export default function DbWorkbench({
             </div>
           </>
         )}
+
+      <Modal
+        title={groupModal.mode === 'create' ? '新建分组' : '重命名分组'}
+        open={groupModal.open}
+        onOk={saveGroup}
+        onCancel={() => setGroupModal({ open: false, mode: 'create', name: '' })}
+        okText="保存"
+        destroyOnClose
+      >
+        <Input
+          placeholder="如 生产 / 测试 / 报表库"
+          value={groupModal.name}
+          onChange={(e) => setGroupModal((m) => ({ ...m, name: e.target.value }))}
+          onPressEnter={saveGroup}
+          maxLength={50}
+        />
+      </Modal>
 
       <Modal
         title={`SQL 定时任务：${cur?.name || ''}`}

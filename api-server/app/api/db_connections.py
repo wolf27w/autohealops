@@ -60,6 +60,78 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
     }
 
 
+@router.get("/groups")
+async def list_groups(user=Depends(require_any_user)):
+    """实例分组列表（含每个组的实例数）。"""
+    from app.models import DbGroup
+    from sqlalchemy import func as _f
+    async with async_session() as session:
+        groups = list((await session.execute(select(DbGroup).order_by(DbGroup.name))).scalars())
+        rows = (await session.execute(
+            select(DBConnection.group_name, _f.count(DBConnection.id)).group_by(DBConnection.group_name)
+        )).all()
+    counts = {(g or ""): int(n or 0) for g, n in rows}
+    return {"code": 200, "message": "success", "data": [
+        {"id": g.id, "name": g.name, "conn_count": counts.get(g.name, 0)} for g in groups
+    ]}
+
+
+@router.post("/groups")
+async def create_group(payload: dict, user=Depends(require_admin)):
+    """新建分组（重名返回 400）。"""
+    from app.models import DbGroup
+    name = (payload.get("name") or "").strip()[:50]
+    if not name:
+        return {"code": 400, "message": "分组名不能为空", "data": None}
+    async with async_session() as session:
+        exists = (await session.execute(select(DbGroup).where(DbGroup.name == name))).scalars().first()
+        if exists:
+            return {"code": 400, "message": "分组已存在", "data": None}
+        g = DbGroup(name=name)
+        session.add(g)
+        await session.commit()
+        await session.refresh(g)
+    return {"code": 200, "message": "success", "data": {"id": g.id, "name": g.name, "conn_count": 0}}
+
+
+@router.put("/groups/{group_id}")
+async def rename_group(group_id: int, payload: dict, user=Depends(require_admin)):
+    """重命名分组（同步更新该组下所有实例的 group_name）。"""
+    from app.models import DbGroup
+    from sqlalchemy import update as _update
+    name = (payload.get("name") or "").strip()[:50]
+    if not name:
+        return {"code": 400, "message": "分组名不能为空", "data": None}
+    async with async_session() as session:
+        g = await session.get(DbGroup, group_id)
+        if not g:
+            return {"code": 404, "message": "分组不存在", "data": None}
+        dup = (await session.execute(select(DbGroup).where(DbGroup.name == name, DbGroup.id != group_id))).scalars().first()
+        if dup:
+            return {"code": 400, "message": "分组名已存在", "data": None}
+        old = g.name
+        g.name = name
+        await session.execute(_update(DBConnection).where(DBConnection.group_name == old).values(group_name=name))
+        await session.commit()
+    return {"code": 200, "message": "success", "data": {"id": group_id, "name": name}}
+
+
+@router.delete("/groups/{group_id}")
+async def delete_group(group_id: int, user=Depends(require_admin)):
+    """删除分组：组内实例移到「未分组」，不删除实例。"""
+    from app.models import DbGroup
+    from sqlalchemy import update as _update
+    async with async_session() as session:
+        g = await session.get(DbGroup, group_id)
+        if not g:
+            return {"code": 404, "message": "分组不存在", "data": None}
+        name = g.name
+        await session.execute(_update(DBConnection).where(DBConnection.group_name == name).values(group_name=""))
+        await session.delete(g)
+        await session.commit()
+    return {"code": 200, "message": "success", "data": None}
+
+
 @router.get("/sql-task-counts")
 async def sql_task_counts(user=Depends(require_any_user)):
     """每个数据库连接的定时任务数量（实例列表展示用）。"""

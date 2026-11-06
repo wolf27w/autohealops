@@ -513,6 +513,12 @@ export const exportDBObjects = (id: number, data: Record<string, unknown>) =>
   http.post<{ sql?: string; tables?: number; rows?: number; truncated?: boolean; bytes?: number }>(`/db-connections/${id}/export`, data)
 export const importDBObjects = (id: number, data: Record<string, unknown>) =>
   http.post<{ executed?: number; skipped?: number }>(`/db-connections/${id}/import`, data)
+// 数据库实例分组
+export interface DbGroupRow { id: number; name: string; conn_count: number }
+export const listDbGroups = () => http.get<DbGroupRow[]>('/db-connections/groups')
+export const createDbGroup = (name: string) => http.post<DbGroupRow>('/db-connections/groups', { name })
+export const renameDbGroup = (id: number, name: string) => http.put(`/db-connections/groups/${id}`, { name })
+export const deleteDbGroup = (id: number) => http.delete(`/db-connections/groups/${id}`)
 // SQL 定时任务（每月跑 SQL → 发邮件）
 export interface SqlTaskRow {
   id: number; name: string; db_connection_id: number; sql: string
