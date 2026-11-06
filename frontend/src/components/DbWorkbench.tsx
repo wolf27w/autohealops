@@ -179,14 +179,21 @@ export default function DbWorkbench({
   }
 
   const applySugg = (item: string) => {
-    if (!sugg) return
-    const next = sql.slice(0, sugg.start) + item + sql.slice(sugg.end)
+    // 用「当前 textarea 的真实值与光标」重算替换区间，避免状态滞后导致插成 "selects"
+    const el = taRef.current?.resizableTextArea?.textArea
+    const value = el ? el.value : sql
+    const caret = el ? (el.selectionStart ?? value.length) : value.length
+    const before = value.slice(0, caret)
+    const m = before.match(/[A-Za-z0-9_$.]+$/)
+    const start = caret - (m ? m[0].length : 0)
+    const next = value.slice(0, start) + item + value.slice(caret)
     setSql(next)
     setSugg(null)
-    const pos = sugg.start + item.length
+    setSelLen(0)
+    const pos = start + item.length
     requestAnimationFrame(() => {
-      const el = taRef.current?.resizableTextArea?.textArea
-      if (el) { el.focus(); el.setSelectionRange(pos, pos) }
+      const ta = taRef.current?.resizableTextArea?.textArea
+      if (ta) { ta.focus(); ta.setSelectionRange(pos, pos) }
     })
   }
 
@@ -550,7 +557,10 @@ export default function DbWorkbench({
                   if (sugg) {
                     if (e.key === 'ArrowDown') { e.preventDefault(); setSugg({ ...sugg, idx: (sugg.idx + 1) % sugg.items.length }); return }
                     if (e.key === 'ArrowUp') { e.preventDefault(); setSugg({ ...sugg, idx: (sugg.idx - 1 + sugg.items.length) % sugg.items.length }); return }
-                    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applySugg(sugg.items[sugg.idx]); return }
+                    if (e.key === 'Enter' || e.key === 'Tab') {
+                      e.preventDefault(); e.stopPropagation()
+                      applySugg(sugg.items[sugg.idx]); return
+                    }
                     if (e.key === 'Escape') { e.preventDefault(); setSugg(null); return }
                   }
                   if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
