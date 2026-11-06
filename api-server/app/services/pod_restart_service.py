@@ -23,7 +23,7 @@
 参考 db_alert_service.py（N6 建单/去重/恢复范式）。
 """
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -98,14 +98,35 @@ def _build_message(pod: dict, fault_type: str, prev_r: int, restart: int, extra:
     return msg
 
 
-def _detect_restart_diffs(pods: list[dict], baseline: dict[str, int]) -> tuple[list[tuple[dict, int, int]], dict[str, int]]:
+RESTART_GRACE = timedelta(minutes=5)  # 手工重启（restartedAt 注解）后的宽限期
+
+
+def _restart_annotation_time(raw: str):
+    """解析 kubectl/kubesphere 的 restartedAt 注解；解析失败返回 None"""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        t = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t
+
+
+def _detect_restart_diffs(pods: list[dict], baseline: dict[str, int],
+                          now=None) -> tuple[list[tuple[dict, int, int]], dict[str, int]]:
     """纯函数：对比重启计数基线，返回 (需处理增量 [(pod, prev_r, restart), ...], 新基线)
 
-    排除规则：
-    - 手动重启（restarted_at 非空）→ 不跟踪、不进基线（排除）
-    - 首次发现（无基线，含滚动发布新 Pod）→ 只记基线（本轮不上报）
-    - restart > prev → 增量上报；restart <= prev → 只更新基线
+    规则（2026-11-06 修 R22）：
+    - 手工重启注解（restartedAt）**只在 5 分钟宽限期内**忽略；超过宽限期恢复正常跟踪
+      （注解会从 Deployment 模板继承到每个 Pod，永久排除会导致这些服务永远不告警）
+    - 宽限期内也**写基线**，避免宽限期结束后第一次增量被当成「首次发现」静默
+    - 首次发现（无基线）→ 只记基线，本轮不上报
+    - restart > prev → 增量上报
     """
+    now = now or datetime.now(timezone.utc)
     new_baseline: dict[str, int] = {}
     increments: list[tuple[dict, int, int]] = []
     for p in pods:
@@ -114,8 +135,17 @@ def _detect_restart_diffs(pods: list[dict], baseline: dict[str, int]) -> tuple[l
             continue
         field = f"{p.get('namespace', '')}/{name}"
         restart = int(p.get("restart_count") or 0)
-        if p.get("restarted_at"):
-            continue  # 手动重启排除
+
+        ra_time = _restart_annotation_time(p.get("restarted_at") or "")
+        if ra_time is not None:
+            try:
+                within_grace = timedelta(0) <= (now - ra_time) <= RESTART_GRACE
+            except TypeError:
+                within_grace = False
+            if within_grace:
+                new_baseline[field] = restart  # 宽限期内不报，但记基线
+                continue
+
         prev = baseline.get(field)
         if prev is None:
             new_baseline[field] = restart  # 首次发现记基线
