@@ -253,11 +253,106 @@ async def get_schema(conn_id: int, user=Depends(require_any_user)):
         data = json.loads(raw)
         # 系统库不进补全候选（否则 3000 张系统表会淹没业务表）
         sys_dbs = {"information_schema", "performance_schema", "mysql", "sys"}
-        data["tables"] = [t for t in (data.get("tables") or []) if (t.get("db") or "") not in sys_dbs]
+        for key in ("tables", "views", "routines", "events"):
+            data[key] = [x for x in (data.get(key) or []) if (x.get("db") or "") not in sys_dbs]
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"获取表结构失败：{e}", "data": None}
     _SCHEMA_CACHE[conn_id] = (time.time(), data)
     return {"code": 200, "message": "success", "data": data}
+
+
+@router.get("/{conn_id}/object-ddl")
+async def get_object_ddl(conn_id: int, kind: str, name: str, db: str = "",
+                         user=Depends(require_any_user)):
+    """表/视图/函数/存储过程/事件的创建语句（SHOW CREATE）。"""
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    ok, why = _agent_db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    try:
+        from app import agent_gateway
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(c.cluster_id), "DbObjectDDL",
+            json.dumps({"key": c.agent_db_key, "kind": kind, "db": db or c.database, "name": name}).encode(),
+            30.0,
+        )
+        return {"code": 200, "message": "success", "data": json.loads(raw)}
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"获取 DDL 失败：{e}", "data": None}
+
+
+@router.post("/{conn_id}/export")
+async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_user)):
+    """导出库/表为 SQL（CREATE + INSERT，单表 ≤5000 行、总 ≤5MB）。"""
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    ok, why = _agent_db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    scope = (payload.get("scope") or "db").lower()
+    table = (payload.get("table") or "").strip()
+    if scope == "table" and not table:
+        return {"code": 400, "message": "导出单表需要指定表名", "data": None}
+    try:
+        from app import agent_gateway
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(c.cluster_id), "DbExport",
+            json.dumps({"key": c.agent_db_key, "db": c.database, "table": table if scope == "table" else "",
+                        "rows": int(payload.get("rows") or 1000)}).encode(),
+            120.0,
+        )
+        return {"code": 200, "message": "success", "data": json.loads(raw)}
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"导出失败：{e}", "data": None}
+
+
+@router.post("/{conn_id}/import")
+async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin)):
+    """导入 SQL 脚本 / CSV（管理员 + confirm，≤5MB，全额审计）。"""
+    if not payload.get("confirm"):
+        return {"code": 400, "message": "导入会真实写库，需要显式确认（confirm=true）", "data": None}
+    content = payload.get("content") or ""
+    if not content:
+        return {"code": 400, "message": "content 不能为空", "data": None}
+    if len(content) > 5 * 1024 * 1024:
+        return {"code": 400, "message": "文件超过 5MB，请拆分后导入", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    ok, why = _agent_db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+
+    fmt = (payload.get("format") or "sql").lower()
+    table = (payload.get("table") or "").strip()
+    started = time.time()
+    result, err = {}, ""
+    try:
+        from app import agent_gateway
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(c.cluster_id), "DbImport",
+            json.dumps({"key": c.agent_db_key, "db": (payload.get("db") or c.database),
+                        "table": table, "format": fmt, "content": content}).encode(),
+            180.0,
+        )
+        result = json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    elapsed = round(time.time() - started, 2)
+    await _audit_sql(user, c, f"IMPORT {fmt} {table or c.database} ({len(content)} bytes)",
+                     elapsed, 0, not err, err, "db_import",
+                     int(result.get("executed") or 0))
+    if err:
+        return {"code": 500, "message": f"导入失败：{err}", "data": None}
+    return {"code": 200, "message": "success", "data": result}
 
 
 @router.post("/{conn_id}/exec")

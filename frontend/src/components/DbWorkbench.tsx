@@ -2,8 +2,8 @@
 // 直接嵌在「诊断中心 → 数据库管理」tab 里，不再是弹窗。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message } from 'antd'
-import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined } from '@ant-design/icons'
-import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, type SqlTaskRow } from '../services/api'
+import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined, TableOutlined, EyeOutlined, FunctionOutlined, FieldTimeOutlined, ExportOutlined, ImportOutlined } from '@ant-design/icons'
+import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
   id: number
@@ -54,8 +54,14 @@ const DIALECT_KEYWORDS: Record<string, string[]> = {
     'connect by', 'start with', 'sysdate', 'sequence.nextval'],
 }
 
-interface SchemaData { databases: string[]; tables: { db: string; name: string }[] }
-const EMPTY_SCHEMA: SchemaData = { databases: [], tables: [] }
+interface SchemaData {
+  databases: string[]
+  tables: { db: string; name: string }[]
+  views: { db: string; name: string }[]
+  routines: { db: string; name: string; type: string }[]
+  events: { db: string; name: string; extra?: string }[]
+}
+const EMPTY_SCHEMA: SchemaData = { databases: [], tables: [], views: [], routines: [], events: [] }
 
 
 const READ_HEADS = new Set(['select', 'show', 'desc', 'describe', 'explain', 'with'])
@@ -88,6 +94,7 @@ export default function DbWorkbench({
   const [tasks, setTasks] = useState<SqlTaskRow[]>([])
   const [counts, setCounts] = useState<Record<number, number>>({})
   const [selLen, setSelLen] = useState(0)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ table: true, view: true })
   const [editTaskId, setEditTaskId] = useState<number | null>(null)
   const [taskForm] = Form.useForm()
 
@@ -99,9 +106,16 @@ export default function DbWorkbench({
     getDBSchema(cur.id)
       .then((d) => {
         if (!alive) return
+        const raw = d as unknown as {
+          databases?: string[]; tables?: { db: string; name: string }[]
+          views?: { db: string; name: string }[]
+          routines?: { db: string; name: string; type: string }[]
+          events?: { db: string; name: string; extra?: string }[]
+        }
         setSchema({
-          databases: (d?.databases || []).filter((x) => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(x)),
-          tables: (d?.tables || []).map((t) => ({ db: t.db, name: t.name })),
+          databases: (raw?.databases || []).filter((x) => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(x)),
+          tables: raw?.tables || [], views: raw?.views || [],
+          routines: raw?.routines || [], events: raw?.events || [],
         })
       })
       .catch(() => setSchema(EMPTY_SCHEMA))
@@ -141,6 +155,14 @@ export default function DbWorkbench({
     })
     mirror.textContent = ''
   }
+
+  const groups = useMemo(() => ([
+    { key: 'table', label: '表', kind: 'table', items: schema.tables.map((t) => ({ name: t.name })) },
+    { key: 'view', label: '视图', kind: 'view', items: schema.views.map((t) => ({ name: t.name })) },
+    { key: 'function', label: '函数', kind: 'function', items: schema.routines.filter((r) => (r.type || '').toUpperCase() === 'FUNCTION').map((r) => ({ name: r.name })) },
+    { key: 'procedure', label: '存储过程', kind: 'procedure', items: schema.routines.filter((r) => (r.type || '').toUpperCase() === 'PROCEDURE').map((r) => ({ name: r.name })) },
+    { key: 'event', label: '事件', kind: 'event', items: schema.events.map((e) => ({ name: e.name })) },
+  ]), [schema])
 
   const syncSuggest = (text: string, caret: number) => {
     const before = text.slice(0, caret)
@@ -221,6 +243,68 @@ export default function DbWorkbench({
       const x = e as { response?: { data?: { message?: string } }; message?: string }
       setErr(x?.response?.data?.message || x?.message || '导出失败')
     }
+  }
+
+  // ---------- 对象 / 导入导出 ----------
+  const openObject = async (kind: string, name: string) => {
+    if (!cur) return
+    if (kind === 'table' || kind === 'view') {
+      setSql(`select * from \`${name}\` limit 100;`)
+      return
+    }
+    try {
+      const r = await getObjectDDL(cur.id, kind, name, cur.database)
+      if (r?.ddl) setSql(r.ddl)
+      else message.warning('未获取到 DDL')
+    } catch { /* ignore */ }
+  }
+
+  const doExport = async (scope: 'db' | 'table') => {
+    if (!cur) return
+    if (scope === 'table') {
+      message.info('请在对象树里点表名右侧的导出，或先在 SQL 里选中表相关语句')
+      return
+    }
+    try {
+      const r = await exportDBObjects(cur.id, { scope, rows: 1000 })
+      const blob = new Blob([r?.sql || ''], { type: 'text/plain;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `${cur.name}-${new Date().toISOString().slice(0, 10)}.sql`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+      message.success(`已导出 ${r?.tables ?? 0} 张表 / ${r?.rows ?? 0} 行${r?.truncated ? '（超 5MB 已截断）' : ''}`)
+    } catch { /* 拦截器已提示 */ }
+  }
+
+  const doExportTable = async (table: string) => {
+    if (!cur) return
+    try {
+      const r = await exportDBObjects(cur.id, { scope: 'table', table, rows: 5000 })
+      const blob = new Blob([r?.sql || ''], { type: 'text/plain;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `${table}-${new Date().toISOString().slice(0, 10)}.sql`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+      message.success(`已导出 ${table}（${r?.rows ?? 0} 行）`)
+    } catch { /* ignore */ }
+  }
+
+  const doImport = (file: File) => {
+    if (!cur) return
+    const fmt = file.name.toLowerCase().endsWith('.csv') ? 'csv' : 'sql'
+    const table = fmt === 'csv' ? (window.prompt('CSV 导入到哪张表？填表名') || '') : ''
+    if (fmt === 'csv' && !table) return
+    if (!window.confirm(`确认导入 ${file.name}（${Math.round(file.size / 1024)} KB）？会真实写库，无法自动回滚。`)) return
+    const reader = new FileReader()
+    reader.onload = async () => {
+      try {
+        const r = await importDBObjects(cur.id, {
+          format: fmt, table, content: String(reader.result || ''), confirm: true,
+        })
+        message.success(`导入完成：执行 ${r?.executed ?? 0} 条`)
+      } catch { /* ignore */ }
+    }
+    reader.readAsText(file)
   }
 
   // ---------- 定时任务 ----------
@@ -350,6 +434,54 @@ export default function DbWorkbench({
         </div>
       </div>
 
+      {/* 中：对象树（表/视图/函数/存储过程/事件） */}
+      <div style={{ width: 210, flex: '0 0 210px', borderRight: '1px solid #f0f0f0', paddingRight: 8, overflow: 'auto' }}>
+        {!cur ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择实例" /> : (
+          <>
+            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>
+              {cur.database || '-'} · {schema.tables.length} 表 / {schema.views.length} 视图
+            </div>
+            {groups.map((g) => (
+              <div key={g.key} style={{ marginBottom: 4 }}>
+                <div
+                  onClick={() => setOpenGroups((m) => ({ ...m, [g.key]: !m[g.key] }))}
+                  style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: '3px 2px', color: '#595959' }}
+                >
+                  {openGroups[g.key] ? '▾' : '▸'} {g.label}（{g.items.length}）
+                </div>
+                {openGroups[g.key] && g.items.map((it) => (
+                  <div
+                    key={`${g.key}-${it.name}`}
+                    onClick={() => openObject(g.kind, it.name)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
+                      fontSize: 12, padding: '2px 4px 2px 12px', borderRadius: 4, color: '#262626',
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = '#f5f5f5' }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+                  >
+                    {g.kind === 'table' ? <TableOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
+                      : g.kind === 'view' ? <EyeOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
+                      : g.kind === 'event' ? <FieldTimeOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
+                      : <FunctionOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />}
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.name}>{it.name}</span>
+                    {g.kind === 'table' && (
+                      <Tooltip title="导出该表">
+                        <ExportOutlined style={{ fontSize: 11, color: '#bfbfbf' }}
+                          onClick={(e) => { e.stopPropagation(); doExportTable(it.name) }} />
+                      </Tooltip>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {schema.tables.length + schema.views.length === 0 && (
+              <div style={{ fontSize: 11, color: '#bfbfbf' }}>无对象（或直连库不支持）</div>
+            )}
+          </>
+        )}
+      </div>
+
       {/* 右：操作条 + SQL + 结果 */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : (
@@ -442,6 +574,13 @@ export default function DbWorkbench({
               )}
               <Button icon={<DownloadOutlined />} disabled={!isAgent || !sql.trim() || !isRead} onClick={download}>下载 CSV</Button>
               <Button icon={<ClockCircleOutlined />} disabled={!isAgent} onClick={() => openTasks()}>定时任务</Button>
+              <Button icon={<ExportOutlined />} disabled={!isAgent} onClick={() => doExport('db')}>导出库</Button>
+              <Popconfirm title="导入 SQL/CSV 会真实写库，确定继续？"
+                onConfirm={() => { const el = document.getElementById('db-import-file') as HTMLInputElement | null; el?.click() }}>
+                <Button icon={<ImportOutlined />} disabled={!isAgent}>导入</Button>
+              </Popconfirm>
+              <input id="db-import-file" type="file" accept=".sql,.csv" style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.currentTarget.value = '' }} />
               {res?.affected_rows !== undefined && (
                 <Tag color={(res.affected_rows || 0) > 0 ? 'green' : 'default'}>影响行数：{res.affected_rows}</Tag>
               )}

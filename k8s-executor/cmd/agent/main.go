@@ -423,6 +423,33 @@ func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.A
 		resp.Payload = out
 		return resp
 	}
+	if f.Method == "DbObjectDDL" {
+		out, err := agentdb.ObjectDDLByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
+	if f.Method == "DbExport" {
+		out, err := agentdb.ExportByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
+	if f.Method == "DbImport" {
+		out, err := agentdb.ImportByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
 	if f.Method == "DbSchemaByKey" {
 		out, err := agentdb.SchemaByKey(ctx, f.Payload)
 		if err != nil {

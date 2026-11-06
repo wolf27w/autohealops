@@ -506,6 +506,13 @@ export const queryDBConnection = (id: number, sql: string) =>
 // 执行 SQL（DML/DDL，仅 admin；confirm=true 二次确认）
 export const execDBConnection = (id: number, sql: string) =>
   http.post<{ columns?: string[]; rows?: unknown[][]; affected_rows?: number; write?: boolean }>(`/db-connections/${id}/exec`, { sql, confirm: true })
+// 数据库对象：DDL / 导出 / 导入（MySQL）
+export const getObjectDDL = (id: number, kind: string, name: string, db?: string) =>
+  http.get<{ ddl?: string }>(`/db-connections/${id}/object-ddl`, { params: { kind, name, db } })
+export const exportDBObjects = (id: number, data: Record<string, unknown>) =>
+  http.post<{ sql?: string; tables?: number; rows?: number; truncated?: boolean; bytes?: number }>(`/db-connections/${id}/export`, data)
+export const importDBObjects = (id: number, data: Record<string, unknown>) =>
+  http.post<{ executed?: number; skipped?: number }>(`/db-connections/${id}/import`, data)
 // SQL 定时任务（每月跑 SQL → 发邮件）
 export interface SqlTaskRow {
   id: number; name: string; db_connection_id: number; sql: string
