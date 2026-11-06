@@ -173,12 +173,19 @@ export default function DbWorkbench({
       if (!m.has(g)) m.set(g, [])
       m.get(g)!.push(c)
     }
-    return [...m.entries()].sort((a, b) => {
-      if (a[0] === '未分组') return 1
-      if (b[0] === '未分组') return -1
-      return a[0].localeCompare(b[0], 'zh')
-    })
+    return m
   }, [filtered])
+
+  // 渲染用：以「已建分组」为准（空组也要显示），再并上实例里出现但未建组的名字
+  const renderGroups = useMemo(() => {
+    const names = new Set<string>()
+    dbGroups.forEach((g) => names.add(g.name))
+    groupedConns.forEach((_, k) => { if (k !== '未分组') names.add(k) })
+    const list = [...names].sort((a, b) => a.localeCompare(b, 'zh'))
+    const out = list.map((n) => [n, groupedConns.get(n) || []] as [string, ConsoleConn[]])
+    if (groupedConns.has('未分组')) out.push(['未分组', groupedConns.get('未分组') || []])
+    return out
+  }, [dbGroups, groupedConns])
 
   const groups = useMemo(() => ([
     { key: 'table', label: '表', kind: 'table', items: schema.tables.map((t) => ({ name: t.name })) },
@@ -496,7 +503,7 @@ export default function DbWorkbench({
         <div style={{ flex: 1, overflow: 'auto' }}>
           {filtered.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库" /> : (
             <>
-            {groupedConns.map(([gname, items]) => {
+            {renderGroups.map(([gname, items]) => {
               const collapsed = !!closedGroups[gname]
               return (
                 <div key={gname} style={{ marginBottom: 6 }}>
