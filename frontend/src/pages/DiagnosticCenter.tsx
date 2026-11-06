@@ -11,7 +11,7 @@ import DbWorkbench, { type ConsoleConn } from '../components/DbWorkbench'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL,
-  runDbDiagnosis, getDbDiagnosisReports, downloadInspectionReport, getDbDiagnosisProgress,
+  runDbDiagnosis, getDbDiagnosisReports, downloadInspectionReport, getDbDiagnosisProgress, listDbGroups,
 } from '../services/api'
 
 interface DBReport {
@@ -157,6 +157,7 @@ function DBConnections() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
+  const [dbGroups, setDbGroups] = useState<{ id: number; name: string }[]>([])
   const [form] = Form.useForm()
 
   const load = () => getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
@@ -167,8 +168,11 @@ function DBConnections() {
     } catch { /* 拦截器已提示失败原因 */ }
   }
   useEffect(() => { load() }, [])
+  const loadGroups = () => listDbGroups().then((d) => setDbGroups((d || []) as { id: number; name: string }[])).catch(() => setDbGroups([]))
+  useEffect(() => { loadGroups() }, [])
 
   const openModal = (c?: DBConnection) => {
+    loadGroups()
     setEditing(c || null)
     setModalOpen(true)
     if (c) {
@@ -263,8 +267,13 @@ function DBConnections() {
       <Modal title={editing ? '编辑数据库连接' : '添加数据库连接'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="group_name" label="分组" tooltip="实例列表按分组展示；留空=未分组">
-            <Input placeholder="如 生产 / 测试 / 报表库" />
+          <Form.Item name="group_name" label="分组" tooltip="选择已创建的分组；留空=未分组">
+            <Select
+              allowClear
+              placeholder="选择分组（不选=未分组）"
+              options={dbGroups.map((g) => ({ value: g.name, label: g.name }))}
+              notFoundContent="还没有分组，去左侧「＋分组」创建"
+            />
           </Form.Item>
           <Form.Item name="db_type" label="类型" rules={[{ required: true }]}>
             <Select options={['mysql', 'pg', 'oracle'].map((t) => ({ value: t, label: t }))} />
