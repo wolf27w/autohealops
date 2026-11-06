@@ -1,4 +1,5 @@
 // 处理记录页：任务+审批合并，展示告警处理闭环（处理方式 + 审核人）+ 一键回滚
+import { envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import { Table, Tag, Select, Space, Button, Popconfirm, message } from 'antd'
 import { getRepairRecords, rollbackExecution } from '../services/api'
@@ -110,7 +111,7 @@ export default function ProcessingRecords() {
         }}
         columns={[
           { title: '告警ID', dataIndex: 'alert_id', width: 80 },
-          { title: '集群', dataIndex: 'cluster_name', render: (v) => v || '-' },
+          { title: '环境', dataIndex: 'env', width: 100, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
           { title: '故障类型', dataIndex: 'fault_type' },
           { title: '资源', dataIndex: 'resource_name', ellipsis: true },
           { title: '命名空间', dataIndex: 'namespace', width: 140 },

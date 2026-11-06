@@ -36,6 +36,7 @@ export interface PageResult<T> {
 
 // ============ 集群 ============
 export interface Cluster {
+  env_tag?: string
   id: number
   name: string
   status: string // healthy / unreachable / unknown
@@ -320,6 +321,9 @@ export interface AiResultDistItem {
 export interface RealtimeAlert {
   id: number
   cluster_name: string
+  cluster_id?: number
+  env?: string
+  source?: string
   resource_name: string
   namespace: string
   fault_type: string
@@ -330,6 +334,8 @@ export interface RealtimeAlert {
 
 export interface AbnormalPod {
   cluster_name: string
+  cluster_id?: number
+  env?: string
   namespace: string
   pod_name: string
   alert_count?: number

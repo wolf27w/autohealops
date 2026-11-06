@@ -134,6 +134,8 @@ function times(n){ const a=[],now=Date.now(); for(let i=n-1;i>=0;i--){ const d=n
 function timeAgo(min){ return min<60?`${min} 分钟`:`${(min/60).toFixed(1)} 小时`; }
 
 /* ---------- 模拟数据 ---------- */
+const ENV_LABEL={prod:'生产',release:'UAT',qa:'测试'};
+const envName=t=>ENV_LABEL[t]||t||'-';
 const CLUSTERS = [
   {id:'prod-beijing', name:'prod-beijing', env:'生产', status:'warn',  nodes:48, pods:1260, alerts:7, cpu:78, mem:64, disk:52},
   {id:'prod-shanghai',name:'prod-shanghai',env:'生产', status:'ok',    nodes:36, pods:980,  alerts:1, cpu:41, mem:55, disk:47},
@@ -434,12 +436,12 @@ function renderOverview(){
   <div class="row" style="margin-bottom:16px;align-items:flex-start">
     <div class="col panel">
       <h3>容器 CPU Top 10 <span class="sub">跨集群 · 单位 core</span></h3>
-      <table><thead><tr><th>#</th><th>集群</th><th>容器（命名空间 / Pod）</th><th>类型</th><th>CPU</th></tr></thead>
+      <table><thead><tr><th>#</th><th>环境</th><th>容器（命名空间 / Pod）</th><th>类型</th><th>CPU</th></tr></thead>
       <tbody>${containerTopRows(CTOP.cpu, v=>v.toFixed(3)+' core')}</tbody></table>
     </div>
     <div class="col panel">
       <h3>容器内存 Top 10 <span class="sub">跨集群 · 单位 MiB</span></h3>
-      <table><thead><tr><th>#</th><th>集群</th><th>容器（命名空间 / Pod）</th><th>类型</th><th>内存</th></tr></thead>
+      <table><thead><tr><th>#</th><th>环境</th><th>容器（命名空间 / Pod）</th><th>类型</th><th>内存</th></tr></thead>
       <tbody>${containerTopRows(CTOP.mem, v=>(v/1048576).toFixed(1)+' MiB')}</tbody></table>
     </div>
   </div>
@@ -595,7 +597,7 @@ async function loadContainerTop(){
   if(Date.now()-CTOP.at < REFRESH_MS_TREND) return;
   const ids=CLUSTERS.map(c=>c.id).filter(v=>v!=null);
   if(!ids.length) return;
-  const nameOf=id=>(CLUSTERS.find(c=>String(c.id)===String(id))||{}).name||('#'+id);
+  const envOf=id=>{ const c=CLUSTERS.find(x=>String(x.id)===String(id))||{}; return envName(c.env||''); };
   const res=await Promise.all(ids.map(async id=>{
     const [cpu,mem]=await Promise.all([
       apiGet('/monitoring/clusters/'+id+'/metrics/container_cpu_top').catch(()=>null),
@@ -605,14 +607,14 @@ async function loadContainerTop(){
   }));
   const cpuRows=[], memRows=[];
   const push=(arr,rows,id)=>rows.forEach(x=>{ const m=x.metric||{};
-    arr.push({cluster:nameOf(id), ns:m.namespace||'', pod:m.pod||'', c:m.container||'', v:+x.value||0}); });
+    arr.push({env:envOf(id), cluster:(CLUSTERS.find(c=>String(c.id)===String(id))||{}).name||('#'+id), ns:m.namespace||'', pod:m.pod||'', c:m.container||'', v:+x.value||0}); });
   res.forEach(({id,cpu,mem})=>{ push(cpuRows,(cpu&&cpu.items)||[],id); push(memRows,(mem&&mem.items)||[],id); });
   cpuRows.sort((a,b)=>b.v-a.v); memRows.sort((a,b)=>b.v-a.v);
   CTOP.cpu=cpuRows.slice(0,10); CTOP.mem=memRows.slice(0,10); CTOP.at=Date.now();
 }
 function containerTopRows(rows, fmt){
   if(!rows.length) return '<tr><td colspan="5" class="dim">暂无容器级数据（需集群 Prometheus + cAdvisor）</td></tr>';
-  return rows.map((r,i)=>`<tr><td class="dim">${i+1}</td><td>${r.cluster}</td>
+  return rows.map((r,i)=>`<tr><td class="dim">${i+1}</td><td>${r.env||'-'}</td>
     <td><div class="sm">${r.c}</div><div class="xs dim ell">${r.ns} / ${r.pod}</div></td>
     <td>${ctTypeTag(r.c)}</td><td style="font-weight:600">${fmt(r.v)}</td></tr>`).join('');
 }
@@ -1053,7 +1055,7 @@ async function loadOverviewReal(){
   OVERVIEW.trend = (dash.alert_trend||[]).map(t=>({b:String(t.bucket||''), n:t.new||0, r:t.resolved||0, s:t.self_healed||0}));
   if(!OVERVIEW.trend.length) OVERVIEW.trend = (dash.trend_24h||[]).map(t=>({b:String(t.hour||''), n:t.alerts||0, r:0, s:t.healed||0}));
   CLUSTERS.length=0;
-  cd.forEach(c=>{ CLUSTERS.push({id:c.id, name:c.name, env:(cById[c.id]||{}).env||'',
+  cd.forEach(c=>{ CLUSTERS.push({id:c.id, name:c.name, env:envName((cById[c.id]||{}).env_tag||''),
     status: c.status==='healthy'?'ok':((c.alert_pending||0)>0?'warn':'ok'),
     nodes:c.node_total||0, pods:c.pods||0, alerts:c.alert_pending||0,
     cpu:Math.round(c.cpu_pct||0), mem:Math.round(c.mem_pct||0), disk:0}); });

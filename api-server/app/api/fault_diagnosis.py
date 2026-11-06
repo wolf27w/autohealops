@@ -61,7 +61,9 @@ async def _list_grouped(page: int, page_size: int, category: str, with_total: bo
                 .order_by(AIDiagnosisResult.id.desc())
             )).scalars():
                 diags.setdefault(d.alert_id, d)  # 保留最新
-        cluster_names = {c.id: c.name for c in (await session.execute(select(Cluster))).scalars()}
+        _cl = list((await session.execute(select(Cluster))).scalars())
+        cluster_names = {c.id: c.name for c in _cl}
+        cluster_envs = {c.id: (getattr(c, "env_tag", "") or "") for c in _cl}
 
     import json as _json
     data = []
@@ -78,6 +80,7 @@ async def _list_grouped(page: int, page_size: int, category: str, with_total: bo
                 root_cause = ""
         data.append({
             "alert_id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "env": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
             "resource_type": a.resource_type, "resource_name": a.resource_name, "namespace": a.namespace,
             "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
             "diag_category": a.diag_category,
@@ -152,6 +155,7 @@ async def list_fault_diagnoses(page: int = 1, page_size: int = 50, category: str
                 root_cause = ""
         data.append({
             "alert_id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "env": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
             "resource_type": a.resource_type, "resource_name": a.resource_name, "namespace": a.namespace,
             "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
             "diag_category": a.diag_category,

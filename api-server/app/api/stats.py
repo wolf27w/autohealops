@@ -259,7 +259,9 @@ async def _compute_dashboard(
             .limit(5000)
         )).all()
 
-        cluster_names = {c.id: c.name for c in (await session.execute(select(Cluster))).scalars()}
+        _cl_rows = list((await session.execute(select(Cluster))).scalars())
+        cluster_names = {c.id: c.name for c in _cl_rows}
+        cluster_envs = {c.id: (getattr(c, "env_tag", "") or "") for c in _cl_rows}
         cluster_rows = (await session.execute(select(Cluster))).scalars().all()
         recent = (await session.execute(
             select(Alert).where(Alert.status.in_(["pending", "awaiting_approval", "ticketed"]))
@@ -594,6 +596,9 @@ async def _compute_dashboard(
         )).scalars().all()
         realtime_alerts = [{
             "id": a.id, "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "cluster_id": a.cluster_id,
+            "env": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
+            "source": (cluster_names.get(a.cluster_id, "") if a.cluster_id else a.resource_name),
             "resource_name": a.resource_name, "namespace": a.namespace,
             "fault_type": a.fault_type, "severity": a.severity,
             "status": a.status, "detected_at": str(a.detected_at),
@@ -616,6 +621,8 @@ async def _compute_dashboard(
         )).all()
         abnormal_pods = [{
             "cluster_name": cluster_names.get(int(r[0]), ""),
+            "cluster_id": int(r[0]),
+            "env": cluster_envs.get(int(r[0]), ""),
             "namespace": r[1], "pod_name": r[2],
             "alert_count": int(r[3] or 0), "done_count": int(r[4] or 0),
             "last_at": str(r[5] or ""), "faults": r[6] or "",

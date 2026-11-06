@@ -43,7 +43,9 @@ async def list_records(page: int = 1, page_size: int = 50, user=Depends(require_
         )
         alerts = list(result.scalars())
         cluster_result = await session.execute(select(Cluster))
-        cluster_names = {c.id: c.name for c in cluster_result.scalars()}
+        _clusters = list(cluster_result.scalars())
+        cluster_names = {c.id: c.name for c in _clusters}
+        cluster_envs = {c.id: (getattr(c, "env_tag", "") or "") for c in _clusters}
 
         # 批量化关联（消除 N+1）：一次取本页告警的 方案 + 审批
         alert_ids = [a.id for a in alerts]
@@ -166,6 +168,8 @@ async def list_records(page: int = 1, page_size: int = 50, user=Depends(require_
                 "alert_id": a.id,
                 "cluster_id": a.cluster_id,
                 "cluster_name": cluster_names.get(a.cluster_id, ""),
+                "env": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
+                "source": (cluster_names.get(a.cluster_id, "") if a.cluster_id else a.resource_name),
                 "fault_type": a.fault_type,
                 "resource_type": a.resource_type,
                 "resource_name": a.resource_name,

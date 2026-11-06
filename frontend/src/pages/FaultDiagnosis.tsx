@@ -1,4 +1,5 @@
 // 故障诊断（针对告警的 AI 诊断，与「应用诊断」「数据库诊断」分开）
+import { envLabel, envColor } from '../utils/env'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Tag, Button, Space, Modal, message, Input } from 'antd'
@@ -109,7 +110,7 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
         }}
         columns={[
           { title: '最新告警', dataIndex: 'alert_id', width: 90 },
-          { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v) => v || '-' },
+          { title: '环境', dataIndex: 'env', width: 100, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
           { title: '故障类型', dataIndex: 'fault_type', width: 170 },
           { title: '次数', dataIndex: 'occurrences', width: 80, sorter: (a, b) => (a.occurrences || 0) - (b.occurrences || 0),
             render: (v?: number) => (v && v > 1) ? <Tag color="orange">×{v}</Tag> : (v || 1) },

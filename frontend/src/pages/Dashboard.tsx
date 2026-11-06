@@ -392,7 +392,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               scroll={{ y: screen ? 300 : 240 }}
               locale={{ emptyText: <Empty description="当前无未处理告警" /> }}
               columns={[
-                { title: '集群', dataIndex: 'cluster_name', width: 110, ellipsis: true },
+                { title: '环境', dataIndex: 'env', width: 90, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
                 { title: '资源', dataIndex: 'resource_name', ellipsis: true },
                 { title: '命名空间', dataIndex: 'namespace', width: 100, ellipsis: true },
                 { title: '故障', dataIndex: 'fault_type', width: 150, ellipsis: true },
@@ -427,7 +427,7 @@ export default function Dashboard({ screen = false }: { screen?: boolean }) {
               scroll={{ y: 240 }}
               locale={{ emptyText: <Empty description="暂无历史告警" /> }}
               columns={[
-                { title: '集群', dataIndex: 'cluster_name', width: 100, ellipsis: true },
+                { title: '环境', dataIndex: 'env', width: 90, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
                 { title: '命名空间', dataIndex: 'namespace', width: 110, ellipsis: true },
                 { title: 'Pod', dataIndex: 'pod_name', ellipsis: true },
                 { title: '告警数', dataIndex: 'alert_count', width: 80, defaultSortOrder: 'descend', sorter: (a: AbnormalPod, b: AbnormalPod) => (a.alert_count || 0) - (b.alert_count || 0) },
