@@ -39,6 +39,7 @@ from app.models.resource import QuotaSnapshot, ResourceSnapshot
 from app.models.report_schedule import ReportSchedule
 from app.models.self_heal_rule import SelfHealRule
 from app.models.slow_sql import SlowSQLRecord
+from app.models.sql_task import SqlTask
 from app.models.stats import AIEffectivenessStat, ModelAccuracyStat
 from app.models.system_setting import SystemSetting
 from app.models.task import Task, TaskAuditLog
@@ -89,6 +90,7 @@ __all__ = [
     "ReportSchedule",
     "SelfHealRule",
     "SlowSQLRecord",
+    "SqlTask",
     "KnowledgeEntry",
     "LogAlertRule",
     "LogSource",

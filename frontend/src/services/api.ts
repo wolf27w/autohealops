@@ -506,6 +506,22 @@ export const queryDBConnection = (id: number, sql: string) =>
 // 执行 SQL（DML/DDL，仅 admin；confirm=true 二次确认）
 export const execDBConnection = (id: number, sql: string) =>
   http.post<{ columns?: string[]; rows?: unknown[][]; affected_rows?: number; write?: boolean }>(`/db-connections/${id}/exec`, { sql, confirm: true })
+// SQL 定时任务（每月跑 SQL → 发邮件）
+export interface SqlTaskRow {
+  id: number; name: string; db_connection_id: number; sql: string
+  cron_expression: string; recipients: string; is_enabled: boolean
+  last_run_at?: string; last_status?: string; last_error?: string
+}
+export const listSqlTasks = (connId: number) => http.get<SqlTaskRow[]>(`/db-connections/${connId}/sql-tasks`)
+export const createSqlTask = (connId: number, data: Record<string, unknown>) =>
+  http.post<SqlTaskRow>(`/db-connections/${connId}/sql-tasks`, data)
+export const updateSqlTask = (connId: number, taskId: number, data: Record<string, unknown>) =>
+  http.put<SqlTaskRow>(`/db-connections/${connId}/sql-tasks/${taskId}`, data)
+export const deleteSqlTask = (connId: number, taskId: number) =>
+  http.delete(`/db-connections/${connId}/sql-tasks/${taskId}`)
+export const runSqlTask = (connId: number, taskId: number, dryRun = false) =>
+  http.post<{ ok?: boolean; error?: string; rows?: number; preview?: unknown[] }>(
+    `/db-connections/${connId}/sql-tasks/${taskId}/run`, { dry_run: dryRun })
 // SQL 编辑器补全：当前账号可见的 databases + tables（agent 库）
 export const getDBSchema = (id: number) =>
   http.get<{ databases?: string[]; tables?: { db: string; name: string; type?: string }[] }>(`/db-connections/${id}/schema`)

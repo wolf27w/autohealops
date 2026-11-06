@@ -1,9 +1,9 @@
 // 数据库管理面板（Navicat 式）：左侧实例列表，右上 SQL 编辑，右下结果。
 // 直接嵌在「诊断中心 → 数据库管理」tab 里，不再是弹窗。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch } from 'antd'
-import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema } from '../services/api'
+import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message } from 'antd'
+import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
   id: number
@@ -81,6 +81,13 @@ export default function DbWorkbench({
   const [schema, setSchema] = useState<SchemaData>(EMPTY_SCHEMA)
   const [sugg, setSugg] = useState<{ items: string[]; start: number; end: number; idx: number } | null>(null)
   const taRef = useRef<{ resizableTextArea?: { textArea: HTMLTextAreaElement } } | null>(null)
+  const mirrorRef = useRef<HTMLDivElement | null>(null)
+  const [caretPos, setCaretPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
+  // 定时任务
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [tasks, setTasks] = useState<SqlTaskRow[]>([])
+  const [editTaskId, setEditTaskId] = useState<number | null>(null)
+  const [taskForm] = Form.useForm()
 
   // 选中库变化 → 拉一次可见库/表（用于补全，60s 服务端缓存）
   useEffect(() => {
@@ -108,6 +115,31 @@ export default function DbWorkbench({
     return [...set]
   }, [cur?.db_type, schema])
 
+  // 用镜像 div 量光标坐标 → 候选框贴在输入框里的光标下方
+  const measureCaret = (text: string, caret: number) => {
+    const ta = taRef.current?.resizableTextArea?.textArea
+    const mirror = mirrorRef.current
+    if (!ta || !mirror) return
+    const cs = window.getComputedStyle(ta)
+    mirror.style.font = cs.font
+    mirror.style.lineHeight = cs.lineHeight
+    mirror.style.letterSpacing = cs.letterSpacing
+    mirror.style.padding = cs.padding
+    mirror.style.width = `${ta.clientWidth}px`
+    mirror.textContent = text.slice(0, caret)
+    const marker = document.createElement('span')
+    marker.textContent = '\u200b'
+    mirror.appendChild(marker)
+    const lineH = parseFloat(cs.lineHeight || '19') || 19
+    const top = marker.offsetTop - ta.scrollTop + lineH
+    const left = marker.offsetLeft - ta.scrollLeft
+    setCaretPos({
+      top: Math.max(0, Math.min(top, ta.clientHeight - 24)),
+      left: Math.max(0, Math.min(left, Math.max(0, ta.clientWidth - 220))),
+    })
+    mirror.textContent = ''
+  }
+
   const syncSuggest = (text: string, caret: number) => {
     const before = text.slice(0, caret)
     const m = before.match(/[A-Za-z0-9_$.]+$/)
@@ -116,6 +148,7 @@ export default function DbWorkbench({
     const low = word.toLowerCase()
     const items = candidates.filter((c) => c.toLowerCase().startsWith(low) && c.toLowerCase() !== low).slice(0, 20)
     if (!items.length) { setSugg(null); return }
+    measureCaret(text, caret)
     setSugg({ items, start: caret - word.length, end: caret, idx: 0 })
   }
 
@@ -158,6 +191,59 @@ export default function DbWorkbench({
       const x = e as { response?: { data?: { message?: string } }; message?: string }
       setErr(x?.response?.data?.message || x?.message || '导出失败')
     }
+  }
+
+
+  // ---------- 定时任务 ----------
+  const refreshTasks = async () => {
+    if (!cur) return
+    try { setTasks((await listSqlTasks(cur.id)) || []) } catch { setTasks([]) }
+  }
+
+  const openTasks = async () => {
+    setTasksOpen(true)
+    setEditTaskId(null)
+    taskForm.resetFields()
+    taskForm.setFieldsValue({ cron_expression: '0 9 1 * *', is_enabled: true, recipients: '' })
+    await refreshTasks()
+  }
+
+  const startEditTask = (t: SqlTaskRow) => {
+    setEditTaskId(t.id)
+    taskForm.setFieldsValue({
+      name: t.name, cron_expression: t.cron_expression, recipients: t.recipients, is_enabled: t.is_enabled,
+    })
+    setSql(t.sql)
+  }
+
+  const saveTask = async () => {
+    if (!cur) return
+    const v = await taskForm.validateFields()
+    const payload = { ...v, sql }
+    try {
+      if (editTaskId) await updateSqlTask(cur.id, editTaskId, payload)
+      else await createSqlTask(cur.id, payload)
+      message.success(editTaskId ? '已更新' : '已创建')
+      setEditTaskId(null)
+      taskForm.resetFields()
+      taskForm.setFieldsValue({ cron_expression: '0 9 1 * *', is_enabled: true, recipients: '' })
+      await refreshTasks()
+    } catch { /* 拦截器已提示 */ }
+  }
+
+  const runTaskNow = async (t: SqlTaskRow, dryRun: boolean) => {
+    if (!cur) return
+    try {
+      const r = await runSqlTask(cur.id, t.id, dryRun)
+      if (dryRun) message.success(`测试通过，返回 ${r?.rows ?? 0} 行（未发邮件）`)
+      else message.success(`已执行并发送${r?.rows != null ? `（${r.rows} 行）` : ''}`)
+      await refreshTasks()
+    } catch { /* 拦截器已提示（如 SMTP 未配置） */ }
+  }
+
+  const removeTask = async (t: SqlTaskRow) => {
+    if (!cur) return
+    try { await deleteSqlTask(cur.id, t.id); await refreshTasks() } catch { /* ignore */ }
   }
 
   return (
@@ -254,9 +340,14 @@ export default function DbWorkbench({
                   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && isAgent && sql.trim() && isRead) run(false)
                 }}
               />
+              <div ref={mirrorRef} style={{
+                position: 'absolute', left: -99999, top: 0, visibility: 'hidden',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'Menlo, Consolas, monospace',
+                fontSize: 13, pointerEvents: 'none',
+              }} />
               {sugg && (
                 <div style={{
-                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 20, width: 340,
+                  position: 'absolute', top: caretPos.top, left: caretPos.left, zIndex: 20, width: 320,
                   background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
                   boxShadow: '0 6px 16px rgba(0,0,0,.12)', maxHeight: 220, overflow: 'auto',
                 }}>
@@ -290,6 +381,7 @@ export default function DbWorkbench({
                 </Popconfirm>
               )}
               <Button icon={<DownloadOutlined />} disabled={!isAgent || !sql.trim() || !isRead} onClick={download}>下载 CSV</Button>
+              <Button icon={<ClockCircleOutlined />} disabled={!isAgent} onClick={openTasks}>定时任务</Button>
               {res?.affected_rows !== undefined && (
                 <Tag color={(res.affected_rows || 0) > 0 ? 'green' : 'default'}>影响行数：{res.affected_rows}</Tag>
               )}
@@ -327,6 +419,68 @@ export default function DbWorkbench({
             </div>
           </>
         )}
+
+      <Modal
+        title={`SQL 定时任务：${cur?.name || ''}`}
+        open={tasksOpen}
+        onCancel={() => setTasksOpen(false)}
+        footer={null}
+        width={860}
+      >
+        <Form form={taskForm} layout="inline" style={{ marginBottom: 10, rowGap: 8 }}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '必填' }]}>
+            <Input placeholder="如 月度订单报表" style={{ width: 170 }} />
+          </Form.Item>
+          <Form.Item name="cron_expression" label="Cron" rules={[{ required: true, message: '必填' }]}
+            tooltip="5 段：分 时 日 月 周。每月 1 号 9:00 = 0 9 1 * *">
+            <Input placeholder="0 9 1 * *" style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item name="recipients" label="收件邮箱" rules={[{ required: true, message: '必填' }]}
+            tooltip="多个用逗号分隔；也可填平台用户名（取其邮箱）">
+            <Input placeholder="a@x.com,b@y.com" style={{ width: 240 }} />
+          </Form.Item>
+          <Form.Item name="is_enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" onClick={saveTask}>{editTaskId ? '保存修改' : '新建（用当前 SQL）'}</Button>
+              {editTaskId && <Button onClick={() => { setEditTaskId(null); taskForm.resetFields(); taskForm.setFieldsValue({ cron_expression: '0 9 1 * *', is_enabled: true, recipients: '' }) }}>取消编辑</Button>}
+            </Space>
+          </Form.Item>
+        </Form>
+
+        <Table
+          size="small"
+          rowKey="id"
+          dataSource={tasks}
+          pagination={false}
+          columns={[
+            { title: '名称', dataIndex: 'name' },
+            { title: 'Cron', dataIndex: 'cron_expression', width: 110 },
+            { title: '收件人', dataIndex: 'recipients', ellipsis: true },
+            { title: '上次执行', dataIndex: 'last_run_at', width: 150 },
+            {
+              title: '状态', dataIndex: 'last_status', width: 90,
+              render: (v: string) => <Tag color={v === 'success' ? 'green' : v === 'failed' ? 'red' : 'default'}>{v || '-'}</Tag>,
+            },
+            {
+              title: '操作', width: 230, render: (_: unknown, t: SqlTaskRow) => (
+                <Space size={4}>
+                  <Button size="small" onClick={() => startEditTask(t)}>编辑</Button>
+                  <Button size="small" type="primary" onClick={() => runTaskNow(t, false)}>立即执行</Button>
+                  <Button size="small" onClick={() => runTaskNow(t, true)}>测试</Button>
+                  <Popconfirm title="删除该任务？" onConfirm={() => removeTask(t)}>
+                    <Button size="small" danger>删除</Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
+        <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
+          任务执行的是<b>当前编辑器里的 SQL</b>（保存时取当前内容）；只允许只读语句；
+          结果以 CSV 附件 + 邮件正文摘要发送。平台需先配置 SMTP（系统设置 → 通知/邮件）。
+        </div>
+      </Modal>
       </div>
     </div>
   )

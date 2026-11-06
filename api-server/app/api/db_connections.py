@@ -330,6 +330,136 @@ async def download_query(conn_id: int, payload: dict, user=Depends(require_any_u
     )
 
 
+# ============ SQL 定时任务（每月跑一次 SQL，把结果发邮箱） ============
+
+_READ_HEADS = ("select", "show", "desc", "describe", "explain", "with")
+
+
+def _task_dict(t) -> dict:
+    return {
+        "id": t.id, "name": t.name, "db_connection_id": t.db_connection_id,
+        "sql": t.sql, "cron_expression": t.cron_expression or "",
+        "recipients": t.recipients or "", "is_enabled": bool(t.is_enabled),
+        "last_run_at": str(t.last_run_at) if t.last_run_at else "",
+        "last_status": t.last_status or "", "last_error": t.last_error or "",
+    }
+
+
+def _validate_task_payload(payload: dict) -> tuple[bool, str]:
+    from apscheduler.triggers.cron import CronTrigger
+    sql = (payload.get("sql") or "").strip()
+    if not sql:
+        return False, "sql 必填"
+    head = (sql.split(None, 1)[0] or "").lower()
+    if head not in _READ_HEADS:
+        return False, "定时任务只允许只读 SQL（select/show/describe/explain/with）"
+    cron = (payload.get("cron_expression") or "").strip()
+    if cron:
+        try:
+            CronTrigger.from_crontab(cron)
+        except Exception:  # noqa: BLE001
+            return False, "cron 非法（5 段：分 时 日 月 周，如每月 1 号 9 点 = 0 9 1 * *）"
+    return True, ""
+
+
+@router.get("/{conn_id}/sql-tasks")
+async def list_sql_tasks(conn_id: int, user=Depends(require_any_user)):
+    from app.models import SqlTask
+    async with async_session() as session:
+        rows = list((await session.execute(
+            select(SqlTask).where(SqlTask.db_connection_id == conn_id).order_by(SqlTask.id.desc())
+        )).scalars())
+    return {"code": 200, "message": "success", "data": [_task_dict(t) for t in rows]}
+
+
+@router.post("/{conn_id}/sql-tasks")
+async def create_sql_task(conn_id: int, payload: dict, user=Depends(require_admin)):
+    """新建定时任务：SQL + cron + 收件邮箱（逗号分隔，支持平台用户名）。"""
+    from app.models import SqlTask
+    from app.services import sql_task_service
+    ok, why = _validate_task_payload(payload)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    async with async_session() as session:
+        conn = await session.get(DBConnection, conn_id)
+        if not conn:
+            return {"code": 404, "message": "连接不存在", "data": None}
+        t = SqlTask(
+            name=(payload.get("name") or "").strip() or f"SQL任务-{conn.name}",
+            db_connection_id=conn_id,
+            sql=(payload.get("sql") or "").strip(),
+            cron_expression=(payload.get("cron_expression") or "").strip(),
+            recipients=(payload.get("recipients") or "").strip(),
+            is_enabled=bool(payload.get("is_enabled", True)),
+            created_by=getattr(user, "id", 0) or 0,
+        )
+        session.add(t)
+        await session.commit()
+        await session.refresh(t)
+    if t.is_enabled:
+        sql_task_service.register_task(t)
+    return {"code": 200, "message": "success", "data": _task_dict(t)}
+
+
+@router.put("/{conn_id}/sql-tasks/{task_id}")
+async def update_sql_task(conn_id: int, task_id: int, payload: dict, user=Depends(require_admin)):
+    from app.models import SqlTask
+    from app.services import sql_task_service
+    ok, why = _validate_task_payload(payload)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    async with async_session() as session:
+        t = await session.get(SqlTask, task_id)
+        if not t or t.db_connection_id != conn_id:
+            return {"code": 404, "message": "任务不存在", "data": None}
+        t.name = (payload.get("name") or t.name).strip()
+        t.sql = (payload.get("sql") or t.sql).strip()
+        t.cron_expression = (payload.get("cron_expression") if payload.get("cron_expression") is not None
+                             else t.cron_expression).strip()
+        t.recipients = (payload.get("recipients") if payload.get("recipients") is not None
+                        else t.recipients or "").strip()
+        if payload.get("is_enabled") is not None:
+            t.is_enabled = bool(payload["is_enabled"])
+        await session.commit()
+        await session.refresh(t)
+    if t.is_enabled:
+        sql_task_service.register_task(t)
+    else:
+        sql_task_service.unregister_task(t.id)
+    return {"code": 200, "message": "success", "data": _task_dict(t)}
+
+
+@router.delete("/{conn_id}/sql-tasks/{task_id}")
+async def delete_sql_task(conn_id: int, task_id: int, user=Depends(require_admin)):
+    from app.models import SqlTask
+    from app.services import sql_task_service
+    async with async_session() as session:
+        t = await session.get(SqlTask, task_id)
+        if not t or t.db_connection_id != conn_id:
+            return {"code": 404, "message": "任务不存在", "data": None}
+        await session.delete(t)
+        await session.commit()
+    sql_task_service.unregister_task(task_id)
+    return {"code": 200, "message": "success", "data": None}
+
+
+@router.post("/{conn_id}/sql-tasks/{task_id}/run")
+async def run_sql_task(conn_id: int, task_id: int, payload: dict | None = None,
+                       user=Depends(require_admin)):
+    """立即执行一次；dry_run=true 只跑 SQL 并返回预览，不发邮件（便于验证 cron/SQL 是否正确）。"""
+    from app.models import SqlTask
+    from app.services import sql_task_service
+    payload = payload or {}
+    async with async_session() as session:
+        t = await session.get(SqlTask, task_id)
+        if not t or t.db_connection_id != conn_id:
+            return {"code": 404, "message": "任务不存在", "data": None}
+    r = await sql_task_service.execute_task(task_id, dry_run=bool(payload.get("dry_run")))
+    return {"code": 200 if r.get("ok") else 500,
+            "message": "success" if r.get("ok") else (r.get("error") or "执行失败"),
+            "data": r}
+
+
 @router.delete("/{conn_id}")
 async def delete_connection(conn_id: int, user=Depends(require_admin)):
     async with async_session() as session:

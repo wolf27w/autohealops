@@ -249,6 +249,12 @@ async def startup_tasks() -> None:
     await seed_alert_policies()
     await scheduler_service.load_all_tasks()
     scheduler_service.start()
+    # SQL 定时任务（每月跑 SQL 发邮件）：依赖 scheduler 已启动
+    try:
+        from app.services import sql_task_service
+        await sql_task_service.load_all()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SQL 定时任务加载失败: %s", e)
 
     # 报表定时推送（C4）
     from app.services import report_service as _report_svc
