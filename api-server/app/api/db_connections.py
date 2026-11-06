@@ -174,7 +174,7 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
         logger.warning("数据库查询审计写入失败: %s", e)
 
     if not ok:
-        return {"code": 500, "message": f"查询失败：{err}", "data": None}
+        return {"code": 500, "message": f"查询失败：{err}（SQL: {sql[:120]}）", "data": None}
     return {"code": 200, "message": "success", "data": data}
 
 
@@ -406,7 +406,7 @@ async def exec_connection(conn_id: int, payload: dict, user=Depends(require_admi
     affected = int(data.get("affected_rows") or 0)
     await _audit_sql(user, c, sql, elapsed, len(data.get("rows") or []), not err, err, "db_exec", affected)
     if err:
-        return {"code": 500, "message": f"执行失败：{err}", "data": None}
+        return {"code": 500, "message": f"执行失败：{err}（SQL: {sql[:120]}）", "data": None}
     return {"code": 200, "message": "success", "data": data}
 
 
