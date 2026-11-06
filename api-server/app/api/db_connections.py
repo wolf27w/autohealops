@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """数据库连接管理 API（数据库监控；admin 创建，授权 operator 管理，viewer 只读）"""
 import asyncio
+import csv
+import io
 import json
 import logging
 import time
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
 
 from app.core.database import async_session
@@ -162,6 +164,131 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
     if not ok:
         return {"code": 500, "message": f"查询失败：{err}", "data": None}
     return {"code": 200, "message": "success", "data": data}
+
+
+def _agent_db_ready(c: DBConnection):
+    """agent 库校验：返回 (ok, 错误消息)"""
+    if (getattr(c, "source", "direct") or "direct") != "agent":
+        return False, "仅 agent 接入的库支持平台查询（直连库请用客户端执行）"
+    if not c.cluster_id or not c.agent_db_key:
+        return False, "该库缺少 agent 归属信息（cluster_id/key）"
+    return True, ""
+
+
+async def _agent_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: bool = False,
+                     timeout: float = 40.0) -> dict:
+    from app import agent_gateway
+    raw = await asyncio.to_thread(
+        agent_gateway.call, int(c.cluster_id), "QueryDatabaseByKey",
+        json.dumps({"key": c.agent_db_key, "sql": sql, "limit": limit, "allow_write": allow_write}).encode(),
+        timeout,
+    )
+    return json.loads(raw)
+
+
+async def _audit_sql(user, c: DBConnection, sql: str, elapsed: float, rows: int,
+                     ok: bool, err: str, mode: str, affected: int = 0) -> None:
+    """审计：只记元信息（谁/集群/库/SQL 摘要/耗时/行数/影响行数/成败），不落结果。"""
+    try:
+        from app.services import audit_service
+        await audit_service.create_audit_record(
+            f"dbsql-{uuid.uuid4().hex[:12]}",
+            trigger_snapshot=json.dumps({
+                "mode": mode, "source": "agent", "cluster_id": c.cluster_id,
+                "agent_db_key": c.agent_db_key, "db": c.name,
+            }, ensure_ascii=False),
+            execution_detail=json.dumps({
+                "user": getattr(user, "username", "") or "", "sql": sql[:500],
+                "elapsed_s": elapsed, "rows": rows, "affected": affected, "ok": ok, "error": err[:200],
+            }, ensure_ascii=False),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("数据库审计写入失败: %s", e)
+
+
+@router.post("/{conn_id}/exec")
+async def exec_connection(conn_id: int, payload: dict, user=Depends(require_admin)):
+    """执行 SQL（DML/DDL）：仅管理员 + 必须显式 confirm，全额审计。
+
+    老板口径：平台不做自动修改；这里是人工兜底入口，操作人自负，全部留痕。
+    """
+    sql = (payload.get("sql") or "").strip()
+    if not sql:
+        return {"code": 400, "message": "sql 必填", "data": None}
+    if not payload.get("confirm"):
+        return {"code": 400, "message": "执行写操作需要显式确认（confirm=true）", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    ok, why = _agent_db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+
+    started = time.time()
+    data, err = {}, ""
+    try:
+        data = await _agent_sql(c, sql, limit=200, allow_write=True, timeout=60.0)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    elapsed = round(time.time() - started, 3)
+    affected = int(data.get("affected_rows") or 0)
+    await _audit_sql(user, c, sql, elapsed, len(data.get("rows") or []), not err, err, "db_exec", affected)
+    if err:
+        return {"code": 500, "message": f"执行失败：{err}", "data": None}
+    return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/{conn_id}/query/download")
+async def download_query(conn_id: int, payload: dict, user=Depends(require_any_user)):
+    """执行只读查询并导出 CSV（最多 5000 行，UTF-8 BOM，Excel 可直接打开）。"""
+    sql = (payload.get("sql") or "").strip()
+    if not sql:
+        return {"code": 400, "message": "sql 必填", "data": None}
+    head = sql.split(None, 1)[0].lower()
+    if head not in ("select", "show", "describe", "desc", "explain", "with"):
+        return {"code": 400, "message": "导出仅支持只读查询", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    ok, why = _agent_db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+
+    started = time.time()
+    data, err = {}, ""
+    try:
+        data = await _agent_sql(c, sql, limit=5000, allow_write=False, timeout=90.0)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    elapsed = round(time.time() - started, 3)
+    rows = data.get("rows") or []
+    await _audit_sql(user, c, sql, elapsed, len(rows), not err, err, "db_export")
+    if err:
+        return {"code": 500, "message": f"导出失败：{err}", "data": None}
+
+    buf = io.StringIO()
+    buf.write("\ufeff")  # BOM：Excel 打开不乱码
+    writer = csv.writer(buf, lineterminator="\r\n")
+    columns = data.get("columns") or []
+    writer.writerow(columns)
+    for r in rows:
+        writer.writerow(["" if v is None else v for v in r])
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"{c.name or 'db'}-{(c.database or 'query')}-{ts}.csv"
+    # HTTP 头只能是 latin-1：中文文件名用 RFC 5987（filename*），另给一个 ASCII 兜底名
+    from urllib.parse import quote
+    ascii_name = f"db-{c.id}-{ts}.csv"
+    disposition = (f'attachment; filename="{ascii_name}"; '
+                   f"filename*=UTF-8''{quote(filename, safe='')}")
+    return Response(
+        content=buf.getvalue().encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @router.delete("/{conn_id}")

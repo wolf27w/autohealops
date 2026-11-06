@@ -503,6 +503,12 @@ export const getDiagnosisQuality = (days = 7) =>
 // R6：agent 库只读查询（平台只发 key+SQL，凭据在 agent 本地）
 export const queryDBConnection = (id: number, sql: string) =>
   http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/db-connections/${id}/query`, { sql })
+// 执行 SQL（DML/DDL，仅 admin；confirm=true 二次确认）
+export const execDBConnection = (id: number, sql: string) =>
+  http.post<{ columns?: string[]; rows?: unknown[][]; affected_rows?: number; write?: boolean }>(`/db-connections/${id}/exec`, { sql, confirm: true })
+// 查询结果导出 CSV（≤5000 行）
+export const downloadDBQuery = (id: number, sql: string) =>
+  http.post<Blob>(`/db-connections/${id}/query/download`, { sql }, { responseType: 'blob' })
 export const getDBConnections = () => http.get('/db-connections')
 export const createDBConnection = (data: Payload) => http.post('/db-connections', data)
 export const updateDBConnection = (id: number, data: Payload) => http.put(`/db-connections/${id}`, data)

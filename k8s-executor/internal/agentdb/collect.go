@@ -73,8 +73,10 @@ func SetConfigPath(p string) { configPath = p }
 // 平台只发 {key, sql}，账号密码在 agent 本地，不出集群。
 func QueryByKey(ctx context.Context, payload []byte) ([]byte, error) {
 	var req struct {
-		Key string `json:"key"`
-		SQL string `json:"sql"`
+		Key        string `json:"key"`
+		SQL        string `json:"sql"`
+		Limit      int    `json:"limit"`
+		AllowWrite bool   `json:"allow_write"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return nil, fmt.Errorf("解析请求失败: %w", err)
@@ -97,7 +99,7 @@ func QueryByKey(ctx context.Context, payload []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("序列化连接参数失败: %w", err)
 		}
-		q, err := json.Marshal(map[string]string{"sql": req.SQL})
+		q, err := json.Marshal(map[string]any{"sql": req.SQL, "limit": req.Limit, "allow_write": req.AllowWrite})
 		if err != nil {
 			return nil, err
 		}

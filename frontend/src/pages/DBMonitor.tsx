@@ -1,10 +1,10 @@
 // 数据库监控：按数据库切换，一屏展示全部监控项（+ 慢 SQL）
 // 不同数据库类型（mysql/pg/oracle）采集项不同，按采集到的内容展示
 import { useEffect, useState } from 'react'
-import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch, Modal, Input, Alert } from 'antd'
+import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch, Modal, Input, Alert, Segmented, Popconfirm } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, queryDBConnection } from '../services/api'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, queryDBConnection, execDBConnection, downloadDBQuery } from '../services/api'
 
 interface Metric {
   metric_type: string
@@ -101,6 +101,8 @@ export default function DBMonitor() {
   const [queryRes, setQueryRes] = useState<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean } | null>(null)
   const [queryErr, setQueryErr] = useState('')
   const [queryLoading, setQueryLoading] = useState(false)
+  const [sqlMode, setSqlMode] = useState<'read' | 'exec'>('read')
+  const [affected, setAffected] = useState<number | null>(null)
 
   useEffect(() => {
     getDBConnections().then((d) => {
@@ -237,44 +239,105 @@ export default function DBMonitor() {
       )}
 
       <Modal
-        title={`查询数据库：${cur?.name || ''}`}
+        title={`SQL 控制台：${cur?.name || ''}`}
         open={queryOpen}
         onCancel={() => setQueryOpen(false)}
-        onOk={async () => {
-          if (!cur) return
-          setQueryLoading(true); setQueryErr(''); setQueryRes(null)
-          try {
-            const d = await queryDBConnection(cur.id, sqlText)
-            setQueryRes(d as unknown as { columns?: string[]; rows?: unknown[][]; truncated?: boolean })
-          } catch (e) {
-            const err = e as { response?: { data?: { message?: string } }; message?: string }
-            setQueryErr(err?.response?.data?.message || err?.message || '查询失败')
-          } finally { setQueryLoading(false) }
-        }}
-        okText="执行（只读）"
-        confirmLoading={queryLoading}
-        width={820}
+        footer={null}
+        width={880}
       >
-        <Alert type="info" showIcon style={{ marginBottom: 8 }}
-          message="平台只下发 key + SQL，账号密码在 agent 本地，不出集群；仅允许 select / show / describe / explain，最多返回 200 行。" />
-        <Input.TextArea rows={5} value={sqlText} onChange={(e) => setSqlText(e.target.value)}
-          placeholder="select * from information_schema.tables limit 10" />
+        <Space style={{ marginBottom: 8 }} wrap>
+          <Segmented
+            value={sqlMode}
+            onChange={(v) => { setSqlMode(v as 'read' | 'exec'); setQueryRes(null); setQueryErr(''); setAffected(null) }}
+            options={[{ label: '只读查询', value: 'read' }, { label: '执行（管理员）', value: 'exec' }]}
+          />
+          {sqlMode === 'exec' && <Tag color="red">写操作：DML/DDL，全部审计留痕</Tag>}
+        </Space>
+        <Alert
+          type={sqlMode === 'exec' ? 'warning' : 'info'}
+          showIcon
+          style={{ marginBottom: 8 }}
+          message={sqlMode === 'exec'
+            ? '执行模式会真实修改数据库，仅管理员可用；平台记录 谁/库/SQL 摘要/影响行数，不记录结果。'
+            : '平台只下发 key + SQL，账号密码在 agent 本地；只读白名单 + 最多 200 行（导出上限 5000 行）。'}
+        />
+        <Input.TextArea rows={6} value={sqlText} onChange={(e) => setSqlText(e.target.value)}
+          placeholder={sqlMode === 'exec' ? "update t set c=1 where id=1" : "select * from information_schema.tables limit 10"} />
+
         {queryErr && <Alert type="error" showIcon style={{ marginTop: 8 }} message={queryErr} />}
+
+        <Space style={{ marginTop: 10 }}>
+          {sqlMode === 'read' ? (
+            <Button type="primary" loading={queryLoading} onClick={async () => {
+              if (!cur) return
+              setQueryLoading(true); setQueryErr(''); setQueryRes(null); setAffected(null)
+              try {
+                const d = await queryDBConnection(cur.id, sqlText)
+                setQueryRes(d as unknown as { columns?: string[]; rows?: unknown[][]; truncated?: boolean })
+              } catch (e) {
+                const err = e as { response?: { data?: { message?: string } }; message?: string }
+                setQueryErr(err?.response?.data?.message || err?.message || '查询失败')
+              } finally { setQueryLoading(false) }
+            }}>执行查询</Button>
+          ) : (
+            <Popconfirm
+              title="确认执行写操作？"
+              description="将真实修改数据库，无法自动回滚。"
+              okText="确认执行" cancelText="取消" okButtonProps={{ danger: true }}
+              onConfirm={async () => {
+                if (!cur) return
+                setQueryLoading(true); setQueryErr(''); setQueryRes(null); setAffected(null)
+                try {
+                  const d = await execDBConnection(cur.id, sqlText)
+                  setQueryRes({ columns: d?.columns, rows: d?.rows, truncated: false })
+                  setAffected(Number(d?.affected_rows ?? 0))
+                } catch (e) {
+                  const err = e as { response?: { data?: { message?: string } }; message?: string }
+                  setQueryErr(err?.response?.data?.message || err?.message || '执行失败')
+                } finally { setQueryLoading(false) }
+              }}
+            >
+              <Button danger loading={queryLoading}>执行命令</Button>
+            </Popconfirm>
+          )}
+          <Button
+            disabled={sqlMode !== 'read' || !sqlText.trim() || !cur}
+            onClick={async () => {
+              if (!cur) return
+              try {
+                const blob = await downloadDBQuery(cur.id, sqlText)
+                const url = URL.createObjectURL(blob as Blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `${cur.name || 'db'}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.csv`
+                document.body.appendChild(a); a.click(); a.remove()
+                URL.revokeObjectURL(url)
+              } catch (e) {
+                const err = e as { response?: { data?: { message?: string } }; message?: string }
+                setQueryErr(err?.response?.data?.message || err?.message || '导出失败')
+              }
+            }}
+          >下载 CSV</Button>
+          {affected !== null && <Tag color={affected > 0 ? 'green' : 'default'}>影响行数：{affected}</Tag>}
+        </Space>
+
         {queryRes && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
               返回 {(queryRes.rows || []).length} 行{queryRes.truncated ? '（已截断）' : ''}
             </div>
-            <Table
-              size="small"
-              rowKey={(_, i) => String(i)}
-              dataSource={(queryRes.rows || []).map((r, i) => ({ __i: i, r }))}
-              columns={(queryRes.columns || []).map((c, idx) => ({
-                title: c, dataIndex: ['r', idx], render: (v: unknown) => (v === null ? 'NULL' : String(v)),
-              }))}
-              pagination={{ pageSize: 10, showSizeChanger: false }}
-              scroll={{ x: 'max-content' }}
-            />
+            {(queryRes.rows || []).length > 0 && (
+              <Table
+                size="small"
+                rowKey={(_, i) => String(i)}
+                dataSource={(queryRes.rows || []).map((r, i) => ({ __i: i, r }))}
+                columns={(queryRes.columns || []).map((c, idx) => ({
+                  title: c, dataIndex: ['r', idx], render: (v: unknown) => (v === null ? 'NULL' : String(v)),
+                }))}
+                pagination={{ pageSize: 10, showSizeChanger: false }}
+                scroll={{ x: 'max-content' }}
+              />
+            )}
           </div>
         )}
       </Modal>

@@ -956,6 +956,10 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 - 只读白名单：`select / show / describe / explain`（复用 agent `agentdb.Query` 的校验）
 - 限制：最多返回 200 行、单次超时 30s、按集群+库限流
 - 审计：记录「谁、哪个集群、哪个库（key）、SQL 摘要、耗时、返回行数、成功/失败」，**不落查询结果**
+- 控制台两种模式（老板 2026-11-06 加）：
+  - **只读查询**：白名单 select/show/describe/explain/with，最多 200 行；
+  - **执行（管理员）**：DML/DDL，仅 admin + 前端二次确认，返回影响行数，**全部审计**（平台不做自动修改）；
+  - **结果导出**：只读查询结果导出 CSV（最多 5000 行，UTF-8 BOM，Excel 直接打开）。
 - 平台库里查不到该库的任何密码（验收项）
 
 
