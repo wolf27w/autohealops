@@ -1719,3 +1719,36 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 回归测试 `tests/test_pod_restart_annotation.py` 6 例（注解不排除/非法注解/首次发现/增量/无变化/阈值=3）
 - 验证：`podrestart:base:3` 已包含此前被排除的 `prod-eft/efreight-afbase-9d4b6565-*`（809 条基线）
 
+---
+
+### R23 新增告警：Pod 被驱逐（Evicted）无任何告警 — ⏳ 待开发（2026-11-06 排查发现）
+
+**现象**：生产环境当前有 **99 个 Evicted Pod**（95 个因 `DiskPressure`、4 个因 ephemeral-storage 不足），
+平台**没有任何告警**。
+
+**根因**
+- `k8s-executor/internal/watcher/pod_watcher.go` 只检测两件事：
+  1. 容器 `Waiting` 状态（CrashLoopBackOff / ImagePullBackOff / 配置错误等）
+  2. `PodPending` 超过 5 分钟 → `PendingTimeout`
+- **完全没有处理 `status.phase=Failed` + `status.reason=Evicted`**（全仓库仅 `diag_category.py` 里有个 `PodEvicted` 分类名，从未产生告警）
+- Evicted Pod 的容器状态是 `Terminated`/空，不会进入 Waiting 分支，也不会是 Pending → 两个分支都命中不了
+
+**修复方案**
+1. watcher 增加分支：`pod.Status.Phase == Failed && pod.Status.Reason == "Evicted"`
+   → 上报 `PodEvicted`（severity: medium；同一 workload 合并计数，避免一次驱逐刷几十条）
+   → message 带 `status.message`（如 `The node had condition: [DiskPressure]`）+ 节点名
+2. 恢复/关闭口径：Pod 被删除 或 同 workload 有新 Pod Ready → 关闭
+3. 可选自动处置：**自动删除 Evicted Pod**（它们是已终止对象，删了不影响业务）；
+   建议默认开启但受「自愈开关」控制，且记录审计
+4. 节点维度联动：同一节点短时间内多次 Evicted → 关联/升级为节点问题（DiskPressure/内存），
+   在节点页展示驱逐趋势与 Top 节点
+5. 平台展示：集群详情/节点详情增加「Evicted 数量 + 原因分布」
+
+**验收**
+- 造一个 Evicted Pod（或直接 `kubectl` 构造 Failed/Evicted）→ 60 秒内产生 `PodEvicted` 告警并通知
+- 同节点连续驱逐 10 个 Pod → 告警合并（不是 10 条独立告警），并提示节点条件
+- 清理该 Pod（或同 workload 新 Pod Ready）→ 告警自动关闭
+- 现有 CrashLoop/ImagePull/Pending 检测行为不变
+
+**影响面**：生产 99 个 Evicted 对象；测试/UAT 同样不报
+
