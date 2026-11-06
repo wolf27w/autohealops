@@ -39,8 +39,18 @@ func openMySQL(p connParams) (*sql.DB, error) {
 	return db, nil
 }
 
-// HandleHealth 采集 MySQL 健康概览：版本/连接/运行时长/QPS/慢查询/锁等待/表空间 TOP/慢 SQL TOP。
+// HandleHealth 采集 MySQL 健康概览（按需查询用，含表空间 TOP10 + 慢 SQL TOP5）。
 func HandleHealth(ctx context.Context, payload []byte) ([]byte, error) {
+	return handleMetrics(ctx, payload, true)
+}
+
+// HandleMetrics 指标采集（周期上报用）：withSlow=false 时跳过表空间 TOP10 / 慢 SQL，
+// 供 10s 高频采集使用；慢 SQL 由调用方按 60s 单独触发，避免 performance_schema 被压垮。
+func HandleMetrics(ctx context.Context, payload []byte, withSlow bool) ([]byte, error) {
+	return handleMetrics(ctx, payload, withSlow)
+}
+
+func handleMetrics(ctx context.Context, payload []byte, withSlow bool) ([]byte, error) {
 	var p connParams
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return nil, fmt.Errorf("解析请求失败: %w", err)
@@ -114,21 +124,23 @@ func HandleHealth(ctx context.Context, payload []byte) ([]byte, error) {
 		SizeMB float64 `json:"size_mb"`
 	}
 	tables := make([]tbl, 0, 10)
-	if rows, err := db.QueryContext(qctx, `
+	if withSlow {
+		if rows, err := db.QueryContext(qctx, `
 		SELECT table_name, TABLE_ROWS, ROUND((data_length+index_length)/1024/1024, 2)
 		FROM information_schema.tables
 		WHERE table_schema = DATABASE()
 		ORDER BY (data_length+index_length) DESC LIMIT 10`); err == nil {
-		for rows.Next() {
-			var t tbl
-			var r sql.NullInt64
-			var mb sql.NullFloat64
-			if err := rows.Scan(&t.Table, &r, &mb); err == nil {
-				t.Rows, t.SizeMB = r.Int64, mb.Float64
-				tables = append(tables, t)
+			for rows.Next() {
+				var t tbl
+				var r sql.NullInt64
+				var mb sql.NullFloat64
+				if err := rows.Scan(&t.Table, &r, &mb); err == nil {
+					t.Rows, t.SizeMB = r.Int64, mb.Float64
+					tables = append(tables, t)
+				}
 			}
+			rows.Close()
 		}
-		rows.Close()
 	}
 	out["top_tables"] = tables
 
@@ -140,7 +152,7 @@ func HandleHealth(ctx context.Context, payload []byte) ([]byte, error) {
 		MaxMS   float64 `json:"max_ms"`
 	}
 	slow := make([]slowItem, 0, 5)
-	if p.Database != "" {
+	if withSlow && p.Database != "" {
 		if rows, err := db.QueryContext(qctx, `
 			SELECT LEFT(DIGEST_TEXT, 300), COUNT_STAR,
 			       IFNULL(SUM_TIMER_WAIT/1000000000/NULLIF(COUNT_STAR,0),0),

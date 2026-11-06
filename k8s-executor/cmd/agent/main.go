@@ -22,6 +22,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/eventstore"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/metrics"
+	"github.com/autohealops/k8s-executor/internal/prometheus"
 	"github.com/autohealops/k8s-executor/internal/quota"
 	"github.com/autohealops/k8s-executor/internal/watcher"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
@@ -63,6 +64,9 @@ func main() {
 	certFile := flag.String("cert-file", "", "agent 客户端证书（mTLS）")
 	keyFile := flag.String("key-file", "", "agent 客户端私钥（mTLS）")
 	serverName := flag.String("server-name", "", "TLS SNI/校验用主机名（默认取 -platform 的 host）")
+	dbConfig := flag.String("db-config", "", "数据库配置文件（JSON；也可用 AGENT_DB_CONFIG_FILE / AGENT_DB_CONFIG）")
+	dbInterval := flag.Duration("db-interval", 10*time.Second, "数据库指标采集间隔")
+	dbSlowInterval := flag.Duration("db-slow-interval", 60*time.Second, "慢 SQL 采集间隔（内部子循环）")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
 
@@ -96,6 +100,17 @@ func main() {
 	// 33 个 unary RPC 全部可用（原先只有 ExecuteCommand/GetPodLogs 两个）
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
+
+	// 数据库配置（R6）：账密只在集群内，平台不保存；未配置则不采集
+	dbCfgs, err := agentdb.LoadConfigs(*dbConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "数据库配置解析失败: %v\n", err)
+		os.Exit(1)
+	}
+	if len(dbCfgs) > 0 {
+		fmt.Printf("[agent] 已加载 %d 个数据库配置（采集间隔 %s，慢SQL %s；凭据仅在本集群）\n",
+			len(dbCfgs), dbInterval.String(), dbSlowInterval.String())
+	}
 	bridge, err := agentbridge.New(uint(*clusterID), rc, cs, splitCSV(*whitelist), logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化 agent 桥失败: %v\n", err)
@@ -148,7 +163,7 @@ func main() {
 
 	// 断线自动重连
 	for ctx.Err() == nil {
-		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, mc, *watch, logger); err != nil {
+		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, mc, *watch, dbCfgs, *dbInterval, *dbSlowInterval, logger); err != nil {
 			fmt.Fprintf(os.Stderr, "[agent] 隧道断开: %v，3s 后重连\n", err)
 		}
 		select {
@@ -160,7 +175,8 @@ func main() {
 }
 
 func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, token string,
-	bridge *agentbridge.Bridge, cs *kubernetes.Clientset, mc *k8sclient.ClusterClient, enableWatch bool, logger *zap.Logger) error {
+	bridge *agentbridge.Bridge, cs *kubernetes.Clientset, mc *k8sclient.ClusterClient, enableWatch bool,
+	dbCfgs []agentdb.DBConfig, dbInterval, dbSlowInterval time.Duration, logger *zap.Logger) error {
 	client := agentpb.NewAgentServiceClient(conn)
 	stream, err := client.Tunnel(ctx)
 	if err != nil {
@@ -184,6 +200,10 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	// 指标上报（agent 集群无平台侧采集器 → agent 在集群内采集 Pod 指标，经隧道上报平台落库）
 	stopMetrics := startMetricsPush(ctx, mc, send, uint(clusterID), logger)
 	defer stopMetrics()
+
+	// 数据库指标上报（R6）：agent 侧配置的库，每 10s 采一次；慢 SQL 按 60s 子循环
+	stopDBMetrics := startDBMetricsPush(ctx, send, dbCfgs, dbInterval, dbSlowInterval, logger)
+	defer stopDBMetrics()
 
 	// 配额 + 资源快照上报（对齐 config 接入：agent 在集群内采集，经隧道上报平台落库）
 	stopQuota := startQuotaPush(ctx, mc, send, uint(clusterID), logger)
@@ -270,7 +290,7 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 				startWatch(cfg.Policies)
 			}
 		case "request":
-			resp := handleRequest(ctx, bridge, frame)
+			resp := handleRequest(ctx, bridge, frame, mc)
 			if err := send(resp); err != nil {
 				return err
 			}
@@ -362,8 +382,37 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 
 // handleRequest 把隧道请求转给进程内 ExecutorService（P1：全方法反向代理，不再逐方法 switch）；
 // QueryDatabase 例外：由 agent 在集群内直接连数据库执行（不经 executor）。
-func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.AgentFrame) *agentpb.AgentFrame {
+func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.AgentFrame,
+	mc *k8sclient.ClusterClient) *agentpb.AgentFrame {
 	resp := &agentpb.AgentFrame{Type: "response", ReqId: f.ReqId, Method: f.Method}
+	// PromRange：Prometheus 区间查询（gRPC 侧只有即时查询；agent 集群没有 kubeconfig，
+	// 平台无法走 executor 的 /prom/range，必须由 agent 在集群内代查）——2026-11-06 加
+	if f.Method == "PromRange" {
+		var req struct {
+			Query string `json:"query"`
+			Start int64  `json:"start"`
+			End   int64  `json:"end"`
+			Step  int    `json:"step"`
+		}
+		if err := json.Unmarshal(f.Payload, &req); err != nil {
+			resp.Error = "解析 PromRange 请求失败: " + err.Error()
+			return resp
+		}
+		if req.Query == "" {
+			resp.Error = "query 必填"
+			return resp
+		}
+		if req.Step <= 0 {
+			req.Step = 60
+		}
+		out, err := prometheus.QueryRange(mc.Clientset, mc.RestConfig, req.Query, req.Start, req.End, req.Step)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
 	if f.Method == "DbHealth" {
 		out, err := agentdb.HandleHealth(ctx, f.Payload)
 		if err != nil {
@@ -408,6 +457,56 @@ func splitCSV(s string) []string {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// startDBMetricsPush 数据库指标上报（R6）：agent 侧配置的库每 10s 采一次；
+// 慢 SQL（performance_schema 全量 digest）按 slowInterval（默认 60s）子循环，避免把库拖慢。
+func startDBMetricsPush(ctx context.Context, send func(*agentpb.AgentFrame) error,
+	cfgs []agentdb.DBConfig, interval, slowInterval time.Duration, logger *zap.Logger) func() {
+	if len(cfgs) == 0 {
+		return func() {}
+	}
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	if slowInterval <= 0 {
+		slowInterval = 60 * time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		var lastSlow time.Time
+		push := func() {
+			withSlow := lastSlow.IsZero() || time.Since(lastSlow) >= slowInterval
+			if withSlow {
+				lastSlow = time.Now()
+			}
+			rows := agentdb.CollectOnce(ctx, cfgs, withSlow)
+			if len(rows) == 0 {
+				return
+			}
+			payload, err := json.Marshal(map[string]any{"rows": rows})
+			if err != nil {
+				return
+			}
+			if err := send(&agentpb.AgentFrame{Type: "event", Method: "DbMetrics", Payload: payload}); err != nil {
+				logger.Debug("数据库指标上报失败（隧道可能已断）", zap.Error(err))
+			}
+		}
+		push()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				push()
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // startMetricsPush 启动指标上报循环：启动即采一次，之后每 60s 采集一次，
@@ -485,6 +584,7 @@ func startEventPush(ctx context.Context, client *k8sclient.ClusterClient, send f
 	}()
 	return func() { close(done) }
 }
+
 // startQuotaPush 启动配额 + 资源快照上报循环：启动即采一次，之后每 60s 采集一次，
 // 把配额/资源快照经隧道 event 帧（method=CollectSnapshot）上报平台，由平台落库。
 func startQuotaPush(ctx context.Context, client *k8sclient.ClusterClient, send func(*agentpb.AgentFrame) error,

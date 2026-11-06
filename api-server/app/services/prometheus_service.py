@@ -5,6 +5,7 @@
 - 趋势（range）：见 TODO —— executor 需补 range 端点（proto 只支持即时）。
 - 数据源选择：默认自动发现集群 Prometheus（executor 内探测），后续支持按集群自定义地址覆盖。
 """
+import asyncio
 import json
 import logging
 import time
@@ -214,6 +215,19 @@ async def query_range(cluster_id: int, promql: str, minutes: int = 30, step: int
             return {"success": True, "series": _parse_range_obj(r.json()), "error": ""}
         except Exception as e:  # noqa: BLE001
             logger.warning("自定义 Prometheus(%s) 趋势查询失败，回退自动发现: %s", url, e)
+    # agent 接管的集群没有 kubeconfig：executor 的 /prom/range 是「本机直连」路径，必然失败。
+    # 改走隧道，由 agent 在集群内代查 Prometheus（方法 PromRange：JSON 请求 + 原始 Prom 响应）。
+    try:
+        from app import agent_gateway  # 延迟导入，避免与 gateway 模块循环依赖
+        if agent_gateway.is_connected(cluster_id):
+            end = int(time.time())
+            start = end - minutes * 60
+            payload = json.dumps({"query": promql, "start": start, "end": end, "step": step}).encode()
+            raw = await asyncio.to_thread(agent_gateway.call, cluster_id, "PromRange", payload, 60.0)
+            return {"success": True, "series": _parse_range_obj(json.loads(raw)), "error": ""}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent 隧道 range 查询失败，回退 executor: %s", e)
+
     base = getattr(settings, "EXECUTOR_LOGSTREAM_ADDR", "http://localhost:9099")
     params = {"cluster_id": cluster_id, "query": promql, "minutes": minutes, "step": step}
     try:
