@@ -1683,3 +1683,36 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 点历史日期组头可展开/收起
 - 当前会话所在日期组始终可见
 
+---
+
+### R22 修复：手工重启过的 Deployment 永不告警（restartedAt 注解导致排除） — ⏳ 待开发（2026-11-06 排查发现）
+
+**现象**：生产 `prod-eft/efreight-afbase` 于 15:22:55 因 liveness 探针失败被 kill 并重启（restartCount 0→1），
+平台**没有建告警、没有通知**。
+
+**根因**
+1. 该 Deployment 模板上带有 `kubectl.kubernetes.io/restartedAt=2026-11-06T12:10:01+08:00`
+   （此前手工/平台「滚动重启」留下，会一直被 Pod 继承）
+2. executor `ListPodRestartInfo` 把该注解回传给平台（`RestartedAt` 字段）
+3. `pod_restart_service._detect_restart_diffs` 见到 `restarted_at` 非空就 **`continue`**：
+   既不上报增量、**也不写基线** → 该 Deployment 的所有 Pod 永久退出重启检测
+
+**证据**
+- Redis `podrestart:base:3` 里没有 `prod-eft/efreight-afbase-9d4b6565-n7rwb`
+- `kubectl describe` 里探针失败证据齐全（`[15:23:25] Readiness probe failed`）→ 若未被排除会正常建单
+- 生产最近一条 PodRestart* 告警是 11:02（另一批 Pod）；15:22 这次没有任何记录
+- 生产共 25 个 Pod 带该注解（prod-eft 12 个），全部在排除名单里
+
+**修复方案（建议）**
+1. **宽限期**而不是永久排除：注解时间后 N 分钟（默认 10）内忽略重启；超过则恢复正常跟踪
+2. 无论是否忽略，**都要写基线**（避免下一次增量因"首次发现"静默）
+3. 判据补充：`lastState.terminated.reason=Error + exitCode=137` 且事件里有 `probe failed` → 即使有注解、超过宽限期也要报
+4. 平台自身「滚动重启」不要往模板写 restartedAt（用 image/annotation hash 触发），从源头减少这类注解
+
+**验收**
+- 给一个 Deployment 手工 `kubectl rollout restart` → 宽限期内重启不告警；宽限期后再发生 liveness 失败重启 → **能告警并通知**
+- 没有注解的 Deployment 行为不变
+- Redis 基线中始终包含被注解过的 Pod
+
+**影响面**：生产 25 个 Pod；测试环境同类注解也会被排除
+
