@@ -383,7 +383,7 @@ export default function DbWorkbench({
     if (!cur) return
     const { list, missingEnd } = splitStatements(sql)
     if (missingEnd) { message.error('SQL 语句必须以分号结尾（;）'); return }
-    if (list.length !== 1) { message.error('定时任务只能包含一条 SQL'); return }
+    if (list.length === 0) { message.error('SQL 不能为空'); return }
     const v = await taskForm.validateFields()
     const payload = { ...v, sql }
     try {
@@ -726,8 +726,9 @@ export default function DbWorkbench({
           ]}
         />
         <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
-          任务执行的是<b>当前编辑器里的 SQL</b>（保存时取当前内容）；只允许只读语句；
-          结果以 CSV 附件 + 邮件正文摘要发送。平台需先配置 SMTP（系统设置 → 通知/邮件）。
+          任务执行的是<b>当前编辑器里的全部 SQL</b>（保存时取当前内容，按分号拆分逐条执行）；
+          只允许只读语句；每条结果各一份 CSV 附件 + 邮件正文摘要。
+          平台需先配置 SMTP（系统设置 → 通知/邮件）。
         </div>
       </Modal>
       </div>

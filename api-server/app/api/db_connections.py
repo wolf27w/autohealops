@@ -484,12 +484,14 @@ def _validate_task_payload(payload: dict) -> tuple[bool, str]:
         return False, "sql 必填"
     if not sql.endswith(";"):
         return False, "SQL 语句必须以分号结尾（;）"
-    body = sql[:-1]
-    if ";" in body:
-        return False, "定时任务只能包含一条 SQL（请去掉多余语句）"
-    head = (sql.split(None, 1)[0] or "").lower()
-    if head not in _READ_HEADS:
-        return False, "定时任务只允许只读 SQL（select/show/describe/explain/with）"
+    from app.services.sql_task_service import split_sql
+    stmts = split_sql(sql)
+    if not stmts:
+        return False, "SQL 不能为空"
+    for st in stmts:
+        head = (st.split(None, 1)[0] or "").lower()
+        if head not in _READ_HEADS:
+            return False, f"定时任务只允许只读 SQL（检测到 {head or st[:20]}）"
     cron = (payload.get("cron_expression") or "").strip()
     if cron:
         try:
