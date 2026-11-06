@@ -267,6 +267,9 @@ function DBConnections() {
       <Modal title={editing ? '编辑数据库连接' : '添加数据库连接'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="env_tag" label="环境" tooltip="生产/UAT/测试…；告警与工单按环境聚合（留空=未分组）">
+            <Input placeholder="如 生产 / UAT / 测试" />
+          </Form.Item>
           <Form.Item name="group_name" label="分组" tooltip="可直接输入新分组名；留空=未分组">
             <AutoComplete
               allowClear

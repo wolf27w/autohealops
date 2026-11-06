@@ -421,6 +421,8 @@ async def auto_create_from_alert(alert: Alert, reason: str = "", detail: str = "
 
     payload = await _build_alert_ticket_payload(alert)
     payload["title"] = f"[自动] {alert.fault_type} - {alert.resource_name}"
+    payload["env"] = (getattr(alert, "env", "") or "")
+    payload["env"] = (getattr(alert, "env", "") or "")
     if reason:
         payload["description"] += f"\n转单原因：{reason}"
     if detail:

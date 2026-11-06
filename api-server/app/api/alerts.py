@@ -38,7 +38,7 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
     group=true（默认）时按「同 cluster + namespace + fault_type + 服务」合并同类型告警：
     每组只保留最新一条，total 为分组数（而非原始行数）；group=false 保留逐条行为。
     """
-    from sqlalchemy import and_, func
+    from sqlalchemy import and_, func, or_
 
     async with async_session() as session:
         query = select(Alert)
@@ -55,10 +55,12 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
         if fault_type:
             conditions.append(Alert.fault_type == fault_type)
         if env_tag:
+            # 环境维度（R24）：集群告警按 clusters.env_tag，DB 告警按 alerts.env
             env_ids = [c.id for c in (await session.execute(
                 select(Cluster.id).where(Cluster.env_tag == env_tag)
             )).scalars()]
-            conditions.append(Alert.cluster_id.in_(env_ids) if env_ids else Alert.cluster_id == -1)
+            cluster_match = Alert.cluster_id.in_(env_ids) if env_ids else Alert.cluster_id == -1
+            conditions.append(or_(Alert.env == env_tag, cluster_match))
         if manual_required is not None:
             conditions.append(Alert.manual_required == manual_required)
         if conditions:
@@ -113,7 +115,10 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
                     ap_status_by_alert[aid] = ap.status
     items = [
         {"id": a.id, "cluster_id": a.cluster_id, "cluster_name": cluster_names.get(a.cluster_id, ""),
-         "env_tag": cluster_envs.get(a.cluster_id, ""),
+         # R24：env 优先用告警自身（DB 告警），其次集群环境；source 是具体来源（集群名/数据库名）
+         "env": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
+         "env_tag": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
+         "source": (cluster_names.get(a.cluster_id, "") if a.cluster_id else a.resource_name),
          "resource_type": a.resource_type, "resource_name": a.resource_name,
          "namespace": a.namespace, "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
          "approval_status": ap_status_by_alert.get(a.id, ""),

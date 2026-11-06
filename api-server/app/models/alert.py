@@ -16,6 +16,8 @@ class Alert(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # cluster_id 可空：DB 告警无集群（迁移后为 NULL，代码当前用 0 兜底）
     cluster_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # 环境（生产/UAT/测试…）：集群告警取 clusters.env_tag，数据库告警取连接 env_tag（R24）
+    env: Mapped[str] = mapped_column(String(50), default="", server_default="", index=True)
     resource_type: Mapped[str] = mapped_column(String(10), nullable=False)  # pod/node
     resource_name: Mapped[str] = mapped_column(String(200), nullable=False)
     # 聚合键：去随机后缀的 Deployment 名（同服务持续故障合并为一条告警，不按 Pod 实例分散）

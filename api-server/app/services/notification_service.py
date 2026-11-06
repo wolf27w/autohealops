@@ -690,10 +690,26 @@ async def _cluster_env(cluster_id: int) -> str:
 
 
 def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str = "", env: str = "") -> str:
-    """格式化告警消息（带项目名、集群名称、环境）"""
+    """格式化告警消息：按资源类型自动选模板（数据库告警没有命名空间/集群）。
+
+    - 应用/集群类：项目 + 集群 + 环境 + 资源 + 命名空间 + 故障 + 级别 + 详情
+    - 数据库类：环境 + 数据库 + 故障 + 级别 + 详情（不输出项目/集群/命名空间，避免出现空白项）
+    """
+    env_val = (getattr(alert, "env", "") or env or "")
+    if (alert.resource_type or "") == "db":
+        env_line = f"环境: {env_val}\n" if env_val else ""
+        return (
+            f"【AutoHealOps 数据库告警】\n"
+            f"{env_line}"
+            f"数据库: {alert.resource_name}\n"
+            f"故障类型: {alert.fault_type}\n"
+            f"严重级别: {alert.severity}\n"
+            f"详情: {alert.message}"
+        )
+
     proj = f"项目: {project_name}\n" if project_name else ""
     cluster = cluster_name or str(alert.cluster_id)
-    env_line = f"环境: {env}\n" if env else ""
+    env_line = f"环境: {env_val}\n" if env_val else ""
     return (
         f"【AutoHealOps 告警】\n"
         f"{proj}"

@@ -176,7 +176,7 @@ export default function AlertList() {
           expandedRowRender: (record) => <DiagnosisPanel alertId={record.id} />,
         }}
         columns={[
-          { title: '集群', dataIndex: 'cluster_name', render: (v) => v || '-' },
+          { title: '来源', dataIndex: 'source', render: (v, r: Alert) => v || r.cluster_name || '-' },
           { title: '环境', dataIndex: 'env_tag', width: 90, render: (v) => v ? <Tag color={v === 'qa' ? 'green' : v === 'release' ? 'orange' : 'red'}>{v}</Tag> : '-' },
           { title: '资源', dataIndex: 'resource_name' },
           { title: '类型', dataIndex: 'resource_type' },

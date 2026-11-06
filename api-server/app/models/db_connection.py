@@ -38,6 +38,8 @@ class DBConnection(Base):
     inspect_cron: Mapped[str] = mapped_column(String(100), default="")
     # 实例分组（空 = 未分组）
     group_name: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    # 环境（生产/UAT/测试…）；告警/工单按此维度聚合（R24）
+    env_tag: Mapped[str] = mapped_column(String(50), default="", server_default="")
     status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/connected/failed/removed
     # ---- agent 来源（R6，2026-11-06）----
     # direct = 平台直连采集（凭据存平台）；agent = agent 侧配置后上报（平台不存凭据）

@@ -129,8 +129,20 @@ async def _upsert_db_alert(c: DBConnection, fault_type: str, err: str) -> int:
             existing.message = _build_message(c, fault_type, err)
             await session.commit()
             return 0
+        env_val = (getattr(c, "env_tag", "") or "").strip()
+        if not env_val and (getattr(c, "source", "direct") or "direct") == "agent" and c.cluster_id:
+            try:
+                from app.models import Cluster
+                async with async_session() as _s:
+                    _cl = await _s.get(Cluster, int(c.cluster_id))
+                if _cl:
+                    env_val = (getattr(_cl, "env_tag", "") or _cl.name or "")
+            except Exception:  # noqa: BLE001
+                pass
+
         alert = Alert(
             cluster_id=0,                 # 无集群：用 0 兜底（迁移后 cluster_id 可空，代码仍兼容）
+            env=env_val,
             resource_type="db",
             resource_name=c.name,
             # deployment_name 复用为连接名，使现有 dedup_key 生成列按库去重；
@@ -208,7 +220,26 @@ async def scan_db_connections() -> int:
 
         for c in conns:
             try:
+                # agent 库：agent 不在线 ≠ 数据库故障（重启窗口/隧道抖动时不告警）
+                if (getattr(c, "source", "direct") or "direct") == "agent":
+                    from app import agent_gateway
+                    if not (c.cluster_id and agent_gateway.is_connected(int(c.cluster_id))):
+                        continue
+
                 ok, err = await _probe_connection(c)
+                # 连续 2 次失败才告警（避免瞬时抖动刷单）；成功即清零
+                fkey = f"dbprobe:fail:{c.id}"
+                if ok:
+                    if await redis_pool.get(fkey):
+                        await redis_pool.delete(fkey)
+                else:
+                    if "无在线 agent" in (err or ""):
+                        continue  # 隧道刚断，不算数据库故障
+                    n = int(await redis_pool.incr(fkey))
+                    await redis_pool.expire(fkey, 1800)
+                    if n < 2:
+                        logger.info("数据库 %s 首次探活失败（%s），等下一轮确认", c.name, err[:60])
+                        continue
                 if ok:
                     async with async_session() as session:
                         c2 = await session.get(DBConnection, c.id)

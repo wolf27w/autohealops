@@ -92,6 +92,41 @@ func CurrentSink() AlertSink {
 	return activeSink
 }
 
+// clusterEnvTag 取集群环境标签（带 5 分钟缓存；失败返回空串）
+var (
+	envTagMu    sync.Mutex
+	envTagCache = map[uint]struct {
+		v  string
+		at time.Time
+	}{}
+)
+
+func clusterEnvTag(clusterID uint) string {
+	envTagMu.Lock()
+	if e, ok := envTagCache[clusterID]; ok && time.Since(e.at) < 5*time.Minute {
+		envTagMu.Unlock()
+		return e.v
+	}
+	envTagMu.Unlock()
+
+	db := database.GetDB()
+	var c database.Cluster
+	tag := ""
+	if err := db.Select("env_tag", "name").First(&c, clusterID).Error; err == nil {
+		tag = c.EnvTag
+		if tag == "" {
+			tag = c.Name
+		}
+	}
+	envTagMu.Lock()
+	envTagCache[clusterID] = struct {
+		v  string
+		at time.Time
+	}{v: tag, at: time.Now()}
+	envTagMu.Unlock()
+	return tag
+}
+
 // ==================== DB sink（平台侧 executor，原有行为） ====================
 
 type dbSink struct{}
@@ -160,6 +195,7 @@ func reportPodAlert(ev AlertEvent) uint {
 	}
 	alert := database.Alert{
 		ClusterID:      ev.ClusterID,
+		Env:            clusterEnvTag(ev.ClusterID),
 		ResourceType:   "pod",
 		ResourceName:   ev.ResourceName,
 		DeploymentName: ev.DeploymentName,
@@ -226,6 +262,7 @@ func reportNodeAlert(ev AlertEvent) uint {
 	}
 	alert := database.Alert{
 		ClusterID:    ev.ClusterID,
+		Env:          clusterEnvTag(ev.ClusterID),
 		ResourceType: "node",
 		ResourceName: ev.ResourceName,
 		Namespace:    "",

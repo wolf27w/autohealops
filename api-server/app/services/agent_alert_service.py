@@ -131,8 +131,19 @@ async def _merge_or_insert(ev: dict) -> int:
                                     dep or rname, fault, rname, row.id, row.event_count)
                     return 0
 
+        # 环境维度（R24）：集群的 env_tag（空则回落集群名）
+        env_val = ""
+        try:
+            from app.models import Cluster
+            c_row = await session.get(Cluster, cid)
+            if c_row:
+                env_val = (getattr(c_row, "env_tag", "") or c_row.name or "")
+        except Exception:  # noqa: BLE001
+            pass
+
         alert = Alert(
             cluster_id=cid,
+            env=env_val,
             resource_type=rtype,
             resource_name=rname,
             deployment_name=dep,
