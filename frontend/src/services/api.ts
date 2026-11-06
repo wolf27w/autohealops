@@ -221,24 +221,6 @@ export const getNamespaces = (clusterId: number) => http.get(`/resources/cluster
 export const getNamespaceDeployments = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/deployments`)
 export const triggerCollect = (clusterId: number) => http.post(`/resources/clusters/${clusterId}/collect`)
 
-// 集群内数据库（经 agent 查对方集群数据库）
-export interface ClusterDbConn { id: number; cluster_id: number; name: string; db_type: string; host: string; port: number; database: string; username: string; password_set: boolean }
-export const listClusterDbConnections = (clusterId: number) => http.get<ClusterDbConn[]>(`/clusters/${clusterId}/db-connections`)
-export const createClusterDbConnection = (clusterId: number, data: Record<string, unknown>) => http.post<ClusterDbConn>(`/clusters/${clusterId}/db-connections`, data)
-export const deleteClusterDbConnection = (clusterId: number, connId: number) => http.delete(`/clusters/${clusterId}/db-connections/${connId}`)
-export const queryClusterDb = (clusterId: number, connId: number, sql: string) => http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/clusters/${clusterId}/db-connections/${connId}/query`, { sql })
-export interface DbHealthData {
-  db_type?: string; database?: string; version?: string
-  uptime_seconds?: number; threads_connected?: number; threads_running?: number
-  max_connections?: number; max_used_connections?: number
-  queries?: number; commits?: number; rollbacks?: number; slow_queries?: number; row_lock_waits?: number
-  lock_waits?: number
-  top_tables?: { table: string; rows: number; size_mb: number }[]
-  top_slow?: { sql_text: string; exec_count: number; avg_ms: number; max_ms: number }[]
-}
-export const getClusterDbHealth = (clusterId: number, connId: number) =>
-  http.post<DbHealthData>(`/clusters/${clusterId}/db-connections/${connId}/health`)
-
 // ============ 知识库 ============
 export const searchKnowledge = (q: string, topK: number = 5) => http.get('/knowledge/search', { params: { q, top_k: topK } })
 export const getKnowledgeList = () => http.get<KnowledgeEntry[]>('/knowledge')
@@ -518,6 +500,9 @@ export const getDiagnosisQuality = (days = 7) =>
   http.get('/fault-diagnoses/quality', { params: { days } })
 
 // ============ 数据库连接管理 ============
+// R6：agent 库只读查询（平台只发 key+SQL，凭据在 agent 本地）
+export const queryDBConnection = (id: number, sql: string) =>
+  http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/db-connections/${id}/query`, { sql })
 export const getDBConnections = () => http.get('/db-connections')
 export const createDBConnection = (data: Payload) => http.post('/db-connections', data)
 export const updateDBConnection = (id: number, data: Payload) => http.put(`/db-connections/${id}`, data)

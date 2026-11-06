@@ -1,10 +1,10 @@
 // 数据库监控：按数据库切换，一屏展示全部监控项（+ 慢 SQL）
 // 不同数据库类型（mysql/pg/oracle）采集项不同，按采集到的内容展示
 import { useEffect, useState } from 'react'
-import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch } from 'antd'
+import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch, Modal, Input, Alert } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends } from '../services/api'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, queryDBConnection } from '../services/api'
 
 interface Metric {
   metric_type: string
@@ -22,7 +22,11 @@ interface SlowSQL {
   max_latency_ms?: number
   sampled_at?: string
 }
-interface DBConn { id: number; name: string; db_type: string }
+interface DBConn {
+  id: number; name: string; db_type: string
+  source?: string; cluster_id?: number | null; agent_db_key?: string
+  status?: string; last_error?: string; last_seen_at?: string
+}
 interface TrendPoint { metric_name: string; metric_type?: string; series?: string; value: number; sampled_at: string }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -91,6 +95,12 @@ export default function DBMonitor() {
   const [loading, setLoading] = useState(false)
   const [trends, setTrends] = useState<TrendPoint[]>([])
   const [groupByScale, setGroupByScale] = useState(false)
+  // R6：agent 库只读查询
+  const [queryOpen, setQueryOpen] = useState(false)
+  const [sqlText, setSqlText] = useState('select 1')
+  const [queryRes, setQueryRes] = useState<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean } | null>(null)
+  const [queryErr, setQueryErr] = useState('')
+  const [queryLoading, setQueryLoading] = useState(false)
 
   useEffect(() => {
     getDBConnections().then((d) => {
@@ -173,6 +183,12 @@ export default function DBMonitor() {
             options={conns.map((c) => ({ value: c.id, label: `${c.name}（${c.db_type}）` }))} />
           <Button icon={<ReloadOutlined />} onClick={() => load()} disabled={!connId}>刷新</Button>
           {cur && <Tag color="blue">{cur.db_type}</Tag>}
+          {cur && (cur.source === 'agent'
+            ? <Tag color="purple">agent · 集群 {cur.cluster_id}</Tag>
+            : <Tag>平台直连</Tag>)}
+          {cur?.status === 'removed' && <Tag color="red">已下线（agent 配置已移除）</Tag>}
+          {cur?.status === 'failed' && <Tooltip title={cur.last_error}><Tag color="orange">采集失败</Tag></Tooltip>}
+          <Button disabled={!cur || cur.source !== 'agent'} onClick={() => { setQueryOpen(true); setQueryErr(''); setQueryRes(null) }}>查询</Button>
           <span style={{ fontSize: 12, color: '#8c8c8c' }}>采集时间：{sampledAt}</span>
           <span style={{ fontSize: 12, color: '#8c8c8c' }}>（不同数据库类型采集项不同）</span>
         </Space>
@@ -219,6 +235,49 @@ export default function DBMonitor() {
           </Card>
         </>
       )}
+
+      <Modal
+        title={`查询数据库：${cur?.name || ''}`}
+        open={queryOpen}
+        onCancel={() => setQueryOpen(false)}
+        onOk={async () => {
+          if (!cur) return
+          setQueryLoading(true); setQueryErr(''); setQueryRes(null)
+          try {
+            const d = await queryDBConnection(cur.id, sqlText)
+            setQueryRes(d as unknown as { columns?: string[]; rows?: unknown[][]; truncated?: boolean })
+          } catch (e) {
+            const err = e as { response?: { data?: { message?: string } }; message?: string }
+            setQueryErr(err?.response?.data?.message || err?.message || '查询失败')
+          } finally { setQueryLoading(false) }
+        }}
+        okText="执行（只读）"
+        confirmLoading={queryLoading}
+        width={820}
+      >
+        <Alert type="info" showIcon style={{ marginBottom: 8 }}
+          message="平台只下发 key + SQL，账号密码在 agent 本地，不出集群；仅允许 select / show / describe / explain，最多返回 200 行。" />
+        <Input.TextArea rows={5} value={sqlText} onChange={(e) => setSqlText(e.target.value)}
+          placeholder="select * from information_schema.tables limit 10" />
+        {queryErr && <Alert type="error" showIcon style={{ marginTop: 8 }} message={queryErr} />}
+        {queryRes && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+              返回 {(queryRes.rows || []).length} 行{queryRes.truncated ? '（已截断）' : ''}
+            </div>
+            <Table
+              size="small"
+              rowKey={(_, i) => String(i)}
+              dataSource={(queryRes.rows || []).map((r, i) => ({ __i: i, r }))}
+              columns={(queryRes.columns || []).map((c, idx) => ({
+                title: c, dataIndex: ['r', idx], render: (v: unknown) => (v === null ? 'NULL' : String(v)),
+              }))}
+              pagination={{ pageSize: 10, showSizeChanger: false }}
+              scroll={{ x: 'max-content' }}
+            />
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

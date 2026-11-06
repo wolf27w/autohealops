@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 """数据库连接管理 API（数据库监控；admin 创建，授权 operator 管理，viewer 只读）"""
+import asyncio
+import json
+import logging
+import time
+import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -12,6 +17,7 @@ from app.models import DBConnection
 from app.services import user_permission_service
 
 router = APIRouter(prefix="/api/v1/db-connections")
+logger = logging.getLogger(__name__)
 
 
 def _safe_int(v, default=0) -> int:
@@ -39,6 +45,12 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",
         "status": c.status, "created_at": str(c.created_at),
+        # R6：agent 来源（direct=平台直连；agent=agent 侧配置上报，平台不存凭据）
+        "source": getattr(c, "source", "direct") or "direct",
+        "cluster_id": getattr(c, "cluster_id", None),
+        "agent_db_key": getattr(c, "agent_db_key", "") or "",
+        "last_error": getattr(c, "last_error", "") or "",
+        "last_seen_at": str(c.last_seen_at) if getattr(c, "last_seen_at", None) else "",
     }
 
 
@@ -88,6 +100,67 @@ async def list_connections(user=Depends(require_any_user)):
         if user.role != "admin" and not await user_permission_service.check_db_permission(user, c.id):
             continue
         data.append(_serialize(c))
+    return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/{conn_id}/query")
+async def query_connection(conn_id: int, payload: dict, user=Depends(require_any_user)):
+    """只读查询（agent 库）：平台只下发 {key, sql}，账号密码在 agent 本地，不出集群。
+
+    直连库暂不开放（平台侧执行会用到平台保存的凭据，口径上只保留 agent 路径）。
+    """
+    sql = (payload.get("sql") or "").strip()
+    if not sql:
+        return {"code": 400, "message": "sql 必填", "data": None}
+    head = sql.split(None, 1)[0].lower()
+    if head not in ("select", "show", "describe", "desc", "explain"):
+        return {"code": 400, "message": "只允许 select / show / describe / explain（只读）", "data": None}
+
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    if (getattr(c, "source", "direct") or "direct") != "agent":
+        return {"code": 400, "message": "仅 agent 接入的库支持平台查询（直连库请用客户端执行）", "data": None}
+    if not c.cluster_id or not c.agent_db_key:
+        return {"code": 400, "message": "该库缺少 agent 归属信息（cluster_id/key）", "data": None}
+
+    started = time.time()
+    ok, err = True, ""
+    data: dict = {"columns": [], "rows": [], "truncated": False}
+    try:
+        from app import agent_gateway
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(c.cluster_id), "QueryDatabaseByKey",
+            json.dumps({"key": c.agent_db_key, "sql": sql}).encode(), 40.0,
+        )
+        data = json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        ok, err = False, str(e)
+    elapsed = round(time.time() - started, 3)
+    rows = len(data.get("rows") or [])
+
+    # 审计：只记元信息（谁/集群/库/SQL 摘要/耗时/行数/成败），**不落查询结果**
+    try:
+        from app.services import audit_service
+        await audit_service.create_audit_record(
+            f"dbquery-{uuid.uuid4().hex[:12]}",
+            trigger_snapshot=json.dumps({
+                "mode": "db_query", "source": "agent", "cluster_id": c.cluster_id,
+                "agent_db_key": c.agent_db_key, "db": c.name,
+            }, ensure_ascii=False),
+            execution_detail=json.dumps({
+                "user": getattr(user, "username", "") or "", "sql": sql[:500],
+                "elapsed_s": elapsed, "rows": rows, "ok": ok, "error": err[:200],
+            }, ensure_ascii=False),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("数据库查询审计写入失败: %s", e)
+
+    if not ok:
+        return {"code": 500, "message": f"查询失败：{err}", "data": None}
     return {"code": 200, "message": "success", "data": data}
 
 

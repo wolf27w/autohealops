@@ -107,6 +107,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "数据库配置解析失败: %v\n", err)
 		os.Exit(1)
 	}
+	agentdb.SetConfigPath(*dbConfig) // 供「按 key 查询」复用同一份配置
 	if len(dbCfgs) > 0 {
 		fmt.Printf("[agent] 已加载 %d 个数据库配置（采集间隔 %s，慢SQL %s；凭据仅在本集群）\n",
 			len(dbCfgs), dbInterval.String(), dbSlowInterval.String())
@@ -415,6 +416,15 @@ func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.A
 	}
 	if f.Method == "DbHealth" {
 		out, err := agentdb.HandleHealth(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
+	if f.Method == "QueryDatabaseByKey" {
+		out, err := agentdb.QueryByKey(ctx, f.Payload)
 		if err != nil {
 			resp.Error = err.Error()
 			return resp

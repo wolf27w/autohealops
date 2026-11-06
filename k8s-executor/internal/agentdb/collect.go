@@ -4,6 +4,7 @@ package agentdb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -59,4 +60,66 @@ func CollectOnce(ctx context.Context, cfgs []DBConfig, withSlow bool) []map[stri
 		cancel()
 	}
 	return out
+}
+
+// ---------- 按 key 查询（平台不持有凭据，由 agent 用本地配置连库） ----------
+
+var configPath string // -db-config 的值（启动时由 main 注入）
+
+// SetConfigPath 记录 -db-config 路径，供按 key 查询时复用同一份配置。
+func SetConfigPath(p string) { configPath = p }
+
+// QueryByKey 按 agent 配置里的 key 执行只读 SQL：
+// 平台只发 {key, sql}，账号密码在 agent 本地，不出集群。
+func QueryByKey(ctx context.Context, payload []byte) ([]byte, error) {
+	var req struct {
+		Key string `json:"key"`
+		SQL string `json:"sql"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return nil, fmt.Errorf("解析请求失败: %w", err)
+	}
+	if req.Key == "" || req.SQL == "" {
+		return nil, fmt.Errorf("key 和 sql 必填")
+	}
+	cfgs, err := LoadConfigs(configPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cfgs {
+		if c.Key != req.Key {
+			continue
+		}
+		params, err := json.Marshal(connParams{
+			DBType: c.Type, Host: c.Host, Port: c.Port, Database: c.Database,
+			Username: c.Username, Password: c.Password,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("序列化连接参数失败: %w", err)
+		}
+		q, err := json.Marshal(map[string]string{"sql": req.SQL})
+		if err != nil {
+			return nil, err
+		}
+		merged, err := mergeJSON(params, q)
+		if err != nil {
+			return nil, err
+		}
+		return HandleQuery(ctx, merged)
+	}
+	return nil, fmt.Errorf("agent 配置里没有 key=%s（可能已删除或未下发）", req.Key)
+}
+
+func mergeJSON(a, b []byte) ([]byte, error) {
+	ma, mb := map[string]any{}, map[string]any{}
+	if err := json.Unmarshal(a, &ma); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &mb); err != nil {
+		return nil, err
+	}
+	for k, v := range mb {
+		ma[k] = v
+	}
+	return json.Marshal(ma)
 }
