@@ -121,6 +121,7 @@
 | **A3** | 大屏（R7）审美复核 / 细节打磨 | 自研 HTML 大屏已接真实数据，**等老板验收** | `public/monitor-bigscreen.html` | 视反馈 |
 | **A4** | R4 尾巴：**调度 Pod 到指定节点** | ✅ 完成（`7179e1a`）——pod template 加 nodeSelector[kubernetes.io/hostname]（保留其他选择器）+ preview 预览；ServiceDetail「操作」菜单入口 | — |
 | **A5** | **R15 工作负载级连续监控**（Deployment × 容器，只读 Prometheus、零存储；跨 Pod 重建拼接） | ⏳ 待开发（2026-11-06 定）——口径/接口/PromQL 已定稿，**前置：agent `QueryPrometheusRange` 通道**（现 `/prom/range` 不通） | `ServiceDetail` + 大屏「服务/容器监控」；详见 `REQUIREMENTS-BACKLOG.md` R15 | ~1.5~2d |
+| **A6** | **R16 数据库管理（Navicat 式工作台）**：实例/对象树/SQL 控制台 + 导入导出 + 定时任务（cron→CSV 邮件）+ 方言接口层 | ✅ 2026-11-06 已落地（MySQL）：详见 `REQUIREMENTS-BACKLOG.md` R16；agent 0.2.11 | `DiagnosticCenter` → 数据库管理 | — |
 
 ### B. 🟡 需外部前置 / 部署决策
 
@@ -179,6 +180,7 @@
 | M10 | 平台自身发布/回滚（容器化 + 滚动发布 + 保留上一版镜像） | 平台正式上线 | ✅ 完成（`58bb89a`） |
 | M11 | 备份 / DR（MySQL 定时备份 + 异地；确认 Redis 持久化） | 上线前 | ✅ 完成（`2f9b762`） |
 | M12 | AI 用量异常告警（单日成本突增 / 异常调用量） | 接入付费模型后 | ✅ 完成（`3a88a59`）：ai_usage_service（今日 vs N日基线，超倍数/绝对阈值→通知）+ GET /stats/ai-usage |
+| R17 | 数据库同步 / 迁移（binlog/逻辑复制 + 结构 diff 迁移） | 有真实需求时 | 待细化 |
 
 ---
 
