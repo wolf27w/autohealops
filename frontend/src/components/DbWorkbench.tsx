@@ -590,20 +590,7 @@ export default function DbWorkbench({
 
       {/* 右：操作条 + SQL + 结果 */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : connState[cur.id] !== 'on' ? (
-          <div style={{ marginTop: 70, textAlign: 'center' }}>
-            <div style={{ fontSize: 14, marginBottom: 6 }}><b>{cur.name}</b></div>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 14 }}>
-              {cur.host}:{cur.port}{cur.database ? ` / ${cur.database}` : ''}
-            </div>
-            <Tag color={connState[cur.id] === 'failed' ? 'red' : 'default'}>
-              {connState[cur.id] === 'connecting' ? '连接中…' : connState[cur.id] === 'failed' ? '连接失败' : '未连接'}
-            </Tag>
-            <div style={{ marginTop: 12, fontSize: 12, color: '#bfbfbf' }}>
-              默认断开，点击左侧实例后面的「连接」建立会话
-            </div>
-          </div>
-        ) : (
+        {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : connState[cur.id] !== 'on' ? null : (
           <>
             <Space wrap size={6}>
               <b>{cur.name}</b>
