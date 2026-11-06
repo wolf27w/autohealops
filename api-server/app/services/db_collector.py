@@ -12,7 +12,7 @@ import json
 from datetime import datetime
 
 import aiomysql
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -196,6 +196,8 @@ async def collect_connection_slow_sql(conn_id: int) -> int:
     if not c.collect_enabled:
         logger.info("连接 %d 采集开关已关闭，跳过", conn_id)
         return 0
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        return 0  # agent 库的慢 SQL 由 agent 上报时一并落库
     conn_info = {
         "name": c.name,
         "host": c.host,
@@ -276,7 +278,11 @@ async def collect_connection_slow_sql(conn_id: int) -> int:
 async def scan_all_connections() -> int:
     """扫描所有数据库连接：采集慢 SQL + 健康指标（调度用，跳过关闭采集的连接）"""
     async with async_session() as session:
-        result = await session.execute(select(DBConnection).where(DBConnection.collect_enabled.is_(True)))
+        # agent 库由 agent 侧采集并上报，平台不做直连采集（否则会用空密码去连，全部失败）
+        result = await session.execute(select(DBConnection).where(
+            DBConnection.collect_enabled.is_(True),
+            or_(DBConnection.source.is_(None), DBConnection.source != "agent"),
+        ))
         conns = list(result.scalars())
     total = 0
     now = datetime.now()
@@ -318,7 +324,14 @@ def _build_conn_info(c: DBConnection, readonly: bool = False) -> dict:
 
 
 async def test_db_connection(c: DBConnection) -> dict:
-    """测试数据库连接（mysql/pg/oracle），优先用只读诊断账号。返回 {success, message}"""
+    """测试数据库连接（mysql/pg/oracle），优先用只读诊断账号。返回 {success, message}
+
+    agent 库：平台没有账密 → 经隧道让 agent 用本地配置执行 select 1。
+    """
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        from app.services.db_agent_service import agent_probe
+        ok, err = await agent_probe(c)
+        return {"success": ok, "message": "连接正常（经 agent 隧道）" if ok else f"经 agent 连接失败：{err}"}
     info = _build_conn_info(c, readonly=True)
     try:
         if c.db_type == "mysql":
@@ -1038,6 +1051,25 @@ async def _oracle_collect_health(conn_info: dict) -> list[dict]:
     return out
 
 
+
+async def _latest_snapshot_metrics(conn_id: int) -> list[dict]:
+    """agent 库：取最新一批快照作为"健康指标"（agent 每 10s 已上报，平台不重复采集）。"""
+    async with async_session() as session:
+        latest = (await session.execute(
+            select(func.max(DBMetricSnapshot.sampled_at)).where(DBMetricSnapshot.db_connection_id == conn_id)
+        )).scalar()
+        if not latest:
+            return []
+        rows = (await session.execute(
+            select(DBMetricSnapshot).where(
+                DBMetricSnapshot.db_connection_id == conn_id,
+                DBMetricSnapshot.sampled_at == latest,
+            )
+        )).scalars().all()
+    return [{"metric_type": r.metric_type, "metric_name": r.metric_name,
+             "value": r.value, "detail": r.detail or ""} for r in rows]
+
+
 async def collect_db_health(conn_id: int) -> list[dict]:
     """采集数据库健康指标（连接数/锁等待/表空间）并落 db_metric_snapshots 趋势表
 
@@ -1047,6 +1079,8 @@ async def collect_db_health(conn_id: int) -> list[dict]:
         c = await session.get(DBConnection, conn_id)
     if not c:
         return []
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        return await _latest_snapshot_metrics(conn_id)
     conn_info = _build_conn_info(c, readonly=True)
     if c.db_type == "mysql":
         metrics = await _mysql_collect_health(conn_info)

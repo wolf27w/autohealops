@@ -69,7 +69,13 @@ def _build_message(c: DBConnection, fault_type: str, err: str) -> str:
 
 
 async def _probe_connection(c: DBConnection) -> tuple[bool, str]:
-    """只读账号探活（connect + SELECT 1），返回 (成功, 原始错误)"""
+    """只读账号探活（connect + SELECT 1），返回 (成功, 原始错误)
+
+    agent 库：平台没有账密 → 经隧道由 agent 连库。
+    """
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        from app.services.db_agent_service import agent_probe
+        return await agent_probe(c)
     info = _build_conn_info(c, readonly=True)
     try:
         if c.db_type == "mysql":

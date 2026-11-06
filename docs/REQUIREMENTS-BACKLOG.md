@@ -913,7 +913,9 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
   agent 首次上报自动创建一条 `source=agent` 的记录（**不存密码**），后续按 key upsert。
 - 指标写入现有 `db_metric_snapshots`（增加 `source` 列，值 `agent`），慢 SQL 写入 `slow_sql_records`（同样标记来源）。
 - 「数据库监控」页统一展示直连库 + agent 库，带来源徽标（**满足 R4**）。
-- 页面上对 agent 库禁用「手动查询」（因为没有凭据）；健康检查/异常点照常可用（用最新上报数据，不走隧道实时查）。
+- agent 库**可以**手动查询：平台只下发 `{key, sql}`，agent 用本地账密执行（`QueryDatabaseByKey`），
+  只读白名单 + 200 行上限 + 审计；健康检查/探活同样走隧道（`select 1`），不用平台账密。
+  测试连接、告警探活、诊断采集对 agent 库统一走 agent，平台侧直连采集自动跳过（2026-11-06 修）。
 
 **验收**
 - agent 侧配 1 个 MySQL + 1 个 PG → 平台数据库监控页出现两条 `来源=agent` 的记录，指标曲线连续

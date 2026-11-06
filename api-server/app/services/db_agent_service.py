@@ -7,15 +7,37 @@
 - 唯一键 (cluster_id, agent_db_key)：改名只更新同一条记录，key 变视为新实例；
 - agent 配置里删掉的项 → 标 `removed`（不物理删除，历史指标仍可查）。
 """
+import asyncio
+import hashlib
+import json
 from datetime import datetime
 
 from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import DBConnection, DBMetricSnapshot
+from app.models import DBConnection, DBMetricSnapshot, SlowSQLRecord
 
 logger = get_logger("api-server.db_agent")
+
+
+async def agent_query(cluster_id: int, key: str, sql: str, timeout: float = 20.0) -> dict:
+    """经 agent 隧道执行只读 SQL（平台不持有账密）。返回 {columns, rows, truncated}。"""
+    from app import agent_gateway
+    raw = await asyncio.to_thread(
+        agent_gateway.call, int(cluster_id), "QueryDatabaseByKey",
+        json.dumps({"key": key, "sql": sql}).encode(), timeout,
+    )
+    return json.loads(raw)
+
+
+async def agent_probe(c) -> tuple[bool, str]:
+    """agent 库探活：等价 SELECT 1，走隧道由 agent 连库。返回 (成功, 错误)。"""
+    try:
+        await agent_query(int(c.cluster_id), c.agent_db_key or "", "select 1", 15.0)
+        return True, ""
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
 
 
 def _num(v, cast=float) -> float:
@@ -162,6 +184,24 @@ async def handle_db_metrics(cluster_id: int, rows: list[dict]) -> None:
 
             if not err and isinstance(r.get("metrics"), dict):
                 await _write_metrics(session, c.id, r["metrics"], now)
+            slow = r.get("slow_sql") or []
+            if not err and isinstance(slow, list) and slow:
+                for it in slow[:20]:
+                    if not isinstance(it, dict):
+                        continue
+                    text = str(it.get("sql_text") or "")[:2000]
+                    if not text:
+                        continue
+                    session.add(SlowSQLRecord(
+                        db_connection_id=c.id,
+                        digest=hashlib.sha1(text.encode("utf-8")).hexdigest()[:32],
+                        sql_text=text,
+                        schema_name=database,
+                        exec_count=int(_num(it.get("exec_count"), int)),
+                        avg_latency_ms=round(_num(it.get("avg_ms")), 3),
+                        max_latency_ms=round(_num(it.get("max_ms")), 3),
+                        sampled_at=now,
+                    ))
 
         # agent 配置里删掉的项 → 标 removed（保留历史，不物理删）
         for key, c in existing.items():
