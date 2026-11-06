@@ -918,7 +918,12 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 **验收**
 - agent 侧配 1 个 MySQL + 1 个 PG → 平台数据库监控页出现两条 `来源=agent` 的记录，指标曲线连续
 - 断开隧道时记录变灰/标 stale，恢复后自动续上
-- 平台库里查不到外部库的密码
+- 平台库里查不到外部库的密码（直查 `db_connections` 该行 `password_encrypted` 为空）
+- **集群管理的「集群数据库」入口已不存在**（下线完成，无残留按钮/接口/表）
+- **平台可对该库执行只读查询**：选 `source=agent` 的实例 → 输入 `select ...` → 经隧道由 agent 用本地凭据执行 → 返回结果 ≤200 行，审计里有记录
+- 非白名单 SQL（`delete/update/drop`）被拒，且拒绝行为进审计
+- **实例名同步**：只改 agent 配置里的 `name` → 平台实例名跟着变、不新增记录、指标不断；
+  从配置里删掉该项 → 平台该实例变「已下线」，历史数据仍在
 
 **估时**：MySQL 路径 1d（可复用现有 HandleHealth 采集逻辑）；PG 0.5d（依赖 R1 驱动）；平台落库+UI 0.5d。
 
@@ -929,7 +934,22 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 | **agent**（外部集群内的库）| agent 侧 Secret / env | agent 在集群内采集后经隧道上报 | **只在对方集群** |
 
 - 两者在「数据库监控」页**统一展示**，带来源徽标；指标/慢 SQL 同一套表、同一套趋势图口径。
-- 现有 `cluster_db_connections`（平台存凭据 + 经隧道临时查询）保留为**按需排查**入口，不做长期采集。
+- 🔴 **原 `cluster_db_connections`（平台存凭据 + 经隧道临时查询）直接下线**（老板 2026-11-06 定）：
+  删除集群详情「集群数据库」入口、`api/cluster_db.py` 接口与 `cluster_db_connections` 表；
+  **账密一律只在 agent 侧配置**，平台不再保存被管集群的数据库凭据。
+- 下线清单（开发时照此收口）：
+  1. 前端：`ClusterDetail` 顶部「集群数据库」按钮 + `ClusterDbModal.tsx` + `api.ts` 里 `listClusterDbConnections/createClusterDbConnection/deleteClusterDbConnection/queryClusterDb/health`
+  2. 后端：`api/cluster_db.py` 路由、`models/cluster_db_connection.py`、对应迁移（保留数据备份后再 drop）
+  3. agent：`agentdb/query.go`、`agentdb/health.go` 不随之删除——改为下面「平台经 agent 查询」使用
+
+**平台经 agent 查询（老板 2026-11-06 定：凭据不出集群，但平台要能查）**
+- 入口：「数据库监控」/「数据库故障」里 `source=agent` 的实例 →「查询」按钮（原集群数据库弹窗的能力，挪到库维度）
+- 链路：平台 `POST /api/v1/db-connections/{id}/query` → 该记录 `source=agent` → 按 `agent_db_key` 经隧道下发 → **agent 用自己本地配置的账号密码连库执行** → 结果回传
+- 只读白名单：`select / show / describe / explain`（复用 agent `agentdb.Query` 的校验）
+- 限制：最多返回 200 行、单次超时 30s、按集群+库限流
+- 审计：记录「谁、哪个集群、哪个库（key）、SQL 摘要、耗时、返回行数、成功/失败」，**不落查询结果**
+- 平台库里查不到该库的任何密码（验收项）
+
 
 **命名规则（老板 2026-11-05 定：名称以 agent 配置为准）**
 - agent 配置里每项必须有 `key`（稳定标识）和可选 `name`（显示名，缺省=key）：
@@ -938,7 +958,13 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
   ```
 - 平台侧唯一键 = **(cluster_id, source_key)**；显示名 = 配置里的 `name`（没有则 `key`）。
 - 页面上展示为「名称 + 来源集群」，避免两个集群都有 `biz-mysql` 时混淆。
-- 改名不影响归属（key 不变 → 更新同一条记录）；key 改了视为新数据库。
+- **实例名以 agent 配置为准并自动同步**（老板 2026-11-06 定）：
+  - agent 配置里的 `name`（缺省 = `key`）就是平台展示的实例名，**平台侧不可编辑**
+  - 改名（`name` 变）→ 平台**更新同一条记录的名称**，不新建实例、历史指标/慢 SQL 不断
+  - `key` 变了 → 视为新数据库（新建实例），旧记录按「已下线」处理
+  - agent 配置里删掉某一项 → 平台把该实例标记为 `removed`（页面显示「已下线」），
+    **不物理删除**，历史指标/慢 SQL 保留可查
+  - 平台手建的 `source=direct` 库不受影响，名称仍由平台维护
 - 直连库沿用现有 `db_connections.name`（全局唯一），来源标记 `direct`。
 
 ### R7 Agent 侧配置主机（虚拟机）并 SSH 代采 — 1~1.5d（老板 2026-11-05 定）
@@ -1284,6 +1310,9 @@ AI 只负责「起草建议」，创建权在人手上。
 | `push`（默认）| agent → 平台 9095（mTLS 长连接）| agent 能出站（公网/可出网内网）| ✅ 已实现 |
 | `pull` | 平台 → agent `:9100`（HTTPS + mTLS）| agent 不能出站、但平台能入站（DMZ/VPN/内网可达）| ❌ 待实现 |
 
+> **范围限定（老板 2026-11-06 定）：pull 接入模式只针对 agent 接入的集群**；
+> 平台进集群自接入（in-cluster）的集群不需要 pull。
+
 **agent 侧（pull 模式）**
 - 启动参数 `-mode=pull -pull-addr=:9100`（默认仍是 push）
 - 复用现有 agent CA 做**双向 mTLS**（平台验 agent 证书；agent 验平台证书 + Token 双因子）
@@ -1319,3 +1348,81 @@ AI 只负责「起草建议」，创建权在人手上。
 
 **估时**：agent 侧 pull 服务 + 指令队列 1.5~2d；平台拉取 worker + 落库复用 1~1.5d；
 交互类降级适配（终端/exec 排队）1~1.5d；联调 1d。
+
+
+### R15 工作负载级连续监控（Deployment × 容器，只读 Prometheus）— 1.5~2d（老板 2026-11-06 定）
+
+**背景**：现「容器监控」是按 Pod 查的（`pod_metrics` 以 `pod_name` 为维度），
+Deployment 滚动更新 / Pod 重建后曲线就断了——旧 Pod 的数据还在，新 Pod 换了名字，两条接不上。
+老板要的是：**不管容器怎么变，Deployment 的监控始终连续**。
+
+**老板口径（2026-11-06，已定）**
+1. 一个 Deployment 下**按容器各画一条线**（CPU、内存），拼接跨 Pod 生效。
+2. 网络同样每个容器一组（rx/tx 两条）；单容器 Pod = Pod 网络即容器网络（真实）；
+   **多容器 Pod 共享 netns，网络拆不开**，只给 Pod 级汇总并明确标注，不伪造数据。
+3. **只读 Prometheus，不自采、不落库**（平台零存储，`pod_metrics` 不动）。
+4. **一套数据、多处入口**：工作负载详情页、大屏都用同一接口，只是入口不同。
+
+**现状核实（2026-11-06 实测，三集群）**
+
+| 项 | 结论 |
+|---|---|
+| CPU / 内存 | `container_cpu_usage_seconds_total`、`container_memory_working_set_bytes` **有 `container` 标签**（测试 1499 / 生产 1175 条序列）✅ |
+| 网络 | `container_network_*` **无 `container` 标签**（uat/生产/测试均为 0 条），只挂在 pause 沙箱上 → 只能到 Pod 级 |
+| 归属 | `kube_pod_owner` 可用（810 条）；`kube_replicaset_owner` **不存在** → Deployment 归属用 RS 名前缀正则；StatefulSet/DaemonSet 直接按 `owner_kind` + `owner_name` |
+| `kube_pod_labels` | 存在但**没有任何 `label_*`**（kube-state-metrics 未开 label allowlist）→ 不能按 app 标签归属 |
+| 保留期 | 集群 Prometheus `--storage.tsdb.retention.time=7d`，满足 7 天需求 |
+| 阻塞项 | **agent 集群 range 通道不通**：`/prom/range` 报 `集群客户端不可用: client config 构建失败`（即时查询走隧道正常） |
+
+**PromQL（已实测通过）**
+
+```promql
+# CPU（每容器；内存同款，换 container_memory_working_set_bytes）
+sum by (container) (
+  rate(container_cpu_usage_seconds_total{namespace="stg",container!="",container!="POD"}[5m])
+  * on(namespace,pod) group_left(owner_name)
+    kube_pod_owner{namespace="stg",owner_kind="ReplicaSet",owner_name=~"rocketmq-dashboard-[a-z0-9]+"}
+)
+# → {container="rocketmq-dashboard"} 0.0107 core；内存 376864768 B
+
+# 网络（Pod 级，无容器维度）
+sum by (pod) (
+  rate(container_network_receive_bytes_total{namespace="stg",pod=~"rocketmq-dashboard-[a-z0-9]+-[a-z0-9]+"}[5m])
+)
+# → 66.29 B/s
+```
+
+**接口（唯一数据源）**
+```
+GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range=1h|24h|72h|168h
+→ { containers:[{name, points[]}], network:[{pod, points[]}], pods:[{name, first_seen, last_seen}] }
+```
+- 服务端统一构造 PromQL（kind 决定归属写法）、30~60s 结果缓存、range 上限 7 天
+- Prometheus HA（2 副本）固定择一，避免重复序列
+
+**入口（同一接口，多处复用）**
+1. 工作负载详情页 `ServiceDetail` →「监控」抽屉（每容器一条线 + Pod 段条）
+2. 大屏 `monitor-bigscreen.html`「服务 / 容器监控」tab → 选中服务后按 Deployment 渲染
+3. 预留：集群详情、告警详情跳转（不改数据层）
+
+**前置依赖（必须先做）**
+- agent 侧 `QueryPrometheusRange`：proto 加 RPC（Go + Python 双端重新生成）+ agent 实现（复用现有 Prometheus 代理，加 start/end/step）+ api-server 走隧道调用
+- 不修这个，所有入口都只能取当前值，画不出历史曲线
+
+**关键约束 / 风险**
+1. 历史长度 = 集群 Prometheus retention（7d），不是平台承诺；看"7 天"时最早数据可能刚好过期
+2. Prometheus 不可用 / PVC 写满 → 该集群监控无数据，页面需降级提示（不影响告警与自愈）
+3. **多容器 Pod 网络不拆**（共享 netns，拆了就是复制假数据）；UI 必须标注
+4. 单容器 Pod 的"容器网络"直接取 Pod 网络，数值真实，无需额外处理
+5. 平台不再为监控落库 → 该功能不依赖 `pod_metrics`，也不增加其行数
+
+**验收（照这个测）**
+- 触发一次 Deployment 滚动更新（改镜像或重启）：容器名不变的前提下，Deployment 监控曲线**连续不断**
+- 单容器 Deployment：每个容器出 rx/tx 两条线，数值 = 该 Pod 网络
+- 多容器 Deployment：网络只出一条 Pod 级汇总，且有「共享 netns」标注；CPU/内存仍按容器各一条
+- 7 天档位能正常出图（验证 retention 与 step 换算）
+- 对比功能上线前后 `pod_metrics` 行数：不增长（验证零存储）
+- 平台 `monitoring` 与集群 Prometheus 直查同一时刻数值一致（口径核验）
+
+**估时**：range 通道 0.5d（含 proto 双端生成、agent 重启验证）；接口 + 缓存 0.3d；
+前端组件（每容器多线 + 网络 + Pod 段条）0.5~0.8d；两处入口接入与联调 0.3d。合计 **1.5~2d**。
