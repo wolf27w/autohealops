@@ -927,6 +927,12 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 
 **估时**：MySQL 路径 1d（可复用现有 HandleHealth 采集逻辑）；PG 0.5d（依赖 R1 驱动）；平台落库+UI 0.5d。
 
+**边界（老板 2026-11-06 强调）**
+- **agent 配的是「agent 所在集群内」需要监控的库**（host 写集群内 Service 名/Pod IP，如 `mysql.stg.svc.cluster.local`）；
+- **平台自己的库 / 网络可达的库**走「直连」（`source=direct`，凭据在平台）；
+- 两者不要混：把平台库配到 agent 里没有意义（agent 只需要能连通本集群内的库）。
+- agent 侧建议用**只读账号**（SELECT / PROCESS / REPLICATION CLIENT），不要用 root。
+
 **两种数据库来源并存（老板 2026-11-05 定）**
 | 来源 | 配置在哪 | 采集方式 | 凭据存哪 |
 |---|---|---|---|
