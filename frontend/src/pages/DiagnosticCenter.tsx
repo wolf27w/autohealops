@@ -7,7 +7,7 @@ import {
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
 import DBMonitor from './DBMonitor'
-import DbExecModal from '../components/DbExecModal'
+import DbSqlConsole from '../components/DbSqlConsole'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL,
@@ -153,7 +153,7 @@ function ReportsTab() {
 
 function DBConnections() {
   const [conns, setConns] = useState<DBConnection[]>([])
-  const [execTarget, setExecTarget] = useState<{ id: number; name: string; database?: string; source?: string } | null>(null)
+  const [sqlTarget, setSqlTarget] = useState<{ id: number; name: string; database?: string; source?: string } | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
@@ -255,8 +255,8 @@ function DBConnections() {
               <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => runDiagnosis(r)}>诊断</Button>
               <Button size="small" onClick={() => testConn(r)}>测试连接</Button>
               <Button size="small" onClick={async () => { await collectSlowSQL(r.id); message.success('已触发采集') }}>采集</Button>
-              <Button size="small" danger disabled={(r as { source?: string }).source !== 'agent'}
-                onClick={() => setExecTarget({ id: r.id, name: r.name, database: r.database, source: (r as { source?: string }).source })}>执行</Button>
+              <Button size="small" disabled={(r as { source?: string }).source !== 'agent'}
+                onClick={() => setSqlTarget({ id: r.id, name: r.name, database: r.database, source: (r as { source?: string }).source })}>SQL 控制台</Button>
               <Button size="small" onClick={() => openModal(r)}>编辑</Button>
               <Popconfirm title="确认删除？" onConfirm={async () => { await deleteDBConnection(r.id); load() }}>
                 <Button size="small" danger>删除</Button>
@@ -297,7 +297,7 @@ function DBConnections() {
           </Form.Item>
         </Form>
       </Modal>
-          <DbExecModal conn={execTarget} onClose={() => setExecTarget(null)} />
+          <DbSqlConsole conn={sqlTarget} onClose={() => setSqlTarget(null)} />
     </div>
   )
 }
