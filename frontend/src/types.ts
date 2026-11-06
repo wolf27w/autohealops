@@ -572,6 +572,7 @@ export interface AICallLog {
 
 // 统一数据库连接视图模型（原 DiagnosticCenter.DBConn / Permissions.DBConn / ProjectManagement.DBConnection 三份）
 export interface DBConnection {
+  group_name?: string
   id: number
   name: string
   db_type?: string

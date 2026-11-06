@@ -10,6 +10,7 @@ export interface ConsoleConn {
   name: string
   db_type?: string
   database?: string
+  group_name?: string
   host?: string
   port?: number
   source?: string
@@ -99,6 +100,7 @@ export default function DbWorkbench({
   // 连接状态（会话内）：默认断开，点「连接」后建立；切换实例不影响已连接的库
   const [connState, setConnState] = useState<Record<number, 'off' | 'connecting' | 'on' | 'failed'>>({})
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ table: true, view: true })
+  const [closedGroups, setClosedGroups] = useState<Record<string, boolean>>({})
   const [editTaskId, setEditTaskId] = useState<number | null>(null)
   const [taskForm] = Form.useForm()
 
@@ -159,6 +161,21 @@ export default function DbWorkbench({
     })
     mirror.textContent = ''
   }
+
+  // 实例分组（空 = 未分组，排最后）
+  const groupedConns = useMemo(() => {
+    const m = new Map<string, ConsoleConn[]>()
+    for (const c of filtered) {
+      const g = (c.group_name || '').trim() || '未分组'
+      if (!m.has(g)) m.set(g, [])
+      m.get(g)!.push(c)
+    }
+    return [...m.entries()].sort((a, b) => {
+      if (a[0] === '未分组') return 1
+      if (b[0] === '未分组') return -1
+      return a[0].localeCompare(b[0], 'zh')
+    })
+  }, [filtered])
 
   const groups = useMemo(() => ([
     { key: 'table', label: '表', kind: 'table', items: schema.tables.map((t) => ({ name: t.name })) },
@@ -444,67 +461,79 @@ export default function DbWorkbench({
           onChange={(e) => setKw(e.target.value)} style={{ marginBottom: 8 }} />
         <div style={{ flex: 1, overflow: 'auto' }}>
           {filtered.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库" /> : (
-            <List
-              size="small"
-              dataSource={filtered}
-              renderItem={(c) => {
-                const active = c.id === selectedId
-                const agent = (c.source || 'direct') === 'agent'
-                return (
+            <>
+            {groupedConns.map(([gname, items]) => {
+              const collapsed = !!closedGroups[gname]
+              return (
+                <div key={gname} style={{ marginBottom: 6 }}>
                   <div
-                    onClick={() => { onSelect(c.id); reset() }}
-                    style={{
-                      padding: '6px 8px', borderRadius: 6, cursor: 'pointer', marginBottom: 2,
-                      background: active ? '#e6f4ff' : 'transparent',
-                      border: active ? '1px solid #91caff' : '1px solid transparent',
-                    }}
+                    onClick={() => setClosedGroups((m) => ({ ...m, [gname]: !collapsed }))}
+                    style={{ cursor: 'pointer', fontSize: 11, color: '#8c8c8c', padding: '2px 4px', userSelect: 'none' }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{
-                        width: 7, height: 7, borderRadius: 4, flex: '0 0 7px',
-                        background: connState[c.id] === 'on' ? '#52c41a'
-                          : connState[c.id] === 'failed' ? '#ff4d4f'
-                          : connState[c.id] === 'connecting' ? '#faad14' : '#d9d9d9',
-                      }} />
-                      <span style={{ fontWeight: active ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.name}>
-                        {c.name}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginLeft: 13, display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <Tag bordered={false} color={agent ? 'purple' : 'default'} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px' }}>
-                        {agent ? `agent·${c.cluster_id ?? '-'}` : '直连'}
-                      </Tag>
-                      <span>{c.db_type}{c.database ? ` / ${c.database}` : ''}</span>
-                      {c.status === 'removed' && <Tag color="red" style={{ fontSize: 10, lineHeight: '16px' }}>已下线</Tag>}
-                      {(counts[c.id] || 0) > 0 && (
-                        <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px' }}>任务 {counts[c.id]}</Tag>
-                      )}
-                      <span style={{ flex: 1 }} />
-                      <Tooltip title="定时任务">
-                        <ClockCircleOutlined
-                          style={{ fontSize: 12, color: (counts[c.id] || 0) > 0 ? '#1677ff' : '#bfbfbf' }}
-                          onClick={(e) => { e.stopPropagation(); onSelect(c.id); openTasks(c.id) }}
-                        />
-                      </Tooltip>
-                      <Button
-                        size="small"
-                        type={connState[c.id] === 'on' ? 'default' : 'primary'}
-                        loading={connState[c.id] === 'connecting'}
-                        style={{ height: 20, padding: '0 6px', fontSize: 11 }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onSelect(c.id)
-                          if (connState[c.id] === 'on') disconnect(c)
-                          else connect(c)
+                    {collapsed ? '▸' : '▾'} {gname}（{items.length}）
+                  </div>
+                  {!collapsed && items.map((c) => {
+                    const active = c.id === selectedId
+                    const agent = (c.source || 'direct') === 'agent'
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => { onSelect(c.id); reset() }}
+                        style={{
+                          padding: '5px 6px', borderRadius: 6, cursor: 'pointer', marginBottom: 2,
+                          background: active ? '#e6f4ff' : 'transparent',
+                          border: active ? '1px solid #91caff' : '1px solid transparent',
                         }}
                       >
-                        {connState[c.id] === 'on' ? '断开' : '连接'}
-                      </Button>
-                    </div>
-                  </div>
-                )
-              }}
-            />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{
+                            width: 7, height: 7, borderRadius: 4, flex: '0 0 7px',
+                            background: connState[c.id] === 'on' ? '#52c41a'
+                              : connState[c.id] === 'failed' ? '#ff4d4f'
+                              : connState[c.id] === 'connecting' ? '#faad14' : '#d9d9d9',
+                          }} />
+                          <span style={{ fontWeight: active ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.name}>
+                            {c.name}
+                          </span>
+                          <span style={{ flex: 1 }} />
+                          <Tooltip title="定时任务">
+                            <ClockCircleOutlined
+                              style={{ fontSize: 12, color: (counts[c.id] || 0) > 0 ? '#1677ff' : '#bfbfbf' }}
+                              onClick={(e) => { e.stopPropagation(); onSelect(c.id); openTasks(c.id) }}
+                            />
+                          </Tooltip>
+                          <Button
+                            size="small"
+                            type={connState[c.id] === 'on' ? 'default' : 'primary'}
+                            loading={connState[c.id] === 'connecting'}
+                            style={{ height: 20, padding: '0 6px', fontSize: 11 }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onSelect(c.id)
+                              if (connState[c.id] === 'on') disconnect(c)
+                              else connect(c)
+                            }}
+                          >
+                            {connState[c.id] === 'on' ? '断开' : '连接'}
+                          </Button>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#8c8c8c', marginLeft: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <Tag bordered={false} color={agent ? 'purple' : 'default'} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px' }}>
+                            {agent ? `agent·${c.cluster_id ?? '-'}` : '直连'}
+                          </Tag>
+                          <span>{c.db_type}</span>
+                          {(counts[c.id] || 0) > 0 && (
+                            <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px' }}>任务 {counts[c.id]}</Tag>
+                          )}
+                          {c.status === 'removed' && <Tag color="red" style={{ fontSize: 10, lineHeight: '16px' }}>已下线</Tag>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+            </>
           )}
         </div>
       </div>

@@ -36,6 +36,8 @@ class DBConnection(Base):
     inspect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 定时巡检 cron（分 时 日 月 周；空=不定时，仅手动点击巡检）
     inspect_cron: Mapped[str] = mapped_column(String(100), default="")
+    # 实例分组（空 = 未分组）
+    group_name: Mapped[str] = mapped_column(String(50), default="", server_default="")
     status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/connected/failed/removed
     # ---- agent 来源（R6，2026-11-06）----
     # direct = 平台直连采集（凭据存平台）；agent = agent 侧配置后上报（平台不存凭据）

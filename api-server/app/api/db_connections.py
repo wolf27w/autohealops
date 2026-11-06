@@ -49,6 +49,7 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
         "collect_enabled": bool(c.collect_enabled),
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",
+        "group_name": getattr(c, "group_name", "") or "",
         "status": c.status, "created_at": str(c.created_at),
         # R6：agent 来源（direct=平台直连；agent=agent 侧配置上报，平台不存凭据）
         "source": getattr(c, "source", "direct") or "direct",
@@ -100,6 +101,7 @@ async def create_connection(payload: dict, user=Depends(require_admin)):
             collect_enabled=bool(payload.get("collect_enabled", True)),
             inspect_enabled=bool(payload.get("inspect_enabled", True)),
             inspect_cron=(payload.get("inspect_cron") or "").strip(),
+            group_name=(payload.get("group_name") or "").strip()[:50],
             status="unknown",
             created_by=user.id,
         )
@@ -619,7 +621,7 @@ async def update_connection(conn_id: int, payload: dict, user=Depends(require_ad
         if not c:
             return {"code": 404, "message": "连接不存在", "data": None}
         for k in ("name", "host", "port", "database", "username", "readonly_username",
-                  "slow_sql_threshold", "collect_interval", "collect_enabled", "inspect_enabled", "inspect_cron"):
+                  "slow_sql_threshold", "collect_interval", "collect_enabled", "inspect_enabled", "inspect_cron", "group_name"):
             if k in payload:
                 if k == "inspect_cron":
                     setattr(c, k, (payload[k] or "").strip())

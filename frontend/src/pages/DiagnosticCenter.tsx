@@ -262,6 +262,9 @@ function DBConnections() {
       <Modal title={editing ? '编辑数据库连接' : '添加数据库连接'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="group_name" label="分组" tooltip="实例列表按分组展示；留空=未分组">
+            <Input placeholder="如 生产 / 测试 / 报表库" />
+          </Form.Item>
           <Form.Item name="db_type" label="类型" rules={[{ required: true }]}>
             <Select options={['mysql', 'pg', 'oracle'].map((t) => ({ value: t, label: t }))} />
           </Form.Item>
