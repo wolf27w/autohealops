@@ -1,58 +1,51 @@
 # -*- coding: utf-8 -*-
-"""R22 回归：手工重启注解（restartedAt）只应在 5 分钟宽限期内忽略，不能永久排除。
+"""R22 回归：默认没有宽限期（重启就报）；只有连续异常重启 3 次后才进入宽限期。
 
-背景：注解会从 Deployment 模板继承到每个新 Pod；旧逻辑见到注解就 `continue`（且不写基线），
-导致这些服务的重启永不告警（生产 efreight-afbase 15:22 liveness 重启漏报）。
+背景（老板 2026-11-06 口径）：
+- 任何服务默认**不允许宽限期**：只要重启次数增加就应告警
+- 同一 Pod 连续异常重启达到 3 次 → 进入宽限期（抑制后续告警）；恢复后解除
+- 手工重启注解（restartedAt）**不再排除**（旧逻辑导致生产 efreight-afbase 漏报）
 
 运行：cd api-server && ./.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 """
 import unittest
-from datetime import datetime, timedelta, timezone
 
-from app.services.pod_restart_service import _detect_restart_diffs
+from app.services.pod_restart_service import GRACE_THRESHOLD, _detect_restart_diffs
 
 
 def _pod(name="app-1", ns="ns", restarts=1, restarted_at=""):
     return {"name": name, "namespace": ns, "restart_count": restarts, "restarted_at": restarted_at}
 
 
-class TestRestartAnnotationGrace(unittest.TestCase):
-    NOW = datetime(2026, 11, 6, 7, 40, 0, tzinfo=timezone.utc)
-
-    def test_within_grace_skips_alert_but_records_baseline(self):
-        ts = (self.NOW - timedelta(minutes=2)).isoformat()
-        inc, base = _detect_restart_diffs([_pod(restarts=1, restarted_at=ts)], {}, now=self.NOW)
-        self.assertEqual(inc, [])
-        self.assertEqual(base.get("ns/app-1"), 1)  # 关键：基线要写
-
-    def test_after_grace_tracks_normally(self):
-        ts = (self.NOW - timedelta(minutes=30)).isoformat()
+class TestRestartNoGraceByDefault(unittest.TestCase):
+    def test_annotation_does_not_exclude(self):
+        """有手工重启注解也照常告警（旧逻辑会整条跳过）"""
         inc, base = _detect_restart_diffs(
-            [_pod(restarts=2, restarted_at=ts)], {"ns/app-1": 1}, now=self.NOW)
+            [_pod(restarts=2, restarted_at="2026-11-06T12:10:01+08:00")], {"ns/app-1": 1})
         self.assertEqual(len(inc), 1)
         self.assertEqual(inc[0][1:], (1, 2))
         self.assertEqual(base.get("ns/app-1"), 2)
 
-    def test_no_annotation_normal(self):
-        inc, base = _detect_restart_diffs([_pod(restarts=3)], {"ns/app-1": 2}, now=self.NOW)
-        self.assertEqual(len(inc), 1)
-        self.assertEqual(base.get("ns/app-1"), 3)
-
-    def test_invalid_annotation_not_excluded(self):
-        inc, base = _detect_restart_diffs(
-            [_pod(restarts=2, restarted_at="not-a-time")], {"ns/app-1": 1}, now=self.NOW)
+    def test_invalid_annotation_still_tracks(self):
+        inc, _ = _detect_restart_diffs(
+            [_pod(restarts=2, restarted_at="not-a-time")], {"ns/app-1": 1})
         self.assertEqual(len(inc), 1)
 
     def test_first_seen_no_alert(self):
-        inc, base = _detect_restart_diffs([_pod(restarts=5)], {}, now=self.NOW)
+        inc, base = _detect_restart_diffs([_pod(restarts=5)], {})
         self.assertEqual(inc, [])
         self.assertEqual(base.get("ns/app-1"), 5)
 
-    def test_zulu_suffix_supported(self):
-        ts = (self.NOW - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        inc, base = _detect_restart_diffs([_pod(restarts=1, restarted_at=ts)], {}, now=self.NOW)
+    def test_increment_detected(self):
+        inc, _ = _detect_restart_diffs([_pod(restarts=3)], {"ns/app-1": 2})
+        self.assertEqual(len(inc), 1)
+
+    def test_no_change_no_alert(self):
+        inc, _ = _detect_restart_diffs([_pod(restarts=2)], {"ns/app-1": 2})
         self.assertEqual(inc, [])
-        self.assertIn("ns/app-1", base)
+
+    def test_grace_threshold_is_three(self):
+        self.assertEqual(GRACE_THRESHOLD, 3)
 
 
 if __name__ == "__main__":

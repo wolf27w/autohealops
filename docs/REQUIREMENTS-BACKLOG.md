@@ -1685,7 +1685,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R22 修复：手工重启过的 Deployment 永不告警（restartedAt 注解导致排除） — ✅ 已修复（2026-11-06，宽限期 5 分钟）
+### R22 修复：手工重启过的 Deployment 永不告警（restartedAt 注解导致排除） — ✅ 已修复（2026-11-06）
 
 **现象**：生产 `prod-eft/efreight-afbase` 于 15:22:55 因 liveness 探针失败被 kill 并重启（restartCount 0→1），
 平台**没有建告警、没有通知**。
@@ -1703,23 +1703,19 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 生产最近一条 PodRestart* 告警是 11:02（另一批 Pod）；15:22 这次没有任何记录
 - 生产共 25 个 Pod 带该注解（prod-eft 12 个），全部在排除名单里
 
-**修复方案（已按老板口径落地，宽限期 5 分钟）**
-1. **宽限期 5 分钟**而不是永久排除：注解时间后 5 分钟内忽略重启；超过则恢复正常跟踪
-2. 无论是否忽略，**都要写基线**（避免下一次增量因"首次发现"静默）
-3. 判据补充：`lastState.terminated.reason=Error + exitCode=137` 且事件里有 `probe failed` → 即使有注解、超过宽限期也要报
-4. 平台自身「滚动重启」不要往模板写 restartedAt（用 image/annotation hash 触发），从源头减少这类注解
-
-**验收**
-- 给一个 Deployment 手工 `kubectl rollout restart` → 宽限期内重启不告警；宽限期后再发生 liveness 失败重启 → **能告警并通知**
-- 没有注解的 Deployment 行为不变
-- Redis 基线中始终包含被注解过的 Pod
+**修复口径（老板 2026-11-06 最终定）**
+1. **默认任何服务都没有宽限期**：重启次数增加就告警，不再因 `restartedAt` 注解跳过
+2. **连续异常重启 3 次**后，该 Pod 进入**宽限期 10 分钟**：期间不再重复告警（防风暴）
+3. **恢复即解除**：Pod ready 且本轮无新增量 → 清零连续计数、删除宽限期，下次异常照常告警
+4. 连续计数/宽限期按 `Pod（namespace/name）` 粒度存在 Redis：
+   `podrestart:streak:{cluster}:{ns/pod}`（TTL 1h）、`podrestart:grace:{cluster}:{ns/pod}`（TTL 10min）
 
 **影响面**：生产 25 个 Pod；测试环境同类注解也会被排除
 
 **修复记录（2026-11-06）**
-- `pod_restart_service._detect_restart_diffs`：解析 `restarted_at`（支持 `+08:00` / `Z`）→ 只有 5 分钟宽限期内才跳过；
-  宽限期内也写基线；解析失败按“无注解”正常跟踪
-- 新增回归测试 `tests/test_pod_restart_annotation.py`（6 例：宽限期内/超期/无注解/非法时间/首次发现/Z 后缀）
-- 验证：重启后下一轮扫描，`podrestart:base:3` 已包含此前被排除的 `prod-eft/efreight-afbase-9d4b6565-*`（809 条基线）
-  之后这些 Pod 再发生重启即可正常告警
+- `_detect_restart_diffs`：**移除** restartedAt 排除逻辑（注解不再影响判定，仍照常写基线）
+- `_process_increment`：宽限期内直接返回；否则建单→累计连续次数；达到 3 次后设置 10 分钟宽限期（本次仍告警）
+- `scan_cluster` 恢复分支：Pod ready 且无新增量时删除 streak/grace 键
+- 回归测试 `tests/test_pod_restart_annotation.py` 6 例（注解不排除/非法注解/首次发现/增量/无变化/阈值=3）
+- 验证：`podrestart:base:3` 已包含此前被排除的 `prod-eft/efreight-afbase-9d4b6565-*`（809 条基线）
 

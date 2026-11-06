@@ -98,35 +98,21 @@ def _build_message(pod: dict, fault_type: str, prev_r: int, restart: int, extra:
     return msg
 
 
-RESTART_GRACE = timedelta(minutes=5)  # 手工重启（restartedAt 注解）后的宽限期
-
-
-def _restart_annotation_time(raw: str):
-    """解析 kubectl/kubesphere 的 restartedAt 注解；解析失败返回 None"""
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        t = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if t.tzinfo is None:
-        t = t.replace(tzinfo=timezone.utc)
-    return t
+# 连续异常重启达到 N 次 → 进入宽限期（抑制告警，避免风暴）；恢复后解除
+GRACE_THRESHOLD = 3
+GRACE_TTL_SECONDS = 600  # 宽限期 10 分钟；期间再有重启不再告警
 
 
 def _detect_restart_diffs(pods: list[dict], baseline: dict[str, int],
                           now=None) -> tuple[list[tuple[dict, int, int]], dict[str, int]]:
     """纯函数：对比重启计数基线，返回 (需处理增量 [(pod, prev_r, restart), ...], 新基线)
 
-    规则（2026-11-06 修 R22）：
-    - 手工重启注解（restartedAt）**只在 5 分钟宽限期内**忽略；超过宽限期恢复正常跟踪
-      （注解会从 Deployment 模板继承到每个 Pod，永久排除会导致这些服务永远不告警）
-    - 宽限期内也**写基线**，避免宽限期结束后第一次增量被当成「首次发现」静默
-    - 首次发现（无基线）→ 只记基线，本轮不上报
+    规则（老板 2026-11-06 定）：
+    - **默认任何服务都没有宽限期**：只要重启次数增加就上报（不再因 restartedAt 注解跳过）
+    - 首次发现（无基线，含滚动发布新 Pod）→ 只记基线，本轮不上报
     - restart > prev → 增量上报
+    - 「连续 3 次」的宽限期在 `_process_increment` 里按 Pod 计数处理
     """
-    now = now or datetime.now(timezone.utc)
     new_baseline: dict[str, int] = {}
     increments: list[tuple[dict, int, int]] = []
     for p in pods:
@@ -135,17 +121,6 @@ def _detect_restart_diffs(pods: list[dict], baseline: dict[str, int],
             continue
         field = f"{p.get('namespace', '')}/{name}"
         restart = int(p.get("restart_count") or 0)
-
-        ra_time = _restart_annotation_time(p.get("restarted_at") or "")
-        if ra_time is not None:
-            try:
-                within_grace = timedelta(0) <= (now - ra_time) <= RESTART_GRACE
-            except TypeError:
-                within_grace = False
-            if within_grace:
-                new_baseline[field] = restart  # 宽限期内不报，但记基线
-                continue
-
         prev = baseline.get(field)
         if prev is None:
             new_baseline[field] = restart  # 首次发现记基线
@@ -156,146 +131,28 @@ def _detect_restart_diffs(pods: list[dict], baseline: dict[str, int],
     return increments, new_baseline
 
 
-async def _describe_pod(cluster_id: int, namespace: str, pod_name: str) -> str:
-    """拉取 Pod describe（含事件）作为探针失败判定 + 诊断上下文"""
-    r = await executor_client.acall(
-        executor_client.execute_command, cluster_id, namespace, f"describe pod {pod_name}"
-    )
-    return r.get("output", "") if r.get("success") else ""
+def _streak_key(cluster_id: int, field: str) -> str:
+    return f"podrestart:streak:{cluster_id}:{field}"
 
 
-async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
-                        restart: int, prev_r: int, extra: str = "") -> int:
-    """建单/聚合：同 Deployment 同 fault_type 在途不重复建单；返回新建告警 id（0=在途聚合未新建）
-
-    按 deployment_name 维度聚合（与 alerts.dedup_key 唯一索引 + watcher 去重口径一致，
-    避免同服务多 Pod 同时 OOM 时撞 1062 唯一索引）；聚合时把 resource_name 更新为最新出问题的 Pod。
-    """
-    now = datetime.now()
-    dep = infer_deployment_name(pod["name"])
-    async with async_session() as session:
-        # 合并（2026-10-29）：活跃告警 → 计数；窗口内已解决的同故障 → 复用 reopen，
-        # 避免「每轮重启一条告警」（实测同一 Pod 7 天 24 条，全是秒关秒开）
-        from app.services import alert_merge
-        row, reopen = await alert_merge.find_merge_target(
-            session, cluster_id=cluster_id, resource_type="pod", fault_type=fault_type,
-            namespace=pod["namespace"], deployment_name=dep, resource_name=pod["name"])
-        if row:
-            alert_merge.apply_merge(row, message=_build_message(pod, fault_type, prev_r, restart, extra),
-                                    resource_name=pod["name"], reopen=reopen, now=now)
-            await session.commit()
-            if reopen:
-                logger.info("Pod 重启告警复发合并：%s %s 复用 #%d（累计 %d 次）",
-                            dep, fault_type, row.id, row.event_count)
-            return 0
-        alert = Alert(
-            cluster_id=cluster_id,
-            resource_type="pod",
-            resource_name=pod["name"],
-            deployment_name=dep,
-            namespace=pod["namespace"],
-            fault_type=fault_type,
-            severity="high",
-            status="pending",
-            message=_build_message(pod, fault_type, prev_r, restart, extra),
-            event_count=1,
-            manual_required=False,  # N5：诊断+通知后结束，不转人工
-            occurred_at=now.strftime("%Y-%m-%d %H:%M:%S"),
-        )
-        session.add(alert)
-        try:
-            await session.commit()
-        except IntegrityError:
-            # 唯一索引竞态兜底 → 转聚合，不重复建单（只把「已存在」当聚合）
-            await session.rollback()
-            return 0
-        except Exception as e:  # noqa: BLE001
-            # 其它异常（DB 故障等）不静默吞：回滚并抛给上层感知，避免静默丢告警
-            await session.rollback()
-            logger.error("Pod 重启告警建单失败（非唯一冲突）: %s", e)
-            raise
-        await session.refresh(alert)
-        return alert.id
-
-
-async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
-                               fault_type: str, prev_r: int, restart: int) -> None:
-    """AI 诊断重启原因 → 结论写入告警 message → 发告警通知"""
-    async with async_session() as session:
-        alert = await session.get(Alert, alert_id)
-    if not alert:
-        return
-
-    events_text = await _describe_pod(cluster_id, pod["namespace"], pod["name"])
-    logs_text = await fetch_pod_logs(cluster_id, pod["namespace"], pod["name"])
-    alert_data = {
-        "alert_id": alert_id,
-        "cluster_name": str(cluster_id),
-        "namespace": pod["namespace"],
-        "pod_name": pod["name"],
-        "fault_type": _DIAGNOSIS_FAULT_TYPE.get(fault_type, fault_type),
-        "severity": alert.severity,
-        "restart_count": str(restart),
-        "status_info": f"重启次数 {prev_r} -> {restart}",
-        "recent_events": (events_text or "")[:3000],
-        "recent_logs": (logs_text or "")[:4000],
-    }
-    # 指标趋势（2026-10-29）：同一 Pod 的 CPU/内存/重启/limit 使用率，避免 AI 只能看日志猜
-    try:
-        from app.services import diagnosis_metrics
-        metrics_text = await diagnosis_metrics.pod_metrics_trend(cluster_id, pod["namespace"], pod["name"])
-        if metrics_text:
-            alert_data["metrics_trend"] = metrics_text
-    except Exception as e:  # noqa: BLE001
-        logger.debug("采集 Pod 指标趋势失败: %s", e)
-    # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测（N5 本就是探针/OOM 专项，最需要这个）
-    try:
-        from app.services import probe_audit
-        probe = await probe_audit.audit_pod(cluster_id, pod["namespace"], pod["name"])
-        if probe.get("text"):
-            alert_data["probe_evidence"] = probe["text"]
-    except Exception as e:  # noqa: BLE001
-        logger.debug("采集探针证据失败: %s", e)
-    trace_id = generate_trace_id()
-
-    # AI 诊断（ai-service 侧落 AIDiagnosisResult，与 api-server 共享同一张表）
-    # 诊断结论只入库（供告警详情/故障诊断页查看），**不追加进告警 message**（避免通知里骚扰老板）
-    # 诊断去重（2026-10-29）：N5 每次重启增量都会走到这里，原来每来一次就新增一条诊断
-    # （同一 Pod 同一故障最多 15 条）。现在窗口内已有结论就直接复用，不再调 AI。
-    reused = None
-    try:
-        from app.services import diagnosis_reuse
-        # ① 同一告警已经诊断过（N5 聚合告警：重启计数又涨一次）→ 永不复诊，避免同一条告警刷十几条诊断
-        reused = await diagnosis_reuse.find_alert_diagnosis(alert_id)
-        if not reused:
-            # ② 其他告警但同一 Pod 同故障，且在复用窗口内 → 也算同一问题
-            reused = await diagnosis_reuse.find_reusable_diagnosis(
-                cluster_id, pod["namespace"], pod["name"], fault_type
-            )
-    except Exception as e:  # noqa: BLE001
-        logger.debug("诊断复用查询失败: %s", e)
-    if reused:
-        logger.info("Pod 重启告警 %d 复用同 Pod 同故障诊断 #%d（窗口内，跳过 AI）", alert_id, reused[0].id)
-    else:
-        try:
-            diagnosis = await ai_client.diagnose(alert_id, alert_data, {}, trace_id)
-            if not (diagnosis.get("root_cause") or diagnosis.get("suggestions")):
-                logger.info("Pod 重启告警 %d 诊断无结论（模型返回为空）", alert_id)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Pod 重启告警 %d AI 诊断失败: %s", alert_id, e)
-
-    # 通知：与集群/资源/DB 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
-    try:
-        async with async_session() as session:
-            a = await session.get(Alert, alert_id)
-        if a:
-            await notification_service.notify_alert(a)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Pod 重启告警 %d 通知失败: %s", alert_id, e)
+def _grace_key(cluster_id: int, field: str) -> str:
+    return f"podrestart:grace:{cluster_id}:{field}"
 
 
 async def _process_increment(cluster_id: int, pod: dict, restart: int, prev_r: int) -> int:
-    """处理一次重启增量：判定 OOM/探针原因 → 建单 → 诊断+通知；返回是否新建告警"""
+    """处理一次重启增量：判定 OOM/探针原因 → 建单 → 诊断+通知；返回是否新建告警
+
+    宽限期（老板 2026-11-06 定）：默认无宽限期；同一 Pod 连续异常重启达到 3 次后进入宽限期，
+    宽限期内不再告警；Pod 恢复（ready 且无新增量）时清零，恢复告警。
+    """
+    field = f"{pod.get('namespace', '')}/{pod.get('name', '')}"
+    gkey = _grace_key(cluster_id, field)
+    try:
+        if await redis_pool.exists(gkey):
+            return 0  # 宽限期内：抑制
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取重启宽限期失败: %s", e)
+
     oom_names = _oom_container_names(pod)
     if oom_names:
         fault_type = POD_RESTART_OOM
@@ -311,6 +168,20 @@ async def _process_increment(cluster_id: int, pod: dict, restart: int, prev_r: i
     alert_id = await _upsert_alert(cluster_id, pod, fault_type, restart, prev_r, extra)
     if alert_id == 0:
         return 0
+
+    # 连续异常重启计数：达到 3 次 → 本次仍告警，之后进入宽限期（抑制后续）
+    streak = 1
+    try:
+        skey = _streak_key(cluster_id, field)
+        streak = int(await redis_pool.incr(skey))
+        await redis_pool.expire(skey, 3600)
+        if streak >= GRACE_THRESHOLD:
+            await redis_pool.set(gkey, str(streak), ex=GRACE_TTL_SECONDS)
+            logger.info("Pod %s 连续异常重启 %d 次，进入宽限期 %ds（后续抑制告警）",
+                        field, streak, GRACE_TTL_SECONDS)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("重启连续计数失败: %s", e)
+
     await _diagnose_and_notify(alert_id, cluster_id, pod, fault_type, prev_r, restart)
     return 1
 
@@ -415,8 +286,13 @@ async def scan_cluster(cluster_id: int) -> int:
     # 恢复关闭：ready 且本轮无增量 → 关闭在途告警
     for p in pods:
         field = f"{p.get('namespace', '')}/{p.get('name', '')}"
-        if p.get("restarted_at") or field in incremented or not p.get("ready"):
+        if field in incremented or not p.get("ready"):
             continue
+        # 恢复：清零连续计数与宽限期，下次异常照常告警
+        try:
+            await redis_pool.delete(_streak_key(cluster_id, field), _grace_key(cluster_id, field))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("清理重启连续计数失败: %s", e)
         try:
             await _resolve_pod_alerts(cluster_id, p)
         except Exception as e:  # noqa: BLE001
