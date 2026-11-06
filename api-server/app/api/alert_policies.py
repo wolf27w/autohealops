@@ -80,6 +80,7 @@ DEFAULT_POLICIES = [
     {"fault_type": "NodeNotReady", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "critical"},
     {"fault_type": "PendingTimeout", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "medium"},
     {"fault_type": "ImagePullBackOff", "category": "C", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "medium"},
+    {"fault_type": "PodEvicted", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "medium"},
     {"fault_type": "ErrImagePull", "category": "C", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "medium"},
     {"fault_type": "MemoryPressure", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},
     {"fault_type": "DiskPressure", "category": "B", "observe_seconds": 0, "restart_threshold": 0, "time_window_seconds": 0, "severity": "high"},

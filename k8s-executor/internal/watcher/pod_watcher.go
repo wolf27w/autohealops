@@ -29,6 +29,8 @@ const (
 	terminatingForceDel  = 60 * time.Second // 告警后 60s 仍未删除 → 自动强删（force + grace 0）
 	terminatingScanTick  = 20 * time.Second // Terminating 扫描间隔
 
+	evictedAlertMaxAge = 24 * time.Hour // Evicted 只报最近 24h 内创建的（历史遗留对象不刷屏）
+
 	terminatingPageSize   = int64(500) // Terminating 分页拉取：每页 Pod 数（单次响应体小，降低超时/connection reset）
 	terminatingMaxRetries = 3          // 单页 List 瞬时错误最大重试次数
 )
@@ -69,6 +71,10 @@ type PodWatcher struct {
 	policies map[string]*policyConfig
 	// Terminating 扫描进行中标志（防重叠：上一轮未结束时跳过本轮）
 	terminatingScanning int32
+	// Evicted 去重与节流（2026-11-06）：UID 去重防重复上报；按 workload 10 分钟节流防刷屏
+	evictedMu       sync.Mutex
+	evictedSeen     map[string]time.Time
+	evictedThrottle map[string]time.Time
 }
 
 // NewPodWatcher 创建 Pod watcher
@@ -76,8 +82,10 @@ func NewPodWatcher(clusterID uint, clientset *kubernetes.Clientset, logger *zap.
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &PodWatcher{
 		clusterID: clusterID, clientset: clientset, ctx: ctx, cancel: cancel, logger: logger,
-		observed: make(map[string]*observedFault),
-		policies: make(map[string]*policyConfig),
+		observed:        make(map[string]*observedFault),
+		policies:        make(map[string]*policyConfig),
+		evictedSeen:     make(map[string]time.Time),
+		evictedThrottle: make(map[string]time.Time),
 	}
 	w.loadPolicies()
 	return w
@@ -283,6 +291,23 @@ func (w *PodWatcher) handlePodEvent(event watch.Event) {
 			return
 		}
 	}
+	// Evicted：Pod 已被 kubelet 驱逐（节点磁盘/内存压力等）。
+	// 这类 Pod 容器状态是 Terminated（不是 Waiting），phase 是 Failed（不是 Pending）
+	// → 原有两个分支都命中不了，必须单独识别（2026-11-06 加）
+	if pod.Status.Phase == corev1.PodFailed && pod.Status.Reason == "Evicted" {
+		// 历史遗留的 Evicted 对象（几天前被驱逐、一直没清理）不告警，避免一次刷几十条
+		if time.Since(pod.CreationTimestamp.Time) > evictedAlertMaxAge {
+			return
+		}
+		if w.shouldReportEvicted(pod) {
+			msg := fmt.Sprintf("Pod %s in namespace %s was evicted (node=%s): %s",
+				pod.Name, pod.Namespace, pod.Spec.NodeName, strings.TrimSpace(pod.Status.Message))
+			t := pod.CreationTimestamp.Time
+			w.emitAlert(pod, "PodEvicted", "medium", msg, &t)
+		}
+		return
+	}
+
 	// 检测 Pending 超过阈值（B 类直接报；启动慢的窗口内不打扰）
 	if pod.Status.Phase == corev1.PodPending && time.Since(pod.CreationTimestamp.Time) > pendingTimeout {
 		t := pod.CreationTimestamp.Time
@@ -397,6 +422,44 @@ func (w *PodWatcher) emitPendingAlert(item *observedFault) {
 func (w *PodWatcher) emitAutoResolved(item *observedFault) {
 	w.createAlert(item.namespace, item.podName, item.faultType, item.severity,
 		item.message+"（已自行恢复，无需处理）", item.occurredAt, "resolved")
+}
+
+// shouldReportEvicted Evicted 上报判定：
+//   - 同一个 Pod（UID）24h 内只报一次（watch 重连/初始 list 会重复看到终止态对象）
+//   - 同一个 workload（namespace + deployment）10 分钟内只报一次，避免一次驱逐几十个 Pod 刷屏
+func (w *PodWatcher) shouldReportEvicted(pod *corev1.Pod) bool {
+	now := time.Now()
+	uid := string(pod.UID)
+	if uid == "" {
+		uid = pod.Namespace + "/" + pod.Name
+	}
+	wlKey := pod.Namespace + "/" + inferDeploymentName(pod.Name)
+
+	w.evictedMu.Lock()
+	defer w.evictedMu.Unlock()
+
+	// 顺手清理过期（>24h），避免 map 无限增长
+	for k, t := range w.evictedSeen {
+		if now.Sub(t) > 24*time.Hour {
+			delete(w.evictedSeen, k)
+		}
+	}
+	for k, t := range w.evictedThrottle {
+		if now.Sub(t) > 10*time.Minute {
+			delete(w.evictedThrottle, k)
+		}
+	}
+
+	if _, seen := w.evictedSeen[uid]; seen {
+		return false
+	}
+	w.evictedSeen[uid] = now
+
+	if last, ok := w.evictedThrottle[wlKey]; ok && now.Sub(last) < 10*time.Minute {
+		return false
+	}
+	w.evictedThrottle[wlKey] = now
+	return true
 }
 
 // inferDeploymentName 从 Pod 名推断 Deployment 名（Pod 名格式：{deployment}-{rs-hash}-{pod-hash}，去最后两段）

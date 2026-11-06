@@ -1174,6 +1174,23 @@ async def _process_one(alert: Alert) -> bool:
     if alert.resource_type == "db":
         return False
 
+    # Pod 被驱逐（Evicted）：终态对象，只通知不诊断/不自动修复
+    # （清理 Evicted Pod 或同 workload 新 Pod 就绪后，恢复扫描会自动关闭）
+    if alert.fault_type == "PodEvicted":
+        try:
+            from app.services import notification_service
+            await notification_service.send_alert_notification(alert)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("PodEvicted 告警 %d 通知失败: %s", alert.id, e)
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a and a.status == "pending":
+                if "Evicted：已通知" not in (a.message or ""):
+                    a.message = (a.message or "") + "（Evicted：已通知；清理该 Pod 或同服务新 Pod 就绪后自动关闭）"
+                    await session.commit()
+        logger.info("PodEvicted 告警 %d 已通知（不做自动修复）", alert.id)
+        return True
+
     # 节点类告警（2026-10-21）：走节点诊断分支（Pod 那套采集/工具都不适用）
     if alert.resource_type == "node":
         return await _process_node_alert(alert)

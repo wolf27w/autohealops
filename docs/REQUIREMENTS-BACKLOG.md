@@ -1721,7 +1721,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R23 新增告警：Pod 被驱逐（Evicted）无任何告警 — ⏳ 待开发（2026-11-06 排查发现）
+### R23 新增告警：Pod 被驱逐（Evicted）无任何告警 — ✅ 已修复（2026-11-06）
 
 **现象**：生产环境当前有 **99 个 Evicted Pod**（95 个因 `DiskPressure`、4 个因 ephemeral-storage 不足），
 平台**没有任何告警**。
@@ -1751,4 +1751,17 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 现有 CrashLoop/ImagePull/Pending 检测行为不变
 
 **影响面**：生产 99 个 Evicted 对象；测试/UAT 同样不报
+
+**修复记录（2026-11-06）**
+- `pod_watcher.go` 新增分支：`Phase==Failed && Reason=="Evicted"` → 上报 `PodEvicted`（severity medium，
+  message 含节点名 + 原始原因）
+- 去重/节流：同 Pod（UID）24h 只报一次；同 workload（namespace+deployment）10 分钟一条；map 自动清理过期
+- **年龄过滤**：只报最近 24h 内创建的；历史遗留 Evicted（生产现有 99 个均为 11-02 创建）不再刷屏
+- 平台 `alert_auto_service`：`PodEvicted` **只通知、不做 AI 诊断/自动修复**；恢复扫描在「清理该 Pod /
+  同 workload 新 Pod 就绪」后自动关闭
+- 告警策略种子新增 `PodEvicted`（category B，medium）
+- 回归测试：`internal/watcher/pod_evicted_test.go`（节流/去重 + 端到端 handlePodEvent：最近上报、
+  重复不报、历史不报）
+- agent 0.2.12 已发布并升级测试集群；executor 已重启（生产/UAT 生效）
+- 验证：升级/重启后生产**没有**产生历史 Evicted 告警（年龄过滤生效），后续新驱逐会正常告警
 
