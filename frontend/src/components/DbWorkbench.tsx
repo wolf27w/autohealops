@@ -486,6 +486,20 @@ export default function DbWorkbench({
                           onClick={(e) => { e.stopPropagation(); onSelect(c.id); openTasks(c.id) }}
                         />
                       </Tooltip>
+                      <Button
+                        size="small"
+                        type={connState[c.id] === 'on' ? 'default' : 'primary'}
+                        loading={connState[c.id] === 'connecting'}
+                        style={{ height: 20, padding: '0 6px', fontSize: 11 }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onSelect(c.id)
+                          if (connState[c.id] === 'on') disconnect(c)
+                          else connect(c)
+                        }}
+                      >
+                        {connState[c.id] === 'on' ? '断开' : '连接'}
+                      </Button>
                     </div>
                   </div>
                 )
@@ -553,14 +567,11 @@ export default function DbWorkbench({
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 14 }}>
               {cur.host}:{cur.port}{cur.database ? ` / ${cur.database}` : ''}
             </div>
-            <Space>
-              <Tag color={connState[cur.id] === 'failed' ? 'red' : 'default'}>
-                {connState[cur.id] === 'connecting' ? '连接中…' : connState[cur.id] === 'failed' ? '连接失败' : '未连接'}
-              </Tag>
-              <Button type="primary" loading={connState[cur.id] === 'connecting'} onClick={() => connect(cur)}>连接</Button>
-            </Space>
+            <Tag color={connState[cur.id] === 'failed' ? 'red' : 'default'}>
+              {connState[cur.id] === 'connecting' ? '连接中…' : connState[cur.id] === 'failed' ? '连接失败' : '未连接'}
+            </Tag>
             <div style={{ marginTop: 12, fontSize: 12, color: '#bfbfbf' }}>
-              默认断开，点击「连接」后才建立会话（连接成功后加载对象树与 SQL 控制台）
+              默认断开，点击左侧实例后面的「连接」建立会话
             </div>
           </div>
         ) : (
@@ -648,7 +659,6 @@ export default function DbWorkbench({
                 执行（Ctrl/Cmd+Enter）
               </Button>
               <Button icon={<DownloadOutlined />} disabled={!canSql || !sql.trim()} onClick={download}>下载 CSV</Button>
-              <Button onClick={() => disconnect(cur)}>断开</Button>
               <Button icon={<ClockCircleOutlined />} disabled={!canSql} onClick={() => openTasks()}>定时任务</Button>
               <Button icon={<ExportOutlined />} disabled={!canSql} onClick={() => doExport('db')}>导出库</Button>
               <Popconfirm title="导入 SQL/CSV 会真实写库，确定继续？"
