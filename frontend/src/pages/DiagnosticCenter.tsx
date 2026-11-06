@@ -7,7 +7,7 @@ import {
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
 import DBMonitor from './DBMonitor'
-import DbSqlConsole from '../components/DbSqlConsole'
+import DbSqlConsole, { type ConsoleConn } from '../components/DbSqlConsole'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL,
@@ -153,7 +153,8 @@ function ReportsTab() {
 
 function DBConnections() {
   const [conns, setConns] = useState<DBConnection[]>([])
-  const [sqlTarget, setSqlTarget] = useState<{ id: number; name: string; database?: string; source?: string } | null>(null)
+  const [sqlOpen, setSqlOpen] = useState(false)
+  const [sqlInitId, setSqlInitId] = useState<number | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
@@ -239,7 +240,10 @@ function DBConnections() {
 
   return (
     <div>
-      <Button type="primary" icon={<DatabaseOutlined />} style={{ marginBottom: 16 }} onClick={() => openModal()}>添加数据库连接</Button>
+      <Space style={{ marginBottom: 16 }}>
+        <Button type="primary" icon={<DatabaseOutlined />} onClick={() => openModal()}>添加数据库连接</Button>
+        <Button icon={<PlayCircleOutlined />} onClick={() => { setSqlInitId(null); setSqlOpen(true) }}>SQL 控制台</Button>
+      </Space>
       <Table rowKey="id" dataSource={conns} pagination={false}
         columns={[
           { title: '名称', dataIndex: 'name' },
@@ -256,7 +260,7 @@ function DBConnections() {
               <Button size="small" onClick={() => testConn(r)}>测试连接</Button>
               <Button size="small" onClick={async () => { await collectSlowSQL(r.id); message.success('已触发采集') }}>采集</Button>
               <Button size="small" disabled={(r as { source?: string }).source !== 'agent'}
-                onClick={() => setSqlTarget({ id: r.id, name: r.name, database: r.database, source: (r as { source?: string }).source })}>SQL 控制台</Button>
+                onClick={() => { setSqlInitId(r.id); setSqlOpen(true) }}>SQL 控制台</Button>
               <Button size="small" onClick={() => openModal(r)}>编辑</Button>
               <Popconfirm title="确认删除？" onConfirm={async () => { await deleteDBConnection(r.id); load() }}>
                 <Button size="small" danger>删除</Button>
@@ -297,7 +301,7 @@ function DBConnections() {
           </Form.Item>
         </Form>
       </Modal>
-          <DbSqlConsole conn={sqlTarget} onClose={() => setSqlTarget(null)} />
+          <DbSqlConsole open={sqlOpen} conns={conns as unknown as ConsoleConn[]} initialId={sqlInitId} onClose={() => setSqlOpen(false)} />
     </div>
   )
 }
