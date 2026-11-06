@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { DBConnection } from '../types'
 import {
-  Tabs, Card, Button, Table, Modal, Form, Input, Select, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress,
+  Tabs, Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress,
 } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
@@ -267,12 +267,12 @@ function DBConnections() {
       <Modal title={editing ? '编辑数据库连接' : '添加数据库连接'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="group_name" label="分组" tooltip="选择已创建的分组；留空=未分组">
-            <Select
+          <Form.Item name="group_name" label="分组" tooltip="可直接输入新分组名；留空=未分组">
+            <AutoComplete
               allowClear
-              placeholder="选择分组（不选=未分组）"
-              options={dbGroups.map((g) => ({ value: g.name, label: g.name }))}
-              notFoundContent="还没有分组，去左侧「＋分组」创建"
+              placeholder="选择或输入分组（留空=未分组）"
+              options={dbGroups.map((g) => ({ value: g.name }))}
+              filterOption={(input: string, option?: { value?: string }) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
             />
           </Form.Item>
           <Form.Item name="db_type" label="类型" rules={[{ required: true }]}>

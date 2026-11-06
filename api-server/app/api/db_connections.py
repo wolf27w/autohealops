@@ -66,6 +66,16 @@ async def list_groups(user=Depends(require_any_user)):
     from app.models import DbGroup
     from sqlalchemy import func as _f
     async with async_session() as session:
+        # 兼容历史：实例上用了但 db_groups 里没有的分组名，自动补建（保证下拉能选到）
+        used = {g for (g,) in (await session.execute(
+            select(DBConnection.group_name).distinct()
+        )).all() if g}
+        existing = {g.name for g in (await session.execute(select(DbGroup))).scalars()}
+        for name in sorted(used - existing):
+            session.add(DbGroup(name=name))
+        if used - existing:
+            await session.commit()
+
         groups = list((await session.execute(select(DbGroup).order_by(DbGroup.name))).scalars())
         rows = (await session.execute(
             select(DBConnection.group_name, _f.count(DBConnection.id)).group_by(DBConnection.group_name)
