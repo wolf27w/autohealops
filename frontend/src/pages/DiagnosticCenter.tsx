@@ -7,7 +7,7 @@ import {
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
 import DBMonitor from './DBMonitor'
-import DbSqlConsole, { type ConsoleConn } from '../components/DbSqlConsole'
+import DbWorkbench, { type ConsoleConn } from '../components/DbWorkbench'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL,
@@ -71,12 +71,12 @@ export default function DiagnosticCenter() {
   return (
     <>
       <div style={{ marginBottom: 8, color: '#8c8c8c', fontSize: 12 }}>
-        <b>数据库故障诊断</b>：面向数据库连接（指标采集 / 慢 SQL / 巡检报告）。集群故障诊断见「诊断 → 集群故障诊断」；Pod / 应用类见「应用故障诊断」；会话式深挖用「应用诊断助手」。
+        <b>数据库管理</b>：连接实例 + SQL 控制台（指标采集 / 慢 SQL / 巡检报告）。集群故障诊断见「诊断 → 集群故障诊断」；Pod / 应用类见「应用故障诊断」；会话式深挖用「应用诊断助手」。
       </div>
     <Tabs
       defaultActiveKey="db"
       items={[
-        { key: 'db', label: '数据库诊断', children: <DBConnections /> },
+        { key: 'db', label: '数据库管理', children: <DBConnections /> },
         { key: 'reports', label: '诊断报告', children: <ReportsTab /> },
         { key: 'monitor', label: '数据库监控', children: <DBMonitor /> },
       ]}
@@ -153,8 +153,7 @@ function ReportsTab() {
 
 function DBConnections() {
   const [conns, setConns] = useState<DBConnection[]>([])
-  const [sqlOpen, setSqlOpen] = useState(false)
-  const [sqlInitId, setSqlInitId] = useState<number | null>(null)
+  const [selId, setSelId] = useState<number | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<DBConnection | null>(null)
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
@@ -240,34 +239,19 @@ function DBConnections() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<DatabaseOutlined />} onClick={() => openModal()}>添加数据库连接</Button>
-        <Button icon={<PlayCircleOutlined />} onClick={() => { setSqlInitId(null); setSqlOpen(true) }}>SQL 控制台</Button>
-      </Space>
-      <Table rowKey="id" dataSource={conns} pagination={false}
-        columns={[
-          { title: '名称', dataIndex: 'name' },
-          { title: '类型', dataIndex: 'db_type', render: (t) => <Tag>{t}</Tag> },
-          { title: '地址', render: (_, r) => `${r.host}:${r.port}` },
-          { title: '库', dataIndex: 'database' },
-          { title: '慢SQL阈值(s)', dataIndex: 'slow_sql_threshold' },
-          { title: '状态', dataIndex: 'status', render: (s) => <Tag color={s === 'connected' ? 'green' : 'default'}>{s}</Tag> },
-          { title: '采集', dataIndex: 'collect_enabled', width: 70, render: (v, r) => <Switch size="small" checked={v} onChange={(checked) => toggleCollect(r, checked)} /> },
-          { title: '巡检', dataIndex: 'inspect_enabled', width: 70, render: (v, r) => <Switch size="small" checked={v} onChange={(checked) => toggleInspect(r, checked)} /> },
-          { title: '操作', render: (_, r) => (
-            <Space>
-              <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => runDiagnosis(r)}>诊断</Button>
-              <Button size="small" onClick={() => testConn(r)}>测试连接</Button>
-              <Button size="small" onClick={async () => { await collectSlowSQL(r.id); message.success('已触发采集') }}>采集</Button>
-              <Button size="small" disabled={(r as { source?: string }).source !== 'agent'}
-                onClick={() => { setSqlInitId(r.id); setSqlOpen(true) }}>SQL 控制台</Button>
-              <Button size="small" onClick={() => openModal(r)}>编辑</Button>
-              <Popconfirm title="确认删除？" onConfirm={async () => { await deleteDBConnection(r.id); load() }}>
-                <Button size="small" danger>删除</Button>
-              </Popconfirm>
-            </Space>
-          ) },
-        ]} />
+      <DbWorkbench
+        conns={conns as unknown as ConsoleConn[]}
+        selectedId={selId ?? (conns[0]?.id ?? null)}
+        onSelect={setSelId}
+        onAdd={() => openModal()}
+        onDiagnose={(c) => runDiagnosis(c as unknown as DBConnection)}
+        onTest={(c) => testConn(c as unknown as DBConnection)}
+        onCollect={async (c) => { await collectSlowSQL(c.id); message.success('已触发采集') }}
+        onEdit={(c) => openModal(c as unknown as DBConnection)}
+        onDelete={async (c) => { await deleteDBConnection(c.id); load() }}
+        onToggleCollect={(c, v) => toggleCollect(c as unknown as DBConnection, v)}
+        onToggleInspect={(c, v) => toggleInspect(c as unknown as DBConnection, v)}
+      />
 
       <Modal title={diag ? `正在诊断：${diag.name}` : '诊断'} open={!!diag} footer={null} closable={false}
         maskClosable={false} keyboard={false} width={420}>
@@ -301,7 +285,6 @@ function DBConnections() {
           </Form.Item>
         </Form>
       </Modal>
-          <DbSqlConsole open={sqlOpen} conns={conns as unknown as ConsoleConn[]} initialId={sqlInitId} onClose={() => setSqlOpen(false)} />
     </div>
   )
 }
