@@ -59,6 +59,21 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
     }
 
 
+@router.get("/sql-task-counts")
+async def sql_task_counts(user=Depends(require_any_user)):
+    """每个数据库连接的定时任务数量（实例列表展示用）。"""
+    from app.models import SqlTask
+    async with async_session() as session:
+        rows = (await session.execute(select(SqlTask.db_connection_id, SqlTask.is_enabled))).all()
+    agg: dict[int, dict] = {}
+    for cid, enabled in rows:
+        cur = agg.setdefault(int(cid), {"db_connection_id": int(cid), "total": 0, "enabled": 0})
+        cur["total"] += 1
+        if enabled:
+            cur["enabled"] += 1
+    return {"code": 200, "message": "success", "data": list(agg.values())}
+
+
 @router.post("")
 async def create_connection(payload: dict, user=Depends(require_admin)):
     """创建数据库连接（仅 admin；密码加密存储）"""
@@ -350,6 +365,11 @@ def _validate_task_payload(payload: dict) -> tuple[bool, str]:
     sql = (payload.get("sql") or "").strip()
     if not sql:
         return False, "sql 必填"
+    if not sql.endswith(";"):
+        return False, "SQL 语句必须以分号结尾（;）"
+    body = sql[:-1]
+    if ";" in body:
+        return False, "定时任务只能包含一条 SQL（请去掉多余语句）"
     head = (sql.split(None, 1)[0] or "").lower()
     if head not in _READ_HEADS:
         return False, "定时任务只允许只读 SQL（select/show/describe/explain/with）"

@@ -512,6 +512,8 @@ export interface SqlTaskRow {
   cron_expression: string; recipients: string; is_enabled: boolean
   last_run_at?: string; last_status?: string; last_error?: string
 }
+export const getSqlTaskCounts = () =>
+  http.get<{ db_connection_id: number; total: number; enabled: number }[]>('/db-connections/sql-task-counts')
 export const listSqlTasks = (connId: number) => http.get<SqlTaskRow[]>(`/db-connections/${connId}/sql-tasks`)
 export const createSqlTask = (connId: number, data: Record<string, unknown>) =>
   http.post<SqlTaskRow>(`/db-connections/${connId}/sql-tasks`, data)

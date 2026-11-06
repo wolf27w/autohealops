@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined } from '@ant-design/icons'
-import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, type SqlTaskRow } from '../services/api'
+import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
   id: number
@@ -86,6 +86,8 @@ export default function DbWorkbench({
   // 定时任务
   const [tasksOpen, setTasksOpen] = useState(false)
   const [tasks, setTasks] = useState<SqlTaskRow[]>([])
+  const [counts, setCounts] = useState<Record<number, number>>({})
+  const [selLen, setSelLen] = useState(0)
   const [editTaskId, setEditTaskId] = useState<number | null>(null)
   const [taskForm] = Form.useForm()
 
@@ -166,11 +168,36 @@ export default function DbWorkbench({
 
   const reset = () => { setRes(null); setErr('') }
 
+  // 取本次要执行的 SQL：有选中就只执行选中部分
+  const pickSql = (): { text: string; selected: boolean } => {
+    const ta = taRef.current?.resizableTextArea?.textArea
+    if (ta) {
+      const a = ta.selectionStart ?? 0
+      const b = ta.selectionEnd ?? 0
+      if (b > a) return { text: sql.slice(a, b), selected: true }
+    }
+    return { text: sql, selected: false }
+  }
+
+  // 校验：必须以分号结尾；一次只能一条（多条请选中一条执行）
+  const validateSqlText = (text: string): string => {
+    const t = text.trim()
+    if (!t) return 'SQL 不能为空'
+    if (!t.endsWith(';')) return 'SQL 语句必须以分号结尾（;）'
+    const body = t.slice(0, -1)
+    if (body.includes(';')) return '检测到多条语句：请选中要执行的那一条（每条以分号结尾）'
+    return ''
+  }
+
   const run = async (write: boolean) => {
     if (!cur) return
+    const { text } = pickSql()
+    const why = validateSqlText(text)
+    if (why) { setErr(why); setRes(null); return }
+    const payloadSql = text.trim().slice(0, -1) // 去掉结尾分号再下发
     setBusy(true); reset()
     try {
-      setRes((write ? await execDBConnection(cur.id, sql) : await queryDBConnection(cur.id, sql)) as Result)
+      setRes((write ? await execDBConnection(cur.id, payloadSql) : await queryDBConnection(cur.id, payloadSql)) as Result)
     } catch (e) {
       const x = e as { response?: { data?: { message?: string } }; message?: string }
       setErr(x?.response?.data?.message || x?.message || '执行失败')
@@ -179,8 +206,11 @@ export default function DbWorkbench({
 
   const download = async () => {
     if (!cur) return
+    const { text } = pickSql()
+    const why = validateSqlText(text)
+    if (why) { setErr(why); return }
     try {
-      const blob = await downloadDBQuery(cur.id, sql)
+      const blob = await downloadDBQuery(cur.id, text.trim().slice(0, -1))
       const url = URL.createObjectURL(blob as Blob)
       const a = document.createElement('a')
       a.href = url
@@ -193,20 +223,33 @@ export default function DbWorkbench({
     }
   }
 
-
   // ---------- 定时任务 ----------
-  const refreshTasks = async () => {
-    if (!cur) return
-    try { setTasks((await listSqlTasks(cur.id)) || []) } catch { setTasks([]) }
+  const refreshCounts = async () => {
+    try {
+      const rows = await getSqlTaskCounts()
+      const m: Record<number, number> = {}
+      for (const r of rows || []) m[r.db_connection_id] = r.total
+      setCounts(m)
+    } catch { /* ignore */ }
   }
 
-  const openTasks = async () => {
+  const refreshTasks = async (cid?: number) => {
+    const id = cid ?? cur?.id
+    if (!id) return
+    try { setTasks((await listSqlTasks(id)) || []) } catch { setTasks([]) }
+  }
+
+  const openTasks = async (cid?: number) => {
+    if (cid && cid !== cur?.id) onSelect(cid)
     setTasksOpen(true)
     setEditTaskId(null)
     taskForm.resetFields()
     taskForm.setFieldsValue({ cron_expression: '0 9 1 * *', is_enabled: true, recipients: '' })
-    await refreshTasks()
+    await refreshTasks(cid)
+    await refreshCounts()
   }
+
+  useEffect(() => { refreshCounts() }, [conns.length])
 
   const startEditTask = (t: SqlTaskRow) => {
     setEditTaskId(t.id)
@@ -218,6 +261,8 @@ export default function DbWorkbench({
 
   const saveTask = async () => {
     if (!cur) return
+    const why = validateSqlText(sql)
+    if (why) { message.error(why); return }
     const v = await taskForm.validateFields()
     const payload = { ...v, sql }
     try {
@@ -228,6 +273,7 @@ export default function DbWorkbench({
       taskForm.resetFields()
       taskForm.setFieldsValue({ cron_expression: '0 9 1 * *', is_enabled: true, recipients: '' })
       await refreshTasks()
+      await refreshCounts()
     } catch { /* 拦截器已提示 */ }
   }
 
@@ -243,7 +289,7 @@ export default function DbWorkbench({
 
   const removeTask = async (t: SqlTaskRow) => {
     if (!cur) return
-    try { await deleteSqlTask(cur.id, t.id); await refreshTasks() } catch { /* ignore */ }
+    try { await deleteSqlTask(cur.id, t.id); await refreshTasks(); await refreshCounts() } catch { /* ignore */ }
   }
 
   return (
@@ -285,6 +331,16 @@ export default function DbWorkbench({
                       </Tag>
                       <span>{c.db_type}{c.database ? ` / ${c.database}` : ''}</span>
                       {c.status === 'removed' && <Tag color="red" style={{ fontSize: 10, lineHeight: '16px' }}>已下线</Tag>}
+                      {(counts[c.id] || 0) > 0 && (
+                        <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px' }}>任务 {counts[c.id]}</Tag>
+                      )}
+                      <span style={{ flex: 1 }} />
+                      <Tooltip title="定时任务">
+                        <ClockCircleOutlined
+                          style={{ fontSize: 12, color: (counts[c.id] || 0) > 0 ? '#1677ff' : '#bfbfbf' }}
+                          onClick={(e) => { e.stopPropagation(); onSelect(c.id); openTasks(c.id) }}
+                        />
+                      </Tooltip>
                     </div>
                   </div>
                 )
@@ -320,6 +376,10 @@ export default function DbWorkbench({
                 ref={taRef as never}
                 value={sql}
                 onChange={(e) => { setSql(e.target.value); syncSuggest(e.target.value, e.target.selectionStart ?? 0) }}
+                onSelect={(e) => {
+                  const el = e.target as HTMLTextAreaElement
+                  setSelLen(Math.max(0, (el.selectionEnd ?? 0) - (el.selectionStart ?? 0)))
+                }}
                 onBlur={() => setTimeout(() => setSugg(null), 120)}
                 disabled={!isAgent}
                 placeholder={'select * from information_schema.tables limit 10\n-- 或 update t set c=1 where id=1'}
@@ -381,12 +441,14 @@ export default function DbWorkbench({
                 </Popconfirm>
               )}
               <Button icon={<DownloadOutlined />} disabled={!isAgent || !sql.trim() || !isRead} onClick={download}>下载 CSV</Button>
-              <Button icon={<ClockCircleOutlined />} disabled={!isAgent} onClick={openTasks}>定时任务</Button>
+              <Button icon={<ClockCircleOutlined />} disabled={!isAgent} onClick={() => openTasks()}>定时任务</Button>
               {res?.affected_rows !== undefined && (
                 <Tag color={(res.affected_rows || 0) > 0 ? 'green' : 'default'}>影响行数：{res.affected_rows}</Tag>
               )}
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                {sql.trim() ? (isRead ? '识别为只读语句（最多 200 行）' : `识别为写语句（${head}）`) : '只读查询最多 200 行，导出最多 5000 行'}
+                {selLen > 0 ? `将执行选中内容（${selLen} 字符）` : '将执行全部内容'}
+                {' · '}语句必须以分号结尾
+                {sql.trim() ? (isRead ? ' · 只读（≤200 行）' : ` · 写语句（${head}）`) : ''}
               </span>
             </Space>
 
