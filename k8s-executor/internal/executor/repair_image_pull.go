@@ -17,7 +17,12 @@ type RepairImagePullResult struct {
 	Success bool
 	Message string
 	Fixed   bool
+	// NeedCredentials：本命名空间里根本没有镜像仓库认证 Secret，需人工创建（平台据此提示/转人工）
+	NeedCredentials bool
 }
+
+// NeedCredPrefix 平台据此识别「缺认证 Secret」并提示创建（proto 不改，用消息前缀承载）
+const NeedCredPrefix = "[NEED_CRED]"
 
 var (
 	// Deployment Pod：{deploy}-{rsHash}-{podHash}
@@ -37,14 +42,25 @@ func (e *Executor) RepairImagePull(ctx context.Context, namespace, podName strin
 		return &RepairImagePullResult{Success: false, Message: err.Error()}
 	}
 
+	// 认证候选（老板 2026-11-06 口径）：
+	//   1) 本 namespace 内已有的镜像仓库认证 Secret（kubernetes.io/dockerconfigjson / dockercfg）——有就直接加；
+	//   2) 同 namespace 正常服务用过的 imagePullSecrets（兼容写法，作为补充）。
 	normalSecrets, err := e.collectNormalSecrets(ctx, namespace, kind, name)
 	if err != nil {
-		return &RepairImagePullResult{Success: false, Message: err.Error()}
+		normalSecrets = map[string]bool{}
+	}
+	nsSecrets := e.collectNamespaceRegistrySecrets(ctx, namespace)
+	for _, s := range nsSecrets {
+		normalSecrets[s] = true
 	}
 	if len(normalSecrets) == 0 {
+		// 没有认证信息 → 提示人工创建（不猜、不自动建，平台不保存仓库凭据）
 		return &RepairImagePullResult{
-			Success: false,
-			Message: "集群内没有其他服务配置 imagePullSecrets，无法自动补（需人工确认镜像仓库认证配置）",
+			Success:         false,
+			NeedCredentials: true,
+			Message: NeedCredPrefix + "命名空间 " + namespace + " 内没有镜像仓库认证 Secret（kubernetes.io/dockerconfigjson）；" +
+				"请先创建，例如：kubectl -n " + namespace + " create secret docker-registry <名字> " +
+				"--docker-server=<harbor地址> --docker-username=<账号> --docker-password=<密码>",
 		}
 	}
 
@@ -53,11 +69,12 @@ func (e *Executor) RepairImagePull(ctx context.Context, namespace, podName strin
 		return &RepairImagePullResult{Success: false, Message: err.Error()}
 	}
 	if len(missing) > 0 {
-		return &RepairImagePullResult{
-			Success: true,
-			Fixed:   true,
-			Message: fmt.Sprintf("已为 %s %s 补 imagePullSecrets %v（参考集群内正常服务）", kind, name, missing),
+		recreated, _ := e.deleteImagePullFailedPods(ctx, namespace, kind, name)
+		msg := fmt.Sprintf("已为 %s %s 补 imagePullSecrets %v", kind, name, missing)
+		if recreated > 0 {
+			msg += fmt.Sprintf("，并重建 %d 个卡住的 Pod", recreated)
 		}
+		return &RepairImagePullResult{Success: true, Fixed: true, Message: msg}
 	}
 
 	// secrets 与正常服务一致但仍拉不到：先看是不是 401（凭证失效/无权限）
@@ -73,7 +90,7 @@ func (e *Executor) RepairImagePull(ctx context.Context, namespace, podName strin
 	return &RepairImagePullResult{
 		Success: true,
 		Fixed:   false,
-		Message: fmt.Sprintf("%s %s 的 imagePullSecrets 已与集群内正常服务一致（%v），但仍拉取失败，可能是镜像名错/凭证失效/网络问题，转人工", kind, name, keysOf(normalSecrets)),
+		Message: fmt.Sprintf("%s %s 的 imagePullSecrets 已配置（%v），但仍拉取失败：可能是镜像地址写错、镜像未上传、凭证失效或网络问题，需人工确认", kind, name, keysOf(normalSecrets)),
 	}
 }
 
@@ -249,6 +266,89 @@ func (e *Executor) collectNormalSecrets(ctx context.Context, namespace, excludeK
 	}
 
 	return secrets, nil
+}
+
+// collectNamespaceRegistrySecrets 列出本命名空间内所有镜像仓库认证 Secret 名
+// （type 为 kubernetes.io/dockerconfigjson 或 kubernetes.io/dockercfg）
+func (e *Executor) collectNamespaceRegistrySecrets(ctx context.Context, namespace string) []string {
+	list, err := e.clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		s := &list.Items[i]
+		switch s.Type {
+		case corev1.SecretTypeDockerConfigJson, corev1.SecretTypeDockercfg:
+			if s.Name != "" {
+				names = append(names, s.Name)
+			}
+		}
+	}
+	return names
+}
+
+// deleteImagePullFailedPods 删除该工作负载下卡在镜像拉取（ImagePullBackOff/ErrImagePull）的 Pod，
+// 逼控制器用新的 imagePullSecrets 重建；返回删除个数。
+func (e *Executor) deleteImagePullFailedPods(ctx context.Context, namespace, kind, name string) (int, error) {
+	selector, err := e.workloadSelector(ctx, namespace, kind, name)
+	if err != nil || selector == "" {
+		return 0, err
+	}
+	pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if !hasImagePullFailure(p) {
+			continue
+		}
+		if err := e.clientset.CoreV1().Pods(namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err == nil {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+// workloadSelector 取工作负载的 Pod 选择器（labels 字符串）
+func (e *Executor) workloadSelector(ctx context.Context, namespace, kind, name string) (string, error) {
+	switch kind {
+	case "Deployment":
+		d, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		return metav1.FormatLabelSelector(d.Spec.Selector), nil
+	case "StatefulSet":
+		s, err := e.clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		return metav1.FormatLabelSelector(s.Spec.Selector), nil
+	case "DaemonSet":
+		d, err := e.clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		return metav1.FormatLabelSelector(d.Spec.Selector), nil
+	}
+	return "", nil
+}
+
+// hasImagePullFailure 判断 Pod 是否有容器（含 init）卡在镜像拉取
+func hasImagePullFailure(p *corev1.Pod) bool {
+	check := func(sts []corev1.ContainerStatus) bool {
+		for _, cs := range sts {
+			w := cs.State.Waiting
+			if w != nil && (w.Reason == "ImagePullBackOff" || w.Reason == "ErrImagePull" || w.Reason == "InvalidImageName") {
+				return true
+			}
+		}
+		return false
+	}
+	return check(p.Status.ContainerStatuses) || check(p.Status.InitContainerStatuses)
 }
 
 // detectPullAuthError 从 Pod 事件里识别镜像仓库认证失败（401），返回命中的事件消息

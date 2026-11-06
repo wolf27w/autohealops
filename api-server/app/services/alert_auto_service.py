@@ -785,9 +785,26 @@ async def _repair_image_pull_inner(alert: Alert, trace_id: str) -> None:
                 a.message = (a.message or "") + f"（已补 secrets，但验证未通过，保持待处理）"
             await session.commit()
         if not repaired:
-            # 补 secrets 成功但验证未通过 → 记录一次修复失败（循环抑制计数）
+            # 已补认证 + 重建 Pod，仍在验证窗口内未恢复 → 人工确认（镜像地址错/镜像未上传）
             await _record_suppression(alert)
+            await _escalate_image_pull_to_approval(
+                alert,
+                f"已补 imagePullSecrets 并重建 Pod，{AUTO_VERIFY_WAIT_SECONDS}s 内仍未恢复："
+                f"疑似镜像地址写错或镜像未上传，需人工确认（{msg[:120]}）",
+            )
+            logger.info("告警 %d 补认证后仍拉取失败，已转人工确认", alert.id)
+            return
         logger.info("告警 %d 闭环处理完成（镜像修复）", alert.id)
+        return
+
+    # 本命名空间没有镜像仓库认证 Secret → 提示人工创建（老板 2026-11-06 口径）
+    if msg.startswith("[NEED_CRED]"):
+        hint = msg[len("[NEED_CRED]"):].strip()
+        await _mark_manual_and_notify(
+            alert, "缺少镜像仓库认证 Secret",
+            f"{hint}。创建后平台会自动补 imagePullSecrets 并重启 Pod；若补完仍失败，需人工确认镜像地址/镜像是否已上传。",
+        )
+        logger.info("告警 %d 命名空间缺少镜像仓库认证 Secret，已提示创建", alert.id)
         return
 
     if "not found" in msg or "不存在" in msg:
