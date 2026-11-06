@@ -684,6 +684,8 @@ async function renderServiceBody(skipInstant=false){
   }
   if(skipInstant && CV.instCache && CV.instCache.key===instKey){ CV.instCache={ key:instKey, mine, podCount, cpuLim, memLim }; }
   const R=`namespace="${ns}",pod=~"${svc}-.*",container!=""`;
+  // 网络指标没有 container 标签（cAdvisor 只在 pause 沙箱上报 Pod 级网络）→ 单独用 Pod 级选择器
+  const RN=`namespace="${ns}",pod=~"${svc}-.*"`;
   let INST;
   if(skipInstant && CV.instCache && CV.instCache.key===instKey && CV.instCache.rows){
     INST=CV.instCache.rows;
@@ -697,8 +699,8 @@ async function renderServiceBody(skipInstant=false){
     promInstant(cid,`sum by(container)(rate(container_cpu_cfs_throttled_seconds_total{${R}}[5m]))`),
     promInstant(cid,`sum by(container)(rate(container_fs_reads_bytes_total{${R}}[5m]))`),
     promInstant(cid,`sum by(container)(rate(container_fs_writes_bytes_total{${R}}[5m]))`),
-    promInstant(cid,`sum by(container)(rate(container_network_receive_errors_total{${R}}[5m]))`),
-    promInstant(cid,`sum by(container)(rate(container_network_transmit_errors_total{${R}}[5m]))`),
+    promInstant(cid,`sum by(pod)(rate(container_network_receive_errors_total{${RN}}[5m]))`),
+    promInstant(cid,`sum by(pod)(rate(container_network_transmit_errors_total{${RN}}[5m]))`),
     // N13 容器级：逐 Pod 逐容器
     promInstant(cid,`sum by(pod,container)(rate(container_cpu_usage_seconds_total{${R}}[5m]))`),
     promInstant(cid,`sum by(pod,container)(container_memory_working_set_bytes{${R}})`),
@@ -711,7 +713,7 @@ async function renderServiceBody(skipInstant=false){
     CV.instCache.rows=INST;
   }
   const {a,b,c,d,e,f,g,h,i2,jpc,jpm,jpr,jpl,jpw,jpt}=INST;
-  const CCPU=mapBy(a,'container'),CMEM=mapBy(b,'container'),RST=mapBy(c,'container'),OOM=mapBy(d,'container'),THR=mapBy(e,'container'),RD=mapBy(f,'container'),WR=mapBy(g,'container'),NERR=mapBy(h,'container'),NETT=mapBy(i2,'container');
+  const CCPU=mapBy(a,'container'),CMEM=mapBy(b,'container'),RST=mapBy(c,'container'),OOM=mapBy(d,'container'),THR=mapBy(e,'container'),RD=mapBy(f,'container'),WR=mapBy(g,'container'),NERR=mapBy(h,'pod'),NETT=mapBy(i2,'pod');
   const names=[...new Set([...Object.keys(CCPU),...Object.keys(CMEM),...Object.keys(RST),...Object.keys(OOM),...Object.keys(THR),...Object.keys(RD)])].sort();
   const imgMap={};
   const imgKey=[cid,ns,(mine[0]||{}).name||''].join('|');

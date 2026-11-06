@@ -61,13 +61,15 @@ METRIC_QUERIES: dict[str, dict] = {
         "label": "容器内存 Top", "unit": "bytes", "scope": "container",
         "promql": 'topk(20, sum by(namespace, pod, container) (container_memory_working_set_bytes{container!="",container!="POD"}))',
     },
+    # 网络指标没有 container 标签（cAdvisor 只在 pause 沙箱上报 Pod 级网络），
+    # 加 container!="" / container!="POD" 会把所有序列过滤掉 → 曲线全空（2026-11-06 修）
     "container_net_rx": {
-        "label": "容器网络入站 Top", "unit": "bytes/s", "scope": "container",
-        "promql": 'sum by(namespace, pod, container) (rate(container_network_receive_bytes_total{container!="",container!="POD"}[5m]))',
+        "label": "容器网络入站 Top", "unit": "bytes/s", "scope": "pod",
+        "promql": 'sum by(namespace, pod) (rate(container_network_receive_bytes_total[5m]))',
     },
     "container_net_tx": {
-        "label": "容器网络出站 Top", "unit": "bytes/s", "scope": "container",
-        "promql": 'sum by(namespace, pod, container) (rate(container_network_transmit_bytes_total{container!="",container!="POD"}[5m]))',
+        "label": "容器网络出站 Top", "unit": "bytes/s", "scope": "pod",
+        "promql": 'sum by(namespace, pod) (rate(container_network_transmit_bytes_total[5m]))',
     },
     # ---- 趋势用（无 topk，供 range 曲线） ----
     "container_cpu": {
@@ -253,6 +255,16 @@ def _sel(namespace: str, pod: str, container: str) -> str:
     return ",".join(sel)
 
 
+def _pod_sel(namespace: str = "", pod: str = "") -> str:
+    """网络类指标的 Pod 级选择器（这些指标没有 container 标签，不能带 container 过滤）"""
+    sel = []
+    if namespace:
+        sel.append(f'namespace="{namespace}"')
+    if pod:
+        sel.append(f'pod="{pod}"')
+    return ",".join(sel)
+
+
 def filtered_promql(metric: str, namespace: str = "", pod: str = "", container: str = "") -> str | None:
     """对 container_* 指标按 namespace/pod/container 注入过滤；无过滤或非容器指标返回 None。"""
     if not (namespace or pod or container):
@@ -261,8 +273,9 @@ def filtered_promql(metric: str, namespace: str = "", pod: str = "", container: 
         return f'sum by (pod, container) (rate(container_cpu_usage_seconds_total{{{_sel(namespace, pod, container)}}}[5m]))'
     if metric in ("container_mem_top", "container_mem"):
         return f'sum by (pod, container) (container_memory_working_set_bytes{{{_sel(namespace, pod, container)}}})'
+    # 网络只有 Pod 级（无 container 标签）：只按 namespace/pod 过滤，不能带 container 选择器
     if metric in ("container_net_rx",):
-        return f'sum by (pod, container) (rate(container_network_receive_bytes_total{{{_sel(namespace, pod, container)}}}[5m]))'
+        return f'sum by (pod) (rate(container_network_receive_bytes_total{{{_pod_sel(namespace, pod)}}}[5m]))'
     if metric in ("container_net_tx",):
-        return f'sum by (pod, container) (rate(container_network_transmit_bytes_total{{{_sel(namespace, pod, container)}}}[5m]))'
+        return f'sum by (pod) (rate(container_network_transmit_bytes_total{{{_pod_sel(namespace, pod)}}}[5m]))'
     return None

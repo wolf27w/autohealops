@@ -293,6 +293,10 @@ async def startup_tasks() -> None:
         _background_tasks.append(asyncio.create_task(_interval_worker(name, 5 if name == "僵尸计划收尾" else 30, fn, timeout)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
     _background_tasks.append(asyncio.create_task(_agent_cluster_health_loop()))
+    # 接入凭证超时清理（每 10 分钟）：agent 接入 5 小时仍未连上 → 删除记录，令牌失效
+    from app.services.cluster_credential_service import cleanup_stale_pending_clusters
+    _background_tasks.append(asyncio.create_task(
+        _interval_worker("未连接凭证清理", 600, cleanup_stale_pending_clusters, 120.0)))
     # 仪表盘预热（每 10 秒）：把默认「实时」视图预先算好写缓存，前端轮询不再踩冷路径
     from app.api.stats import prewarm_dashboard
     _background_tasks.append(asyncio.create_task(_interval_worker("仪表盘预热", 10, prewarm_dashboard, 60.0)))

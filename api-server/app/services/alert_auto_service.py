@@ -126,7 +126,20 @@ async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) ->
     # get_pod_status 失败：区分「Pod 不存在」与「查询失败」；查询失败直接保持 pending
     if not result.get("success") and not _is_not_found(result.get("message")):
         return False
-    # Pod not found 或未 ready：查 Deployment 的所有 Pod（区分新旧版本副本）
+
+    # Pod 仍存在但未就绪：只有 Deployment 才需要看同工作负载其它副本（滚动更新场景）。
+    # StatefulSet / DaemonSet 的 Pod 名是稳定的（重建后同名），存在且未就绪就是持续故障。
+    # 旧逻辑会把 broker-a-0 推断成 Deployment "broker"，查不到就当成「资源已删除」→ 2 秒关掉告警
+    # （2026-11-06 修：按 owner_kind 判定，不再无脑按名字猜）。
+    if result.get("success"):
+        detail = await executor_client.acall(executor_client.get_pod_detail, cluster_id, namespace, pod_name)
+        owner_kind = ""
+        if detail.get("success"):
+            owner_kind = ((detail.get("detail") or {}).get("owner_kind") or "").strip()
+        if owner_kind != "Deployment":
+            return False
+
+    # Pod 已删除，或是 Deployment 但当前 Pod 未就绪：查同 Deployment 的所有 Pod（区分新旧版本副本）
     dep_name = infer_deployment_name(pod_name)
     if dep_name:
         dep_pods = await executor_client.acall(executor_client.list_deployment_pods, cluster_id, namespace, dep_name)
@@ -786,6 +799,18 @@ async def _repair_image_pull_inner(alert: Alert, trace_id: str) -> None:
             a.message = a.message + "（Pod 已重建/删除，告警过时自愈关闭）"
             await session.commit()
         logger.info("告警 %d 闭环处理完成（镜像修复，Pod 已重建）", alert.id)
+        return
+
+    # 仓库 401：凭证失效 / 账号无该镜像权限 —— 补 secrets 修不了，直接转工单并说明原因
+    low = (msg or "").lower()
+    if "401" in low or "unauthorized" in low or "authentication required" in low:
+        await _record_suppression(alert)
+        await _mark_manual_and_notify(
+            alert, "镜像仓库认证失败（401）",
+            f"拉取镜像返回 401：{msg[:180]}。这不是缺 imagePullSecrets，而是凭证失效或账号无该镜像权限，"
+            f"需要在目标集群内更新 imagePullSecrets 的账号密码（平台不保存仓库凭据）。",
+        )
+        logger.info("告警 %d 镜像拉取 401（凭证问题），已转工单", alert.id)
         return
 
     # 补 secrets 失败（镜像本身有问题）→ 计数 + 转人工审批

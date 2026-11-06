@@ -227,8 +227,12 @@ func (w *PodWatcher) handlePodEvent(event watch.Event) {
 		return
 	}
 
-	// 遍历容器检测故障
-	for _, cs := range pod.Status.ContainerStatuses {
+	// 遍历容器检测故障（含 init 容器）：镜像拉取/崩溃常发生在 init 阶段，
+	// 只扫 ContainerStatuses 会把这类故障漏掉，最后落成 PendingTimeout（2026-11-06 修）。
+	statuses := make([]corev1.ContainerStatus, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
+	statuses = append(statuses, pod.Status.InitContainerStatuses...)
+	statuses = append(statuses, pod.Status.ContainerStatuses...)
+	for _, cs := range statuses {
 		// 容器 Waiting 状态
 		if cs.State.Waiting != nil {
 			reason := cs.State.Waiting.Reason

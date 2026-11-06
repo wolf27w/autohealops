@@ -43,3 +43,28 @@ async def backfill_missing_credentials() -> int:
         if updated:
             await session.commit()
     return updated
+
+async def cleanup_stale_pending_clusters(max_age_hours: int = 5) -> int:
+    """接入凭证超时清理（老板 2026-11-06 定：5 小时未连接自动清理）
+
+    - 只处理 `agent_status='pending'`（已连上 / 已断开的不动）
+    - 创建超过 N 小时仍未连上 → 视为放弃接入，删除集群记录（令牌随即失效）
+    - 日志留痕：cluster_id / name / token hash 前 8 位 / 创建时间
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now() - timedelta(hours=max(1, int(max_age_hours)))
+    async with async_session() as session:
+        rows = list((await session.execute(
+            select(Cluster).where(Cluster.agent_status == "pending", Cluster.created_at < cutoff)
+        )).scalars())
+        if not rows:
+            return 0
+        for c in rows:
+            logger.warning(
+                "清理未连接的接入凭证：cluster_id=%s name=%s token=%s*** created_at=%s",
+                c.id, c.name, (c.agent_token_hash or "")[:8], c.created_at,
+            )
+            await session.delete(c)
+        await session.commit()
+    return len(rows)
