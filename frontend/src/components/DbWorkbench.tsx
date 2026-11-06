@@ -1,7 +1,7 @@
 // 数据库管理面板（Navicat 式）：左侧实例列表，右上 SQL 编辑，右下结果。
 // 直接嵌在「诊断中心 → 数据库管理」tab 里，不再是弹窗。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message } from 'antd'
+import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message, Tabs, Alert } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined, TableOutlined, EyeOutlined, FunctionOutlined, FieldTimeOutlined, ExportOutlined, ImportOutlined } from '@ant-design/icons'
 import { execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
 
@@ -74,7 +74,7 @@ export default function DbWorkbench({
   const [sql, setSql] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [res, setRes] = useState<Result | null>(null)
+  const [results, setResults] = useState<Array<{ sql: string; ok: boolean; err?: string; columns?: string[]; rows?: unknown[][]; affected?: number; truncated?: boolean }>>([])
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
   const isAgent = (cur?.source || 'direct') === 'agent'
   // 直连库也支持平台执行（平台存账密，直接连库）；目前直连仅 mysql
@@ -103,7 +103,7 @@ export default function DbWorkbench({
   // 选中库变化 → 拉一次可见库/表（用于补全，60s 服务端缓存）
   useEffect(() => {
     setSchema(EMPTY_SCHEMA)
-    if (!cur || (cur.source || 'direct') !== 'agent') return
+    if (!cur) return
     let alive = true
     getDBSchema(cur.id)
       .then((d) => {
@@ -190,7 +190,7 @@ export default function DbWorkbench({
     })
   }
 
-  const reset = () => { setRes(null); setErr('') }
+  const reset = () => { setResults([]); setErr('') }
 
   // 取本次要执行的 SQL：有选中就只执行选中部分
   const pickSql = (): { text: string; selected: boolean } => {
@@ -203,38 +203,65 @@ export default function DbWorkbench({
     return { text: sql, selected: false }
   }
 
-  // 校验：必须以分号结尾；一次只能一条（多条请选中一条执行）
-  const validateSqlText = (text: string): string => {
-    const t = text.trim()
-    if (!t) return 'SQL 不能为空'
-    if (!t.endsWith(';')) return 'SQL 语句必须以分号结尾（;）'
-    const body = t.slice(0, -1)
-    if (body.includes(';')) return '检测到多条语句：请选中要执行的那一条（每条以分号结尾）'
-    return ''
+  // 按分号拆分（忽略引号/反引号内的分号）；没有以分号结尾的尾巴视为缺少结尾
+  const splitStatements = (text: string): { list: string[]; missingEnd: boolean } => {
+    const list: string[] = []
+    let cur = ''
+    let quote: string | null = null
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]
+      if (quote) {
+        cur += ch
+        if (ch === quote && text[i - 1] !== '\\') quote = null
+        continue
+      }
+      if (ch === "'" || ch === '"' || ch === '`') { quote = ch; cur += ch; continue }
+      if (ch === ';') { if (cur.trim()) list.push(cur.trim()); cur = ''; continue }
+      cur += ch
+    }
+    const rest = cur.trim()
+    return { list, missingEnd: !!rest }
   }
 
-  const run = async (write: boolean) => {
+  const isReadStmt = (st: string) => READ_HEADS.has((st.trim().split(/\s+/)[0] || '').toLowerCase())
+
+  // 执行全部（没选中时）；有选中只执行选中那段
+  const run = async () => {
     if (!cur) return
     const { text } = pickSql()
-    const why = validateSqlText(text)
-    if (why) { setErr(why); setRes(null); return }
-    const payloadSql = text.trim().slice(0, -1) // 去掉结尾分号再下发
-    setBusy(true); reset()
-    try {
-      setRes((write ? await execDBConnection(cur.id, payloadSql) : await queryDBConnection(cur.id, payloadSql)) as Result)
-    } catch (e) {
-      const x = e as { response?: { data?: { message?: string } }; message?: string }
-      setErr(x?.response?.data?.message || x?.message || '执行失败')
-    } finally { setBusy(false) }
+    const { list, missingEnd } = splitStatements(text)
+    if (missingEnd) { setErr('SQL 语句必须以分号结尾（;）'); return }
+    if (!list.length) { setErr('SQL 不能为空'); return }
+
+    const hasWrite = list.some((st) => !isReadStmt(st))
+    if (hasWrite && !window.confirm(`包含 ${list.filter((st) => !isReadStmt(st)).length} 条写操作，将真实修改数据库且无法自动回滚，继续？`)) return
+
+    setBusy(true); setErr(''); setResults([])
+    const out: typeof results = []
+    for (const st of list) {
+      try {
+        const d = (isReadStmt(st)
+          ? await queryDBConnection(cur.id, st)
+          : await execDBConnection(cur.id, st)) as Result
+        out.push({ sql: st, ok: true, columns: d?.columns, rows: d?.rows,
+                   affected: d?.affected_rows, truncated: d?.truncated })
+      } catch (e) {
+        const x = e as { response?: { data?: { message?: string } }; message?: string }
+        out.push({ sql: st, ok: false, err: x?.response?.data?.message || x?.message || '执行失败' })
+      }
+      setResults([...out])
+    }
+    setBusy(false)
   }
 
   const download = async () => {
     if (!cur) return
     const { text } = pickSql()
-    const why = validateSqlText(text)
-    if (why) { setErr(why); return }
+    const { list, missingEnd } = splitStatements(text)
+    if (missingEnd) { setErr('SQL 语句必须以分号结尾（;）'); return }
+    if (list.length !== 1) { setErr('导出 CSV 一次只能一条只读语句（请选中一条）'); return }
     try {
-      const blob = await downloadDBQuery(cur.id, text.trim().slice(0, -1))
+      const blob = await downloadDBQuery(cur.id, list[0])
       const url = URL.createObjectURL(blob as Blob)
       const a = document.createElement('a')
       a.href = url
@@ -347,8 +374,9 @@ export default function DbWorkbench({
 
   const saveTask = async () => {
     if (!cur) return
-    const why = validateSqlText(sql)
-    if (why) { message.error(why); return }
+    const { list, missingEnd } = splitStatements(sql)
+    if (missingEnd) { message.error('SQL 语句必须以分号结尾（;）'); return }
+    if (list.length !== 1) { message.error('定时任务只能包含一条 SQL'); return }
     const v = await taskForm.validateFields()
     const payload = { ...v, sql }
     try {
@@ -531,7 +559,7 @@ export default function DbWorkbench({
                     syncSuggest(sql, el.selectionStart ?? 0)
                     return
                   }
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canSql && sql.trim() && isRead) run(false)
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canSql && sql.trim() && isRead) run()
                 }}
               />
               <div ref={mirrorRef} style={{
@@ -564,17 +592,10 @@ export default function DbWorkbench({
             </div>
 
             <Space wrap>
-              {isRead ? (
-                <Button type="primary" loading={busy} disabled={!canSql || !sql.trim()} onClick={() => run(false)}>
-                  执行（Ctrl/Cmd+Enter）
-                </Button>
-              ) : (
-                <Popconfirm title="确认执行写操作？" description="将真实修改数据库，无法自动回滚。"
-                  okText="确认执行" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => run(true)}>
-                  <Button danger loading={busy} disabled={!canSql || !sql.trim()}>执行（写）</Button>
-                </Popconfirm>
-              )}
-              <Button icon={<DownloadOutlined />} disabled={!canSql || !sql.trim() || !isRead} onClick={download}>下载 CSV</Button>
+              <Button type="primary" danger={!isRead} loading={busy} disabled={!canSql || !sql.trim()} onClick={run}>
+                执行（Ctrl/Cmd+Enter）
+              </Button>
+              <Button icon={<DownloadOutlined />} disabled={!canSql || !sql.trim()} onClick={download}>下载 CSV</Button>
               <Button icon={<ClockCircleOutlined />} disabled={!canSql} onClick={() => openTasks()}>定时任务</Button>
               <Button icon={<ExportOutlined />} disabled={!canSql} onClick={() => doExport('db')}>导出库</Button>
               <Popconfirm title="导入 SQL/CSV 会真实写库，确定继续？"
@@ -583,41 +604,56 @@ export default function DbWorkbench({
               </Popconfirm>
               <input id="db-import-file" type="file" accept=".sql,.csv" style={{ display: 'none' }}
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.currentTarget.value = '' }} />
-              {res?.affected_rows !== undefined && (
-                <Tag color={(res.affected_rows || 0) > 0 ? 'green' : 'default'}>影响行数：{res.affected_rows}</Tag>
-              )}
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                {selLen > 0 ? `将执行选中内容（${selLen} 字符）` : '将执行全部内容'}
-                {' · '}语句必须以分号结尾
-                {sql.trim() ? (isRead ? ' · 只读（≤200 行）' : ` · 写语句（${head}）`) : ''}
+                {selLen > 0 ? `将执行选中内容（${selLen} 字符）` : '将执行全部语句（多条分别出结果）'}
+                {' · '}每条必须以分号结尾
+                {!isRead ? ' · 含写操作需确认' : ''}
               </span>
             </Space>
 
             {err && <div style={{ color: '#ff4d4f', fontSize: 13 }}>{err}</div>}
 
             <div style={{ flex: 1, minHeight: 0, border: '1px solid #f0f0f0', borderRadius: 6, overflow: 'auto' }}>
-              {!res ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="执行后在这里看结果" style={{ marginTop: 40 }} />
-              ) : (res.rows || []).length === 0 ? (
-                <div style={{ padding: 12, color: '#8c8c8c', fontSize: 13 }}>
-                  执行成功{res.affected_rows !== undefined ? `，影响 ${res.affected_rows} 行` : '，无返回行'}
-                </div>
+              {results.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="执行后在这里看结果（多条语句按 tab 展示）" style={{ marginTop: 40 }} />
               ) : (
-                <>
-                  <div style={{ padding: '6px 10px', fontSize: 12, color: '#8c8c8c' }}>
-                    返回 {(res.rows || []).length} 行{res.truncated ? '（已截断）' : ''}
-                  </div>
-                  <Table
-                    size="small"
-                    rowKey={(_, i) => String(i)}
-                    dataSource={(res.rows || []).map((r, i) => ({ __i: i, r }))}
-                    columns={(res.columns || []).map((c, idx) => ({
-                      title: c, dataIndex: ['r', idx], render: (v: unknown) => (v === null ? 'NULL' : String(v)),
-                    }))}
-                    pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
-                    scroll={{ x: 'max-content' }}
-                  />
-                </>
+                <Tabs
+                  size="small"
+                  style={{ padding: '0 8px' }}
+                  items={results.map((r, i) => ({
+                    key: String(i),
+                    label: (
+                      <span style={{ color: r.ok ? undefined : '#ff4d4f' }}>
+                        {i + 1}. {r.sql.replace(/\s+/g, ' ').slice(0, 22)}{r.sql.length > 22 ? '…' : ''}{r.ok ? '' : ' ✕'}
+                      </span>
+                    ),
+                    children: r.ok ? (
+                      (r.rows || []).length === 0 ? (
+                        <div style={{ padding: 12, color: '#8c8c8c', fontSize: 13 }}>
+                          执行成功{r.affected !== undefined ? `，影响 ${r.affected} 行` : '，无返回行'}
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ padding: '4px 2px', fontSize: 12, color: '#8c8c8c' }}>
+                            返回 {(r.rows || []).length} 行{r.truncated ? '（已截断）' : ''}
+                          </div>
+                          <Table
+                            size="small"
+                            rowKey={(_, idx) => String(idx)}
+                            dataSource={(r.rows || []).map((row, idx) => ({ __i: idx, row }))}
+                            columns={(r.columns || []).map((c, ci) => ({
+                              title: c, dataIndex: ['row', ci], render: (v: unknown) => (v === null ? 'NULL' : String(v)),
+                            }))}
+                            pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
+                            scroll={{ x: 'max-content' }}
+                          />
+                        </div>
+                      )
+                    ) : (
+                      <Alert type="error" showIcon message={r.err} description={<code>{r.sql}</code>} />
+                    ),
+                  }))}
+                />
               )}
             </div>
           </>
