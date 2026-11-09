@@ -791,7 +791,7 @@
 
 > 说明：把当天讨论的需求补上「验收标准 / 技术落点 / 拆分 / 估时 / 风险」，便于排期与验收。
 
-### R1 PostgreSQL 支持（经 agent 查库 + 健康采集）— 0.5~1d
+### R1 PostgreSQL 支持（经 agent 查库 + 健康采集）— ✅ 已实现（2026-11-09，commit `1b7a008`；agent 0.2.15 已升级测试集群；待真 PG 实例验证）
 
 **验收**
 - 配置 `db_type=postgres` 的连接后，只读 SQL 能返回列/行（NULL、时间、数字类型正确）
@@ -823,7 +823,7 @@
 
 **前置**：平台自身在 k8s 内运行（本地开发不受影响）；RBAC 允许平台 SA 读写该 Secret。
 
-### R3 数据库监控增强 — 2~3d
+### R3 数据库监控增强 — ✅ 已实现（2026-11-09：R3.1 异常点 `f3a2451` / R3.3 慢SQL建议 + R3.2 时间段 `d96cfad` / digest 趋势 `36beed9`；两时间段并排对比未做）
 
 **R3.1 异常点（1d）**
 - 验收：给出一条结构化异常列表，形如 `{level, metric, current, threshold, message, suggestion}`；阈值可在系统设置里改；平台直连库与 agent 集群库都能看
@@ -1106,7 +1106,7 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 | 8.5 会话录制 + 回放页 + 清理 | 1.5~2d |
 | 联调/自测 | 1d |
 
-### R9 主机采集支持密码认证（改用 asyncssh）— 0.5d（老板 2026-11-05 定：走 B 方案）
+### R9 主机采集支持密码认证（改用 asyncssh）— ✅ 已修复（2026-11-09，commit `36881dc`；8 台主机全部 online）
 
 **现状（Bug，2026-11-05 实测确认）**
 - `api-server/app/services/host_monitor_service.py` 的 `ssh_ps()` 用系统 `ssh -o BatchMode=yes`，
@@ -1525,7 +1525,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R18 数据库连接：按类型区分认证方式与字段 — ⏳ 待开发（老板 2026-11-06）
+### R18 数据库连接：按类型区分认证方式与字段 — ✅ 已实现（2026-11-09，commit `846fd40`；迁移 `b5c6d7e8f9a0`）
 
 **目标**：新建/编辑数据库连接时，**先选类型，再显示该类型对应的字段与校验**，不再用一套表单套所有库。
 本轮先支持 **mysql / pg（postgres）/ oracle** 三种，后续新增类型单独加。
@@ -1567,7 +1567,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R19 集群管理内发布（对接 Jenkins）— ⏳ 待开发（老板 2026-11-06）
+### R19 集群管理内发布（对接 Jenkins）— ✅ 已实现（2026-11-09，`5e129e8`…`e496b07`；含 namespace 标签门控 / 映射 / 单发+批量 / Blue Ocean 阶段日志 / 发布历史 / 每用户 Token；回滚到指定构建号未做）
 
 **目标**：在「集群管理」里直接发布服务，不用再去 Jenkins 页面点；后台统一配置 Jenkins 与服务映射，发布后弹出 pipeline 阶段视图与实时日志。
 
@@ -1693,7 +1693,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R21 应用诊断助手：会话按天折叠（默认只展开当天） — ⏳ 待开发（老板 2026-11-06）
+### R21 应用诊断助手：会话按天折叠（默认只展开当天） — ✅ 已实现（2026-11-09，commit `7a44313`）
 
 **目标**：会话列表按日期分组，**默认只展开当天**，历史日期默认收起，减少干扰。
 
