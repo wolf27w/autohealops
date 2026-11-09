@@ -48,11 +48,14 @@ func SchemaByKey(ctx context.Context, payload []byte) ([]byte, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("agent 配置里没有 key=%s", req.Key)
 	}
-	if cfg.Type != "mysql" {
-		return nil, fmt.Errorf("暂不支持 db_type=%s 的元数据（当前仅 mysql）", cfg.Type)
+	if cfg.Type == "postgres" {
+		cfg.Type = "pg"
+	}
+	if cfg.Type != "mysql" && cfg.Type != "pg" {
+		return nil, fmt.Errorf("暂不支持 db_type=%s 的元数据（当前 mysql/pg）", cfg.Type)
 	}
 
-	db, err := openMySQL(connParams{
+	db, err := openDB(connParams{
 		DBType: cfg.Type, Host: cfg.Host, Port: cfg.Port, Database: cfg.Database,
 		Username: cfg.Username, Password: cfg.Password,
 	})
@@ -66,7 +69,18 @@ func SchemaByKey(ctx context.Context, payload []byte) ([]byte, error) {
 	defer cancel()
 
 	dbs := make([]string, 0, 16)
-	if rows, err := db.QueryContext(qctx, "SHOW DATABASES"); err == nil {
+	if cfg.Type == "pg" {
+		if rows, err := db.QueryContext(qctx,
+			"SELECT datname FROM pg_database WHERE datistemplate=false AND datallowconn ORDER BY datname"); err == nil {
+			for rows.Next() {
+				var s string
+				if rows.Scan(&s) == nil {
+					dbs = append(dbs, s)
+				}
+			}
+			rows.Close()
+		}
+	} else if rows, err := db.QueryContext(qctx, "SHOW DATABASES"); err == nil {
 		for rows.Next() {
 			var s string
 			if rows.Scan(&s) == nil {

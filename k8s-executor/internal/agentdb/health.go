@@ -23,8 +23,15 @@ func (p *connParams) normalize() {
 	if p.DBType == "" {
 		p.DBType = "mysql"
 	}
+	if p.DBType == "postgres" {
+		p.DBType = "pg"
+	}
 	if p.Port == 0 {
-		p.Port = 3306
+		if p.DBType == "pg" {
+			p.Port = 5432
+		} else {
+			p.Port = 3306
+		}
 	}
 }
 
@@ -56,13 +63,10 @@ func handleMetrics(ctx context.Context, payload []byte, withSlow bool) ([]byte, 
 		return nil, fmt.Errorf("解析请求失败: %w", err)
 	}
 	p.normalize()
-	if p.DBType != "mysql" {
-		return nil, fmt.Errorf("暂不支持 db_type=%s（健康采集当前仅 mysql）", p.DBType)
-	}
 	if p.Host == "" {
 		return nil, fmt.Errorf("host 不能为空")
 	}
-	db, err := openMySQL(p)
+	db, err := openDB(p)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +74,11 @@ func handleMetrics(ctx context.Context, payload []byte, withSlow bool) ([]byte, 
 
 	qctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+
+	// PG 走独立口径（连接/事务/锁/库表大小/慢查询）
+	if p.DBType == "pg" {
+		return pgMetrics(qctx, db, p, withSlow)
+	}
 
 	out := map[string]any{"db_type": "mysql", "database": p.Database}
 

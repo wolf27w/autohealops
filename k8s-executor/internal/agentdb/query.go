@@ -60,11 +60,18 @@ func HandleQuery(ctx context.Context, payload []byte) ([]byte, error) {
 	if req.DBType == "" {
 		req.DBType = "mysql"
 	}
-	if req.Port == 0 {
-		req.Port = 3306
+	if req.DBType == "postgres" {
+		req.DBType = "pg"
 	}
-	if req.DBType != "mysql" {
-		return nil, fmt.Errorf("暂不支持 db_type=%s（当前仅 mysql）", req.DBType)
+	if req.Port == 0 {
+		if req.DBType == "pg" {
+			req.Port = 5432
+		} else {
+			req.Port = 3306
+		}
+	}
+	if req.DBType != "mysql" && req.DBType != "pg" {
+		return nil, fmt.Errorf("暂不支持 db_type=%s（当前仅 mysql/pg）", req.DBType)
 	}
 	limit := req.Limit
 	if limit <= 0 {
@@ -74,9 +81,17 @@ func HandleQuery(ctx context.Context, payload []byte) ([]byte, error) {
 		limit = hardMaxRows
 	}
 
+	driver := "mysql"
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&timeout=10s&readTimeout=30s",
 		req.Username, req.Password, req.Host, req.Port, req.Database)
-	db, err := sql.Open("mysql", dsn)
+	if req.DBType == "pg" {
+		driver = "pgx"
+		dsn = pgDSN(connParams{
+			DBType: "pg", Host: req.Host, Port: req.Port,
+			Database: req.Database, Username: req.Username, Password: req.Password,
+		})
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开连接失败: %w", err)
 	}

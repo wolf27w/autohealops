@@ -32,8 +32,11 @@ func (c *DBConfig) normalize() {
 	if c.Type == "" {
 		c.Type = "mysql"
 	}
+	if c.Type == "postgres" {
+		c.Type = "pg" // 统一用 pg 上报，与平台端 R18 的 db_type 口径一致
+	}
 	if c.Port == 0 {
-		if c.Type == "postgres" {
+		if c.Type == "pg" {
 			c.Port = 5432
 		} else {
 			c.Port = 3306
@@ -106,7 +109,7 @@ func parseConfigs(raw []byte) ([]DBConfig, error) {
 		if seen[c.Key] {
 			return nil, fmt.Errorf("key 重复: %s", c.Key)
 		}
-		if c.Type != "mysql" && c.Type != "postgres" {
+		if c.Type != "mysql" && c.Type != "pg" {
 			return nil, fmt.Errorf("%s: 不支持的 type=%s（仅 mysql/postgres）", c.Key, c.Type)
 		}
 		if c.Host == "" {

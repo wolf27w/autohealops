@@ -46,8 +46,10 @@ func DialectFor(key string) (Dialect, *DBConfig, error) {
 	switch cfg.Type {
 	case "mysql":
 		return &mysqlDialect{key: key}, cfg, nil
+	case "pg", "postgres":
+		return &pgDialect{key: key}, cfg, nil
 	default:
-		return nil, cfg, fmt.Errorf("暂不支持 db_type=%s（当前仅 mysql）", cfg.Type)
+		return nil, cfg, fmt.Errorf("暂不支持 db_type=%s（当前仅 mysql/pg）", cfg.Type)
 	}
 }
 
@@ -120,4 +122,48 @@ func (d *mysqlDialect) Import(ctx context.Context, db, table, format, content st
 		return nil, err
 	}
 	return out, nil
+}
+
+// ---------- PostgreSQL 适配（R1：只读查询 + 元数据；DDL/导出/导入待方言实现） ----------
+
+type pgDialect struct{ key string }
+
+func (d *pgDialect) Kind() string { return "pg" }
+
+func (d *pgDialect) Query(ctx context.Context, sqlText string, limit int, allowWrite bool) (map[string]any, error) {
+	payload, _ := json.Marshal(map[string]any{"key": d.key, "sql": sqlText, "limit": limit, "allow_write": allowWrite})
+	raw, err := QueryByKey(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (d *pgDialect) Schema(ctx context.Context) (map[string]any, error) {
+	payload, _ := json.Marshal(map[string]any{"key": d.key})
+	raw, err := SchemaByKey(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (d *pgDialect) DDL(ctx context.Context, kind, db, name string) (map[string]any, error) {
+	return nil, fmt.Errorf("pg 暂不支持导出对象 DDL（R1 仅查询+健康采集）")
+}
+
+func (d *pgDialect) Export(ctx context.Context, db, table string, rows int) (map[string]any, error) {
+	return nil, fmt.Errorf("pg 暂不支持导出（R1 仅查询+健康采集）")
+}
+
+func (d *pgDialect) Import(ctx context.Context, db, table, format, content string) (map[string]any, error) {
+	return nil, fmt.Errorf("pg 暂不支持导入（R1 仅查询+健康采集）")
 }

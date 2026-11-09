@@ -54,3 +54,15 @@ func TestConfigNormalize(t *testing.T) {
 		t.Fatalf("name 缺省应等于 key: %q", c.DisplayName())
 	}
 }
+
+func TestConfigPostgresNormalizesToPg(t *testing.T) {
+	t.Setenv("AGENT_DB_CONFIG", `[{"key":"biz-pg","type":"postgres","host":"pg.default.svc"}]`)
+	cfgs, err := LoadConfigs("")
+	if err != nil || len(cfgs) != 1 {
+		t.Fatalf("load 失败: %v %+v", err, cfgs)
+	}
+	c := cfgs[0]
+	if c.Type != "pg" || c.Port != 5432 {
+		t.Fatalf("postgres 应归一为 pg 且默认端口 5432: %+v", c)
+	}
+}
