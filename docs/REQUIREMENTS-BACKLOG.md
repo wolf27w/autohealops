@@ -1634,26 +1634,29 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 构建结束状态（成功/失败）与 Jenkins 一致；审计里能查到操作人
 - Jenkins 不可达/凭据错误时有明确提示（不吞异常）
 
-**认证与「用当前登录用户发布」（老板 2026-11-06 提出）**
+**认证与发布身份（老板 2026-11-09 最终口径）**
 
-现状：平台与 Jenkins 都是 LDAP 登录。希望发布时用**当前平台用户**的身份去触发 Jenkins。
+现状：平台与 Jenkins 都是 LDAP。老板要求：**管理员配置一次、用户不配任何东西、只选分支**，且希望 Jenkins 里能看到真实用户。
 
-可行方案（按推荐度）：
+结论（已实现）：
+- **服务账号触发**（管理员在「系统设置 → 发布」配一次 Jenkins 连接：URL + 服务账号/API Token）
+- 用户发布时只选**分支**（Job 由管理员在「服务↔Job 映射」里预先配好）
+- 触发后用 Jenkins `submitDescription` 把**真实平台 LDAP 用户名写进构建描述**（Jenkins 构建页可见：`平台发布人: xxx`）
+- 原因：Jenkins 的「Started by」就是调 API 的凭据，要显示真实用户只能每人配 Token（老板嫌复杂）或 LDAP 直通（密码红线+会话过期）——两者都不选
+- （可选/保留）每用户 API Token 能力（方案 A）仍在后端，用户若自己配了就优先用，否则回退服务账号
+
+方案对比（历史记录）：
 
 | 方案 | 做法 | 优点 | 缺点 |
 |---|---|---|---|
-| **A. 每用户 Jenkins API Token（推荐）** | 用户在「个人设置」里填一次 Jenkins API Token（加密存平台）；发布时用该 Token 调 Jenkins | Jenkins 侧看到的就是真实用户，权限/审计天然一致；实现简单 | 每个用户要生成一次 Token |
-| B. 服务账号 + 记录操作人 | 平台用统一服务账号发布，把「平台用户名」写进构建参数/描述 | 零维护 | Jenkins 里看不到真实用户，权限无法按人控制 |
-| C. LDAP 直通（转发用户凭据） | 平台保存用户 LDAP 密码或用其换票据再调 Jenkins | 无需额外交互 | **不能存 LDAP 密码**（安全红线）；Jenkins REST 也没有 SSO 代授权，除非再加 oauth2-proxy/header 认证，成本高 |
-
-**建议**：本轮做 **A**（个人设置里配置 Jenkins API Token，加密存储、只本人可改），
-同时保留 B 作为兜底（未配置 Token 的用户只能用服务账号发布，并在构建描述里标注平台用户名）。
+| A. 每用户 Jenkins API Token | 用户填一次 Token（加密存）；发布用它 | Started by 是真实用户 | 每人都要配（老板 2026-11-09 否决：太复杂） |
+| **B. 服务账号 + 构建描述标真实用户（已采用）** | 统一服务账号触发，描述/参数写平台用户名 | 零维护，用户只选分支；Jenkins 能看到发布人 | Started by 是服务账号（不是真实用户） |
+| C. LDAP 直通 | 登录时把 LDAP 凭据转给 Jenkins 换会话 | Started by 真实用户 | 不能存 LDAP 密码（红线）；会话过期；复杂 |
 
 **其它口径**
-- 支持多 Jenkins 实例并存（每个实例一条配置，各自独立凭据/Token）
+- 支持多 Jenkins 实例并存（每个实例一条配置，各自独立凭据）
+- 分支选项来自 Job 的 `BRANCH_TAG` 参数 `allValueItems`（GitParameterDefinition，实测测试K8s Jenkins 返回 83 个分支）
 - 是否支持「回滚到指定构建号」：先记为 ⏳（本轮先做「重新发布同一分支」）
-
-**待确认**：A 方案的 Token 是每个 Jenkins 实例各配一个，还是同一 Token 复用（推荐按实例分开）
 
 ---
 
