@@ -282,7 +282,7 @@ export const searchLogs = (params: PageParams) => http.get('/logs/search', { par
 // ============ 指标监控 ============
 // R15 工作负载级监控（Deployment × 容器，跨 Pod 拼接；只读 Prometheus）
 export const getWorkloadMetrics = (clusterId: number, kind: string, namespace: string, name: string, range = '1h') =>
-  http.get(`/monitoring/clusters/${clusterId}/workloads/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/metrics`, { params: { range } })
+  http.get(`/monitoring/clusters/${clusterId}/workloads/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/metrics`, { params: { range }, timeout: 60000 })
 export const getPodMetrics = (clusterId: number, ns: string, pod: string, range = '1h') =>
   http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/metrics`, { params: { range } })
 
