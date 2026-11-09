@@ -20,6 +20,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/agentbridge"
 	"github.com/autohealops/k8s-executor/internal/agentdb"
 	"github.com/autohealops/k8s-executor/internal/eventstore"
+	"github.com/autohealops/k8s-executor/internal/hostagent"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/metrics"
 	"github.com/autohealops/k8s-executor/internal/prometheus"
@@ -67,6 +68,8 @@ func main() {
 	dbConfig := flag.String("db-config", "", "数据库配置文件（JSON；也可用 AGENT_DB_CONFIG_FILE / AGENT_DB_CONFIG）")
 	dbInterval := flag.Duration("db-interval", 10*time.Second, "数据库指标采集间隔")
 	dbSlowInterval := flag.Duration("db-slow-interval", 60*time.Second, "慢 SQL 采集间隔（内部子循环）")
+	hostConfig := flag.String("host-config", "", "主机代采配置 hosts.json 路径（空=不启用）")
+	sshKey := flag.String("ssh-key", "", "主机代采 SSH 私钥路径")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
 
@@ -77,6 +80,12 @@ func main() {
 
 	if *clusterID == 0 {
 		fmt.Fprintln(os.Stderr, "必须指定 -cluster-id")
+		os.Exit(1)
+	}
+
+	hosts, err := hostagent.LoadHosts(*hostConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载主机代采配置失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -164,7 +173,7 @@ func main() {
 
 	// 断线自动重连
 	for ctx.Err() == nil {
-		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, mc, *watch, dbCfgs, *dbInterval, *dbSlowInterval, logger); err != nil {
+		if err := runTunnel(ctx, conn, *clusterID, *token, bridge, cs, mc, *watch, dbCfgs, *dbInterval, *dbSlowInterval, hosts, *sshKey, logger); err != nil {
 			fmt.Fprintf(os.Stderr, "[agent] 隧道断开: %v，3s 后重连\n", err)
 		}
 		select {
@@ -177,7 +186,8 @@ func main() {
 
 func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, token string,
 	bridge *agentbridge.Bridge, cs *kubernetes.Clientset, mc *k8sclient.ClusterClient, enableWatch bool,
-	dbCfgs []agentdb.DBConfig, dbInterval, dbSlowInterval time.Duration, logger *zap.Logger) error {
+	dbCfgs []agentdb.DBConfig, dbInterval, dbSlowInterval time.Duration,
+	hosts []hostagent.HostConfig, sshKeyPath string, logger *zap.Logger) error {
 	client := agentpb.NewAgentServiceClient(conn)
 	stream, err := client.Tunnel(ctx)
 	if err != nil {
@@ -213,6 +223,10 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 	// k8s 事件历史上报（k8s 默认只留 1h；平台自存 7 天，供历史事件回溯）
 	stopEvents := startEventPush(ctx, mc, send, uint(clusterID), logger)
 	defer stopEvents()
+
+	// 主机代采上报（R7）：agent 在集群内 SSH 采集外部 VM，经隧道上报平台
+	stopHostMetrics := startHostMetricsPush(ctx, send, hosts, sshKeyPath, logger)
+	defer stopHostMetrics()
 
 	// 告警检测（P2）：watcher 在 agent 内跑，事件经隧道上报平台，平台统一写库/触发处理
 	var pw *watcher.PodWatcher
@@ -538,6 +552,46 @@ func startDBMetricsPush(ctx context.Context, send func(*agentpb.AgentFrame) erro
 			}
 			if err := send(&agentpb.AgentFrame{Type: "event", Method: "DbMetrics", Payload: payload}); err != nil {
 				logger.Debug("数据库指标上报失败（隧道可能已断）", zap.Error(err))
+			}
+		}
+		push()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				push()
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+// startHostMetricsPush 主机代采上报循环（R7）：启动即采一次，之后每 60s 采集一次，
+// 把主机进程指标经隧道 event 帧（method=HostMetrics）上报平台，由平台自动建主机/更新状态。
+func startHostMetricsPush(ctx context.Context, send func(*agentpb.AgentFrame) error,
+	hosts []hostagent.HostConfig, sshKeyPath string, logger *zap.Logger) func() {
+	if len(hosts) == 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		push := func() {
+			rows := hostagent.CollectOnce(ctx, hosts, sshKeyPath, logger)
+			if len(rows) == 0 {
+				return
+			}
+			payload, err := json.Marshal(map[string]any{"hosts": rows})
+			if err != nil {
+				logger.Warn("主机代采指标序列化失败", zap.Error(err))
+				return
+			}
+			if err := send(&agentpb.AgentFrame{Type: "event", Method: "HostMetrics", Payload: payload}); err != nil {
+				logger.Debug("主机代采指标上报失败（隧道可能已断）", zap.Error(err))
 			}
 		}
 		push()
