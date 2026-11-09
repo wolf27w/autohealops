@@ -1575,12 +1575,14 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - Jenkins 实例：名称、地址、认证方式（用户名+API Token / 凭据 ID）、是否忽略证书
 - 服务映射：`集群 → 服务名 → Jenkins Job 名`（一个服务可对应多个环境/集群；与集群 id 绑定）
 - 参数模板：分支参数名（如 `BRANCH_TAG`）、构建参数默认值、是否允许覆盖
-- **发布 namespace 白名单（老板 2026-11-09 新增）**：配置「集群 → 允许发布的 namespace 列表」
-  - 只有**白名单内**的 namespace 才出现「发布」入口（服务/工作负载行内按钮、批量操作、详情页按钮）；
-  - 不在白名单的 namespace **完全不渲染发布按钮**（不置灰、不提示，避免误导）；
-  - 后端同样拦截：对非白名单 namespace 调发布接口 → **403**（`namespace 未开放发布`），不能只靠前端隐藏；
-  - 白名单为空 = 全平台都不显示发布入口（需先在后台配置）；
-  - 配置变更进审计（谁在什么时候开放/关闭了哪个集群的哪个 namespace）
+- **发布入口用 namespace 标签开关（老板 2026-11-09 定，不用白名单）**：
+  - 机制：**看当前 namespace 上的 label**。带指定标签的 namespace，其下 **Deployment** 才会出现「发布」按钮；
+    没打标签的 namespace **直接不渲染按钮**（不置灰、不提示），无需平台维护名单
+  - 标签 key/value 可配（系统设置 → 发布），默认建议 `autohealops.io/release=enabled`
+  - 标签由集群侧运维在 namespace 上打，**平台只读不写**；平台缓存的 namespace 列表要一并带 `labels`
+  - 后端同样校验：对无该标签的 namespace 调发布接口 → **403**（`namespace 未开启发布`），不能只靠前端隐藏
+  - 标签变更后按钮随之生效：namespace 缓存 TTL ≤ 60s，或发布页/服务列表刷新时重拉
+  - 构建/审计记录里保存「命中的 namespace 标签」，方便回溯为什么这个 ns 可以发布
 
 **集群管理 → 发布（老板 2026-11-06 细化：按服务发布 + 单独选分支）**
 - 入口：**在某个服务上点「发布」**（集群详情 / 服务列表行内操作）
@@ -1604,7 +1606,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 在服务 A 上点发布：弹窗里服务名固定为 A，不出现服务选择器
 - 分支下拉直接来自 Jenkins 参数 choices（与 Jenkins 页面完全一致）；参数缺失时提示并可手输
 - 构建参数里 `服务名 = A`、`分支 = 选中值`，Jenkins 构建页面能对上
-- **namespace 白名单**：白名单内 namespace 有「发布」按钮；白名单外 namespace 看不到按钮；绕过前端直接调接口 → 403
+- **namespace 标签**：带 `autohealops.io/release=enabled` 的 namespace 下 Deployment 有「发布」按钮；未打标签的看不到按钮；绕过前端直接调接口 → 403
 
 **技术要点**
 - Jenkins API：`POST /job/{name}/buildWithParameters`（需 crumb + 认证）、`GET /job/{name}/{n}/api/json` 取阶段/状态、
