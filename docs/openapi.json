@@ -3299,265 +3299,6 @@
         "summary": "Agent Upgrade"
       }
     },
-    "/api/v1/clusters/{cluster_id}/db-connections": {
-      "get": {
-        "operationId": "get_api_v1_clusters_cluster_id_db_connections",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "cluster_id",
-            "required": true,
-            "schema": {
-              "title": "Cluster Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Db Connections"
-      },
-      "post": {
-        "operationId": "post_api_v1_clusters_cluster_id_db_connections",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "cluster_id",
-            "required": true,
-            "schema": {
-              "title": "Cluster Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "title": "Payload",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Db Connection"
-      }
-    },
-    "/api/v1/clusters/{cluster_id}/db-connections/{conn_id}": {
-      "delete": {
-        "operationId": "delete_api_v1_clusters_cluster_id_db_connections_conn_id",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "cluster_id",
-            "required": true,
-            "schema": {
-              "title": "Cluster Id",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "path",
-            "name": "conn_id",
-            "required": true,
-            "schema": {
-              "title": "Conn Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Delete Db Connection"
-      }
-    },
-    "/api/v1/clusters/{cluster_id}/db-connections/{conn_id}/health": {
-      "post": {
-        "description": "一键数据库健康采集（经 agent 在集群内执行）：版本/连接/运行时长/慢查询/锁等待/表空间/慢SQL TOP",
-        "operationId": "post_api_v1_clusters_cluster_id_db_connections_conn_id_health",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "cluster_id",
-            "required": true,
-            "schema": {
-              "title": "Cluster Id",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "path",
-            "name": "conn_id",
-            "required": true,
-            "schema": {
-              "title": "Conn Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Db Health"
-      }
-    },
-    "/api/v1/clusters/{cluster_id}/db-connections/{conn_id}/query": {
-      "post": {
-        "description": "下发 SQL 由 agent 在集群内执行（只读白名单：select/show/describe/explain）",
-        "operationId": "post_api_v1_clusters_cluster_id_db_connections_conn_id_query",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "cluster_id",
-            "required": true,
-            "schema": {
-              "title": "Cluster Id",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "path",
-            "name": "conn_id",
-            "required": true,
-            "schema": {
-              "title": "Conn Id",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "title": "Payload",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Query Db"
-      }
-    },
     "/api/v1/clusters/{cluster_id}/health-check": {
       "post": {
         "operationId": "post_api_v1_clusters_cluster_id_health_check",
@@ -4138,7 +3879,7 @@
         "summary": "List Connections"
       },
       "post": {
-        "description": "创建数据库连接（仅 admin；密码加密存储）",
+        "description": "创建数据库连接（仅 admin；密码加密存储；R18 按类型校验字段）",
         "operationId": "post_api_v1_db_connections",
         "requestBody": {
           "content": {
@@ -4177,6 +3918,186 @@
           }
         ],
         "summary": "Create Connection"
+      }
+    },
+    "/api/v1/db-connections/groups": {
+      "get": {
+        "description": "实例分组列表（含每个组的实例数）。",
+        "operationId": "get_api_v1_db_connections_groups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Groups"
+      },
+      "post": {
+        "description": "新建分组（重名返回 400）。",
+        "operationId": "post_api_v1_db_connections_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Group"
+      }
+    },
+    "/api/v1/db-connections/groups/{group_id}": {
+      "delete": {
+        "description": "删除分组：组内实例移到「未分组」，不删除实例。",
+        "operationId": "delete_api_v1_db_connections_groups_group_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Group"
+      },
+      "put": {
+        "description": "重命名分组（同步更新该组下所有实例的 group_name）。",
+        "operationId": "put_api_v1_db_connections_groups_group_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rename Group"
+      }
+    },
+    "/api/v1/db-connections/sql-task-counts": {
+      "get": {
+        "description": "每个数据库连接的定时任务数量（实例列表展示用）。",
+        "operationId": "get_api_v1_db_connections_sql_task_counts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sql Task Counts"
       }
     },
     "/api/v1/db-connections/{conn_id}": {
@@ -4221,7 +4142,7 @@
         "summary": "Delete Connection"
       },
       "put": {
-        "description": "更新连接（admin 或对该连接有 manage 权限的 operator）",
+        "description": "更新连接（admin 或对该连接有 manage 权限的 operator）；R18 按类型校验",
         "operationId": "put_api_v1_db_connections_conn_id",
         "parameters": [
           {
@@ -4314,6 +4235,390 @@
           }
         ],
         "summary": "Collect Slow Sql"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/exec": {
+      "post": {
+        "description": "执行 SQL（DML/DDL）：仅管理员 + 必须显式 confirm，全额审计。\n\n老板口径：平台不做自动修改；这里是人工兜底入口，操作人自负，全部留痕。",
+        "operationId": "post_api_v1_db_connections_conn_id_exec",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Exec Connection"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/export": {
+      "post": {
+        "description": "导出库/表为 SQL（CREATE + INSERT，单表 ≤5000 行、总 ≤5MB）。",
+        "operationId": "post_api_v1_db_connections_conn_id_export",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Objects"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/import": {
+      "post": {
+        "description": "导入 SQL 脚本 / CSV（管理员 + confirm，≤5MB，全额审计）。",
+        "operationId": "post_api_v1_db_connections_conn_id_import",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Objects"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/object-ddl": {
+      "get": {
+        "description": "表/视图/函数/存储过程/事件的创建语句（SHOW CREATE）。",
+        "operationId": "get_api_v1_db_connections_conn_id_object_ddl",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "db",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Db",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Object Ddl"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/query": {
+      "post": {
+        "description": "只读查询（agent 库）：平台只下发 {key, sql}，账号密码在 agent 本地，不出集群。\n\n直连库暂不开放（平台侧执行会用到平台保存的凭据，口径上只保留 agent 路径）。",
+        "operationId": "post_api_v1_db_connections_conn_id_query",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Query Connection"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/query/download": {
+      "post": {
+        "description": "执行只读查询并导出 CSV（最多 5000 行，UTF-8 BOM，Excel 可直接打开）。",
+        "operationId": "post_api_v1_db_connections_conn_id_query_download",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Query"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/schema": {
+      "get": {
+        "description": "SQL 编辑器补全用：返回该库当前账号可见的 databases + tables（仅 agent 库）。\n\n结果缓存 60s（同一库反复打开编辑器不必每次过隧道）。",
+        "operationId": "get_api_v1_db_connections_conn_id_schema",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Schema"
       }
     },
     "/api/v1/db-connections/{conn_id}/slow-sql": {
@@ -4420,6 +4725,280 @@
           }
         ],
         "summary": "Slow Sql Trend"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/sql-tasks": {
+      "get": {
+        "operationId": "get_api_v1_db_connections_conn_id_sql_tasks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Sql Tasks"
+      },
+      "post": {
+        "description": "新建定时任务：SQL + cron + 收件邮箱（逗号分隔，支持平台用户名）。",
+        "operationId": "post_api_v1_db_connections_conn_id_sql_tasks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Sql Task"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/sql-tasks/{task_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_db_connections_conn_id_sql_tasks_task_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Sql Task"
+      },
+      "put": {
+        "operationId": "put_api_v1_db_connections_conn_id_sql_tasks_task_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Sql Task"
+      }
+    },
+    "/api/v1/db-connections/{conn_id}/sql-tasks/{task_id}/run": {
+      "post": {
+        "description": "立即执行一次；dry_run=true 只跑 SQL 并返回预览，不发邮件（便于验证 cron/SQL 是否正确）。",
+        "operationId": "post_api_v1_db_connections_conn_id_sql_tasks_task_id_run",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Sql Task"
       }
     },
     "/api/v1/db-connections/{conn_id}/test": {
@@ -8170,6 +8749,86 @@
           }
         ],
         "summary": "Cluster Range"
+      }
+    },
+    "/api/v1/monitoring/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/metrics": {
+      "get": {
+        "description": "工作负载级监控（R15）：Deployment/StatefulSet/DaemonSet × 容器，跨 Pod 重建拼接。\n\n- 数据源：集群自带 Prometheus（**平台不落库**）\n- CPU/内存：每容器一条线（指标本身带 container 标签）\n- 网络：只有 Pod 级（容器共享 netns），前端按\"该 Pod 是否单容器\"决定拆或合并\n- range：10m / 1h / 6h / 24h / 72h / 168h（上限 7 天，受集群 Prometheus retention 限制）",
+        "operationId": "get_api_v1_monitoring_clusters_cluster_id_workloads_kind_namespace_name_metrics",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "1h",
+              "title": "Range",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Workload Metrics"
       }
     },
     "/api/v1/monitoring/metrics": {
@@ -13437,6 +14096,49 @@
         "summary": "Cluster Pods"
       }
     },
+    "/api/v1/resources/clusters/{cluster_id}/pods/evicted/cleanup": {
+      "post": {
+        "description": "清理该集群已驱逐（Evicted）的 Pod（终态对象，删除无影响；记录审计）。",
+        "operationId": "post_api_v1_resources_clusters_cluster_id_pods_evicted_cleanup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cleanup Evicted"
+      }
+    },
     "/api/v1/resources/clusters/{cluster_id}/workload-events": {
       "get": {
         "description": "工作负载事件（按 Pod 汇总 describe 中的 Events）",
@@ -16223,6 +16925,22 @@
                 }
               ],
               "title": "Cluster Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env_tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Tag"
             }
           },
           {
