@@ -76,8 +76,6 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
       .finally(() => setLoading(false))
   }, [target, range])
 
-  if (!target) return null
-
   const containerCount = Math.max(1, data.cpu.length)
   const podCount = Object.keys(data.pod_container_count).length
   const multiContainer = Object.values(data.pod_container_count).some((n) => n > 1)
@@ -125,7 +123,7 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
   const base = { data: [], xField: 't', yField: 'v', seriesField: 'type', smooth: true, height: 200, animation: false, legend: { position: 'top' as const } }
 
   return (
-    <Drawer title={`工作负载监控：${target.namespace} / ${target.name}`} open={!!target} onClose={onClose} width={860}>
+    <Drawer title={target ? `工作负载监控：${target.namespace} / ${target.name}` : '工作负载监控'} open={!!target} onClose={onClose} width={860}>
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={RANGES} />
         <Tag color="blue">{containerCount} 个容器</Tag>
