@@ -86,6 +86,8 @@ export const agentsBatchUpgrade = (data: { cluster_ids: number[]; image?: string
   http.post<{ image: string; ok: number; total: number; results: AgentUpgradeResult[] }>('/clusters/agents/upgrade', data)
 // 吊销 Agent 令牌
 export const revokeClusterAgent = (id: number) => http.post(`/clusters/${id}/agent/revoke`)
+// R26：集群级自愈开关
+export const setClusterAutoHeal = (id: number, enabled: boolean) => http.put(`/clusters/${id}/auto-heal`, { enabled })
 export const setupClusterRBAC = (id: number) => http.post(`/clusters/${id}/setup-rbac`)
 export const inspectCluster = (id: number) => http.post(`/clusters/${id}/inspect`)
 export const getInspectionReports = (id: number, limit = 20) => http.get(`/clusters/${id}/inspection-reports`, { params: { limit } })

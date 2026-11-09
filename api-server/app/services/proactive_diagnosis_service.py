@@ -220,6 +220,9 @@ async def run_scan(cluster_id: int | None = None, namespace: str = "", kinds: li
             q = select(Cluster)
             if cluster_id:
                 q = q.where(Cluster.id == cluster_id)
+            else:
+                # R26：后台自动巡检跳过关闭自愈的集群（省算力）；定向巡检（指定 cluster_id）不受限
+                q = q.where(Cluster.auto_heal_enabled.is_(True))
             clusters = list((await s.execute(q)).scalars())
         for c in clusters:
             summary["clusters"] += 1

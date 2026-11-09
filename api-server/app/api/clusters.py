@@ -642,6 +642,7 @@ async def list_clusters(user=Depends(require_any_user)):
          "created_at": str(c.created_at),
          "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
          "inspect_enabled": bool(c.inspect_enabled),
+         "auto_heal_enabled": bool(getattr(c, "auto_heal_enabled", True)),
          "inspect_cron": c.inspect_cron or "",
          "last_check_at": str(c.last_check_at) if c.last_check_at else "",
          "last_check_error": c.last_check_error or "",
@@ -667,8 +668,22 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
         "agent_version": c.agent_version or "",
         "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
         "inspect_enabled": bool(c.inspect_enabled),
+        "auto_heal_enabled": bool(getattr(c, "auto_heal_enabled", True)),
         "inspect_cron": c.inspect_cron or "",
     }}
+
+
+@router.put("/{cluster_id}/auto-heal")
+async def set_auto_heal(cluster_id: int, payload: dict, user=Depends(require_operator)):
+    """R26：集群级自愈/自动诊断总开关（关闭后告警照常通知，但不自动 AI 诊断/不自愈）。"""
+    enabled = bool(payload.get("enabled", True))
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+        if not c:
+            return {"code": 404, "message": "集群不存在", "data": None}
+        c.auto_heal_enabled = enabled
+        await session.commit()
+    return {"code": 200, "message": "success", "data": {"auto_heal_enabled": enabled}}
 
 
 @router.put("/{cluster_id}")
@@ -689,6 +704,8 @@ async def update_cluster(cluster_id: int, payload: dict, user=Depends(require_ad
             c.maintenance_window = json.dumps(mw, ensure_ascii=False) if isinstance(mw, dict) else str(mw or "{}")
         if "inspect_enabled" in payload:
             c.inspect_enabled = bool(payload.get("inspect_enabled", True))
+        if "auto_heal_enabled" in payload:
+            c.auto_heal_enabled = bool(payload.get("auto_heal_enabled", True))
         if "inspect_cron" in payload:
             c.inspect_cron = (payload.get("inspect_cron") or "").strip()
         await session.commit()

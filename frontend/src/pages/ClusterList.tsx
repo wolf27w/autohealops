@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, Upload, Space, message, Select, Tag, Switch, Tooltip, Dropdown, Checkbox, Alert, Typography } from 'antd'
 import { PlusOutlined, ReloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters, agentOnboardCluster, getAgentImage, agentUpgrade, agentsBatchUpgrade } from '../services/api'
+import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCluster, replaceClusterKubeconfig, parseClusterKubeconfig, importMultiClusters, agentOnboardCluster, getAgentImage, agentUpgrade, agentsBatchUpgrade, setClusterAutoHeal } from '../services/api'
 import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
@@ -23,6 +23,7 @@ type ClusterWithExtra = Cluster & {
   rbac_status?: string
   version?: string
   inspect_cron?: string
+  auto_heal_enabled?: boolean
 }
 
 const RBAC_MODE_LABEL: Record<string, string> = {
@@ -237,6 +238,17 @@ export default function ClusterList() {
             const tip = r.agent_version ? `agent 版本 ${r.agent_version}` : '尚未上报版本（旧版 agent 或未连接）'
             return <Tooltip title={tip}><Tag color={x.c}>{x.t}{ver}</Tag></Tooltip>
           } },
+          { title: '自愈', dataIndex: 'auto_heal_enabled', width: 80, render: (v: boolean, r: ClusterWithExtra) => (
+            <Tooltip title={v ? '开：异常自动 AI 诊断/自愈' : '关：只通知，不自动 AI 诊断/自愈'}>
+              <Switch size="small" checked={!!v} onChange={async (checked) => {
+                try {
+                  await setClusterAutoHeal(r.id, checked)
+                  message.success(checked ? '已开启自愈' : '已关闭自愈（仅通知）')
+                  load()
+                } catch { /* 拦截器提示 */ }
+              }} />
+            </Tooltip>
+          ) },
           { title: '创建时间', dataIndex: 'created_at' },
           {
             title: '操作', width: 70, render: (_, record) => (

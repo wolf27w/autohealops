@@ -50,6 +50,8 @@ class Cluster(Base):
     last_check_error: Mapped[str] = mapped_column(String(255), default="")
     # 巡检开关（按集群）：关闭后该集群不参与巡检/报告生成
     inspect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 自愈/自动诊断总开关（R26，老板 2026-11-09）：关闭后告警照常通知，但不自动 AI 诊断/不自愈（省算力）
+    auto_heal_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     # 定时巡检 cron（分 时 日 月 周；空=不定时，仅手动点击巡检）
     inspect_cron: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

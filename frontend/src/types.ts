@@ -42,6 +42,7 @@ export interface Cluster {
   status: string // healthy / unreachable / unknown
   rbac_mode?: string
   inspect_enabled?: boolean
+  auto_heal_enabled?: boolean
   maintenance_window?: string
   last_check_at?: string | null
   last_check_error?: string | null

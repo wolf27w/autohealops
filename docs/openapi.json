@@ -3299,6 +3299,60 @@
         "summary": "Agent Upgrade"
       }
     },
+    "/api/v1/clusters/{cluster_id}/auto-heal": {
+      "put": {
+        "description": "R26：集群级自愈/自动诊断总开关（关闭后告警照常通知，但不自动 AI 诊断/不自愈）。",
+        "operationId": "put_api_v1_clusters_cluster_id_auto_heal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Auto Heal"
+      }
+    },
     "/api/v1/clusters/{cluster_id}/health-check": {
       "post": {
         "operationId": "post_api_v1_clusters_cluster_id_health_check",

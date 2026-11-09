@@ -17,7 +17,7 @@ from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import acquire_lock, redis_pool, release_lock
 from app.core.security import generate_trace_id
-from app.models import AIDiagnosisResult, Alert, Approval, SelfHealRule
+from app.models import AIDiagnosisResult, Alert, Approval, Cluster, SelfHealRule
 from app.services import audit_service, knowledge_service
 
 logger = get_logger("api-server.alert_auto")
@@ -1675,7 +1675,19 @@ async def process_alert(alert_id: int) -> bool:
     try:
         async with async_session() as session:
             alert = await session.get(Alert, alert_id)
+            # R26：集群关闭自愈 → 只通知，不自动 AI 诊断/不自愈（省算力）
+            cluster_auto_heal = True
+            if alert and alert.cluster_id:
+                try:
+                    c = await session.get(Cluster, int(alert.cluster_id))
+                    if c is not None:
+                        cluster_auto_heal = bool(getattr(c, "auto_heal_enabled", True))
+                except Exception:  # noqa: BLE001
+                    cluster_auto_heal = True
         if not alert or alert.status not in ("pending", "awaiting_approval"):
+            return False
+        if not cluster_auto_heal:
+            logger.info("集群 %s 已关闭自动自愈，跳过告警 %s 的自动处理（仅通知）", alert.cluster_id, alert_id)
             return False
         return await _process_one(alert)
     finally:
