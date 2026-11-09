@@ -43,6 +43,12 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
     return {
         "id": c.id, "name": c.name, "db_type": c.db_type, "host": c.host,
         "port": c.port, "database": c.database, "username": c.username,
+        # R18：Oracle 连接方式（mysql/pg 为空）
+        "connect_mode": getattr(c, "connect_mode", "") or "",
+        "service_name": getattr(c, "service_name", "") or "",
+        "sid": getattr(c, "sid", "") or "",
+        "tns_descriptor": getattr(c, "tns_descriptor", "") or "",
+        "oracle_role": getattr(c, "oracle_role", "") or "",
         "readonly_username": c.readonly_username or "",
         "has_readonly_password": bool(c.readonly_password_encrypted),
         "slow_sql_threshold": c.slow_sql_threshold, "collect_interval": c.collect_interval,
@@ -59,6 +65,113 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
         "last_error": getattr(c, "last_error", "") or "",
         "last_seen_at": str(c.last_seen_at) if getattr(c, "last_seen_at", None) else "",
     }
+
+
+# ---- R18：按数据库类型校验与默认值（2026-11-09）----
+DB_TYPE_DEFAULT_PORT = {"mysql": 3306, "pg": 5432, "oracle": 1521}
+ORACLE_MODES = ("service_name", "sid", "tns")
+ORACLE_ROLES = ("", "sysdba", "sysoper")
+
+
+def _tns_descriptor_ok(text: str) -> bool:
+    """TNS 描述符校验：以 (DESCRIPTION= 开头、括号配对。"""
+    t = (text or "").strip()
+    if not t.upper().startswith("(DESCRIPTION="):
+        return False
+    depth = 0
+    for ch in t:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _validate_conn_payload(db_type: str, data: dict) -> str | None:
+    """按类型校验连接字段；返回错误文案，None 表示通过。
+
+    data 是「创建时的 payload」或「编辑时的合并值」，字段均为最终值。
+    """
+    if not (data.get("name") or "").strip():
+        return "名称不能为空"
+    db_type = (db_type or "mysql").lower()
+    host = (data.get("host") or "").strip()
+    username = (data.get("username") or "").strip()
+
+    if db_type == "mysql":
+        if not host:
+            return "MySQL 连接必须填写主机"
+        if not username:
+            return "MySQL 连接必须填写用户名"
+        # database 非必填（不填=连接实例但不选默认库）
+        return None
+
+    if db_type == "pg":
+        if not host:
+            return "PostgreSQL 连接必须填写主机"
+        if not username:
+            return "PostgreSQL 连接必须填写用户名"
+        if not (data.get("database") or "").strip():
+            return "PostgreSQL 连接必须填写数据库名"
+        return None
+
+    if db_type == "oracle":
+        mode = (data.get("connect_mode") or "service_name").lower()
+        if mode not in ORACLE_MODES:
+            return "Oracle 连接方式仅支持 Service Name / SID / TNS 描述符"
+        role = (data.get("oracle_role") or "").lower()
+        if role not in ORACLE_ROLES:
+            return "Oracle 角色仅支持 默认 / SYSDBA / SYSOPER"
+        if not username:
+            return "Oracle 连接必须填写用户名"
+        if mode == "tns":
+            if not _tns_descriptor_ok(data.get("tns_descriptor") or ""):
+                return "TNS 描述符格式不正确（需以 (DESCRIPTION= 开头且括号配对）"
+            return None
+        if not host:
+            return "Oracle 连接必须填写主机"
+        if mode == "service_name" and not (data.get("service_name") or "").strip():
+            return "Oracle 连接方式为 Service Name 时必须填写服务名"
+        if mode == "sid" and not (data.get("sid") or "").strip():
+            return "Oracle 连接方式为 SID 时必须填写 SID"
+        return None
+
+    return f"数据库类型仅支持 mysql/pg/oracle（当前 {db_type}）"
+
+
+def _apply_type_fields(c: DBConnection, db_type: str, data: dict) -> None:
+    """把类型相关字段写到模型上；非 oracle 时清空 oracle 专用字段（避免串值）。"""
+    c.db_type = db_type
+    default_port = DB_TYPE_DEFAULT_PORT.get(db_type, 3306)
+    c.port = _safe_int(data.get("port") or default_port, default_port)
+    c.host = (data.get("host") or "").strip()
+    c.username = (data.get("username") or "").strip()
+    if db_type == "oracle":
+        mode = (data.get("connect_mode") or "service_name").lower()
+        c.connect_mode = mode
+        c.oracle_role = (data.get("oracle_role") or "").lower()
+        if mode == "service_name":
+            c.service_name = (data.get("service_name") or "").strip()
+            c.sid = ""
+            c.tns_descriptor = ""
+        elif mode == "sid":
+            c.sid = (data.get("sid") or "").strip()
+            c.service_name = ""
+            c.tns_descriptor = ""
+        else:  # tns
+            c.tns_descriptor = (data.get("tns_descriptor") or "").strip()
+            c.service_name = ""
+            c.sid = ""
+        c.database = ""
+    else:
+        c.database = (data.get("database") or "").strip()
+        c.connect_mode = ""
+        c.service_name = ""
+        c.sid = ""
+        c.tns_descriptor = ""
+        c.oracle_role = ""
 
 
 @router.get("/groups")
@@ -160,20 +273,24 @@ async def sql_task_counts(user=Depends(require_any_user)):
 
 @router.post("")
 async def create_connection(payload: dict, user=Depends(require_admin)):
-    """创建数据库连接（仅 admin；密码加密存储）"""
-    name = payload.get("name", "")
-    db_type = payload.get("db_type", "mysql")
-    if db_type not in ("mysql", "pg", "oracle"):
-        return {"code": 400, "message": "数据库类型仅支持 mysql/pg/oracle", "data": None}
+    """创建数据库连接（仅 admin；密码加密存储；R18 按类型校验字段）"""
+    name = (payload.get("name") or "").strip()
+    db_type = (payload.get("db_type") or "mysql").lower()
+    data = dict(payload)
+    data["name"] = name
+    err = _validate_conn_payload(db_type, data)
+    if err:
+        return {"code": 400, "message": err, "data": None}
     password = payload.get("password", "")
     async with async_session() as session:
         c = DBConnection(
             name=name,
             db_type=db_type,
-            host=payload.get("host", ""),
-            port=_safe_int(payload.get("port", 3306), 3306),
-            database=payload.get("database", ""),
-            username=payload.get("username", ""),
+            host=(payload.get("host") or "").strip(),
+            port=_safe_int(payload.get("port") or DB_TYPE_DEFAULT_PORT.get(db_type, 3306),
+                           DB_TYPE_DEFAULT_PORT.get(db_type, 3306)),
+            database="",
+            username=(payload.get("username") or "").strip(),
             password_encrypted=encrypt_aes256_gcm(password) if password else "",
             readonly_username=payload.get("readonly_username", ""),
             readonly_password_encrypted=(
@@ -189,6 +306,7 @@ async def create_connection(payload: dict, user=Depends(require_admin)):
             status="unknown",
             created_by=user.id,
         )
+        _apply_type_fields(c, db_type, data)
         session.add(c)
         await session.commit()
         await session.refresh(c)
@@ -697,20 +815,55 @@ async def delete_connection(conn_id: int, user=Depends(require_admin)):
 
 @router.put("/{conn_id}")
 async def update_connection(conn_id: int, payload: dict, user=Depends(require_admin)):
-    """更新连接（admin 或对该连接有 manage 权限的 operator）"""
+    """更新连接（admin 或对该连接有 manage 权限的 operator）；R18 按类型校验"""
     if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id, "manage"):
         return {"code": 403, "message": "无管理权限", "data": None}
     async with async_session() as session:
         c = await session.get(DBConnection, conn_id)
         if not c:
             return {"code": 404, "message": "连接不存在", "data": None}
-        for k in ("name", "host", "port", "database", "username", "readonly_username",
-                  "slow_sql_threshold", "collect_interval", "collect_enabled", "inspect_enabled", "inspect_cron", "group_name", "env_tag"):
+        new_type = (payload.get("db_type") or c.db_type or "mysql").lower()
+        # 合并当前值 + 本次提交，按最终类型校验（避免只传部分字段时误判）
+        merged = {
+            "name": payload.get("name", c.name),
+            "host": payload.get("host", c.host),
+            "port": payload.get("port", c.port),
+            "database": payload.get("database", c.database),
+            "username": payload.get("username", c.username),
+            "connect_mode": payload.get("connect_mode", getattr(c, "connect_mode", "")),
+            "service_name": payload.get("service_name", getattr(c, "service_name", "")),
+            "sid": payload.get("sid", getattr(c, "sid", "")),
+            "tns_descriptor": payload.get("tns_descriptor", getattr(c, "tns_descriptor", "")),
+            "oracle_role": payload.get("oracle_role", getattr(c, "oracle_role", "")),
+        }
+        # 切换类型时，上一类型的专属值不能带过去（只保留 host/port/username/password）
+        if new_type != (c.db_type or "mysql"):
+            merged["database"] = payload.get("database", "")
+            merged["connect_mode"] = payload.get("connect_mode", "service_name" if new_type == "oracle" else "")
+            merged["service_name"] = payload.get("service_name", "")
+            merged["sid"] = payload.get("sid", "")
+            merged["tns_descriptor"] = payload.get("tns_descriptor", "")
+            merged["oracle_role"] = payload.get("oracle_role", "")
+            # 类型变了且没显式给端口 → 用新类型的默认端口（不能继承上一类型的端口）
+            if "port" not in payload:
+                merged["port"] = DB_TYPE_DEFAULT_PORT.get(new_type, 3306)
+        err = _validate_conn_payload(new_type, merged)
+        if err:
+            return {"code": 400, "message": err, "data": None}
+
+        c.name = (merged["name"] or "").strip()
+        _apply_type_fields(c, new_type, merged)
+        for k in ("slow_sql_threshold", "collect_interval", "collect_enabled", "inspect_enabled"):
             if k in payload:
-                if k == "inspect_cron":
-                    setattr(c, k, (payload[k] or "").strip())
-                else:
-                    setattr(c, k, payload[k])
+                setattr(c, k, payload[k])
+        if "inspect_cron" in payload:
+            c.inspect_cron = (payload["inspect_cron"] or "").strip()
+        if "group_name" in payload:
+            c.group_name = (payload["group_name"] or "").strip()[:50]
+        if "env_tag" in payload:
+            c.env_tag = (payload["env_tag"] or "").strip()[:50]
+        if "readonly_username" in payload:
+            c.readonly_username = payload["readonly_username"] or ""
         if payload.get("readonly_password"):
             c.readonly_password_encrypted = encrypt_aes256_gcm(payload["readonly_password"])
         if payload.get("password"):

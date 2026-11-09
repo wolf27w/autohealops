@@ -320,6 +320,12 @@ def _build_conn_info(c: DBConnection, readonly: bool = False) -> dict:
         "username": username,
         "password": decrypt_aes256_gcm(password) if password else "",
         "database": c.database,
+        # R18：Oracle 连接方式（mysql/pg 为空，不参与连接）
+        "connect_mode": getattr(c, "connect_mode", "") or "",
+        "service_name": getattr(c, "service_name", "") or "",
+        "sid": getattr(c, "sid", "") or "",
+        "tns_descriptor": getattr(c, "tns_descriptor", "") or "",
+        "oracle_role": getattr(c, "oracle_role", "") or "",
     }
 
 
@@ -353,10 +359,29 @@ async def test_db_connection(c: DBConnection) -> dict:
             await conn.close()
         elif c.db_type == "oracle":
             import oracledb  # noqa: PLC0415  # 可选依赖
-            conn = await oracledb.connect_async(
-                user=info["username"], password=info["password"],
-                host=info["host"], port=info["port"], service_name=info["database"],
-            )
+            role = (info.get("oracle_role") or "").lower()
+            auth_mode = oracledb.AUTH_MODE_DEFAULT
+            if role == "sysdba":
+                auth_mode = oracledb.AUTH_MODE_SYSDBA
+            elif role == "sysoper":
+                auth_mode = oracledb.AUTH_MODE_SYSOPER
+            mode = (info.get("connect_mode") or "service_name").lower()
+            if mode == "tns":
+                conn = await oracledb.connect_async(
+                    user=info["username"], password=info["password"],
+                    dsn=info["tns_descriptor"], mode=auth_mode,
+                )
+            elif mode == "sid":
+                conn = await oracledb.connect_async(
+                    user=info["username"], password=info["password"],
+                    host=info["host"], port=info["port"], sid=info["sid"], mode=auth_mode,
+                )
+            else:
+                conn = await oracledb.connect_async(
+                    user=info["username"], password=info["password"],
+                    host=info["host"], port=info["port"],
+                    service_name=info["service_name"] or info["database"], mode=auth_mode,
+                )
             cur = conn.cursor()
             await cur.execute("SELECT 1 FROM DUAL")
             await cur.fetchone()

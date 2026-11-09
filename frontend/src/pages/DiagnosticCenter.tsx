@@ -159,6 +159,34 @@ function DBConnections() {
   const [diag, setDiag] = useState<{ name: string; pct: number; step: string } | null>(null)
   const [dbGroups, setDbGroups] = useState<{ id: number; name: string }[]>([])
   const [form] = Form.useForm()
+  // R18：按类型渲染不同字段组
+  const dbType: string = Form.useWatch('db_type', form) || 'mysql'
+  const oracleMode: string = Form.useWatch('connect_mode', form) || 'service_name'
+
+  // 切换类型：默认端口跟着变，清掉上一类型的专属值（host/port/username/password 保留）
+  const onTypeChange = (t: string) => {
+    form.setFieldsValue({
+      db_type: t,
+      port: t === 'oracle' ? 1521 : t === 'pg' ? 5432 : 3306,
+      database: undefined,
+      connect_mode: t === 'oracle' ? 'service_name' : undefined,
+      service_name: undefined,
+      sid: undefined,
+      tns_descriptor: undefined,
+      oracle_role: undefined,
+    })
+  }
+
+  // 切换 Oracle 连接方式：清掉其他方式的残留值（host/port 属于共享字段，保留）
+  const onOracleModeChange = (m: string) => {
+    form.setFieldsValue({
+      connect_mode: m,
+      service_name: m === 'service_name' ? form.getFieldValue('service_name') : undefined,
+      sid: m === 'sid' ? form.getFieldValue('sid') : undefined,
+      tns_descriptor: m === 'tns' ? form.getFieldValue('tns_descriptor') : undefined,
+      port: form.getFieldValue('port') || 1521,
+    })
+  }
 
   const load = () => getDBConnections().then((d) => setConns((d || []) as DBConnection[]))
   const testConn = async (r: DBConnection) => {
@@ -176,7 +204,12 @@ function DBConnections() {
     setEditing(c || null)
     setModalOpen(true)
     if (c) {
-      form.setFieldsValue({ ...c, password: '' })
+      form.setFieldsValue({
+        ...c,
+        password: '',
+        // R18：老数据无 connect_mode 时给 Oracle 默认（Service Name）
+        connect_mode: c.db_type === 'oracle' ? ((c.connect_mode as string) || 'service_name') : undefined,
+      })
     } else {
       form.resetFields()
       form.setFieldsValue({ db_type: 'mysql', port: 3306, slow_sql_threshold: 1.0, collect_interval: 5, collect_enabled: true, inspect_enabled: true })
@@ -278,15 +311,75 @@ function DBConnections() {
               filterOption={(input: string, option?: { value?: string }) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
             />
           </Form.Item>
-          <Form.Item name="db_type" label="类型" rules={[{ required: true }]}>
-            <Select options={['mysql', 'pg', 'oracle'].map((t) => ({ value: t, label: t }))} />
+          <Form.Item name="db_type" label="数据库类型" rules={[{ required: true }]}>
+            <Select onChange={onTypeChange} options={[
+              { value: 'mysql', label: 'MySQL' },
+              { value: 'pg', label: 'PostgreSQL' },
+              { value: 'oracle', label: 'Oracle' },
+            ]} />
           </Form.Item>
-          <Space>
-            <Form.Item name="host" label="主机" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="port" label="端口" rules={[{ required: true }]}><InputNumber min={1} max={65535} /></Form.Item>
-          </Space>
-          <Form.Item name="database" label="数据库" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="username" label="用户名" rules={[{ required: true }]} extra="建议用只读权限账号（诊断采集只需查系统视图 / performance_schema）"><Input /></Form.Item>
+          {dbType === 'oracle' && (
+            <Form.Item name="connect_mode" label="连接方式" rules={[{ required: true }]}>
+              <Select onChange={onOracleModeChange} options={[
+                { value: 'service_name', label: 'Service Name' },
+                { value: 'sid', label: 'SID' },
+                { value: 'tns', label: 'TNS 描述符' },
+              ]} />
+            </Form.Item>
+          )}
+          {!(dbType === 'oracle' && oracleMode === 'tns') && (
+            <Space>
+              <Form.Item name="host" label="主机" rules={[{ required: true, message: '请填主机' }]}><Input /></Form.Item>
+              <Form.Item name="port" label="端口" rules={[{ required: true }]}><InputNumber min={1} max={65535} /></Form.Item>
+            </Space>
+          )}
+          {dbType !== 'oracle' && (
+            <Form.Item
+              name="database"
+              label={dbType === 'pg' ? '数据库（必填）' : '数据库（可选）'}
+              rules={dbType === 'pg' ? [{ required: true, message: 'PostgreSQL 必须填数据库名' }] : []}
+              extra={dbType === 'mysql' ? '不填=连接实例但不选默认库（SQL 里需写全名 db.table）' : undefined}
+            ><Input /></Form.Item>
+          )}
+          {dbType === 'oracle' && oracleMode === 'service_name' && (
+            <Form.Item name="service_name" label="Service Name" rules={[{ required: true, message: '请填 Service Name' }]}>
+              <Input placeholder="如 ORCLPDB1" />
+            </Form.Item>
+          )}
+          {dbType === 'oracle' && oracleMode === 'sid' && (
+            <Form.Item name="sid" label="SID" rules={[{ required: true, message: '请填 SID' }]}>
+              <Input placeholder="如 ORCL" />
+            </Form.Item>
+          )}
+          {dbType === 'oracle' && oracleMode === 'tns' && (
+            <Form.Item
+              name="tns_descriptor"
+              label="TNS 描述符"
+              rules={[{ required: true, message: '请粘贴 TNS 描述符' }, {
+                validator: (_, v: string) => {
+                  const t = (v || '').trim()
+                  if (!t.toUpperCase().startsWith('(DESCRIPTION=')) return Promise.reject(new Error('必须以 (DESCRIPTION= 开头'))
+                  let depth = 0
+                  for (const ch of t) {
+                    if (ch === '(') depth += 1
+                    else if (ch === ')') { depth -= 1; if (depth < 0) return Promise.reject(new Error('括号不配对')) }
+                  }
+                  return depth === 0 ? Promise.resolve() : Promise.reject(new Error('括号不配对'))
+                },
+              }]}
+            >
+              <Input.TextArea rows={4} placeholder="(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=...)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=...)))" />
+            </Form.Item>
+          )}
+          {dbType === 'oracle' && (
+            <Form.Item name="oracle_role" label="角色" tooltip="SYSDBA/SYSOPER 需要相应权限；默认=普通用户">
+              <Select allowClear placeholder="默认" options={[
+                { value: 'sysdba', label: 'SYSDBA' },
+                { value: 'sysoper', label: 'SYSOPER' },
+              ]} />
+            </Form.Item>
+          )}
+          <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请填用户名' }]} extra="建议用只读权限账号（诊断采集只需查系统视图 / performance_schema）"><Input /></Form.Item>
           <Form.Item name="password" label={editing ? '密码（留空=不修改）' : '密码'} rules={editing ? [] : [{ required: true }]}>
             <Input.Password />
           </Form.Item>

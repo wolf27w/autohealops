@@ -40,6 +40,15 @@ class DBConnection(Base):
     group_name: Mapped[str] = mapped_column(String(50), default="", server_default="")
     # 环境（生产/UAT/测试…）；告警/工单按此维度聚合（R24）
     env_tag: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    # ---- R18 Oracle 专用字段（2026-11-09）----
+    # 连接方式：service_name / sid / tns（仅 oracle 使用；mysql/pg 为空）
+    connect_mode: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    service_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    sid: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    # TNS 描述符（完整 (DESCRIPTION=...) 串）
+    tns_descriptor: Mapped[str] = mapped_column(String(2000), default="", server_default="")
+    # Oracle 角色：""=默认 / sysdba / sysoper
+    oracle_role: Mapped[str] = mapped_column(String(20), default="", server_default="")
     status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/connected/failed/removed
     # ---- agent 来源（R6，2026-11-06）----
     # direct = 平台直连采集（凭据存平台）；agent = agent 侧配置后上报（平台不存凭据）

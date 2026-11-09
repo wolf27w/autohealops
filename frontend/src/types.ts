@@ -585,6 +585,12 @@ export interface DBConnection {
   id: number
   name: string
   db_type?: string
+  // R18：Oracle 连接方式（mysql/pg 为空）
+  connect_mode?: string
+  service_name?: string
+  sid?: string
+  tns_descriptor?: string
+  oracle_role?: string
   host?: string
   port?: number
   database?: string
