@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import Alert, AlertPolicy, Cluster, K8sEvent, PodMetric, QuotaSnapshot, ResourceSnapshot
+from app.models import Alert, AlertPolicy, Cluster, Host, K8sEvent, PodMetric, QuotaSnapshot, ResourceSnapshot
 
 logger = get_logger("api-server.agent_alert")
 
@@ -252,8 +252,73 @@ async def handle_event(cluster_id: int, method: str, payload: bytes) -> None:
         await handle_collect_snapshot(ev)
     elif method == "Events":
         await handle_events(ev)
+    elif method == "HostMetrics":
+        await handle_host_metrics(ev)
     else:
         logger.debug("未识别的 agent 事件 method=%s", method)
+
+
+async def handle_host_metrics(ev: dict) -> None:
+    """agent 上报的主机/虚拟机代采指标（method=HostMetrics）→ 自动建主机 + 更新状态。
+
+    agent 集群内的外部内网 VM，平台 SSH 不可达，由 agent 用对方集群挂载的私钥 SSH 代采，
+    经隧道 event 帧上报。首次上报自动建记录（不存 SSH 凭据）；状态/进程翻转通知与直连口径一致。
+    payload 形如 {hosts: [{key, name, address, port, user, ts, online, error,
+                          processes:[{name, path, running, pid_count, cpu_pct, mem_mb}]}]}
+    """
+    from app.services import host_monitor_service as hms
+
+    cid = int(ev.get("cluster_id") or 0)
+    rows = ev.get("hosts") or []
+    if not isinstance(rows, list) or not rows:
+        return
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        key = str(r.get("key") or "").strip()
+        if not key:
+            continue
+        name = str(r.get("name") or "").strip() or key
+        address = str(r.get("address") or "").strip()
+        port = int(r.get("port") or 22)
+        user = str(r.get("user") or "root").strip()
+        online = bool(r.get("online"))
+        error = str(r.get("error") or "")[:255]
+        processes = [p for p in (r.get("processes") or []) if isinstance(p, dict)]
+        specs = [{"name": p.get("name") or "", "path": p.get("path") or ""}
+                 for p in processes if (p.get("path") or "").strip()]
+        ts = str(r.get("ts") or "")
+        now = datetime.now()
+        async with async_session() as s:
+            h = (await s.execute(
+                select(Host).where(Host.cluster_id == cid, Host.source_key == key)
+            )).scalar_one_or_none()
+            if h is None:
+                dup = (await s.execute(select(Host).where(Host.name == name))).scalar_one_or_none()
+                if dup is not None:
+                    name = f"{name}（{key}）"
+                h = Host(
+                    name=name, address=address, ssh_port=port, ssh_user=user,
+                    source="agent", cluster_id=cid, source_key=key,
+                    kind="host", enabled=True, status="unknown",
+                    process_paths=json.dumps(specs, ensure_ascii=False),
+                )
+                s.add(h)
+                await s.flush()
+            else:
+                h.name = name
+                h.address = address
+                h.ssh_port = port
+                h.ssh_user = user
+                h.process_paths = json.dumps(specs, ensure_ascii=False)
+            h.status = "online" if online else "offline"
+            h.last_error = "" if online else error
+            h.last_seen = now
+            h.last_metrics = json.dumps({"ts": ts, "online": online, "paths": processes}, ensure_ascii=False)
+            await s.commit()
+            host_id = h.id
+        await hms.flip_notify(host_id, name, processes)
+    logger.info("agent 主机代采指标落库 cluster=%s 共 %d 台", cid, len(rows))
 
 
 async def handle_pod_metrics(ev: dict) -> None:

@@ -28,6 +28,7 @@ export default function HostManagement() {
   const [loading, setLoading] = useState(false)
   const [groupFilter, setGroupFilter] = useState<string>('all')
   const [kindFilter, setKindFilter] = useState<string>('')
+  const [sourceFilter, setSourceFilter] = useState<string>('')
   const [keyword, setKeyword] = useState('')
 
   const [modal, setModal] = useState(false)
@@ -60,12 +61,13 @@ export default function HostManagement() {
     if (groupFilter === 'ungrouped') params.group_id = 0
     else if (groupFilter !== 'all') params.group_id = Number(groupFilter)
     if (kindFilter) params.kind = kindFilter
+    if (sourceFilter) params.source = sourceFilter
     if (keyword.trim()) params.keyword = keyword.trim()
     getHosts(params).then((d) => setHosts(d || [])).catch(() => {}).finally(() => setLoading(false))
   }
 
   useEffect(() => { loadGroups() }, [])
-  useEffect(() => { load() }, [groupFilter, kindFilter, keyword])
+  useEffect(() => { load() }, [groupFilter, kindFilter, sourceFilter, keyword])
 
   const openCreate = () => {
     setEditing(null); setStep(0); setWizardKind('host')
@@ -122,6 +124,7 @@ export default function HostManagement() {
     { title: '分组', width: 110, render: (_: unknown, r: HostItem) => r.group_name
       ? <Tag>{r.group_name}</Tag> : <Tag color="warning">未分组</Tag> },
     { title: '类型', width: 90, render: (_: unknown, r: HostItem) => <Tag color={KIND[r.kind]?.color}>{KIND[r.kind]?.label || r.kind}</Tag> },
+    { title: '来源', width: 90, render: (_: unknown, r: HostItem) => r.source === 'agent' ? <Tag color="cyan">agent</Tag> : <Tag>直连</Tag> },
     { title: '地址', render: (_: unknown, r: HostItem) => `${r.address}:${r.ssh_port}` },
     { title: '状态', dataIndex: 'status', width: 80, render: (s: string, r: HostItem) => {
       const tag = <Tag color={STATUS[s]?.color}>{STATUS[s]?.label || s}</Tag>
@@ -131,7 +134,8 @@ export default function HostManagement() {
     { title: '启用', dataIndex: 'enabled', width: 70, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
     { title: '操作', width: 170, render: (_: unknown, r: HostItem) => (
       <Space size="small">
-        {r.can.operate && <Button size="small" type="link" loading={checking === r.id} icon={<SyncOutlined />} onClick={() => doCheck(r.id)}>检测</Button>}
+        {r.can.operate && r.source === 'agent' && <Button size="small" type="link" onClick={() => setCheckResult({ online: r.last_metrics?.online ?? false, error: '', paths: r.last_metrics?.paths || [] })}>指标</Button>}
+        {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" loading={checking === r.id} icon={<SyncOutlined />} onClick={() => doCheck(r.id)}>检测</Button>}
         {r.can.operate && <Button size="small" type="link" onClick={() => openEdit(r)}>编辑</Button>}
         {r.can.delete && <Popconfirm title="删除该主机？" onConfirm={() => del(r.id)}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>}
       </Space>
@@ -159,6 +163,7 @@ export default function HostManagement() {
           <div style={{ padding: '8px 4px' }}>
             <Segmented block options={[{ label: '全部', value: '' }, { label: '主机', value: 'host' }, { label: '虚拟机', value: 'vm' }]} value={kindFilter} onChange={(v) => setKindFilter(v as string)} />
           </div>
+          <Select placeholder="来源" allowClear style={{ width: '100%', marginBottom: 8 }} value={sourceFilter || undefined} onChange={(v) => setSourceFilter(v || '')} options={[{ value: 'direct', label: '直连' }, { value: 'agent', label: 'agent 代采' }]} />
           <Input.Search placeholder="搜索名称/地址" allowClear onSearch={(v) => setKeyword(v)} style={{ marginBottom: 8 }} />
         </div>
 

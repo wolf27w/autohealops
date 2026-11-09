@@ -711,6 +711,8 @@ export interface HostItem {
   process_paths: { name: string; path: string }[]
   enabled: boolean; status: string; last_seen?: string | null; last_error?: string
   kind: 'host' | 'vm'; group_id: number | null; group_name?: string; env_tag?: string
+  source: 'direct' | 'agent'; cluster_id: number | null; source_key?: string
+  last_metrics?: { ts?: string; online?: boolean; paths?: { name: string; path: string; running: boolean; pid_count: number; cpu_pct: number; mem_mb: number }[] } | null
   can: HostCan
 }
 export interface HostCheckResult { online: boolean; error: string; paths: { name: string; path: string; running: boolean; pid_count: number; cpu_pct: number; mem_mb: number }[] }
@@ -719,7 +721,7 @@ export interface HostGroup {
   is_default: boolean; member_count: number; host_count: number; my_role: 'admin' | 'operator' | 'viewer' | null
 }
 export interface HostGroupMember { id: number; user_id: number; username: string; role: string }
-export const getHosts = (params?: { group_id?: number; kind?: string; keyword?: string }) =>
+export const getHosts = (params?: { group_id?: number; kind?: string; source?: string; keyword?: string }) =>
   http.get<HostItem[]>('/hosts', { params })
 export const createHost = (d: Record<string, unknown>) => http.post<HostItem>('/hosts', d)
 export const updateHost = (id: number, d: Record<string, unknown>) => http.put<HostItem>(`/hosts/${id}`, d)

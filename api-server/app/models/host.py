@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""主机 / 虚拟机纳管（N11）：非 K8s 的服务器，按「进程路径」监控其服务。
+"""主机 / 虚拟机纳管（N11 + R25 + R7）：非 K8s 的服务器，按「进程路径」监控其服务。
 
-通过 SSH 采集进程（ps），对每个配置的「进程路径」判断存活/CPU/内存，
-异常（进程消失）→ 平台通知闭环（掉线告警 / 恢复告知）。与集群节点分开管理。
+- 直连主机：平台 SSH 采集（asyncssh）。
+- agent 主机（R7）：外部内网 VM，平台不可达，由 agent 在集群内 SSH 代采，经隧道上报。
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -14,6 +14,7 @@ from app.core.database import Base
 
 class Host(Base):
     __tablename__ = "hosts"
+    __table_args__ = (UniqueConstraint("cluster_id", "source_key", name="uq_hosts_agent_key"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)  # 显示名
@@ -31,6 +32,11 @@ class Host(Base):
     kind: Mapped[str] = mapped_column(String(10), default="host", server_default="host")
     group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     env_tag: Mapped[str] = mapped_column(String(50), default="", server_default="")
+    # R7：来源（direct 平台直连 / agent 集群内代采）+ agent 归属集群 + 配置 key + 最近指标
+    source: Mapped[str] = mapped_column(String(10), default="direct", server_default="direct")
+    cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_key: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    last_metrics: Mapped[str] = mapped_column(Text, default="")
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

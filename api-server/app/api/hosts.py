@@ -32,6 +32,10 @@ def _row(h: Host, group_name: str = "", can: dict | None = None) -> dict:
         "last_seen": str(h.last_seen) if h.last_seen else None,
         "kind": h.kind, "group_id": h.group_id, "group_name": group_name,
         "env_tag": getattr(h, "env_tag", "") or "",
+        "source": getattr(h, "source", "direct") or "direct",
+        "cluster_id": getattr(h, "cluster_id", None),
+        "source_key": getattr(h, "source_key", "") or "",
+        "last_metrics": _parse_metrics(getattr(h, "last_metrics", "")),
         "can": can or {"view": True, "operate": False, "manage": False, "delete": False},
     }
 
@@ -49,9 +53,17 @@ async def _audit_host(trace_id: str, detail: str, host_id: int) -> None:
                               execution_detail=detail)
 
 
+def _parse_metrics(raw: str) -> dict | None:
+    try:
+        m = json.loads(raw or "")
+        return m if isinstance(m, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @router.get("")
-async def list_hosts(group_id: int | None = None, kind: str | None = None, keyword: str = "",
-                     user=Depends(require_any_user)):
+async def list_hosts(group_id: int | None = None, kind: str | None = None, source: str | None = None,
+                     keyword: str = "", user=Depends(require_any_user)):
     async with async_session() as s:
         q = select(Host)
         is_admin = hgs.is_platform_admin(user)
@@ -67,6 +79,8 @@ async def list_hosts(group_id: int | None = None, kind: str | None = None, keywo
                 q = q.where(Host.group_id == group_id)
         if kind:
             q = q.where(Host.kind == kind)
+        if source:
+            q = q.where(Host.source == source)
         if keyword:
             like = f"%{keyword}%"
             q = q.where(or_(Host.name.like(like), Host.address.like(like)))

@@ -139,6 +139,28 @@ async def _notify(content: str) -> None:
         logger.warning("主机监控通知失败: %s", e)
 
 
+async def flip_notify(host_id: int, host_name: str, paths: list[dict]) -> None:
+    """按进程路径检测状态翻转并通知（直连 / agent 代采共用）。"""
+    try:
+        prev_raw = await redis_pool.get(await _state_key(host_id))
+        prev = json.loads(prev_raw) if prev_raw else {}
+    except Exception:  # noqa: BLE001
+        prev = {}
+    new = {p["path"]: ("up" if p.get("running") else "down")
+           for p in paths if isinstance(p, dict) and p.get("path")}
+    for path, st in new.items():
+        old = prev.get(path)
+        if old is not None and old != st:
+            if st == "down":
+                await _notify(f"⚠️ 主机【{host_name}】进程掉线：{path}")
+            else:
+                await _notify(f"✅ 主机【{host_name}】进程恢复：{path}")
+    try:
+        await redis_pool.set(await _state_key(host_id), json.dumps(new, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def check_and_notify(host: Host) -> dict:
     """检查 + 状态翻转通知。返回 check_host 结果。"""
     res = await check_host(host)
@@ -155,23 +177,7 @@ async def check_and_notify(host: Host) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("写主机状态失败: %s", e)
     # 翻转检测（按进程路径）
-    try:
-        prev_raw = await redis_pool.get(await _state_key(host.id))
-        prev = json.loads(prev_raw) if prev_raw else {}
-    except Exception:  # noqa: BLE001
-        prev = {}
-    new = {p["path"]: ("up" if p["running"] else "down") for p in res["paths"]}
-    for path, st in new.items():
-        old = prev.get(path)
-        if old is not None and old != st:
-            if st == "down":
-                await _notify(f"⚠️ 主机【{host.name}】进程掉线：{path}")
-            else:
-                await _notify(f"✅ 主机【{host.name}】进程恢复：{path}")
-    try:
-        await redis_pool.set(await _state_key(host.id), json.dumps(new, ensure_ascii=False))
-    except Exception:  # noqa: BLE001
-        pass
+    await flip_notify(host.id, host.name, res["paths"])
     return res
 
 
@@ -179,7 +185,7 @@ async def background_loop() -> None:
     while True:
         try:
             async with async_session() as s:
-                hosts = list((await s.execute(select(Host).where(Host.enabled.is_(True)))).scalars())
+                hosts = list((await s.execute(select(Host).where(Host.enabled.is_(True), Host.source == "direct"))).scalars())
             for h in hosts:
                 try:
                     await check_and_notify(h)
