@@ -1571,20 +1571,31 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 **目标**：在「集群管理」里直接发布服务，不用再去 Jenkins 页面点；后台统一配置 Jenkins 与服务映射，发布后弹出 pipeline 阶段视图与实时日志。
 
-**后台配置（统一入口，建议放「系统设置 → 发布」）**
-- Jenkins 实例：名称、地址、认证方式（用户名+API Token / 凭据 ID）、是否忽略证书
-- 服务映射：`集群 → 服务名 → Jenkins Job 名`（一个服务可对应多个环境/集群；与集群 id 绑定）
-  - **一个 Job 对应多个服务（老板 2026-11-09 确认）**：多个「服务名」可映射到同一个 Job，
-    发布时靠「服务名参数」区分是哪个服务；所以配映射时允许多行 `服务名 → 同一 Job 名`
-- 参数模板：分支参数名（如 `BRANCH_TAG`）、构建参数默认值、是否允许覆盖
-- **发布入口用 namespace 标签开关（老板 2026-11-09 定，不用白名单）**：
-  - 机制：**看当前 namespace 上的 label**。带指定标签的 namespace，其下 **Deployment** 才会出现「发布」按钮；
-    没打标签的 namespace **直接不渲染按钮**（不置灰、不提示），无需平台维护名单
-  - 标签 key/value 可配（系统设置 → 发布），默认建议 `autohealops.io/release=enabled`
-  - 标签由集群侧运维在 namespace 上打，**平台只读不写**；平台缓存的 namespace 列表要一并带 `labels`
-  - 后端同样校验：对无该标签的 namespace 调发布接口 → **403**（`namespace 未开启发布`），不能只靠前端隐藏
-  - 标签变更后按钮随之生效：namespace 缓存 TTL ≤ 60s，或发布页/服务列表刷新时重拉
-  - 构建/审计记录里保存「命中的 namespace 标签」，方便回溯为什么这个 ns 可以发布
+**后台配置（老板 2026-11-09 定：连接全局配 + 服务/Job 匹配按 namespace 配）**
+
+**① Jenkins 连接（全局，放「系统设置 → 发布」）**
+- Jenkins 实例：名称、地址、认证方式（用户名+API Token / 凭据 ID / 服务账号）、是否忽略证书
+- 支持多实例并存；每用户 API Token 在「个人设置」里配（R19 认证方案 A，兜底服务账号）
+
+**② 服务 ↔ Job 匹配（按 namespace 配，不是全局一张表）**
+- 每个 namespace 一份「发布映射」：`服务名 → { Jenkins 实例, Job 名, 服务名参数, 分支参数 }`
+- **一个 Job 对应多个服务（老板 2026-11-09 确认）**：多个「服务名」可映射到同一个 Job，
+  发布时靠「服务名参数」区分；所以映射允许多行 `服务名 → 同一 Job 名`
+- 配置入口：集群 → namespace 上编辑「发布映射」（选 namespace 后维护该 ns 的服务/Job 对照表）
+- 点发布时按「当前服务名」查本 namespace 的映射；**未配映射的服务 → 提示「该服务未配置发布映射」**（不触发）
+
+**③ 参数模板**
+- 分支参数名（如 `BRANCH_TAG`）、服务名参数（默认 `SERVICE_NAME`/`Issue_command`）、构建参数默认值、是否允许覆盖
+
+**④ 发布入口用 namespace 标签开关（老板 2026-11-09 定，不用白名单）**
+- 机制：**看当前 namespace 上的 label**。带指定标签的 namespace，其下 **Deployment** 才会出现「发布」按钮；
+  没打标签的 namespace **直接不渲染按钮**（不置灰、不提示），无需平台维护名单
+  - 标签 = **开关**（控制按钮显隐）；上面的「发布映射」= **具体发布配置**（点发布时用），两层独立
+- 标签 key/value 可配（系统设置 → 发布），默认建议 `autohealops.io/release=enabled`
+- 标签由集群侧运维在 namespace 上打，**平台只读不写**；平台缓存的 namespace 列表要一并带 `labels`
+- 后端同样校验：对无该标签的 namespace 调发布接口 → **403**（`namespace 未开启发布`），不能只靠前端隐藏
+- 标签变更后按钮随之生效：namespace 缓存 TTL ≤ 60s，或发布页/服务列表刷新时重拉
+- 构建/审计记录里保存「命中的 namespace 标签」，方便回溯为什么这个 ns 可以发布
 
 **集群管理 → 发布（老板 2026-11-06 细化：按服务发布 + 单独选分支）**
 - 入口：**在某个服务上点「发布」**（集群详情 / 服务列表行内操作）
@@ -1593,7 +1604,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
   - **分支 = 需要单独选择**（下拉/可搜索，见下）
 - 发布弹窗内容：
   - 服务：`<只读>`（当前服务）
-  - Jenkins 实例：默认按「集群 → 服务」映射的实例，可切换
+  - Jenkins 实例：默认取「该 namespace 映射里配的实例」，可切换
   - **分支**：下拉选择，**来源 = Jenkins Job 参数定义**（老板 2026-11-06 定）
     - 调 `GET /job/{name}/api/json?tree=property[parameterDefinitions[name,type,choices]]`
     - 取「分支参数」（默认 `BRANCH_TAG`，可配）的 `choices` 作为下拉选项
