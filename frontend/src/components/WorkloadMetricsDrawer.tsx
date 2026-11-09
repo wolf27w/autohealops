@@ -1,8 +1,8 @@
 // 工作负载级监控抽屉（R15）：Deployment/StatefulSet/DaemonSet × 容器，跨 Pod 重建拼接。
 // 数据源 = 集群 Prometheus（平台不落库）：CPU/内存按容器各一条线；网络按 Deployment 汇总
 // （容器共享 netns，拆不到容器，UI 里明确标注）。
-import { useEffect, useMemo, useState } from 'react'
-import { Drawer, Segmented, Empty, Space, Tag, Spin } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Drawer, Segmented, Empty, Space, Tag, Spin, Switch } from 'antd'
 import { Line } from '@ant-design/charts'
 import { getWorkloadMetrics } from '../services/api'
 
@@ -60,23 +60,49 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
     cpu: Series[]; memory: Series[]; net_rx: Series[]; net_tx: Series[]
     pod_container_count: Record<string, number>
   }>({ cpu: [], memory: [], net_rx: [], net_tx: [], pod_container_count: {} })
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState(0)
+  const inFlight = useRef(false)
 
+  const applyData = (raw: unknown) => {
+    const d = raw as unknown as WorkloadMetricsPayload
+    setData({
+      cpu: d?.cpu || [], memory: d?.memory || [], net_rx: d?.net_rx || [], net_tx: d?.net_tx || [],
+      pod_container_count: d?.pod_container_count || {},
+    })
+    setLastUpdated(Date.now())
+  }
+
+  // 首次打开 / 切换范围：带 loading
   useEffect(() => {
     if (!target) return
+    let cancelled = false
     setLoading(true); setErr('')
+    inFlight.current = true
     getWorkloadMetrics(target.clusterId, target.kind, target.namespace, target.name, range)
-      .then((raw) => {
-        const d = raw as unknown as WorkloadMetricsPayload
-        setData({
-          cpu: d?.cpu || [], memory: d?.memory || [], net_rx: d?.net_rx || [], net_tx: d?.net_tx || [],
-          pod_container_count: d?.pod_container_count || {},
-        })
-      })
-      .catch((e) => setErr(e?.response?.data?.message || '查询失败（检查集群 Prometheus 是否可用）'))
-      .finally(() => setLoading(false))
+      .then((raw) => { if (!cancelled) applyData(raw) })
+      .catch((e) => { if (!cancelled) setErr(e?.response?.data?.message || '查询失败（检查集群 Prometheus 是否可用）') })
+      .finally(() => { inFlight.current = false; if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
     // 依赖拆成字段：父组件传新对象（同值）时不重复拉数据，避免闪屏
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target?.clusterId, target?.kind, target?.namespace, target?.name, range])
+
+  // 自动刷新：静默更新（不 loading、不重建图表 → 不闪）
+  useEffect(() => {
+    if (!target || !autoRefresh) return
+    let cancelled = false
+    const t = setInterval(() => {
+      if (inFlight.current) return
+      inFlight.current = true
+      getWorkloadMetrics(target.clusterId, target.kind, target.namespace, target.name, range)
+        .then((raw) => { if (!cancelled) applyData(raw) })
+        .catch(() => { /* 静默失败，保留旧数据 */ })
+        .finally(() => { inFlight.current = false })
+    }, 15000)
+    return () => { cancelled = true; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target?.clusterId, target?.kind, target?.namespace, target?.name, range, autoRefresh])
 
   const containerCount = Math.max(1, data.cpu.length)
   const podCount = Object.keys(data.pod_container_count).length
@@ -128,6 +154,10 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
     <Drawer title={target ? `工作负载监控：${target.namespace} / ${target.name}` : '工作负载监控'} open={!!target} onClose={onClose} width={860}>
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={RANGES} />
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} /> 自动刷新(15s)
+          {lastUpdated ? ` · 更新于 ${new Date(lastUpdated).toLocaleTimeString()}` : ''}
+        </span>
         <Tag color="blue">{containerCount} 个容器</Tag>
         <Tag color="geekblue">{podCount} 个 Pod</Tag>
         {multiContainer && <Tag color="orange">存在多容器 Pod（网络按 Deployment 汇总）</Tag>}
