@@ -1574,6 +1574,8 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 **后台配置（统一入口，建议放「系统设置 → 发布」）**
 - Jenkins 实例：名称、地址、认证方式（用户名+API Token / 凭据 ID）、是否忽略证书
 - 服务映射：`集群 → 服务名 → Jenkins Job 名`（一个服务可对应多个环境/集群；与集群 id 绑定）
+  - **一个 Job 对应多个服务（老板 2026-11-09 确认）**：多个「服务名」可映射到同一个 Job，
+    发布时靠「服务名参数」区分是哪个服务；所以配映射时允许多行 `服务名 → 同一 Job 名`
 - 参数模板：分支参数名（如 `BRANCH_TAG`）、构建参数默认值、是否允许覆盖
 - **发布入口用 namespace 标签开关（老板 2026-11-09 定，不用白名单）**：
   - 机制：**看当前 namespace 上的 label**。带指定标签的 namespace，其下 **Deployment** 才会出现「发布」按钮；
