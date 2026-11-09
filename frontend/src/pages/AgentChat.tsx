@@ -109,10 +109,10 @@ export default function AgentChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 最近 7 天（含今天）默认展开，更早按日期折叠
-  const recentDay = localDay(new Date(Date.now() - 6 * 86400000))
+  // R21（2026-11-09）：默认只展开当天，历史日期全部折叠（点日期展开）
+  const todayKey = localDay(new Date())
 
-  // 按天分组（新→旧），最近 2 天默认展开
+  // 按天分组（新→旧）
   const sessionGroups = useMemo(() => {
     const m = new Map<string, Session[]>()
     for (const s of sessions) {
@@ -356,8 +356,7 @@ export default function AgentChat() {
         <div style={{ marginTop: 12, overflowY: 'auto', flex: 1 }}>
           {sessions.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
           {sessionGroups.map(([day, items]) => {
-            const isRecent = day >= recentDay  // 最近 7 天默认展开
-            const open = olderOpen[day] !== undefined ? olderOpen[day] : isRecent
+            const open = olderOpen[day] !== undefined ? olderOpen[day] : day === todayKey
             return (
               <div key={day} style={{ marginBottom: 4 }}>
                 <div
