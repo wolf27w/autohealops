@@ -23,6 +23,7 @@ import PvcCreateModal from '../components/PvcCreateModal'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../components/WorkloadCreateModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import ReleaseModal from '../components/ReleaseModal'
+import ReleaseHistoryModal from '../components/ReleaseHistoryModal'
 import { podStatusColor, podReadyText } from '../utils/podStatus'
 
 interface ResourceItem {
@@ -104,6 +105,7 @@ export default function ClusterDetail() {
   const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)
   const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
   const [releaseTarget, setReleaseTarget] = useState<WorkloadTarget | null>(null)
+  const [releaseHistoryTarget, setReleaseHistoryTarget] = useState<WorkloadTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, ClusterPod>>({})
   // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
   const [podList, setPodList] = useState<ClusterPod[]>([])
@@ -451,13 +453,15 @@ export default function ClusterDetail() {
           <Button size="small" type="primary" onClick={() => setReleaseTarget({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })}>发布</Button>
         )}
         <Dropdown trigger={['click']} menu={{ items: [
+          ...(tabKind(r) === 'deployment' ? [{ key: 'history', label: '发布历史' }] : []),
           { key: 'mounts', label: '存储与环境变量' },
           { key: 'yaml', label: '编辑 YAML' },
           { type: 'divider' as const },
           { key: 'delete', label: '删除', danger: true },
         ], onClick: ({ key }) => {
           const tgt = { clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name }
-          if (key === 'mounts') setMountTarget(tgt)
+          if (key === 'history') setReleaseHistoryTarget(tgt)
+          else if (key === 'mounts') setMountTarget(tgt)
           else if (key === 'yaml') setWlYaml(tgt)
           else if (key === 'delete') Modal.confirm({
             title: `删除 ${tabKind(r)} ${r.namespace}/${r.name}？`,
@@ -879,6 +883,10 @@ export default function ClusterDetail() {
       {releaseTarget && (
         <ReleaseModal open clusterId={releaseTarget.clusterId} namespace={releaseTarget.namespace}
           serviceName={releaseTarget.name} onClose={() => setReleaseTarget(null)} />
+      )}
+      {releaseHistoryTarget && (
+        <ReleaseHistoryModal open clusterId={releaseHistoryTarget.clusterId} namespace={releaseHistoryTarget.namespace}
+          serviceName={releaseHistoryTarget.name} onClose={() => setReleaseHistoryTarget(null)} />
       )}
       <Modal open={scaleOpen} width={440} title={`批量改副本（${selItems.length} 个${wlTypeLabel}）`}
         onCancel={() => setScaleOpen(false)} onOk={submitBatchReplicas} okText="应用" destroyOnClose>
