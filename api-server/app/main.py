@@ -12,7 +12,7 @@ from app.api import (
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
     projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
-from app.api import hosts, jvm
+from app.api import hosts, host_groups, jvm
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -582,4 +582,5 @@ app.include_router(fault_diagnosis.router)
 app.include_router(agent.router)
 app.include_router(terminal.router)
 app.include_router(hosts.router)
+app.include_router(host_groups.router)
 app.include_router(mcp.router)

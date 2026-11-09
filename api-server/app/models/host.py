@@ -27,6 +27,10 @@ class Host(Base):
     status: Mapped[str] = mapped_column(String(20), default="unknown")           # online/offline/unknown
     # R9：最近一次采集失败原因（认证失败/网络不可达/超时…）；成功时清空
     last_error: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    # R25：类型（host 物理机 / vm 虚拟机，创建后不可改）+ 分组 + 环境标签
+    kind: Mapped[str] = mapped_column(String(10), default="host", server_default="host")
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    env_tag: Mapped[str] = mapped_column(String(50), default="", server_default="")
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
