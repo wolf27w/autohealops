@@ -137,17 +137,31 @@ async def get_namespace_deployments(cluster_id: int, namespace: str) -> list[dic
 
 
 async def _annotate_publish(cluster_id: int, ns_map: dict[str, dict]) -> None:
-    """给 deployments 打 publish_enabled（namespace 带发布标签才 True）。R19。"""
+    """给 deployments 打 publish_enabled：namespace 带发布标签 **且** 该服务已配映射才 True。R19。
+
+    只对有映射的服务显示发布按钮 — 避免用户点未配映射的服务报错。
+    """
     try:
         from app.services import release_access
-        enabled = await release_access.get_publish_namespaces(cluster_id)
+        enabled_ns = await release_access.get_publish_namespaces(cluster_id)
     except Exception as e:  # noqa: BLE001
         logger.debug("发布标签读取失败 cluster=%s: %s", cluster_id, e)
-        enabled = set()
+        enabled_ns = set()
+    mapped: set[tuple[str, str]] = set()
+    try:
+        from sqlalchemy import select
+        from app.core.database import async_session
+        from app.models import ReleaseMapping
+        async with async_session() as s:
+            rows = (await s.execute(select(ReleaseMapping.namespace, ReleaseMapping.service_name).where(
+                ReleaseMapping.cluster_id == cluster_id, ReleaseMapping.enabled.is_(True)))).all()
+        mapped = {(ns, svc) for ns, svc in rows}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读发布映射失败 cluster=%s: %s", cluster_id, e)
     for ns, info in ns_map.items():
-        flag = ns in enabled
+        ns_ok = ns in enabled_ns
         for d in info.get("deployments") or []:
-            d["publish_enabled"] = flag
+            d["publish_enabled"] = bool(ns_ok and (ns, d.get("name")) in mapped)
 
 
 async def get_cluster_detail(cluster_id: int) -> list[dict]:
