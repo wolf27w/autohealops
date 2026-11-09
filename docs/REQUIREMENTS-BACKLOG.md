@@ -979,7 +979,7 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
   - 平台手建的 `source=direct` 库不受影响，名称仍由平台维护
 - 直连库沿用现有 `db_connections.name`（全局唯一），来源标记 `direct`。
 
-### R7 Agent 侧配置主机（虚拟机）并 SSH 代采 — 1~1.5d（老板 2026-11-05 定）
+### R7 Agent 侧配置主机（虚拟机）并 SSH 代采 — ✅ 已实现（2026-11-09）
 
 **背景**：外部集群内网的虚拟机，平台 SSH 不可达；但 agent 在集群内，能连同网段 VM。
 凭据（SSH 私钥）留在对方集群（Secret 挂载），平台不保存。
