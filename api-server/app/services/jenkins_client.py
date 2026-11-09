@@ -63,6 +63,32 @@ class JenkinsClient:
         j = await self._get_json("api/json?tree=jobs[name]")
         return [{"name": x["name"]} for x in (j.get("jobs") or [])]
 
+    async def get_branch_choices(self, job_name: str, param_name: str) -> dict:
+        """取 Git 参数（如 BRANCH_TAG）的分支/tag 选项（allValueItems）及默认值。"""
+        j = await self._get_json(f"job/{quote(job_name)}/api/json")
+        for prop in j.get("property") or []:
+            for p in prop.get("parameterDefinitions") or []:
+                if p.get("name") != param_name:
+                    continue
+                av = p.get("allValueItems") or {}
+                vals = av.get("values") or []
+                return {
+                    "choices": [v.get("value") for v in vals if v.get("value")],
+                    "default": (p.get("defaultParameterValue") or {}).get("value", ""),
+                    "type": p.get("type") or "",
+                }
+        return {"choices": [], "default": "", "type": ""}
+
+    async def set_build_description(self, job_name: str, number: int, description: str) -> bool:
+        """设置构建描述（写操作人等信息，Jenkins 构建页可见）。"""
+        crumb = await self._crumb()
+        headers = {}
+        if crumb:
+            headers[crumb.get("crumbRequestField", "Jenkins-Crumb")] = crumb.get("crumb", "")
+        path = f"job/{quote(job_name)}/{number}/submitDescription"
+        r = await self._client.post(self._path(path), auth=self._auth, data={"description": description}, headers=headers)
+        return r.status_code < 400
+
     async def get_param_choices(self, job_name: str, param_name: str) -> dict:
         """取指定参数的定义：{name,type,choices,default}；找不到返回空。"""
         for d in await self.get_job_params(job_name):

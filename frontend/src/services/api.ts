@@ -796,7 +796,7 @@ export const getReleaseBranches = (d: { cluster_id: number; namespace: string; s
 export interface JobParam { name: string; type: string; kind: 'text' | 'select' | 'boolean' | 'textarea' | 'file' | 'branch' | 'multiselect'; choices: string[]; default: string; description: string }
 export const getReleaseJobs = (instanceId: number) => http.get<{ name: string }[]>('/release/jobs', { params: { instance_id: instanceId } })
 export const getReleaseJobParams = (instanceId: number, job: string) => http.get<JobParam[]>('/release/jobs/params', { params: { instance_id: instanceId, job } })
-export const triggerRelease = (d: { cluster_id: number; namespace: string; service_name: string; jenkins_instance_id: number; job_name: string; params?: Record<string, unknown> }) => http.post<{ build_id: number; build_number: number; job_name: string; auth_mode?: string }>('/release/trigger', d)
+export const triggerRelease = (d: { cluster_id: number; namespace: string; service_name: string; branch?: string }) => http.post<{ build_id: number; build_number: number; job_name: string; auth_mode?: string }>('/release/trigger', d)
 export const getReleaseBuildStatus = (buildId: number) => http.get<{ build_number: number; building: boolean; result: string; status: string; stages: { name: string; status: string; duration_ms: number }[] }>(`/release/builds/${buildId}/status`)
 export const getReleaseBuildLog = (buildId: number, start = 0) => http.get<{ text: string; size: number; has_more: boolean }>(`/release/builds/${buildId}/log`, { params: { start } })
 export interface MyJenkinsToken { instance_id: number; instance_name: string; url: string; auth_type: string; username: string; has_token: boolean }

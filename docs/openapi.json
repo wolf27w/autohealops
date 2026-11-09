@@ -10722,6 +10722,49 @@
         "summary": "Delete Project User"
       }
     },
+    "/api/v1/release/branches": {
+      "post": {
+        "description": "取某服务发布时的分支选项（来自映射 Job 的 BRANCH_TAG allValueItems）。",
+        "operationId": "post_api_v1_release_branches",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Branches"
+      }
+    },
     "/api/v1/release/builds/{build_id}/log": {
       "get": {
         "operationId": "get_api_v1_release_builds_build_id_log",
@@ -11284,7 +11327,7 @@
     },
     "/api/v1/release/trigger": {
       "post": {
-        "description": "触发发布：校验 namespace 标签 + 集群权限 → 按 job + 参数调 Jenkins buildWithParameters。",
+        "description": "触发发布：namespace 标签 → 集群权限 → 映射(服务→job) → 服务账号触发 → 写构建描述（真实用户）。\n\n用户只传 cluster_id/namespace/service_name/branch；job 与参数从管理员配置的映射来。",
         "operationId": "post_api_v1_release_trigger",
         "requestBody": {
           "content": {
