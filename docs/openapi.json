@@ -11154,6 +11154,82 @@
         "summary": "Delete Mapping"
       }
     },
+    "/api/v1/release/my-tokens": {
+      "get": {
+        "description": "列出所有 Jenkins 实例 + 当前用户是否已配个人 Token（回显脱敏）。",
+        "operationId": "get_api_v1_release_my_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Tokens"
+      }
+    },
+    "/api/v1/release/my-tokens/{instance_id}": {
+      "put": {
+        "description": "保存当前用户的 Jenkins API Token（加密存储；api_token 为空则清除）。",
+        "operationId": "put_api_v1_release_my_tokens_instance_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set My Token"
+      }
+    },
     "/api/v1/release/trigger": {
       "post": {
         "description": "触发发布：校验 namespace 标签 + 映射 + 集群权限 → 调 Jenkins buildWithParameters。",

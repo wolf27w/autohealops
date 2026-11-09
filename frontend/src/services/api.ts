@@ -796,5 +796,8 @@ export const getReleaseBranches = (d: { cluster_id: number; namespace: string; s
 export const triggerRelease = (d: { cluster_id: number; namespace: string; service_name: string; branch?: string }) => http.post<{ build_id: number; build_number: number; job_name: string }>('/release/trigger', d)
 export const getReleaseBuildStatus = (buildId: number) => http.get<{ build_number: number; building: boolean; result: string; status: string; stages: { name: string; status: string; duration_ms: number }[] }>(`/release/builds/${buildId}/status`)
 export const getReleaseBuildLog = (buildId: number, start = 0) => http.get<{ text: string; size: number; has_more: boolean }>(`/release/builds/${buildId}/log`, { params: { start } })
+export interface MyJenkinsToken { instance_id: number; instance_name: string; url: string; auth_type: string; username: string; has_token: boolean }
+export const getMyJenkinsTokens = () => http.get<MyJenkinsToken[]>('/release/my-tokens')
+export const setMyJenkinsToken = (instanceId: number, d: { username?: string; api_token?: string }) => http.put(`/release/my-tokens/${instanceId}`, d)
 
 export default api

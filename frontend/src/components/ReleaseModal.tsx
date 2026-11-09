@@ -1,7 +1,8 @@
 // 发布弹窗（R19）：选分支 → 触发 → 展示 pipeline 阶段 + 实时日志
 import { useEffect, useRef, useState } from 'react'
-import { Modal, Select, Input, Button, Space, Tag, Spin, Alert, Divider } from 'antd'
-import { getReleaseBranches, triggerRelease, getReleaseBuildStatus, getReleaseBuildLog } from '../services/api'
+import { Modal, Select, Input, Button, Space, Tag, Spin, Alert, Divider, message } from 'antd'
+import { getReleaseBranches, triggerRelease, getReleaseBuildStatus, getReleaseBuildLog, getMyJenkinsTokens, setMyJenkinsToken } from '../services/api'
+import type { MyJenkinsToken } from '../services/api'
 
 interface Props {
   open: boolean
@@ -23,6 +24,9 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
   const [status, setStatus] = useState('')
   const [log, setLog] = useState('')
   const [logStart, setLogStart] = useState(0)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [myTokens, setMyTokens] = useState<MyJenkinsToken[]>([])
+  const [authForms, setAuthForms] = useState<Record<number, { username: string; token: string }>>({})
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -40,6 +44,23 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
       .finally(() => setLoadingBranches(false))
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [open, clusterId, namespace, serviceName])
+
+  const openAuth = async () => {
+    setAuthOpen(true)
+    const list = (await getMyJenkinsTokens()) || []
+    setMyTokens(list)
+    const m: Record<number, { username: string; token: string }> = {}
+    list.forEach((t) => { m[t.instance_id] = { username: t.username || '', token: '' } })
+    setAuthForms(m)
+  }
+
+  const saveAuth = async (instId: number) => {
+    const f = authForms[instId]
+    if (!f) return
+    await setMyJenkinsToken(instId, { username: f.username, api_token: f.token })
+    message.success('已保存（发布将用你的身份）')
+    openAuth()
+  }
 
   const doTrigger = async () => {
     setErr(''); setTriggering(true)
@@ -102,7 +123,10 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
                     options={branches.map((b) => ({ value: b, label: b }))} />}
             </Space>
             {err && <Alert type="error" message={err} showIcon />}
-            <Button type="primary" loading={triggering} onClick={doTrigger} disabled={!branch}>发布</Button>
+            <Space>
+              <Button type="primary" loading={triggering} onClick={doTrigger} disabled={!branch}>发布</Button>
+              <Button onClick={openAuth}>配置我的 Jenkins 认证</Button>
+            </Space>
           </>
         )}
 
@@ -128,6 +152,29 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
           </>
         )}
       </Space>
+
+      <Modal open={authOpen} onCancel={() => setAuthOpen(false)} footer={null} width={560} title="我的 Jenkins 认证（用你的身份发布）" destroyOnClose>
+        <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+          在 Jenkins → 个人 → Configure 里生成 API Token，填到这里（加密保存）。未配置的实例发布时回退到服务账号。
+        </div>
+        {myTokens.length === 0 && <div style={{ color: '#999', padding: 8 }}>暂无可配置的 Jenkins 实例（管理员先在系统设置里添加）</div>}
+        {myTokens.map((t) => (
+          <div key={t.instance_id} style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
+            <div style={{ marginBottom: 6 }}><b>{t.instance_name}</b> <span style={{ color: '#8c8c8c', fontSize: 12 }}>{t.url}</span>
+              {t.has_token && <Tag color="green" style={{ marginLeft: 6 }}>已配置</Tag>}
+            </div>
+            <Space>
+              <Input placeholder="Jenkins 用户名（默认=平台用户名）" style={{ width: 180 }}
+                value={authForms[t.instance_id]?.username || ''}
+                onChange={(e) => setAuthForms((p) => ({ ...p, [t.instance_id]: { ...p[t.instance_id], username: e.target.value } }))} />
+              <Input.Password placeholder="API Token（留空=不修改）" style={{ width: 200 }}
+                value={authForms[t.instance_id]?.token || ''}
+                onChange={(e) => setAuthForms((p) => ({ ...p, [t.instance_id]: { ...p[t.instance_id], token: e.target.value } }))} />
+              <Button size="small" type="primary" onClick={() => saveAuth(t.instance_id)}>保存</Button>
+            </Space>
+          </div>
+        ))}
+      </Modal>
     </Modal>
   )
 }

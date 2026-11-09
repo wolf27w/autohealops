@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.database import async_session
 from app.core.security import decrypt_aes256_gcm, encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_operator
-from app.models import JenkinsInstance, ReleaseBuild, ReleaseMapping
+from app.models import JenkinsInstance, ReleaseBuild, ReleaseMapping, UserJenkinsToken
 from app.services import release_access, user_permission_service
 
 router = APIRouter(prefix="/api/v1/release")
@@ -179,10 +179,81 @@ async def delete_mapping(mapping_id: int, user=Depends(require_admin)):
 
 # ---------------- 分支 / 触发 / 状态日志 ----------------
 
+@router.get("/my-tokens")
+async def my_tokens(user=Depends(require_operator)):
+    """列出所有 Jenkins 实例 + 当前用户是否已配个人 Token（回显脱敏）。"""
+    async with async_session() as session:
+        insts = list((await session.execute(select(JenkinsInstance).order_by(JenkinsInstance.id))).scalars())
+        mine = {t.jenkins_instance_id: t for t in (await session.execute(
+            select(UserJenkinsToken).where(UserJenkinsToken.user_id == user.id)
+        )).scalars()}
+    return {"code": 200, "message": "success", "data": [
+        {"instance_id": j.id, "instance_name": j.name, "url": j.url, "auth_type": j.auth_type,
+         "username": mine[j.id].username if j.id in mine else "",
+         "has_token": bool(mine.get(j.id) and mine[j.id].api_token_encrypted)}
+        for j in insts
+    ]}
+
+
+@router.put("/my-tokens/{instance_id}")
+async def set_my_token(instance_id: int, payload: dict, user=Depends(require_operator)):
+    """保存当前用户的 Jenkins API Token（加密存储；api_token 为空则清除）。"""
+    async with async_session() as session:
+        j = await session.get(JenkinsInstance, instance_id)
+        if not j:
+            return {"code": 404, "message": "实例不存在", "data": None}
+        t = (await session.execute(
+            select(UserJenkinsToken).where(
+                UserJenkinsToken.user_id == user.id,
+                UserJenkinsToken.jenkins_instance_id == instance_id,
+            )
+        )).scalars().first()
+        api_token = payload.get("api_token") or ""
+        username = (payload.get("username") or "").strip()
+        if t:
+            if api_token:
+                t.api_token_encrypted = encrypt_aes256_gcm(api_token)
+                t.username = username
+            elif not username:
+                await session.delete(t)  # 清空 Token 且无用户名 → 删行
+            else:
+                t.username = username
+        elif api_token or username:
+            session.add(UserJenkinsToken(
+                user_id=user.id, jenkins_instance_id=instance_id,
+                username=username, api_token_encrypted=encrypt_aes256_gcm(api_token) if api_token else "",
+            ))
+        await session.commit()
+    return {"code": 200, "message": "success", "data": None}
+
 def _get_client(j: JenkinsInstance) -> "jenkins_client.JenkinsClient":
     from app.services import jenkins_client
     token = decrypt_aes256_gcm(j.api_token_encrypted) if j.api_token_encrypted else ""
     return jenkins_client.JenkinsClient(j.url, j.username, token, bool(j.ignore_ssl))
+
+
+async def _resolve_credential(j: JenkinsInstance, user) -> tuple[str, str, str]:
+    """解析发布凭据：优先当前用户的个人 Token，否则回退实例凭据（服务账号）。
+
+    返回 (jenkins_username, api_token, mode)，mode = personal / instance。
+    """
+    if user is not None:
+        async with async_session() as session:
+            t = (await session.execute(
+                select(UserJenkinsToken).where(
+                    UserJenkinsToken.user_id == user.id,
+                    UserJenkinsToken.jenkins_instance_id == j.id,
+                )
+            )).scalars().first()
+        if t and t.api_token_encrypted:
+            uname = t.username or getattr(user, "username", "") or ""
+            return uname, decrypt_aes256_gcm(t.api_token_encrypted), "personal"
+    return j.username, (decrypt_aes256_gcm(j.api_token_encrypted) if j.api_token_encrypted else ""), "instance"
+
+
+def _make_client(j: JenkinsInstance, username: str, token: str) -> "jenkins_client.JenkinsClient":
+    from app.services import jenkins_client
+    return jenkins_client.JenkinsClient(j.url, username, token, bool(j.ignore_ssl))
 
 
 async def _load_mapping(cluster_id: int, namespace: str, service_name: str) -> tuple[ReleaseMapping | None, JenkinsInstance | None]:
@@ -212,7 +283,8 @@ async def list_branches(payload: dict, user=Depends(require_operator)):
     m, j = await _load_mapping(cluster_id, namespace, service_name)
     if not m or not j:
         return {"code": 400, "message": "该服务未配置发布映射", "data": None}
-    client = _get_client(j)
+    uname, token, _mode = await _resolve_credential(j, user)
+    client = _make_client(j, uname, token)
     try:
         d = await client.get_param_choices(m.job_name, m.branch_param)
     except Exception as e:  # noqa: BLE001
@@ -253,7 +325,8 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
     params = {m.service_param: service_name}
     if branch:
         params[m.branch_param] = branch
-    client = _get_client(j)
+    uname, token, mode = await _resolve_credential(j, user)
+    client = _make_client(j, uname, token)
     try:
         number = await client.trigger_build(m.job_name, params)
     except Exception as e:  # noqa: BLE001
@@ -266,12 +339,13 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
             cluster_id=cluster_id, namespace=namespace, service_name=service_name,
             jenkins_instance_id=m.jenkins_instance_id, job_name=m.job_name,
             branch=branch, build_number=number, status="queued",
-            triggered_by=user.id, triggered_by_name=getattr(user, "username", "") or "",
+            triggered_by=user.id,
+            triggered_by_name=f"{getattr(user, 'username', '') or ''}({mode})",
         )
         session.add(b)
         await session.commit()
         await session.refresh(b)
-    return {"code": 200, "message": "success", "data": {"build_id": b.id, "build_number": number, "job_name": m.job_name}}
+    return {"code": 200, "message": "success", "data": {"build_id": b.id, "build_number": number, "job_name": m.job_name, "auth_mode": mode}}
 
 
 async def _build_and_instance(build_id: int) -> tuple[ReleaseBuild | None, JenkinsInstance | None]:

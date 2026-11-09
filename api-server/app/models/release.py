@@ -65,3 +65,17 @@ class ReleaseBuild(Base):
     triggered_by_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class UserJenkinsToken(Base):
+    """每用户的 Jenkins API Token（R19 认证：用当前登录用户身份发布，不存 LDAP 密码）。"""
+
+    __tablename__ = "user_jenkins_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    jenkins_instance_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # Jenkins 用户名（默认=平台用户名；LDAP 同源通常一致）
+    username: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    api_token_encrypted: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
