@@ -12,7 +12,7 @@ value 留空 = 只看 key 是否存在。
 import logging
 from typing import Optional
 
-from app.clients import executor_client
+from app.clients.executor_client import executor_client
 from app.core.redis_client import redis_pool
 
 logger = logging.getLogger("api-server.release-access")

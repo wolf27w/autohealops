@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.api import (
     agent, ai_proxy, alert_policies, alert_silences, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
-    projects, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
+    projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
 from app.api import hosts, jvm
 from app.api import settings as settings_api
@@ -574,6 +574,7 @@ app.include_router(external_access.router)
 app.include_router(settings_api.router)
 app.include_router(permissions.router)
 app.include_router(projects.router)
+app.include_router(release.router)
 app.include_router(db_connections.router)
 app.include_router(db_diagnosis.router)
 app.include_router(diagnostic.router)

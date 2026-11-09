@@ -37,6 +37,7 @@ from app.models.prompt import PromptTemplate, PromptVersion
 from app.models.repair_plan import RepairPlan
 from app.models.resource import QuotaSnapshot, ResourceSnapshot
 from app.models.report_schedule import ReportSchedule
+from app.models.release import JenkinsInstance, ReleaseBuild, ReleaseMapping
 from app.models.self_heal_rule import SelfHealRule
 from app.models.slow_sql import SlowSQLRecord
 from app.models.sql_task import SqlTask
@@ -89,6 +90,9 @@ __all__ = [
     "ResourceSnapshot",
     "QuotaSnapshot",
     "ReportSchedule",
+    "JenkinsInstance",
+    "ReleaseMapping",
+    "ReleaseBuild",
     "SelfHealRule",
     "SlowSQLRecord",
     "SqlTask",
