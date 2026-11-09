@@ -554,6 +554,7 @@ export const getSlowSQL = (connId: number, limit = 50, start?: string, end?: str
   http.get(`/db-connections/${connId}/slow-sql`, { params: { limit, ...(start ? { start } : {}), ...(end ? { end } : {}) } })
 export const getDBAnomalies = (connId: number) => http.get(`/db-connections/${connId}/anomalies`)
 export const getSlowSQLTrend = (connId: number, hours = 24) => http.get(`/db-connections/${connId}/slow-sql-trend`, { params: { hours } })
+export const getSlowSQLDigestTrend = (connId: number, digest: string, hours = 24) => http.get(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/trend`, { params: { hours } })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
 // ============ 权限管理（admin）============

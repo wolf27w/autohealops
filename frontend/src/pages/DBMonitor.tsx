@@ -1,10 +1,10 @@
 // 数据库监控：按数据库切换，一屏展示全部监控项（+ 慢 SQL）
 // 不同数据库类型（mysql/pg/oracle）采集项不同，按采集到的内容展示
 import { useEffect, useState } from 'react'
-import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch } from 'antd'
+import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch, Modal, message } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, getDBAnomalies } from '../services/api'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, getDBAnomalies, getSlowSQLDigestTrend } from '../services/api'
 
 interface Metric {
   metric_type: string
@@ -15,6 +15,7 @@ interface Metric {
 }
 interface SlowSQL {
   id: number
+  digest?: string
   sql_text?: string
   schema_name?: string
   exec_count?: number
@@ -100,6 +101,7 @@ export default function DBMonitor() {
   const [anomalies, setAnomalies] = useState<Anomaly[]>([])
   const [groupByScale, setGroupByScale] = useState(false)
   const [slowRange, setSlowRange] = useState<string>('1d')
+  const [digestTrend, setDigestTrend] = useState<{ digest: string; data: TrendPoint[] } | null>(null)
 
   // R3.2：慢 SQL 时间段过滤（start ISO 串）
   const slowRangeStart = (r: string): string | undefined => {
@@ -190,6 +192,14 @@ export default function DBMonitor() {
     { title: '次数', dataIndex: 'exec_count', width: 80 },
     { title: '库', dataIndex: 'schema_name', width: 120, render: (v: string) => v || '-' },
     { title: '采样时间', dataIndex: 'sampled_at', width: 170 },
+    { title: '趋势', width: 70, render: (_: unknown, r: SlowSQL) => r.digest
+      ? <Button type="link" size="small" onClick={() => {
+          getSlowSQLDigestTrend(connId!, r.digest!, 24).then((d) => {
+            const rows = ((d || []) as { bucket: string; avg_latency_ms: number; max_latency_ms: number; exec_count: number }[])
+            setDigestTrend({ digest: r.digest!, data: rows.map((x) => ({ metric_name: 'avg', series: '平均耗时(ms)', value: x.avg_latency_ms, sampled_at: x.bucket })) })
+          }).catch(() => message.error('趋势查询失败'))
+        }}>曲线</Button>
+      : '-' },
     { title: '优化建议', dataIndex: 'suggestions', width: 260, render: (v: SlowSQL['suggestions'], r: SlowSQL) => {
       if (!v || !v.length) return '-'
       const tip = v.map((s) => `• ${s.hint}：${s.action}（风险：${s.risk}）`).join('\n')
@@ -283,6 +293,13 @@ export default function DBMonitor() {
           </Card>
         </>
       )}
+
+      <Modal open={!!digestTrend} onCancel={() => setDigestTrend(null)} footer={null} width={720}
+        title={`慢 SQL 趋势（digest ${digestTrend?.digest?.slice(0, 16) ?? ''}…）`}>
+        {digestTrend && (digestTrend.data.length
+          ? <Line data={digestTrend.data} xField="sampled_at" yField="value" seriesField="series" height={300} smooth />
+          : <div style={{ color: '#999', padding: 8 }}>该 digest 无趋势数据（多次采集后形成）</div>)}
+      </Modal>
 
     </div>
   )

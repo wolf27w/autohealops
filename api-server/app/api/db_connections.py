@@ -968,6 +968,37 @@ async def slow_sql_trend(conn_id: int, hours: int = 24, user=Depends(require_any
     ]}
 
 
+@router.get("/{conn_id}/slow-sql/{digest}/trend")
+async def slow_sql_digest_trend(conn_id: int, digest: str, hours: int = 24, user=Depends(require_any_user)):
+    """R3.2：同一 digest 的耗时/次数曲线（按小时分桶）。"""
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限", "data": None}
+    from sqlalchemy import func as sa_func
+    from app.models import SlowSQLRecord
+    since = datetime.now() - timedelta(hours=max(1, min(hours, 720)))
+    async with async_session() as session:
+        result = await session.execute(
+            select(
+                sa_func.date_format(SlowSQLRecord.sampled_at, "%Y-%m-%d %H:00").label("bucket"),
+                sa_func.coalesce(sa_func.max(SlowSQLRecord.avg_latency_ms), 0.0).label("avg_latency_ms"),
+                sa_func.coalesce(sa_func.max(SlowSQLRecord.max_latency_ms), 0.0).label("max_latency_ms"),
+                sa_func.coalesce(sa_func.max(SlowSQLRecord.exec_count), 0).label("exec_count"),
+            ).where(
+                SlowSQLRecord.db_connection_id == conn_id,
+                SlowSQLRecord.digest == digest,
+                SlowSQLRecord.sampled_at >= since,
+            )
+            .group_by("bucket")
+            .order_by("bucket")
+        )
+        rows = result.all()
+    return {"code": 200, "message": "success", "data": [
+        {"bucket": r.bucket, "avg_latency_ms": round(float(r.avg_latency_ms), 2),
+         "max_latency_ms": round(float(r.max_latency_ms), 2), "exec_count": int(r.exec_count)}
+        for r in rows
+    ]}
+
+
 @router.post("/{conn_id}/collect")
 async def collect_slow_sql(conn_id: int, user=Depends(require_operator)):
     """手动触发慢 SQL 采集"""

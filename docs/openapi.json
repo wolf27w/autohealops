@@ -4790,6 +4790,68 @@
         "summary": "Slow Sql Trend"
       }
     },
+    "/api/v1/db-connections/{conn_id}/slow-sql/{digest}/trend": {
+      "get": {
+        "description": "R3.2：同一 digest 的耗时/次数曲线（按小时分桶）。",
+        "operationId": "get_api_v1_db_connections_conn_id_slow_sql_digest_trend",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "digest",
+            "required": true,
+            "schema": {
+              "title": "Digest",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "title": "Hours",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Slow Sql Digest Trend"
+      }
+    },
     "/api/v1/db-connections/{conn_id}/sql-tasks": {
       "get": {
         "operationId": "get_api_v1_db_connections_conn_id_sql_tasks",
