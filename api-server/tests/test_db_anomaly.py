@@ -46,5 +46,34 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(out[0]["level"], "high")
 
 
+class TestSqlSuggestions(unittest.TestCase):
+    def test_select_star(self):
+        from app.services.db_anomaly_service import sql_suggestions
+        rules = [s["rule"] for s in sql_suggestions("SELECT * FROM users")]
+        self.assertIn("select_star", rules)
+        self.assertIn("no_where", rules)  # 无 WHERE
+
+    def test_like_leading_wildcard(self):
+        from app.services.db_anomaly_service import sql_suggestions
+        rules = [s["rule"] for s in sql_suggestions("SELECT * FROM t WHERE name LIKE '%abc'")]
+        self.assertIn("like_leading_wildcard", rules)
+
+    def test_large_in(self):
+        from app.services.db_anomaly_service import sql_suggestions
+        ins = ",".join(str(i) for i in range(20))
+        rules = [s["rule"] for s in sql_suggestions(f"SELECT * FROM t WHERE id IN ({ins})")]
+        self.assertIn("large_in", rules)
+
+    def test_function_on_column(self):
+        from app.services.db_anomaly_service import sql_suggestions
+        rules = [s["rule"] for s in sql_suggestions("SELECT * FROM t WHERE DATE(created_at) = '2026-01-01'")]
+        self.assertIn("function_on_column", rules)
+
+    def test_suggestion_shape(self):
+        from app.services.db_anomaly_service import sql_suggestions
+        for s in sql_suggestions("SELECT * FROM t ORDER BY x"):
+            self.assertTrue(all(k in s for k in ("rule", "hint", "action", "risk")))
+
+
 if __name__ == "__main__":
     unittest.main()

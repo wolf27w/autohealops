@@ -21,6 +21,8 @@ interface SlowSQL {
   avg_latency_ms?: number
   max_latency_ms?: number
   sampled_at?: string
+  hit_rules?: string[]
+  suggestions?: { rule: string; hint: string; action: string; risk: string }[]
 }
 interface DBConn {
   id: number; name: string; db_type: string
@@ -97,6 +99,25 @@ export default function DBMonitor() {
   const [trends, setTrends] = useState<TrendPoint[]>([])
   const [anomalies, setAnomalies] = useState<Anomaly[]>([])
   const [groupByScale, setGroupByScale] = useState(false)
+  const [slowRange, setSlowRange] = useState<string>('1d')
+
+  // R3.2：慢 SQL 时间段过滤（start ISO 串）
+  const slowRangeStart = (r: string): string | undefined => {
+    const now = new Date()
+    switch (r) {
+      case '1d': now.setHours(0, 0, 0, 0); break
+      case '2d': now.setDate(now.getDate() - 1); now.setHours(0, 0, 0, 0); break
+      case '7d': now.setDate(now.getDate() - 6); now.setHours(0, 0, 0, 0); break
+      default: return undefined
+    }
+    return now.toISOString()
+  }
+
+  const reloadSlow = (r?: string) => {
+    const id = connId
+    if (!id) return
+    getSlowSQL(id, 200, slowRangeStart(r ?? slowRange)).then((d) => setSlowSQL((d || []) as SlowSQL[])).catch(() => setSlowSQL([]))
+  }
 
 
   useEffect(() => {
@@ -113,7 +134,7 @@ export default function DBMonitor() {
     setLoading(true)
     Promise.all([
       getDbLatestMetrics(id).then((d) => setMetrics((d || []) as Metric[])),
-      getSlowSQL(id, 200).then((d) => setSlowSQL((d || []) as SlowSQL[])).catch(() => setSlowSQL([])),
+      getSlowSQL(id, 200, slowRangeStart(slowRange)).then((d) => setSlowSQL((d || []) as SlowSQL[])).catch(() => setSlowSQL([])),
       getDBAnomalies(id).then((d) => setAnomalies((d || []) as Anomaly[])).catch(() => setAnomalies([])),
     ]).finally(() => setLoading(false))
   }
@@ -169,6 +190,13 @@ export default function DBMonitor() {
     { title: '次数', dataIndex: 'exec_count', width: 80 },
     { title: '库', dataIndex: 'schema_name', width: 120, render: (v: string) => v || '-' },
     { title: '采样时间', dataIndex: 'sampled_at', width: 170 },
+    { title: '优化建议', dataIndex: 'suggestions', width: 260, render: (v: SlowSQL['suggestions'], r: SlowSQL) => {
+      if (!v || !v.length) return '-'
+      const tip = v.map((s) => `• ${s.hint}：${s.action}（风险：${s.risk}）`).join('\n')
+      return <Tooltip title={<div style={{ whiteSpace: 'pre-wrap', maxWidth: 520 }}>{tip}</div>}>
+        <span>{v.map((s) => <Tag key={s.rule} color="orange" style={{ marginBottom: 2 }}>{s.rule}</Tag>)}</span>
+      </Tooltip>
+    } },
     { title: 'SQL', dataIndex: 'sql_text', ellipsis: true, render: (v: string) => <Tooltip title={<pre style={{ maxWidth: 700, whiteSpace: 'pre-wrap' }}>{v}</pre>}>{v}</Tooltip> },
   ]
 
@@ -239,7 +267,15 @@ export default function DBMonitor() {
                 })()}
           </Card>
 
-          <Card size="small" title={`慢 SQL（Top ${slowSQL.length}）`} style={{ marginTop: 12 }}>
+          <Card size="small" title={`慢 SQL（Top ${slowSQL.length}）`} style={{ marginTop: 12 }}
+            extra={<Select size="small" value={slowRange} style={{ width: 110 }}
+              onChange={(v) => { setSlowRange(v); reloadSlow(v) }}
+              options={[
+                { value: '1d', label: '今天' },
+                { value: '2d', label: '昨天' },
+                { value: '7d', label: '近 7 天' },
+                { value: 'all', label: '全部' },
+              ]} />}>
             {slowSQL.length
               ? <Table rowKey="id" size="small" dataSource={slowSQL} columns={slowCols}
                   pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }} />

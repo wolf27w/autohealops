@@ -904,21 +904,36 @@ async def connection_anomalies(conn_id: int, user=Depends(require_any_user)):
 
 
 @router.get("/{conn_id}/slow-sql")
-async def list_slow_sql(conn_id: int, limit: int = 50, user=Depends(require_any_user)):
-    """查询某连接的慢 SQL 记录"""
+async def list_slow_sql(conn_id: int, limit: int = 50, start: str = "", end: str = "",
+                        user=Depends(require_any_user)):
+    """查询某连接的慢 SQL 记录（支持 R3.2 时间段过滤 start/end，ISO 时间）
+
+    每条附带 R3.3 优化建议：hit_rules + suggestions（静态分析）。
+    """
     if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
         return {"code": 403, "message": "无权限", "data": None}
     from app.models import SlowSQLRecord
+    stmt = select(SlowSQLRecord).where(SlowSQLRecord.db_connection_id == conn_id)
+    if start:
+        try:
+            stmt = stmt.where(SlowSQLRecord.sampled_at >= datetime.fromisoformat(start.replace("Z", "+00:00")))
+        except ValueError:
+            return {"code": 400, "message": "start 时间格式不正确", "data": None}
+    if end:
+        try:
+            stmt = stmt.where(SlowSQLRecord.sampled_at <= datetime.fromisoformat(end.replace("Z", "+00:00")))
+        except ValueError:
+            return {"code": 400, "message": "end 时间格式不正确", "data": None}
+    stmt = stmt.order_by(SlowSQLRecord.avg_latency_ms.desc()).limit(max(1, min(limit, 500)))
     async with async_session() as session:
-        result = await session.execute(
-            select(SlowSQLRecord).where(SlowSQLRecord.db_connection_id == conn_id)
-            .order_by(SlowSQLRecord.sampled_at.desc()).limit(limit)
-        )
-        records = list(result.scalars())
+        records = list((await session.execute(stmt)).scalars())
+    from app.services import db_anomaly_service
     return {"code": 200, "message": "success", "data": [
         {"id": r.id, "digest": r.digest, "sql_text": r.sql_text, "schema_name": r.schema_name,
          "exec_count": r.exec_count, "avg_latency_ms": r.avg_latency_ms, "max_latency_ms": r.max_latency_ms,
-         "sampled_at": str(r.sampled_at)} for r in records
+         "sampled_at": str(r.sampled_at),
+         "hit_rules": db_anomaly_service.analyze_slow_sql(r.sql_text)["hit_rules"],
+         "suggestions": db_anomaly_service.analyze_slow_sql(r.sql_text)["suggestions"]} for r in records
     ]}
 
 

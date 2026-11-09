@@ -9,6 +9,7 @@
 """
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -212,3 +213,62 @@ async def _recent_slow_sql(conn_id: int) -> list[dict]:
             .order_by(SlowSQLRecord.avg_latency_ms.desc()).limit(20)
         )).scalars()
     return [{"avg_latency_ms": r.avg_latency_ms, "sql_text": r.sql_text} for r in rows]
+
+
+# ============ R3.3 慢 SQL 优化建议（静态分析，纯函数） ============
+
+def sql_suggestions(sql_text: str) -> list[dict]:
+    """对一条慢 SQL 做静态分析，返回命中规则列表：
+    [{rule, hint, action, risk}]（命中规则 + 依据 + 优化动作 + 风险提示）。"""
+    if not sql_text:
+        return []
+    s = " ".join((sql_text or "").split()).lower()
+    out: list[dict] = []
+
+    def push(rule, hint, action, risk):
+        out.append({"rule": rule, "hint": hint, "action": action, "risk": risk})
+
+    # 1. SELECT *
+    if re.search(r"select\s+\*\s+from", s):
+        push("select_star", "使用了 SELECT *", "只取业务需要的列，减少回表与传输", "返回多余列放大结果集")
+
+    # 2. 前置通配 LIKE
+    if re.search(r"""like\s+['\"]%""", s):
+        push("like_leading_wildcard", "LIKE 以 % 开头", "改为前缀匹配或全文索引/反向索引", "无法利用 B+Tree 索引，必全表扫描")
+
+    # 3. 函数包列
+    if re.search(r"where\s+\w*\([^)]*\)\s*=|where\s+\w+\s*=\s*\w*\(", s):
+        push("function_on_column", "WHERE 里对列套函数", "把列剥离出来（如 date(col) = 'x' 改为范围条件）", "索引列被函数包裹 → 索引失效")
+
+    # 4. 大 IN
+    m = re.search(r"\bin\s*\(([^)]*)\)", s)
+    if m and m.group(1).count(",") >= 10:
+        push("large_in", "IN 列表很长", "改为临时表/JOIN，或分批", "IN 元素过多影响解析与执行计划")
+
+    # 5. 全表扫描（无 WHERE 的 SELECT）
+    if re.search(r"select\b", s) and "where" not in s:
+        push("no_where", "SELECT 没有 WHERE", "确认是否真要全量；加分页 LIMIT", "大表无过滤 = 全表扫描")
+
+    # 6. ORDER BY 无 LIMIT
+    if re.search(r"order\s+by", s) and "limit" not in s:
+        push("sort_no_limit", "ORDER BY 无 LIMIT", "加 LIMIT 或确认排序列有索引", "大结果集排序消耗临时表/磁盘")
+
+    # 7. GROUP BY（可能临时表）
+    if re.search(r"group\s+by", s):
+        push("group_by", "GROUP BY 聚合", "检查分组列是否有索引", "缺索引时走临时表/文件排序")
+
+    # 8. OR 条件
+    if re.search(r"\bor\b", s):
+        push("or_condition", "WHERE 使用 OR", "改写为 UNION ALL 或保证两侧都有索引", "OR 常导致索引失效/合并扫描")
+
+    # 9. 笛卡尔积（多表无 ON）
+    if len(re.findall(r"\bfrom\b", s)) > 1 and re.search(r"join", s) and "on " not in s:
+        push("join_no_on", "JOIN 缺少 ON 条件", "补齐关联条件", "缺 ON 会退化为笛卡尔积")
+
+    return out
+
+
+def analyze_slow_sql(sql_text: str) -> dict:
+    """R3.3：返回 {hit_rules, suggestions}（供慢 SQL 列表直接附加）。"""
+    sug = sql_suggestions(sql_text)
+    return {"hit_rules": [x["rule"] for x in sug], "suggestions": sug}

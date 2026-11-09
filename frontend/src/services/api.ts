@@ -550,7 +550,8 @@ export const createDBConnection = (data: Payload) => http.post('/db-connections'
 export const updateDBConnection = (id: number, data: Payload) => http.put(`/db-connections/${id}`, data)
 export const deleteDBConnection = (id: number) => http.delete(`/db-connections/${id}`)
 export const testDBConnection = (id: number) => http.post(`/db-connections/${id}/test`)
-export const getSlowSQL = (connId: number, limit = 50) => http.get(`/db-connections/${connId}/slow-sql`, { params: { limit } })
+export const getSlowSQL = (connId: number, limit = 50, start?: string, end?: string) =>
+  http.get(`/db-connections/${connId}/slow-sql`, { params: { limit, ...(start ? { start } : {}), ...(end ? { end } : {}) } })
 export const getDBAnomalies = (connId: number) => http.get(`/db-connections/${connId}/anomalies`)
 export const getSlowSQLTrend = (connId: number, hours = 24) => http.get(`/db-connections/${connId}/slow-sql-trend`, { params: { hours } })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)

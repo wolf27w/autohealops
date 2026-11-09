@@ -4194,6 +4194,49 @@
         "summary": "Update Connection"
       }
     },
+    "/api/v1/db-connections/{conn_id}/anomalies": {
+      "get": {
+        "description": "R3.1：该数据库连接的异常点列表（连接使用率/命中率/锁等待/慢 SQL/表空间增长等）。",
+        "operationId": "get_api_v1_db_connections_conn_id_anomalies",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Connection Anomalies"
+      }
+    },
     "/api/v1/db-connections/{conn_id}/collect": {
       "post": {
         "description": "手动触发慢 SQL 采集",
@@ -4623,7 +4666,7 @@
     },
     "/api/v1/db-connections/{conn_id}/slow-sql": {
       "get": {
-        "description": "查询某连接的慢 SQL 记录",
+        "description": "查询某连接的慢 SQL 记录（支持 R3.2 时间段过滤 start/end，ISO 时间）\n\n每条附带 R3.3 优化建议：hit_rules + suggestions（静态分析）。",
         "operationId": "get_api_v1_db_connections_conn_id_slow_sql",
         "parameters": [
           {
@@ -4643,6 +4686,26 @@
               "default": 50,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "End",
+              "type": "string"
             }
           }
         ],
