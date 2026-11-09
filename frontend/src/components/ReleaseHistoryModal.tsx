@@ -8,8 +8,8 @@ import PipelineView from './PipelineView'
 interface Props {
   open: boolean
   clusterId: number
-  namespace: string
-  serviceName: string
+  namespace?: string
+  serviceName?: string
   onClose: () => void
 }
 
@@ -32,7 +32,7 @@ export default function ReleaseHistoryModal({ open, clusterId, namespace, servic
 
   const load = () => {
     setLoading(true)
-    getReleaseBuilds({ cluster_id: clusterId, namespace, service_name: serviceName, limit: 100 })
+    getReleaseBuilds({ cluster_id: clusterId, namespace: namespace || undefined, service_name: serviceName || undefined, limit: 200 })
       .then((d) => setBuilds(d || [])).catch(() => setBuilds([])).finally(() => setLoading(false))
   }
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function ReleaseHistoryModal({ open, clusterId, namespace, servic
   ]
 
   return (
-    <Modal open={open} onCancel={onClose} footer={null} width={860} title={`发布历史：${serviceName}`} destroyOnClose>
+    <Modal open={open} onCancel={onClose} footer={null} width={860} title={serviceName ? `发布历史：${serviceName}` : '发布历史'} destroyOnClose>
       <Space direction="vertical" style={{ width: '100%' }}>
         {builds.length === 0 && !loading
           ? <Empty description="暂无发布记录" />

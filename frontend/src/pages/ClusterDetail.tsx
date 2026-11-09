@@ -106,6 +106,7 @@ export default function ClusterDetail() {
   const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
   const [releaseTarget, setReleaseTarget] = useState<WorkloadTarget | null>(null)
   const [releaseHistoryTarget, setReleaseHistoryTarget] = useState<WorkloadTarget | null>(null)
+  const [clusterHistoryOpen, setClusterHistoryOpen] = useState(false)
   const [livePods, setLivePods] = useState<Record<string, ClusterPod>>({})
   // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
   const [podList, setPodList] = useState<ClusterPod[]>([])
@@ -800,6 +801,7 @@ export default function ClusterDetail() {
         </Popconfirm>
         <Button size="small" onClick={() => navigate(`/node-management?cluster=${id}`)}>集群节点</Button>
         <Button size="small" onClick={() => navigate(`/resource-governance?cluster=${id}`)}>资源治理</Button>
+        <Button size="small" onClick={() => setClusterHistoryOpen(true)}>发布历史</Button>
         <Button size="small" onClick={() => { setAiResult(null); setAiNs(activeNs && activeNs !== '_all_' ? activeNs : ''); setAiKinds([]); setAppInspectOpen(true) }}>应用巡检</Button>
         <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>集群巡检</Button>
       </div>
@@ -888,6 +890,8 @@ export default function ClusterDetail() {
         <ReleaseHistoryModal open clusterId={releaseHistoryTarget.clusterId} namespace={releaseHistoryTarget.namespace}
           serviceName={releaseHistoryTarget.name} onClose={() => setReleaseHistoryTarget(null)} />
       )}
+      <ReleaseHistoryModal open={clusterHistoryOpen} clusterId={Number(id)}
+        namespace={activeNs && activeNs !== '_all_' ? activeNs : ''} onClose={() => setClusterHistoryOpen(false)} />
       <Modal open={scaleOpen} width={440} title={`批量改副本（${selItems.length} 个${wlTypeLabel}）`}
         onCancel={() => setScaleOpen(false)} onOk={submitBatchReplicas} okText="应用" destroyOnClose>
         <div style={{ marginBottom: 8 }}>目标副本数（0 = 停止，N = 启动/扩缩容）：</div>
