@@ -1,6 +1,6 @@
 // 主机/虚拟机纳管（N11）：非 K8s 服务器，按「进程路径」监控服务（SSH 采集，无 agent）
 import { useEffect, useState } from 'react'
-import { Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message } from 'antd'
+import { Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd'
 import { PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { getHosts, createHost, updateHost, deleteHost, checkHost } from '../services/api'
 import type { HostItem, HostCheckResult } from '../services/api'
@@ -55,7 +55,12 @@ export default function HostManagement() {
           { title: '名称', dataIndex: 'name' },
           { title: '地址', dataIndex: 'address', render: (v, r) => `${v}:${r.ssh_port}` },
           { title: '用户', dataIndex: 'ssh_user', width: 80 },
-          { title: '状态', dataIndex: 'status', width: 80, render: (s: string) => <Tag color={STATUS[s]?.color}>{STATUS[s]?.label || s}</Tag> },
+          { title: '状态', dataIndex: 'status', width: 80, render: (s: string, r: HostItem) => {
+            const tag = <Tag color={STATUS[s]?.color}>{STATUS[s]?.label || s}</Tag>
+            return s === 'offline' && r.last_error
+              ? <Tooltip title={r.last_error}>{tag}</Tooltip>
+              : tag
+          } },
           { title: '监控进程', width: 260, render: (_, r) => (r.process_paths || []).map((p) => p.name || p.path).join('、') || '-' },
           { title: '启用', dataIndex: 'enabled', width: 70, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
           { title: '最近检测', dataIndex: 'last_seen', width: 160, render: (v: string | null) => v ? String(v).slice(0, 19).replace('T', ' ') : '-' },

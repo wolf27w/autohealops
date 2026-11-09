@@ -703,7 +703,7 @@ export interface HostItem {
   id: number; name: string; address: string; ssh_port: number; ssh_user: string
   has_password: boolean; ssh_key_path: string
   process_paths: { name: string; path: string }[]
-  enabled: boolean; status: string; last_seen?: string | null
+  enabled: boolean; status: string; last_seen?: string | null; last_error?: string
 }
 export interface HostCheckResult { online: boolean; error: string; paths: { name: string; path: string; running: boolean; pid_count: number; cpu_pct: number; mem_mb: number }[] }
 export const getHosts = () => http.get<HostItem[]>('/hosts')

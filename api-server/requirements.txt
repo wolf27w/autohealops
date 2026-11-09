@@ -16,3 +16,4 @@ apscheduler==3.10.4
 grpcio==1.66.2
 grpcio-tools==1.66.2
 bcrypt==4.2.0
+asyncssh==2.24.1

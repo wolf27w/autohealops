@@ -26,6 +26,7 @@ def _row(h: Host) -> dict:
         "ssh_user": h.ssh_user, "has_password": bool(h.ssh_password_encrypted),
         "ssh_key_path": h.ssh_key_path, "process_paths": paths,
         "enabled": h.enabled, "status": h.status,
+        "last_error": getattr(h, "last_error", "") or "",
         "last_seen": str(h.last_seen) if h.last_seen else None,
     }
 
