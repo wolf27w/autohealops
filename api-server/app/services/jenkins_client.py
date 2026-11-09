@@ -71,7 +71,11 @@ class JenkinsClient:
         return [{"name": x["name"]} for x in (j.get("jobs") or [])]
 
     async def get_branch_choices(self, job_name: str, param_name: str) -> dict:
-        """取 Git 参数（如 BRANCH_TAG）的分支/tag 选项（allValueItems）及默认值。"""
+        """取 Git 参数（如 BRANCH_TAG）的分支/tag 选项（allValueItems）及默认值。
+
+        默认值可能与 choices 不同步（如 default=testing，choices=origin/testing），
+        归一化到真实可选值；对不上就置空（强制前端让用户选）。
+        """
         j = await self._get_json(f"job/{quote(job_name)}/api/json")
         for prop in j.get("property") or []:
             for p in prop.get("parameterDefinitions") or []:
@@ -79,11 +83,12 @@ class JenkinsClient:
                     continue
                 av = p.get("allValueItems") or {}
                 vals = av.get("values") or []
-                return {
-                    "choices": [v.get("value") for v in vals if v.get("value")],
-                    "default": (p.get("defaultParameterValue") or {}).get("value", ""),
-                    "type": p.get("type") or "",
-                }
+                choices = [v.get("value") for v in vals if v.get("value")]
+                default = (p.get("defaultParameterValue") or {}).get("value", "") or ""
+                if default and default not in choices:
+                    match = [c for c in choices if c == default or c.endswith("/" + default) or c.endswith(default)]
+                    default = match[0] if match else ""
+                return {"choices": choices, "default": default, "type": p.get("type") or ""}
         return {"choices": [], "default": "", "type": ""}
 
     async def set_build_description(self, job_name: str, number: int, description: str) -> bool:
