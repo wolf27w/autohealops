@@ -136,8 +136,11 @@ export default function ReleaseSettings() {
 
       <Modal title={mapEditing ? '编辑映射' : '添加映射'} open={mapModal} onOk={saveMap} onCancel={() => setMapModal(false)}>
         <Form form={mapForm} layout="vertical">
-          <Form.Item name="service_name" label="服务名" rules={[{ required: true }]} extra="与 Deployment 名一致；多个服务名可指向同一 Job">
-            <Input placeholder="如 svc-order" />
+          <Form.Item name="service_name" label="服务名" rules={[{ required: true }]} extra="与 Deployment 名一致；支持一次填多个（逗号/顿号/换行分隔），多个服务可指向同一个 Job">
+            <Input.TextArea rows={3} placeholder="如 svc-order，或一行一个：
+svc-order
+svc-user
+svc-pay" />
           </Form.Item>
           <Form.Item name="jenkins_instance_id" label="Jenkins 实例" rules={[{ required: true }]}>
             <Select options={insts.map((i) => ({ value: i.id, label: `${i.name}（${i.url}）` }))} />

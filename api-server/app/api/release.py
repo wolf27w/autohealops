@@ -127,10 +127,23 @@ async def list_mappings(cluster_id: int | None = None, namespace: str = "", user
 async def upsert_mapping(payload: dict, user=Depends(require_admin)):
     cluster_id = payload.get("cluster_id")
     namespace = (payload.get("namespace") or "").strip()
-    service_name = (payload.get("service_name") or "").strip()
+    raw = (payload.get("service_name") or "").strip()
     job_name = (payload.get("job_name") or "").strip()
-    if not cluster_id or not namespace or not service_name or not job_name:
+    if not cluster_id or not namespace or not raw or not job_name:
         return {"code": 400, "message": "cluster_id/namespace/service_name/job_name 必填", "data": None}
+    # 支持一次填多个服务：逗号/顿号/分号/换行分隔
+    import re as _re
+    names = [x.strip() for x in _re.split(r"[,，、;；\n\r]+", raw) if x.strip()]
+    # 去重保序
+    seen, svc_names = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n); svc_names.append(n)
+    if not svc_names:
+        return {"code": 400, "message": "服务名不能为空", "data": None}
+    too_long = [n for n in svc_names if len(n) > 300]
+    if too_long:
+        return {"code": 400, "message": f"服务名过长（>{300}）：{too_long[0][:50]}…", "data": None}
     jenkins_instance_id = payload.get("jenkins_instance_id")
     if not jenkins_instance_id:
         return {"code": 400, "message": "jenkins_instance_id 必填", "data": None}
@@ -138,32 +151,39 @@ async def upsert_mapping(payload: dict, user=Depends(require_admin)):
         inst = await session.get(JenkinsInstance, jenkins_instance_id)
         if not inst:
             return {"code": 404, "message": "Jenkins 实例不存在", "data": None}
-        existing = (await session.execute(
-            select(ReleaseMapping).where(
-                ReleaseMapping.cluster_id == cluster_id,
-                ReleaseMapping.namespace == namespace,
-                ReleaseMapping.service_name == service_name,
-            )
-        )).scalars().first()
-        if existing:
-            existing.jenkins_instance_id = jenkins_instance_id
-            existing.job_name = job_name
-            existing.service_param = (payload.get("service_param") or "SERVICE_NAME").strip()
-            existing.branch_param = (payload.get("branch_param") or "BRANCH_TAG").strip()
-            existing.enabled = bool(payload.get("enabled", True))
-            m = existing
-        else:
-            m = ReleaseMapping(
-                cluster_id=cluster_id, namespace=namespace, service_name=service_name,
-                jenkins_instance_id=jenkins_instance_id, job_name=job_name,
-                service_param=(payload.get("service_param") or "SERVICE_NAME").strip(),
-                branch_param=(payload.get("branch_param") or "BRANCH_TAG").strip(),
-                enabled=bool(payload.get("enabled", True)), created_by=user.id,
-            )
-            session.add(m)
-        await session.commit()
-        await session.refresh(m)
-    return {"code": 200, "message": "success", "data": {"id": m.id}}
+        ids = []
+        for service_name in svc_names:
+            existing = (await session.execute(
+                select(ReleaseMapping).where(
+                    ReleaseMapping.cluster_id == cluster_id,
+                    ReleaseMapping.namespace == namespace,
+                    ReleaseMapping.service_name == service_name,
+                )
+            )).scalars().first()
+            if existing:
+                existing.jenkins_instance_id = jenkins_instance_id
+                existing.job_name = job_name
+                existing.service_param = (payload.get("service_param") or "SERVICE_NAME").strip()
+                existing.branch_param = (payload.get("branch_param") or "BRANCH_TAG").strip()
+                existing.enabled = bool(payload.get("enabled", True))
+                m = existing
+            else:
+                m = ReleaseMapping(
+                    cluster_id=cluster_id, namespace=namespace, service_name=service_name,
+                    jenkins_instance_id=jenkins_instance_id, job_name=job_name,
+                    service_param=(payload.get("service_param") or "SERVICE_NAME").strip(),
+                    branch_param=(payload.get("branch_param") or "BRANCH_TAG").strip(),
+                    enabled=bool(payload.get("enabled", True)), created_by=user.id,
+                )
+                session.add(m)
+            await session.flush()
+            ids.append(m.id)
+        try:
+            await session.commit()
+        except Exception as e:  # noqa: BLE001
+            await session.rollback()
+            return {"code": 400, "message": f"保存失败（请检查字段长度/重复）：{e}", "data": None}
+    return {"code": 200, "message": "success", "data": {"ids": ids, "count": len(ids)}}
 
 
 @router.delete("/mappings/{mapping_id}")
