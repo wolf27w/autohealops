@@ -136,6 +136,20 @@ async def get_namespace_deployments(cluster_id: int, namespace: str) -> list[dic
         return []
 
 
+async def _annotate_publish(cluster_id: int, ns_map: dict[str, dict]) -> None:
+    """给 deployments 打 publish_enabled（namespace 带发布标签才 True）。R19。"""
+    try:
+        from app.services import release_access
+        enabled = await release_access.get_publish_namespaces(cluster_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("发布标签读取失败 cluster=%s: %s", cluster_id, e)
+        enabled = set()
+    for ns, info in ns_map.items():
+        flag = ns in enabled
+        for d in info.get("deployments") or []:
+            d["publish_enabled"] = flag
+
+
 async def get_cluster_detail(cluster_id: int) -> list[dict]:
     """集群详情：按 namespace 分组，每个 namespace 下按工作负载类型分类（无状态/有状态/定时任务/守护集）+ Pod 资源"""
     async with async_session() as session:
@@ -184,6 +198,7 @@ async def get_cluster_detail(cluster_id: int) -> list[dict]:
     if not ns_map:
         # 快照缺失（典型：agent 接入的集群平台侧不采集）→ 实时经 executor/隧道取一次
         return await _cluster_detail_live(cluster_id)
+    await _annotate_publish(cluster_id, ns_map)
     return list(ns_map.values())
 
 
@@ -262,6 +277,7 @@ async def _cluster_detail_live(cluster_id: int) -> list[dict]:
     except Exception as e:  # noqa: BLE001
         logger.warning("实时取 Pod 列表失败 cluster=%s: %s", cluster_id, e)
 
+    await _annotate_publish(cluster_id, ns_map)
     return [v for v in ns_map.values()
             if any(v[k] for k in ("deployments", "statefulsets", "cronjobs", "daemonsets", "pods"))]
 
