@@ -8878,7 +8878,7 @@
     },
     "/api/v1/monitoring/clusters/{cluster_id}/workloads/{kind}/{namespace}/{name}/metrics": {
       "get": {
-        "description": "工作负载级监控（R15）：Deployment/StatefulSet/DaemonSet × 容器，跨 Pod 重建拼接。\n\n- 数据源：集群自带 Prometheus（**平台不落库**）\n- CPU/内存：每容器一条线（指标本身带 container 标签）\n- 网络：只有 Pod 级（容器共享 netns），前端按\"该 Pod 是否单容器\"决定拆或合并\n- range：10m / 1h / 6h / 24h / 72h / 168h（上限 7 天，受集群 Prometheus retention 限制）",
+        "description": "工作负载级监控（R15）：Deployment/StatefulSet/DaemonSet × 容器，跨 Pod 重建拼接。\n\n- 数据源：集群自带 Prometheus（**平台不落库**）\n- CPU/内存：每容器一条线（指标本身带 container 标签）\n- 网络：只有 Pod 级（容器共享 netns），前端按\"该 Pod 是否单容器\"决定拆或合并\n- range：5m / 10m / 1h / 6h / 24h / 72h / 168h（上限 7 天，受集群 Prometheus retention 限制）",
         "operationId": "get_api_v1_monitoring_clusters_cluster_id_workloads_kind_namespace_name_metrics",
         "parameters": [
           {

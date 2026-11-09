@@ -2,7 +2,7 @@
 // 数据源 = 集群 Prometheus（平台不落库）：CPU/内存按容器各一条线；网络按 Deployment 汇总
 // （容器共享 netns，拆不到容器，UI 里明确标注）。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Drawer, Segmented, Empty, Space, Tag, Spin, Switch } from 'antd'
+import { Drawer, Segmented, Empty, Space, Tag, Spin } from 'antd'
 import { Line } from '@ant-design/charts'
 import { getWorkloadMetrics } from '../services/api'
 
@@ -22,11 +22,12 @@ interface Props {
 }
 
 const RANGES = [
+  { value: '5m', label: '5分钟' }, { value: '10m', label: '10分钟' },
   { value: '1h', label: '1小时' }, { value: '6h', label: '6小时' }, { value: '24h', label: '24小时' },
   { value: '72h', label: '3天' }, { value: '168h', label: '7天' },
 ]
 const STEP_LABEL: Record<string, string> = {
-  '1h': '1 分钟', '6h': '5 分钟', '24h': '5 分钟', '72h': '15 分钟', '168h': '1 小时',
+  '5m': '15 秒', '10m': '30 秒', '1h': '1 分钟', '6h': '5 分钟', '24h': '5 分钟', '72h': '15 分钟', '168h': '1 小时',
 }
 
 const fmtT = (ts: number, range: string) => {
@@ -60,7 +61,6 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
     cpu: Series[]; memory: Series[]; net_rx: Series[]; net_tx: Series[]
     pod_container_count: Record<string, number>
   }>({ cpu: [], memory: [], net_rx: [], net_tx: [], pod_container_count: {} })
-  const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastUpdated, setLastUpdated] = useState(0)
   const inFlight = useRef(false)
 
@@ -88,10 +88,11 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target?.clusterId, target?.kind, target?.namespace, target?.name, range])
 
-  // 自动刷新：静默更新（不 loading、不重建图表 → 不闪）
+  // 自动刷新：静默更新（不 loading、不重建图表 → 不闪）；短范围(5m/10m) 每 5s，其余 15s
   useEffect(() => {
-    if (!target || !autoRefresh) return
+    if (!target) return
     let cancelled = false
+    const iv = (range === '5m' || range === '10m') ? 5000 : 15000
     const t = setInterval(() => {
       if (inFlight.current) return
       inFlight.current = true
@@ -99,10 +100,10 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
         .then((raw) => { if (!cancelled) applyData(raw) })
         .catch(() => { /* 静默失败，保留旧数据 */ })
         .finally(() => { inFlight.current = false })
-    }, 15000)
+    }, iv)
     return () => { cancelled = true; clearInterval(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target?.clusterId, target?.kind, target?.namespace, target?.name, range, autoRefresh])
+  }, [target?.clusterId, target?.kind, target?.namespace, target?.name, range])
 
   const containerCount = Math.max(1, data.cpu.length)
   const podCount = Object.keys(data.pod_container_count).length
@@ -155,7 +156,7 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={RANGES} />
         <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-          <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} /> 自动刷新(15s)
+          实时刷新{(range === '5m' || range === '10m') ? '（5 秒）' : '（15 秒）'}
           {lastUpdated ? ` · 更新于 ${new Date(lastUpdated).toLocaleTimeString()}` : ''}
         </span>
         <Tag color="blue">{containerCount} 个容器</Tag>
