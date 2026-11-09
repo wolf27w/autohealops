@@ -35,6 +35,7 @@ interface ResourceItem {
   cpu_limit?: string | number
   memory_request?: string | number
   memory_limit?: string | number
+  publish_enabled?: boolean
   [key: string]: unknown
 }
 
@@ -444,13 +445,18 @@ export default function ClusterDetail() {
       render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
     { title: '操作', key: 'actions', width: 70, render: (_: unknown, r: ResourceItem) => (
       <Dropdown trigger={['click']} menu={{ items: [
+        // R19：发布入口 —— 仅带发布标签的 namespace 下的 Deployment 才显示（无标签不渲染）
+        ...(tabKind(r) === 'deployment' && r.publish_enabled ? [
+          { key: 'publish', label: '发布' },
+        ] : []),
         { key: 'mounts', label: '存储与环境变量' },
         { key: 'yaml', label: '编辑 YAML' },
         { type: 'divider' as const },
         { key: 'delete', label: '删除', danger: true },
       ], onClick: ({ key }) => {
         const tgt = { clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name }
-        if (key === 'mounts') setMountTarget(tgt)
+        if (key === 'publish') message.info('发布功能对接 Jenkins 中（服务映射/凭据配置后开放）')
+        else if (key === 'mounts') setMountTarget(tgt)
         else if (key === 'yaml') setWlYaml(tgt)
         else if (key === 'delete') Modal.confirm({
           title: `删除 ${tabKind(r)} ${r.namespace}/${r.name}？`,
