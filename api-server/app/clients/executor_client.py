@@ -522,6 +522,20 @@ class ExecutorClient:
             logger.error("list_pods 失败: %s", e)
             return {"success": False, "pods": [], "error": str(e)}
 
+    def list_namespaces(self, cluster_id: int, trace_id: str = "") -> dict:
+        """命名空间列表（name + labels）→ 返回 {success, namespaces:[{name,labels}], error}。R19 发布标签门控。"""
+        try:
+            resp = _get_stub().ListNamespaces(
+                executor_pb2.ListNamespacesRequest(cluster_id=cluster_id),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "namespaces": [
+                {"name": n.name, "labels": n.labels} for n in resp.namespaces], "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_namespaces 失败: %s", e)
+            return {"success": False, "namespaces": [], "error": str(e)}
+
     def get_pod_events(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
         """单个 Pod 的 k8s Event → 返回 {success, events, error}"""
         try:

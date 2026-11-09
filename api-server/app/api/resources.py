@@ -263,6 +263,14 @@ async def deployments(cluster_id: int, namespace: str, user=Depends(require_any_
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
     data = await resource_service.get_namespace_deployments(cluster_id, namespace)
+    # R19：发布按钮是否显示（namespace 标签门控）；取不到视为 False（不渲染）
+    try:
+        from app.services import release_access
+        pub = await release_access.publish_namespaces_for_deployments(cluster_id, namespace)
+    except Exception:  # noqa: BLE001
+        pub = None
+    for item in data:
+        item["publish_enabled"] = bool(pub)
     return {"code": 200, "message": "success", "data": data}
 
 

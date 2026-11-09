@@ -49,6 +49,7 @@ const (
 	ExecutorService_ApplyWorkloadYaml_FullMethodName     = "/executor.ExecutorService/ApplyWorkloadYaml"
 	ExecutorService_DeleteResource_FullMethodName        = "/executor.ExecutorService/DeleteResource"
 	ExecutorService_CleanupEvicted_FullMethodName        = "/executor.ExecutorService/CleanupEvicted"
+	ExecutorService_ListNamespaces_FullMethodName        = "/executor.ExecutorService/ListNamespaces"
 	ExecutorService_SetupRBAC_FullMethodName             = "/executor.ExecutorService/SetupRBAC"
 	ExecutorService_ReconcileRoleBindings_FullMethodName = "/executor.ExecutorService/ReconcileRoleBindings"
 	ExecutorService_ListWorkloads_FullMethodName         = "/executor.ExecutorService/ListWorkloads"
@@ -121,6 +122,8 @@ type ExecutorServiceClient interface {
 	DeleteResource(ctx context.Context, in *DeleteResourceRequest, opts ...grpc.CallOption) (*DeleteResourceResponse, error)
 	// 清理已驱逐（Evicted）的 Pod（终态对象，删除不影响业务）
 	CleanupEvicted(ctx context.Context, in *CleanupEvictedRequest, opts ...grpc.CallOption) (*CleanupEvictedResponse, error)
+	// 命名空间列表（name + labels，R19 发布入口标签门控用）
+	ListNamespaces(ctx context.Context, in *ListNamespacesRequest, opts ...grpc.CallOption) (*ListNamespacesResponse, error)
 	// 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
 	SetupRBAC(ctx context.Context, in *SetupRBACRequest, opts ...grpc.CallOption) (*SetupRBACResponse, error)
 	// 项目/成员变更 → reconcile RoleBinding（绑组）
@@ -442,6 +445,16 @@ func (c *executorServiceClient) CleanupEvicted(ctx context.Context, in *CleanupE
 	return out, nil
 }
 
+func (c *executorServiceClient) ListNamespaces(ctx context.Context, in *ListNamespacesRequest, opts ...grpc.CallOption) (*ListNamespacesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNamespacesResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ListNamespaces_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) SetupRBAC(ctx context.Context, in *SetupRBACRequest, opts ...grpc.CallOption) (*SetupRBACResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetupRBACResponse)
@@ -596,6 +609,8 @@ type ExecutorServiceServer interface {
 	DeleteResource(context.Context, *DeleteResourceRequest) (*DeleteResourceResponse, error)
 	// 清理已驱逐（Evicted）的 Pod（终态对象，删除不影响业务）
 	CleanupEvicted(context.Context, *CleanupEvictedRequest) (*CleanupEvictedResponse, error)
+	// 命名空间列表（name + labels，R19 发布入口标签门控用）
+	ListNamespaces(context.Context, *ListNamespacesRequest) (*ListNamespacesResponse, error)
 	// 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
 	SetupRBAC(context.Context, *SetupRBACRequest) (*SetupRBACResponse, error)
 	// 项目/成员变更 → reconcile RoleBinding（绑组）
@@ -702,6 +717,9 @@ func (UnimplementedExecutorServiceServer) DeleteResource(context.Context, *Delet
 }
 func (UnimplementedExecutorServiceServer) CleanupEvicted(context.Context, *CleanupEvictedRequest) (*CleanupEvictedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CleanupEvicted not implemented")
+}
+func (UnimplementedExecutorServiceServer) ListNamespaces(context.Context, *ListNamespacesRequest) (*ListNamespacesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNamespaces not implemented")
 }
 func (UnimplementedExecutorServiceServer) SetupRBAC(context.Context, *SetupRBACRequest) (*SetupRBACResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetupRBAC not implemented")
@@ -1241,6 +1259,24 @@ func _ExecutorService_CleanupEvicted_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_ListNamespaces_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNamespacesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ListNamespaces(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ListNamespaces_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ListNamespaces(ctx, req.(*ListNamespacesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_SetupRBAC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetupRBACRequest)
 	if err := dec(in); err != nil {
@@ -1502,6 +1538,10 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CleanupEvicted",
 			Handler:    _ExecutorService_CleanupEvicted_Handler,
+		},
+		{
+			MethodName: "ListNamespaces",
+			Handler:    _ExecutorService_ListNamespaces_Handler,
 		},
 		{
 			MethodName: "SetupRBAC",

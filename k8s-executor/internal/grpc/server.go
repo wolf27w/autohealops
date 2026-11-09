@@ -422,6 +422,23 @@ func (s *Server) CleanupEvicted(ctx context.Context, req *pb.CleanupEvictedReque
 	}, nil
 }
 
+// ListNamespaces 命名空间列表（name + labels，R19 发布入口标签门控）
+func (s *Server) ListNamespaces(ctx context.Context, req *pb.ListNamespacesRequest) (*pb.ListNamespacesResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListNamespacesResponse{Success: false, Error: err.Error()}, nil
+	}
+	items, err := ex.ListNamespaces(ctx)
+	if err != nil {
+		return &pb.ListNamespacesResponse{Success: false, Error: err.Error()}, nil
+	}
+	ns := make([]*pb.NamespaceInfo, 0, len(items))
+	for _, it := range items {
+		ns = append(ns, &pb.NamespaceInfo{Name: it.Name, Labels: executor.LabelsToCSV(it.Labels)})
+	}
+	return &pb.ListNamespacesResponse{Success: true, Namespaces: ns}, nil
+}
+
 // GetPodDetail Pod 详情（含容器组内容）
 func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) (*pb.GetPodDetailResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)

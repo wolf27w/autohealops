@@ -64,6 +64,8 @@ service ExecutorService {
   rpc DeleteResource(DeleteResourceRequest) returns (DeleteResourceResponse);
   // 清理已驱逐（Evicted）的 Pod（终态对象，删除不影响业务）
   rpc CleanupEvicted(CleanupEvictedRequest) returns (CleanupEvictedResponse);
+  // 命名空间列表（name + labels，R19 发布入口标签门控用）
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
 
   // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
   rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
@@ -378,6 +380,20 @@ message PodBriefInfo {
 message ListPodsResponse {
   bool success = 1;
   repeated PodBriefInfo pods = 2;
+  string error = 3;
+}
+
+// ---------- ListNamespaces（namespace name + labels，R19 发布标签开关） ----------
+message ListNamespacesRequest {
+  int64 cluster_id = 1;
+}
+message NamespaceInfo {
+  string name = 1;
+  string labels = 2;   // 逗号分隔 "k=v,k2=v2"
+}
+message ListNamespacesResponse {
+  bool success = 1;
+  repeated NamespaceInfo namespaces = 2;
   string error = 3;
 }
 
