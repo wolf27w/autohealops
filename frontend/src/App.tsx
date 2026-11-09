@@ -107,7 +107,7 @@ export default function App() {
         <Route path="alert-silences" element={<RequireRole role="admin"><AlertSilences /></RequireRole>} />
         <Route path="on-duty" element={<OnDuty />} />
         <Route path="node-management" element={<RequireRole role="admin"><NodeManagement /></RequireRole>} />
-        <Route path="host-management" element={<RequireRole role="admin"><HostManagement /></RequireRole>} />
+        <Route path="host-management" element={<HostManagement />} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
         <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />

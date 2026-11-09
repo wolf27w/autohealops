@@ -704,18 +704,34 @@ export const getIsolatedPods = (clusterId: number, ns: string) =>
   http.get<{ pods: string[] }>(`/resources/clusters/${clusterId}/namespaces/${ns}/isolated`)
 
 // ============ 主机/虚拟机纳管（N11）============
+export interface HostCan { view: boolean; operate: boolean; manage: boolean; delete: boolean }
 export interface HostItem {
   id: number; name: string; address: string; ssh_port: number; ssh_user: string
   has_password: boolean; ssh_key_path: string
   process_paths: { name: string; path: string }[]
   enabled: boolean; status: string; last_seen?: string | null; last_error?: string
+  kind: 'host' | 'vm'; group_id: number | null; group_name?: string; env_tag?: string
+  can: HostCan
 }
 export interface HostCheckResult { online: boolean; error: string; paths: { name: string; path: string; running: boolean; pid_count: number; cpu_pct: number; mem_mb: number }[] }
-export const getHosts = () => http.get<HostItem[]>('/hosts')
+export interface HostGroup {
+  id: number; name: string; description: string; parent_id: number | null; sort: number
+  is_default: boolean; member_count: number; host_count: number; my_role: 'admin' | 'operator' | 'viewer' | null
+}
+export interface HostGroupMember { id: number; user_id: number; username: string; role: string }
+export const getHosts = (params?: { group_id?: number; kind?: string; keyword?: string }) =>
+  http.get<HostItem[]>('/hosts', { params })
 export const createHost = (d: Record<string, unknown>) => http.post<HostItem>('/hosts', d)
 export const updateHost = (id: number, d: Record<string, unknown>) => http.put<HostItem>(`/hosts/${id}`, d)
 export const deleteHost = (id: number) => http.delete<{ id: number }>(`/hosts/${id}`)
 export const checkHost = (id: number) => http.post<{ host: HostItem; check: HostCheckResult }>(`/hosts/${id}/check`)
+export const getHostGroups = () => http.get<{ is_admin: boolean; groups: HostGroup[] }>('/host-groups')
+export const createHostGroup = (d: Record<string, unknown>) => http.post<{ id: number }>('/host-groups', d)
+export const updateHostGroup = (id: number, d: Record<string, unknown>) => http.put<{ id: number }>(`/host-groups/${id}`, d)
+export const deleteHostGroup = (id: number) => http.delete<{ id: number }>(`/host-groups/${id}`)
+export const getHostGroupMembers = (id: number) => http.get<HostGroupMember[]>(`/host-groups/${id}/members`)
+export const addHostGroupMember = (id: number, d: Record<string, unknown>) => http.post<Record<string, unknown>>(`/host-groups/${id}/members`, d)
+export const removeHostGroupMember = (id: number, userId: number) => http.delete<Record<string, unknown>>(`/host-groups/${id}/members/${userId}`)
 
 export interface AggLogPod { pod: string; phase: string; success: boolean; logs: string; error: string }
 export const getWorkloadLogs = (clusterId: number, namespace: string, kind: string, name: string, params?: { container?: string; tail?: number; previous?: boolean }) =>
