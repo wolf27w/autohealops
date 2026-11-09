@@ -11,7 +11,7 @@ import {
   SettingOutlined, LogoutOutlined, DownOutlined, MedicineBoxOutlined,
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
-  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined, CalendarOutlined, RocketOutlined,
+  ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined, CalendarOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
@@ -74,7 +74,6 @@ const menuItems: NavItem[] = [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
       { key: '/host-management', icon: <DesktopOutlined />, label: '主机/虚拟机' },
-      { key: '/release-history', icon: <RocketOutlined />, label: '发布历史' },
     ],
   },
   {
