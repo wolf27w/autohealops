@@ -1,5 +1,5 @@
 // 服务详情页（专项 D）：工作负载概览 + 副本增减 + 探针编辑 + 回滚/重启/重建 + Pods 列表（监控/日志/进容器/YAML）
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider, Collapse, Spin } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -90,6 +90,12 @@ export default function ServiceDetail() {
   const [wlMetricsOpen, setWlMetricsOpen] = useState(false)
 
   const clusterId = Number(id)
+
+  // 工作负载监控抽屉的 target 必须 memo（否则父组件每 5s 轮询 Pod 重建对象 → 抽屉重复拉数据闪屏）
+  const wlMetricsTarget = useMemo(
+    () => (wlMetricsOpen ? { clusterId, kind, namespace, name } : null),
+    [wlMetricsOpen, clusterId, kind, namespace, name],
+  )
 
   const load = () => {
     getWorkloads(clusterId, namespace).then((d) => {
@@ -438,7 +444,7 @@ export default function ServiceDetail() {
 
       <PodMetricsDrawer pod={metricsPod} onClose={() => setMetricsPod(null)} />
       <WorkloadMetricsDrawer
-        target={wlMetricsOpen ? { clusterId, kind, namespace, name } : null}
+        target={wlMetricsTarget}
         onClose={() => setWlMetricsOpen(false)}
       />
       <PodLogsDrawer pod={logPod} onClose={() => setLogPod(null)} />

@@ -74,7 +74,9 @@ export default function WorkloadMetricsDrawer({ target, onClose }: Props) {
       })
       .catch((e) => setErr(e?.response?.data?.message || '查询失败（检查集群 Prometheus 是否可用）'))
       .finally(() => setLoading(false))
-  }, [target, range])
+    // 依赖拆成字段：父组件传新对象（同值）时不重复拉数据，避免闪屏
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target?.clusterId, target?.kind, target?.namespace, target?.name, range])
 
   const containerCount = Math.max(1, data.cpu.length)
   const podCount = Object.keys(data.pod_container_count).length
