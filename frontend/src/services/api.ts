@@ -797,6 +797,8 @@ export interface JobParam { name: string; type: string; kind: 'text' | 'select' 
 export const getReleaseJobs = (instanceId: number) => http.get<{ name: string }[]>('/release/jobs', { params: { instance_id: instanceId } })
 export const getReleaseJobParams = (instanceId: number, job: string) => http.get<JobParam[]>('/release/jobs/params', { params: { instance_id: instanceId, job } })
 export const triggerRelease = (d: { cluster_id: number; namespace: string; service_name: string; branch?: string }) => http.post<{ build_id: number; build_number: number; job_name: string; auth_mode?: string }>('/release/trigger', d)
+export interface BatchReleaseResult { service: string; ok: boolean; build_id?: number; build_number?: number; error?: string }
+export const batchTriggerRelease = (d: { cluster_id: number; namespace: string; service_names: string[]; branch?: string }) => http.post<{ results: BatchReleaseResult[]; success: number; failed: number }>('/release/batch-trigger', d)
 export const getReleaseBuildStatus = (buildId: number) => http.get<{ build_number: number; building: boolean; result: string; status: string; stages: { name: string; status: string; duration_ms: number }[] }>(`/release/builds/${buildId}/status`)
 export const getReleaseBuildLog = (buildId: number, start = 0) => http.get<{ text: string; size: number; has_more: boolean }>(`/release/builds/${buildId}/log`, { params: { start } })
 export interface MyJenkinsToken { instance_id: number; instance_name: string; url: string; auth_type: string; username: string; has_token: boolean }

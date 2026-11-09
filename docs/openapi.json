@@ -10722,6 +10722,49 @@
         "summary": "Delete Project User"
       }
     },
+    "/api/v1/release/batch-trigger": {
+      "post": {
+        "description": "批量发布：勾选多个服务 + 一个分支；逐服务查映射并触发（并发 5）。",
+        "operationId": "post_api_v1_release_batch_trigger",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Batch Trigger"
+      }
+    },
     "/api/v1/release/branches": {
       "post": {
         "description": "取某服务发布时的分支选项（来自映射 Job 的 BRANCH_TAG allValueItems）。",

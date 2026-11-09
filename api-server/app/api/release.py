@@ -438,6 +438,63 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
     return {"code": 200, "message": "success", "data": {"build_id": b.id, "build_number": number, "job_name": m.job_name, "auth_mode": mode}}
 
 
+@router.post("/batch-trigger")
+async def batch_trigger(payload: dict, user=Depends(require_operator)):
+    """批量发布：勾选多个服务 + 一个分支；逐服务查映射并触发（并发 5）。"""
+    cluster_id = payload.get("cluster_id")
+    namespace = (payload.get("namespace") or "").strip()
+    service_names = [str(x).strip() for x in (payload.get("service_names") or []) if str(x).strip()]
+    branch = (payload.get("branch") or "").strip()
+    if not cluster_id or not namespace or not service_names:
+        return {"code": 400, "message": "cluster_id/namespace/service_names 必填", "data": None}
+    if not await release_access.namespace_publish_enabled(cluster_id, namespace, force_refresh=True):
+        return {"code": 403, "message": "namespace 未开启发布", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_cluster_permission(user, cluster_id, namespace, "operate"):
+        return {"code": 403, "message": "无权限发布该集群", "data": None}
+
+    import asyncio as _asyncio
+    sem = _asyncio.Semaphore(5)
+    results: list[dict] = []
+
+    async def one(svc: str):
+        async with sem:
+            m, j = await _load_mapping(cluster_id, namespace, svc)
+            if not m or not j:
+                results.append({"service": svc, "ok": False, "error": "未配置发布映射"})
+                return
+            params = {m.service_param: svc}
+            if branch:
+                params[m.branch_param] = branch
+            uname, token, mode = await _resolve_credential(j, user)
+            client = _make_client(j, uname, token)
+            try:
+                number = await client.trigger_build(m.job_name, params)
+                try:
+                    await client.set_build_description(m.job_name, number, f"平台发布人: {getattr(user, 'username', '') or ''}（批量）")
+                except Exception:  # noqa: BLE001
+                    pass
+                async with async_session() as s:
+                    b = ReleaseBuild(
+                        cluster_id=cluster_id, namespace=namespace, service_name=svc,
+                        jenkins_instance_id=m.jenkins_instance_id, job_name=m.job_name,
+                        branch=branch, build_number=number, status="queued",
+                        triggered_by=user.id,
+                        triggered_by_name=f"{getattr(user, 'username', '') or ''}({mode})",
+                    )
+                    s.add(b)
+                    await s.commit()
+                    await s.refresh(b)
+                results.append({"service": svc, "ok": True, "build_id": b.id, "build_number": number})
+            except Exception as e:  # noqa: BLE001
+                results.append({"service": svc, "ok": False, "error": str(e)[:200]})
+            finally:
+                await client.close()
+
+    await _asyncio.gather(*(one(s) for s in service_names))
+    ok = sum(1 for r in results if r.get("ok"))
+    return {"code": 200, "message": "success", "data": {"results": results, "success": ok, "failed": len(results) - ok}}
+
+
 async def _build_and_instance(build_id: int) -> tuple[ReleaseBuild | None, JenkinsInstance | None]:
     async with async_session() as session:
         b = await session.get(ReleaseBuild, build_id)

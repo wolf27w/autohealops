@@ -24,6 +24,7 @@ import WorkloadCreateModal, { type WorkloadCreateTarget } from '../components/Wo
 import PodLogStreamModal from '../components/PodLogStreamModal'
 import ReleaseModal from '../components/ReleaseModal'
 import ReleaseHistoryModal from '../components/ReleaseHistoryModal'
+import BatchReleaseModal from '../components/BatchReleaseModal'
 import { podStatusColor, podReadyText } from '../utils/podStatus'
 
 interface ResourceItem {
@@ -107,6 +108,7 @@ export default function ClusterDetail() {
   const [releaseTarget, setReleaseTarget] = useState<WorkloadTarget | null>(null)
   const [releaseHistoryTarget, setReleaseHistoryTarget] = useState<WorkloadTarget | null>(null)
   const [clusterHistoryOpen, setClusterHistoryOpen] = useState(false)
+  const [batchRelease, setBatchRelease] = useState<{ clusterId: number; namespace: string; serviceNames: string[] } | null>(null)
   const [livePods, setLivePods] = useState<Record<string, ClusterPod>>({})
   // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
   const [podList, setPodList] = useState<ClusterPod[]>([])
@@ -390,6 +392,13 @@ export default function ClusterDetail() {
       {activeType !== 'daemonsets' && <Button size="small" onClick={() => { openScaleModal() }}>批量改副本</Button>}
       <Button size="small" onClick={() => runWorkloadBatch('restart')}>批量重启</Button>
       <Button size="small" danger onClick={confirmBatchDelete}>批量删除</Button>
+      {activeType === 'deployments' && (
+        <Button size="small" type="primary" onClick={() => {
+          const nss = Array.from(new Set(selItems.map((x) => x.namespace)))
+          if (nss.length !== 1) { message.error('批量发布请选择同一 namespace 下的服务'); return }
+          setBatchRelease({ clusterId: Number(id), namespace: nss[0], serviceNames: selItems.map((x) => x.name) })
+        }}>批量发布</Button>
+      )}
       <Button size="small" type="link" onClick={() => setWlSel([])}>清除选择</Button>
       <span style={{ fontSize: 12, color: '#999' }}>（改副本填 0 = 停止）</span>
     </Space>
@@ -892,6 +901,10 @@ export default function ClusterDetail() {
       )}
       <ReleaseHistoryModal open={clusterHistoryOpen} clusterId={Number(id)}
         namespace={activeNs && activeNs !== '_all_' ? activeNs : ''} onClose={() => setClusterHistoryOpen(false)} />
+      {batchRelease && (
+        <BatchReleaseModal open clusterId={batchRelease.clusterId} namespace={batchRelease.namespace}
+          serviceNames={batchRelease.serviceNames} onClose={() => setBatchRelease(null)} onDone={() => load()} />
+      )}
       <Modal open={scaleOpen} width={440} title={`批量改副本（${selItems.length} 个${wlTypeLabel}）`}
         onCancel={() => setScaleOpen(false)} onOk={submitBatchReplicas} okText="应用" destroyOnClose>
         <div style={{ marginBottom: 8 }}>目标副本数（0 = 停止，N = 启动/扩缩容）：</div>
