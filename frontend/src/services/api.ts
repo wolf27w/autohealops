@@ -802,5 +802,10 @@ export const getReleaseBuildLog = (buildId: number, start = 0) => http.get<{ tex
 export interface MyJenkinsToken { instance_id: number; instance_name: string; url: string; auth_type: string; username: string; has_token: boolean }
 export const getMyJenkinsTokens = () => http.get<MyJenkinsToken[]>('/release/my-tokens')
 export const setMyJenkinsToken = (instanceId: number, d: { username?: string; api_token?: string }) => http.put(`/release/my-tokens/${instanceId}`, d)
+export interface ReleaseBuild { id: number; cluster_id: number; namespace: string; service_name: string; job_name: string; branch: string; build_number: number; status: string; triggered_by_name: string; created_at: string }
+export const getReleaseBuilds = (params?: { cluster_id?: number; namespace?: string; service_name?: string; limit?: number }) => http.get<ReleaseBuild[]>('/release/builds', { params })
+export interface ReleaseStage { id: number; name: string; status: string; start_time?: number; duration_ms?: number }
+export const getReleaseStages = (buildId: number) => http.get<ReleaseStage[]>(`/release/builds/${buildId}/stages`)
+export const getReleaseStageLog = (buildId: number, stageId: number) => http.get<{ text: string }>(`/release/builds/${buildId}/stages/${stageId}/log`)
 
 export default api

@@ -14,6 +14,13 @@ logger = logging.getLogger("api-server.jenkins")
 _TIMEOUT = 20.0
 
 
+def _strip_html(s: str) -> str:
+    """去掉 Jenkins 日志里的 HTML 标签（timestamp span 等）并反转义。"""
+    import html
+    import re
+    return html.unescape(re.sub(r"<[^>]+>", "", s or ""))
+
+
 class JenkinsError(Exception):
     pass
 
@@ -153,9 +160,33 @@ class JenkinsClient:
         stages = []
         for st in j.get("stages") or []:
             stages.append({
+                "id": st.get("id"),
                 "name": st.get("name"),
                 "status": st.get("status"),            # SUCCESS/FAILED/IN_PROGRESS/NOT_EXECUTED
                 "start_time": st.get("startTimeMillis"),
                 "duration_ms": st.get("durationMillis"),
             })
         return stages
+
+    async def get_stage_log(self, job_name: str, number: int, stage_id: int) -> str:
+        """某阶段的日志：聚合该 stage 下所有 flowNode 的日志（去 HTML 标签，纯文本）。"""
+        try:
+            d = await self._get_json(f"job/{quote(job_name)}/{number}/execution/node/{stage_id}/wfapi/describe")
+        except JenkinsError:
+            return ""
+        parts: list[str] = []
+        for fn in d.get("stageFlowNodes") or []:
+            nid = fn.get("id")
+            if not nid:
+                continue
+            try:
+                r = await self._client.get(
+                    self._path(f"job/{quote(job_name)}/{number}/execution/node/{nid}/wfapi/log?start=0"),
+                    auth=self._auth,
+                )
+                if r.status_code < 400:
+                    txt = (r.json() or {}).get("text") or ""
+                    parts.append(_strip_html(txt))
+            except Exception:  # noqa: BLE001
+                continue
+        return "\n".join(p for p in parts if p)

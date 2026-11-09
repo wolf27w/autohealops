@@ -1,7 +1,8 @@
-// 发布弹窗（R19）：选分支 → 发布（服务↔Job 由管理员在 系统设置→发布 配好）
-import { useEffect, useRef, useState } from 'react'
-import { Modal, Select, Input, Button, Space, Tag, Spin, Alert, Divider } from 'antd'
-import { getReleaseBranches, triggerRelease, getReleaseBuildStatus, getReleaseBuildLog } from '../services/api'
+// 发布弹窗（R19）：选分支 → 发布 → Blue Ocean 式阶段视图（每阶段看日志）
+import { useEffect, useState } from 'react'
+import { Modal, Select, Input, Button, Space, Spin, Alert } from 'antd'
+import { getReleaseBranches, triggerRelease } from '../services/api'
+import PipelineView from './PipelineView'
 
 interface Props {
   open: boolean
@@ -19,16 +20,10 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
   const [err, setErr] = useState('')
   const [triggering, setTriggering] = useState(false)
   const [build, setBuild] = useState<{ buildId: number; number: number; job: string } | null>(null)
-  const [stages, setStages] = useState<{ name: string; status: string }[]>([])
-  const [status, setStatus] = useState('')
-  const [log, setLog] = useState('')
-  const [logStart, setLogStart] = useState(0)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     if (!open) return
-    setChoices([]); setManual(false); setBranch(undefined); setErr('')
-    setBuild(null); setStages([]); setStatus(''); setLog(''); setLogStart(0)
+    setChoices([]); setManual(false); setBranch(undefined); setErr(''); setBuild(null)
     setLoading(true)
     getReleaseBranches({ cluster_id: clusterId, namespace, service_name: serviceName })
       .then((d) => {
@@ -38,7 +33,6 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
       })
       .catch((e: unknown) => setErr((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '取分支失败'))
       .finally(() => setLoading(false))
-    return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [open, clusterId, namespace, serviceName])
 
   const doTrigger = async () => {
@@ -46,8 +40,6 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
     try {
       const r = await triggerRelease({ cluster_id: clusterId, namespace, service_name: serviceName, branch })
       setBuild({ buildId: r.build_id, number: r.build_number, job: r.job_name })
-      setStatus('queued')
-      poll(r.build_id)
     } catch (e) {
       setErr((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '触发失败')
     } finally {
@@ -55,31 +47,8 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
     }
   }
 
-  const poll = (buildId: number) => {
-    if (timerRef.current) clearInterval(timerRef.current)
-    timerRef.current = setInterval(async () => {
-      try {
-        const st = await getReleaseBuildStatus(buildId)
-        setStatus(st.status); setStages(st.stages || [])
-        if (!st.building && st.result) { if (timerRef.current) clearInterval(timerRef.current) }
-      } catch { /* ignore */ }
-      try {
-        const lg = await getReleaseBuildLog(buildId, logStart)
-        if (lg.text) { setLog((prev) => prev + lg.text); setLogStart(lg.size) }
-      } catch { /* ignore */ }
-    }, 2500)
-  }
-
-  const statusTag = (s: string) => {
-    const m: Record<string, { c: string; l: string }> = {
-      queued: { c: 'default', l: '排队中' }, running: { c: 'processing', l: '构建中' },
-      success: { c: 'success', l: '成功' }, failure: { c: 'error', l: '失败' }, aborted: { c: 'warning', l: '已中止' },
-    }
-    return m[s] || { c: 'default', l: s }
-  }
-
   return (
-    <Modal open={open} onCancel={onClose} footer={null} width={760} title={`发布：${serviceName}`} destroyOnClose>
+    <Modal open={open} onCancel={onClose} footer={null} width={820} title={`发布：${serviceName}`} destroyOnClose>
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <Space wrap>
           <span style={{ color: '#8c8c8c' }}>namespace</span><b>{namespace}</b>
@@ -92,11 +61,11 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
               <span>分支</span>
               {loading ? <Spin size="small" /> : manual
                 ? <Input placeholder="手输分支/tag" value={branch} onChange={(e) => setBranch(e.target.value)} style={{ width: 240 }} />
-                : <Select placeholder="选择分支" value={branch} onChange={setBranch} showSearch style={{ width: 280 }}
+                : <Select placeholder="选择分支" value={branch} onChange={setBranch} showSearch style={{ width: 300 }}
                     options={choices.map((b) => ({ value: b, label: b }))} />}
             </Space>
             <div style={{ color: '#8c8c8c', fontSize: 12 }}>
-              发布将用平台配置的 Jenkins 服务账号触发，构建描述里会标注你的平台用户名（Jenkins 构建页可见）。
+              发布用平台配置的服务账号触发，构建描述会标注你的平台用户名（Jenkins 里可见）。
             </div>
             {err && <Alert type="error" message={err} showIcon />}
             <Button type="primary" loading={triggering} onClick={doTrigger} disabled={!branch || loading}>发布</Button>
@@ -104,24 +73,7 @@ export default function ReleaseModal({ open, clusterId, namespace, serviceName, 
         )}
 
         {build && (
-          <>
-            <Space wrap>
-              <Tag color={statusTag(status).c}>{statusTag(status).l}</Tag>
-              <span style={{ color: '#8c8c8c', fontSize: 13 }}>Job：{build.job}　构建号 #{build.number}</span>
-            </Space>
-            {stages.length > 0 && (
-              <Space wrap>
-                {stages.map((s, i) => {
-                  const ok = s.status === 'SUCCESS'; const fail = s.status === 'FAILED'; const run = s.status === 'IN_PROGRESS'
-                  return <Tag key={i} color={ok ? 'green' : fail ? 'red' : run ? 'processing' : 'default'}>{s.name}</Tag>
-                })}
-              </Space>
-            )}
-            <Divider style={{ margin: '8px 0' }} />
-            <pre style={{ maxHeight: 360, overflow: 'auto', background: '#0b0b0b', color: '#d9d9d9', padding: 12, borderRadius: 6, fontSize: 12, margin: 0 }}>
-              {log || '（等待日志…）'}
-            </pre>
-          </>
+          <PipelineView buildId={build.buildId} jobName={build.job} buildNumber={build.number} live />
         )}
       </Space>
     </Modal>

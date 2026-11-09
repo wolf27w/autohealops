@@ -30,6 +30,7 @@ const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const AuditTrace = lazy(() => import('./pages/AuditTrace'))
 const Reports = lazy(() => import('./pages/Reports'))
 const PlatformSettings = lazy(() => import('./pages/PlatformSettings'))
+const ReleaseHistory = lazy(() => import('./pages/ReleaseHistory'))
 const LogSources = lazy(() => import('./pages/LogSources'))
 const Tickets = lazy(() => import('./pages/Tickets'))
 const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
@@ -122,6 +123,7 @@ export default function App() {
         <Route path="approval-flows" element={<Navigate to="/strategy" replace />} />
         <Route path="im-groups" element={<Navigate to="/notify-center" replace />} />
         <Route path="settings" element={<RequireRole role="admin"><PlatformSettings /></RequireRole>} />
+        <Route path="release-history" element={<ReleaseHistory />} />
       </Route>
     </Routes>
     </Suspense>

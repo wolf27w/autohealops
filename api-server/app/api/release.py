@@ -470,3 +470,57 @@ async def build_log(build_id: int, start: int = 0, user=Depends(require_operator
     finally:
         await client.close()
     return {"code": 200, "message": "success", "data": out}
+
+
+@router.get("/builds")
+async def list_builds(cluster_id: int | None = None, namespace: str = "", service_name: str = "",
+                      limit: int = 50, user=Depends(require_operator)):
+    """构建历史（发布记录列表，新→旧）。"""
+    stmt = select(ReleaseBuild).order_by(ReleaseBuild.id.desc()).limit(max(1, min(limit, 200)))
+    if cluster_id:
+        stmt = stmt.where(ReleaseBuild.cluster_id == cluster_id)
+    if namespace:
+        stmt = stmt.where(ReleaseBuild.namespace == namespace)
+    if service_name:
+        stmt = stmt.where(ReleaseBuild.service_name == service_name)
+    async with async_session() as session:
+        rows = list((await session.execute(stmt)).scalars())
+    return {"code": 200, "message": "success", "data": [
+        {"id": b.id, "cluster_id": b.cluster_id, "namespace": b.namespace, "service_name": b.service_name,
+         "job_name": b.job_name, "branch": b.branch, "build_number": b.build_number, "status": b.status,
+         "triggered_by_name": b.triggered_by_name, "created_at": str(b.created_at)} for b in rows
+    ]}
+
+
+@router.get("/builds/{build_id}/stages")
+async def build_stages(build_id: int, user=Depends(require_operator)):
+    """构建的阶段列表（Blue Ocean 式，含 id 供取阶段日志）。"""
+    b, j = await _build_and_instance(build_id)
+    if not b or not j:
+        return {"code": 404, "message": "发布记录不存在", "data": None}
+    uname, token, _ = await _resolve_credential(j, user)
+    client = _make_client(j, uname, token)
+    try:
+        stages = await client.get_build_stages(b.job_name, b.build_number)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"取阶段失败：{e}", "data": []}
+    finally:
+        await client.close()
+    return {"code": 200, "message": "success", "data": stages}
+
+
+@router.get("/builds/{build_id}/stages/{stage_id}/log")
+async def build_stage_log(build_id: int, stage_id: int, user=Depends(require_operator)):
+    """某阶段的日志（纯文本）。"""
+    b, j = await _build_and_instance(build_id)
+    if not b or not j:
+        return {"code": 404, "message": "发布记录不存在", "data": None}
+    uname, token, _ = await _resolve_credential(j, user)
+    client = _make_client(j, uname, token)
+    try:
+        text = await client.get_stage_log(b.job_name, b.build_number, stage_id)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"取阶段日志失败：{e}", "data": None}
+    finally:
+        await client.close()
+    return {"code": 200, "message": "success", "data": {"text": text}}
