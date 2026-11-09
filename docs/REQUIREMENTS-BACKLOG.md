@@ -1822,6 +1822,9 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 2. 组要能**控制权限**（谁能看/谁能操作）；
 3. **创建虚拟机必须先选分组**（不允许出现"无组虚拟机"）。
 
+> **2026-11-09 老板补充口径**：**物理机和虚拟机都按同一套分组 + 分组权限做**，不存在"只给虚拟机分组"的说法；
+> 唯一差异是强制项——**创建虚拟机必须选组**，物理机创建时允许暂不分组（后续可在列表里移入组，移组受 `manage` 权限约束）。
+
 **数据模型**
 - 新表 `host_groups`：`id` / `name`(唯一) / `description` / `parent_id`(可空，支持两层即可) / `sort` / `created_at` / `updated_at`
 - `hosts` 增加：
