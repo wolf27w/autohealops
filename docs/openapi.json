@@ -10722,6 +10722,481 @@
         "summary": "Delete Project User"
       }
     },
+    "/api/v1/release/branches": {
+      "post": {
+        "description": "取某服务发布时的分支选项（来自 Jenkins Job 参数定义）。",
+        "operationId": "post_api_v1_release_branches",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Branches"
+      }
+    },
+    "/api/v1/release/builds/{build_id}/log": {
+      "get": {
+        "operationId": "get_api_v1_release_builds_build_id_log",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "build_id",
+            "required": true,
+            "schema": {
+              "title": "Build Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Build Log"
+      }
+    },
+    "/api/v1/release/builds/{build_id}/status": {
+      "get": {
+        "operationId": "get_api_v1_release_builds_build_id_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "build_id",
+            "required": true,
+            "schema": {
+              "title": "Build Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Build Status"
+      }
+    },
+    "/api/v1/release/jenkins": {
+      "get": {
+        "operationId": "get_api_v1_release_jenkins",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Instances"
+      },
+      "post": {
+        "operationId": "post_api_v1_release_jenkins",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Instance"
+      }
+    },
+    "/api/v1/release/jenkins/{inst_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_release_jenkins_inst_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "inst_id",
+            "required": true,
+            "schema": {
+              "title": "Inst Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Instance"
+      },
+      "put": {
+        "operationId": "put_api_v1_release_jenkins_inst_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "inst_id",
+            "required": true,
+            "schema": {
+              "title": "Inst Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Instance"
+      }
+    },
+    "/api/v1/release/mappings": {
+      "get": {
+        "operationId": "get_api_v1_release_mappings",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cluster_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Namespace",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Mappings"
+      },
+      "post": {
+        "operationId": "post_api_v1_release_mappings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert Mapping"
+      }
+    },
+    "/api/v1/release/mappings/{mapping_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_release_mappings_mapping_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mapping_id",
+            "required": true,
+            "schema": {
+              "title": "Mapping Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Mapping"
+      }
+    },
+    "/api/v1/release/trigger": {
+      "post": {
+        "description": "触发发布：校验 namespace 标签 + 映射 + 集群权限 → 调 Jenkins buildWithParameters。",
+        "operationId": "post_api_v1_release_trigger",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Trigger Release"
+      }
+    },
     "/api/v1/repair-records": {
       "get": {
         "description": "返回处理记录：告警 + 处理方式（自愈/审核）+ 审核人 + 状态",

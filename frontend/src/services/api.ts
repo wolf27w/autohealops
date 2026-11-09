@@ -781,4 +781,20 @@ export interface BalancePlan {
 export const getNodeBalancePlan = (clusterId: number, threshold = 80) =>
   http.get<BalancePlan>(`/resources/clusters/${clusterId}/nodes/balance-plan`, { params: { threshold } })
 
+// ============ 发布（R19） ============
+export interface JenkinsInstance { id: number; name: string; url: string; auth_type: string; username: string; credential_id: string; ignore_ssl: boolean; has_token: boolean }
+export interface ReleaseMapping { id: number; cluster_id: number; namespace: string; service_name: string; jenkins_instance_id: number; job_name: string; service_param: string; branch_param: string; enabled: boolean }
+export interface BranchChoice { param: string; type?: string; choices: string[]; default?: string; manual?: boolean }
+export const getJenkinsInstances = () => http.get<JenkinsInstance[]>('/release/jenkins')
+export const createJenkinsInstance = (d: Record<string, unknown>) => http.post<{ id: number }>('/release/jenkins', d)
+export const updateJenkinsInstance = (id: number, d: Record<string, unknown>) => http.put(`/release/jenkins/${id}`, d)
+export const deleteJenkinsInstance = (id: number) => http.delete(`/release/jenkins/${id}`)
+export const getReleaseMappings = (params?: { cluster_id?: number; namespace?: string }) => http.get<ReleaseMapping[]>('/release/mappings', { params })
+export const upsertReleaseMapping = (d: Record<string, unknown>) => http.post<{ id: number }>('/release/mappings', d)
+export const deleteReleaseMapping = (id: number) => http.delete(`/release/mappings/${id}`)
+export const getReleaseBranches = (d: { cluster_id: number; namespace: string; service_name: string }) => http.post<BranchChoice>('/release/branches', d)
+export const triggerRelease = (d: { cluster_id: number; namespace: string; service_name: string; branch?: string }) => http.post<{ build_id: number; build_number: number; job_name: string }>('/release/trigger', d)
+export const getReleaseBuildStatus = (buildId: number) => http.get<{ build_number: number; building: boolean; result: string; status: string; stages: { name: string; status: string; duration_ms: number }[] }>(`/release/builds/${buildId}/status`)
+export const getReleaseBuildLog = (buildId: number, start = 0) => http.get<{ text: string; size: number; has_more: boolean }>(`/release/builds/${buildId}/log`, { params: { start } })
+
 export default api

@@ -22,6 +22,7 @@ import IngressSettingsModal from '../components/IngressSettingsModal'
 import PvcCreateModal from '../components/PvcCreateModal'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../components/WorkloadCreateModal'
 import PodLogStreamModal from '../components/PodLogStreamModal'
+import ReleaseModal from '../components/ReleaseModal'
 import { podStatusColor, podReadyText } from '../utils/podStatus'
 
 interface ResourceItem {
@@ -102,6 +103,7 @@ export default function ClusterDetail() {
   const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
   const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)
   const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
+  const [releaseTarget, setReleaseTarget] = useState<WorkloadTarget | null>(null)
   const [livePods, setLivePods] = useState<Record<string, ClusterPod>>({})
   // 实时 Pod 列表（全 phase：Running/Pending/Failed…，滚动更新增删即时反映）
   const [podList, setPodList] = useState<ClusterPod[]>([])
@@ -455,7 +457,7 @@ export default function ClusterDetail() {
         { key: 'delete', label: '删除', danger: true },
       ], onClick: ({ key }) => {
         const tgt = { clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name }
-        if (key === 'publish') message.info('发布功能对接 Jenkins 中（服务映射/凭据配置后开放）')
+        if (key === 'publish') setReleaseTarget(tgt)
         else if (key === 'mounts') setMountTarget(tgt)
         else if (key === 'yaml') setWlYaml(tgt)
         else if (key === 'delete') Modal.confirm({
@@ -874,6 +876,10 @@ export default function ClusterDetail() {
         )}
       </Modal>
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
+      {releaseTarget && (
+        <ReleaseModal open clusterId={releaseTarget.clusterId} namespace={releaseTarget.namespace}
+          serviceName={releaseTarget.name} onClose={() => setReleaseTarget(null)} />
+      )}
       <Modal open={scaleOpen} width={440} title={`批量改副本（${selItems.length} 个${wlTypeLabel}）`}
         onCancel={() => setScaleOpen(false)} onOk={submitBatchReplicas} okText="应用" destroyOnClose>
         <div style={{ marginBottom: 8 }}>目标副本数（0 = 停止，N = 启动/扩缩容）：</div>

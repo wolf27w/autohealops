@@ -4,6 +4,7 @@ import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider,
 import { getSettings, updateSettings, changePassword, testEmbedding, getExternalToken, regenerateExternalToken, getMonitoringSources, setMonitoringSource } from '../services/api'
 import type { MonitoringSource } from '../services/api'
 import RiskPolicy from './RiskPolicy'
+import ReleaseSettings from './ReleaseSettings'
 
 export default function PlatformSettings() {
   const [settings, setSettings] = useState<Record<string, unknown>>({})
@@ -309,6 +310,11 @@ export default function PlatformSettings() {
             key: 'risk-policy',
             label: '风险评分策略',
             children: <RiskPolicy />,
+          },
+          {
+            key: 'release',
+            label: '发布',
+            children: <ReleaseSettings />,
           },
           {
             key: 'password',
