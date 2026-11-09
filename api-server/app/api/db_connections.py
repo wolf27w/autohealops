@@ -889,6 +889,20 @@ async def test_connection(conn_id: int, user=Depends(require_any_user)):
     return {"code": 200 if result["success"] else 500, "message": result["message"], "data": result}
 
 
+@router.get("/{conn_id}/anomalies")
+async def connection_anomalies(conn_id: int, user=Depends(require_any_user)):
+    """R3.1：该数据库连接的异常点列表（连接使用率/命中率/锁等待/慢 SQL/表空间增长等）。"""
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    from app.services import db_anomaly_service
+    anomalies = await db_anomaly_service.build_anomalies(c)
+    return {"code": 200, "message": "success", "data": anomalies}
+
+
 @router.get("/{conn_id}/slow-sql")
 async def list_slow_sql(conn_id: int, limit: int = 50, user=Depends(require_any_user)):
     """查询某连接的慢 SQL 记录"""

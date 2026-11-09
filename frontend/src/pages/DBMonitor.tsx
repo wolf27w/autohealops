@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends } from '../services/api'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, getDBAnomalies } from '../services/api'
 
 interface Metric {
   metric_type: string
@@ -28,6 +28,7 @@ interface DBConn {
   status?: string; last_error?: string; last_seen_at?: string
 }
 interface TrendPoint { metric_name: string; metric_type?: string; series?: string; value: number; sampled_at: string }
+interface Anomaly { level: string; metric: string; metric_name: string; current: number | string; threshold: number | string; message: string; suggestion: string }
 
 const TYPE_LABEL: Record<string, string> = {
   connections: '连接', throughput: '吞吐', network: '网络', cache: '缓存/缓冲池',
@@ -94,6 +95,7 @@ export default function DBMonitor() {
   const [slowSQL, setSlowSQL] = useState<SlowSQL[]>([])
   const [loading, setLoading] = useState(false)
   const [trends, setTrends] = useState<TrendPoint[]>([])
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([])
   const [groupByScale, setGroupByScale] = useState(false)
 
 
@@ -112,6 +114,7 @@ export default function DBMonitor() {
     Promise.all([
       getDbLatestMetrics(id).then((d) => setMetrics((d || []) as Metric[])),
       getSlowSQL(id, 200).then((d) => setSlowSQL((d || []) as SlowSQL[])).catch(() => setSlowSQL([])),
+      getDBAnomalies(id).then((d) => setAnomalies((d || []) as Anomaly[])).catch(() => setAnomalies([])),
     ]).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [connId])
@@ -190,6 +193,21 @@ export default function DBMonitor() {
 
       {!connId ? <Empty description="请选择数据库" /> : loading ? <Spin /> : (
         <>
+          {anomalies.length > 0 && (
+            <Card size="small" style={{ marginBottom: 12 }}
+              title={<span style={{ color: '#cf1322' }}>异常点（{anomalies.length}）</span>}>
+              {anomalies.map((a, i) => (
+                <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                  <Tag color={a.level === 'high' ? 'red' : a.level === 'medium' ? 'orange' : 'blue'}>{a.level === 'high' ? '高' : a.level === 'medium' ? '中' : '低'}</Tag>
+                  <div style={{ flex: 1 }}>
+                    <div><b>{a.metric_name}</b> <span style={{ color: '#8c8c8c', fontSize: 12 }}>当前 {a.current}{a.threshold !== '' && a.threshold !== null ? ` / 阈值 ${a.threshold}` : ''}</span></div>
+                    <div style={{ color: '#595959', fontSize: 13 }}>{a.message}</div>
+                    {a.suggestion && <div style={{ color: '#8c8c8c', fontSize: 12 }}>建议：{a.suggestion}</div>}
+                  </div>
+                </div>
+              ))}
+            </Card>
+          )}
           <Card size="small" title={`监控指标（共 ${metrics.length} 项 · ${new Set(metrics.map((m) => m.metric_type)).size} 类）`}>
             <Table rowKey="metric_name" size="small" dataSource={metrics} columns={metricCols}
               pagination={false} scroll={{ y: 520 }} />
