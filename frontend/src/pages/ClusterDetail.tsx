@@ -445,30 +445,30 @@ export default function ClusterDetail() {
     },
     { title: '更新时间', key: 'update_time', dataIndex: 'update_time', width: 180,
       render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
-    { title: '操作', key: 'actions', width: 70, render: (_: unknown, r: ResourceItem) => (
-      <Dropdown trigger={['click']} menu={{ items: [
-        // R19：发布入口 —— 仅带发布标签的 namespace 下的 Deployment 才显示（无标签不渲染）
-        ...(tabKind(r) === 'deployment' && r.publish_enabled ? [
-          { key: 'publish', label: '发布' },
-        ] : []),
-        { key: 'mounts', label: '存储与环境变量' },
-        { key: 'yaml', label: '编辑 YAML' },
-        { type: 'divider' as const },
-        { key: 'delete', label: '删除', danger: true },
-      ], onClick: ({ key }) => {
-        const tgt = { clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name }
-        if (key === 'publish') setReleaseTarget(tgt)
-        else if (key === 'mounts') setMountTarget(tgt)
-        else if (key === 'yaml') setWlYaml(tgt)
-        else if (key === 'delete') Modal.confirm({
-          title: `删除 ${tabKind(r)} ${r.namespace}/${r.name}？`,
-          content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
-          okButtonProps: { danger: true },
-          onOk: () => handleDeleteWorkload(tabKind(r), r.namespace, r.name),
-        })
-      } }}>
-        <Button size="small" type="link"><MoreOutlined /></Button>
-      </Dropdown>
+    { title: '操作', key: 'actions', width: 120, render: (_: unknown, r: ResourceItem) => (
+      <Space size="small">
+        {tabKind(r) === 'deployment' && r.publish_enabled && (
+          <Button size="small" type="primary" onClick={() => setReleaseTarget({ clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name })}>发布</Button>
+        )}
+        <Dropdown trigger={['click']} menu={{ items: [
+          { key: 'mounts', label: '存储与环境变量' },
+          { key: 'yaml', label: '编辑 YAML' },
+          { type: 'divider' as const },
+          { key: 'delete', label: '删除', danger: true },
+        ], onClick: ({ key }) => {
+          const tgt = { clusterId: Number(id), kind: tabKind(r), namespace: r.namespace, name: r.name }
+          if (key === 'mounts') setMountTarget(tgt)
+          else if (key === 'yaml') setWlYaml(tgt)
+          else if (key === 'delete') Modal.confirm({
+            title: `删除 ${tabKind(r)} ${r.namespace}/${r.name}？`,
+            content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
+            okButtonProps: { danger: true },
+            onOk: () => handleDeleteWorkload(tabKind(r), r.namespace, r.name),
+          })
+        } }}>
+          <Button size="small" type="link"><MoreOutlined /></Button>
+        </Dropdown>
+      </Space>
     ) },
   ]
 
