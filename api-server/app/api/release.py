@@ -41,7 +41,7 @@ def _mapping_row(m: ReleaseMapping) -> dict:
 # ---------------- Jenkins 实例 ----------------
 
 @router.get("/jenkins")
-async def list_instances(user=Depends(require_admin)):
+async def list_instances(user=Depends(require_operator)):
     async with async_session() as session:
         rows = list((await session.execute(select(JenkinsInstance).order_by(JenkinsInstance.id))).scalars())
     return {"code": 200, "message": "success", "data": [_instance_row(j) for j in rows]}
@@ -272,42 +272,82 @@ async def _load_mapping(cluster_id: int, namespace: str, service_name: str) -> t
         return m, j
 
 
-@router.post("/branches")
-async def list_branches(payload: dict, user=Depends(require_operator)):
-    """取某服务发布时的分支选项（来自 Jenkins Job 参数定义）。"""
-    cluster_id = payload.get("cluster_id")
-    namespace = (payload.get("namespace") or "").strip()
-    service_name = (payload.get("service_name") or "").strip()
-    if not cluster_id or not namespace or not service_name:
-        return {"code": 400, "message": "cluster_id/namespace/service_name 必填", "data": None}
-    m, j = await _load_mapping(cluster_id, namespace, service_name)
-    if not m or not j:
-        return {"code": 400, "message": "该服务未配置发布映射", "data": None}
-    uname, token, _mode = await _resolve_credential(j, user)
+def _normalize_params(defs: list[dict]) -> list[dict]:
+    """把 Jenkins 参数定义归一为前端友好结构（按类型归类渲染控件）。"""
+    out = []
+    for d in defs:
+        t = d.get("type") or ""
+        kind = "text"
+        if "ChoiceParameter" in t and d.get("choices"):
+            kind = "select"
+        elif "BooleanParameter" in t:
+            kind = "boolean"
+        elif "TextParameter" in t:
+            kind = "textarea"
+        elif "FileParameter" in t:
+            kind = "file"
+        elif "GitParameter" in t:
+            kind = "branch"
+        elif "MultiSelect" in t or "PT_MULTI" in t:
+            kind = "multiselect"
+        out.append({
+            "name": d.get("name"), "type": t, "kind": kind,
+            "choices": d.get("choices") or [],
+            "default": (d.get("defaultParameterValue") or {}).get("value", ""),
+            "description": d.get("description") or "",
+        })
+    return out
+
+
+@router.get("/jobs")
+async def list_jobs(instance_id: int, user=Depends(require_operator)):
+    """列出某 Jenkins 实例的全部 job（发布时选择）。"""
+    async with async_session() as session:
+        j = await session.get(JenkinsInstance, instance_id)
+    if not j:
+        return {"code": 404, "message": "实例不存在", "data": None}
+    uname, token, _ = await _resolve_credential(j, user)
     client = _make_client(j, uname, token)
     try:
-        d = await client.get_param_choices(m.job_name, m.branch_param)
+        jobs = await client.list_jobs()
     except Exception as e:  # noqa: BLE001
-        return {"code": 500, "message": f"取分支失败：{e}", "data": {"choices": [], "manual": True}}
+        return {"code": 500, "message": f"取 job 列表失败：{e}", "data": []}
     finally:
         await client.close()
-    return {"code": 200, "message": "success", "data": {
-        "param": m.branch_param,
-        "type": d.get("type"),
-        "choices": d.get("choices") or [],
-        "default": (d.get("defaultParameterValue") or {}).get("value", ""),
-    }}
+    return {"code": 200, "message": "success", "data": jobs}
+
+
+@router.get("/jobs/params")
+async def job_params(instance_id: int, job: str, user=Depends(require_operator)):
+    """取某 job 的参数定义（发布时动态渲染表单）。"""
+    async with async_session() as session:
+        j = await session.get(JenkinsInstance, instance_id)
+    if not j:
+        return {"code": 404, "message": "实例不存在", "data": None}
+    uname, token, _ = await _resolve_credential(j, user)
+    client = _make_client(j, uname, token)
+    try:
+        defs = await client.get_job_params(job)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"取参数失败：{e}", "data": []}
+    finally:
+        await client.close()
+    return {"code": 200, "message": "success", "data": _normalize_params(defs)}
 
 
 @router.post("/trigger")
 async def trigger_release(payload: dict, user=Depends(require_operator)):
-    """触发发布：校验 namespace 标签 + 映射 + 集群权限 → 调 Jenkins buildWithParameters。"""
+    """触发发布：校验 namespace 标签 + 集群权限 → 按 job + 参数调 Jenkins buildWithParameters。"""
     cluster_id = payload.get("cluster_id")
     namespace = (payload.get("namespace") or "").strip()
     service_name = (payload.get("service_name") or "").strip()
-    branch = (payload.get("branch") or "").strip()
-    if not cluster_id or not namespace or not service_name:
-        return {"code": 400, "message": "cluster_id/namespace/service_name 必填", "data": None}
+    jenkins_instance_id = payload.get("jenkins_instance_id")
+    job_name = (payload.get("job_name") or "").strip()
+    params = payload.get("params") or {}
+    if not cluster_id or not namespace:
+        return {"code": 400, "message": "cluster_id/namespace 必填", "data": None}
+    if not jenkins_instance_id or not job_name:
+        return {"code": 400, "message": "jenkins_instance_id/job_name 必填", "data": None}
 
     # 1. namespace 标签门控（强制刷新，避免刚改标签未生效）
     if not await release_access.namespace_publish_enabled(cluster_id, namespace, force_refresh=True):
@@ -317,18 +357,15 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
     if user.role != "admin" and not await user_permission_service.check_cluster_permission(user, cluster_id, namespace, "operate"):
         return {"code": 403, "message": "无权限发布该集群", "data": None}
 
-    # 3. 映射
-    m, j = await _load_mapping(cluster_id, namespace, service_name)
-    if not m or not j:
-        return {"code": 400, "message": "该服务未配置发布映射", "data": None}
+    async with async_session() as session:
+        j = await session.get(JenkinsInstance, jenkins_instance_id)
+    if not j:
+        return {"code": 404, "message": "Jenkins 实例不存在", "data": None}
 
-    params = {m.service_param: service_name}
-    if branch:
-        params[m.branch_param] = branch
     uname, token, mode = await _resolve_credential(j, user)
     client = _make_client(j, uname, token)
     try:
-        number = await client.trigger_build(m.job_name, params)
+        number = await client.trigger_build(job_name, params)
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"触发构建失败：{e}", "data": None}
     finally:
@@ -336,16 +373,17 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
 
     async with async_session() as session:
         b = ReleaseBuild(
-            cluster_id=cluster_id, namespace=namespace, service_name=service_name,
-            jenkins_instance_id=m.jenkins_instance_id, job_name=m.job_name,
-            branch=branch, build_number=number, status="queued",
+            cluster_id=cluster_id, namespace=namespace, service_name=service_name or job_name,
+            jenkins_instance_id=jenkins_instance_id, job_name=job_name,
+            branch=(params.get("BRANCH_TAG") or params.get("branch") or ""),
+            build_number=number, status="queued",
             triggered_by=user.id,
             triggered_by_name=f"{getattr(user, 'username', '') or ''}({mode})",
         )
         session.add(b)
         await session.commit()
         await session.refresh(b)
-    return {"code": 200, "message": "success", "data": {"build_id": b.id, "build_number": number, "job_name": m.job_name, "auth_mode": mode}}
+    return {"code": 200, "message": "success", "data": {"build_id": b.id, "build_number": number, "job_name": job_name, "auth_mode": mode}}
 
 
 async def _build_and_instance(build_id: int) -> tuple[ReleaseBuild | None, JenkinsInstance | None]:

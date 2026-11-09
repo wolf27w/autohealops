@@ -51,12 +51,17 @@ class JenkinsClient:
     async def get_job_params(self, job_name: str) -> list[dict]:
         """返回 job 的参数定义列表 [{name,type,choices,default}]。"""
         j = await self._get_json(
-            f"job/{quote(job_name)}/api/json?tree=property[parameterDefinitions[name,type,choices,defaultParameterValue[value]]]"
+            f"job/{quote(job_name)}/api/json?tree=property[parameterDefinitions[name,type,description,choices,defaultParameterValue[value]]]"
         )
         defs = []
         for prop in j.get("property") or []:
             defs.extend(prop.get("parameterDefinitions") or [])
         return defs
+
+    async def list_jobs(self) -> list[dict]:
+        """返回 job 列表 [{name}]（供发布时选择 job）。"""
+        j = await self._get_json("api/json?tree=jobs[name]")
+        return [{"name": x["name"]} for x in (j.get("jobs") or [])]
 
     async def get_param_choices(self, job_name: str, param_name: str) -> dict:
         """取指定参数的定义：{name,type,choices,default}；找不到返回空。"""

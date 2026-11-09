@@ -10722,49 +10722,6 @@
         "summary": "Delete Project User"
       }
     },
-    "/api/v1/release/branches": {
-      "post": {
-        "description": "取某服务发布时的分支选项（来自 Jenkins Job 参数定义）。",
-        "operationId": "post_api_v1_release_branches",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "title": "Payload",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Branches"
-      }
-    },
     "/api/v1/release/builds/{build_id}/log": {
       "get": {
         "operationId": "get_api_v1_release_builds_build_id_log",
@@ -11013,6 +10970,101 @@
         "summary": "Update Instance"
       }
     },
+    "/api/v1/release/jobs": {
+      "get": {
+        "description": "列出某 Jenkins 实例的全部 job（发布时选择）。",
+        "operationId": "get_api_v1_release_jobs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Jobs"
+      }
+    },
+    "/api/v1/release/jobs/params": {
+      "get": {
+        "description": "取某 job 的参数定义（发布时动态渲染表单）。",
+        "operationId": "get_api_v1_release_jobs_params",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job",
+            "required": true,
+            "schema": {
+              "title": "Job",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Job Params"
+      }
+    },
     "/api/v1/release/mappings": {
       "get": {
         "operationId": "get_api_v1_release_mappings",
@@ -11232,7 +11284,7 @@
     },
     "/api/v1/release/trigger": {
       "post": {
-        "description": "触发发布：校验 namespace 标签 + 映射 + 集群权限 → 调 Jenkins buildWithParameters。",
+        "description": "触发发布：校验 namespace 标签 + 集群权限 → 按 job + 参数调 Jenkins buildWithParameters。",
         "operationId": "post_api_v1_release_trigger",
         "requestBody": {
           "content": {
