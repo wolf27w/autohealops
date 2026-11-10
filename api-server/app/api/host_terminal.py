@@ -404,15 +404,31 @@ async def sftp_download(host_id: int, path: str, user: User = Depends(require_an
         raise HTTPException(status_code=404, detail=f"文件不存在或不可读：{e}") from e
 
     async def iterator():
+        import hashlib
+
+        from app.services.audit_service import create_audit_record
+        from app.core.security import generate_trace_id
+        h = hashlib.sha256()
+        total = 0
         try:
             async with sftp.open(p, "rb") as f:
                 while True:
                     chunk = await f.read(65536)
                     if not chunk:
                         break
+                    h.update(chunk)
+                    total += len(chunk)
                     yield chunk
         finally:
             conn.close()
+            try:
+                await create_audit_record(
+                    generate_trace_id(),
+                    trigger_snapshot=json.dumps({"action": "host_sftp_download", "host_id": host_id}),
+                    execution_detail=f"下载文件 {p}（{total} 字节，sha256={h.hexdigest()}）来自 {host.name}",
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     name = p.rsplit("/", 1)[-1] or "download"
     return StreamingResponse(iterator(), media_type="application/octet-stream",
@@ -445,6 +461,8 @@ async def sftp_upload(host_id: int, request: Request, path: str = "/tmp", filena
 
     host, conn = await _sftp_conn(host_id, user)
     written = 0
+    import hashlib
+    hasher = hashlib.sha256()
     try:
         async with conn.start_sftp_client() as sftp:
             async with sftp.open(target, "wb") as f:
@@ -454,6 +472,7 @@ async def sftp_upload(host_id: int, request: Request, path: str = "/tmp", filena
                     written += len(chunk)
                     if written > max_mb * 1024 * 1024:
                         raise HTTPException(status_code=413, detail=f"文件超过上限（{max_mb}MB）")
+                    hasher.update(chunk)
                     await f.write(chunk)
     finally:
         conn.close()
@@ -461,6 +480,6 @@ async def sftp_upload(host_id: int, request: Request, path: str = "/tmp", filena
 
     await create_audit_record(generate_trace_id(),
                               trigger_snapshot=json.dumps({"action": "host_sftp_upload", "host_id": host_id}),
-                              execution_detail=f"上传文件 {target}（{written} 字节）到 {host.name}")
+                              execution_detail=f"上传文件 {target}（{written} 字节，sha256={hasher.hexdigest()}）到 {host.name}")
     return {"code": 200, "message": "success",
             "data": {"path": target, "size": written, "host": host.name}}
