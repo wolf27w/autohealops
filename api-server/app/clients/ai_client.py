@@ -33,6 +33,14 @@ class AIClient:
     async def diagnose(self, alert_id: int, alert_data: dict, context_data: dict = None, trace_id: str = "") -> dict:
         return await self._post("/api/v1/ai/diagnose", {"alert_id": alert_id, "alert_data": alert_data, "context_data": context_data}, trace_id)
 
+    async def generate_prompt_suggestion(self, fault_type: str, sample_logs: str = "", root_cause: str = "",
+                                         source_refs: str = "", trace_id: str = "") -> dict:
+        """R13：未分类故障确认解决后，让 ai-service 起草提示词建议。"""
+        return await self._post("/api/v1/ai/prompt-suggestions/generate", {
+            "fault_type": fault_type, "sample_logs": sample_logs, "root_cause": root_cause,
+            "source_refs": source_refs,
+        }, trace_id)
+
     async def jvm_analyze(self, alert_data: dict, context_data: dict = None, trace_id: str = "") -> dict:
         """JVM 综合诊断（基于已采集的 JVM 证据，不跑工具）"""
         return await self._post("/api/v1/ai/jvm-analyze", {"alert_data": alert_data, "context_data": context_data}, trace_id)

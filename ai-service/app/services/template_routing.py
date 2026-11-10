@@ -113,3 +113,35 @@ def resolve(routing: dict, fault_type: str) -> tuple[str, bool]:
         if k and ft.startswith(k):
             return v, True
     return routing.get("default", "default_diagnosis"), False
+
+
+async def bind_fault_type(fault_type: str, template_name: str) -> None:
+    """把 fault_type 绑定到诊断模板（写入 system_settings 的 diagnosis_template_routing exact 表）。"""
+    raw = ""
+    async with async_session() as s:
+        row = (await s.execute(
+            select(SystemSetting).where(SystemSetting.key == "diagnosis_template_routing")
+        )).scalar_one_or_none()
+        if row:
+            raw = row.value or ""
+    cfg = {}
+    if raw.strip():
+        try:
+            cfg = json.loads(raw)
+            if not isinstance(cfg, dict):
+                cfg = {}
+        except Exception:  # noqa: BLE001
+            cfg = {}
+    cfg.setdefault("exact", {})
+    if isinstance(cfg["exact"], dict):
+        cfg["exact"][fault_type] = template_name
+    async with async_session() as s:
+        row = (await s.execute(
+            select(SystemSetting).where(SystemSetting.key == "diagnosis_template_routing")
+        )).scalar_one_or_none()
+        if row:
+            row.value = json.dumps(cfg, ensure_ascii=False)
+        else:
+            s.add(SystemSetting(key="diagnosis_template_routing", value=json.dumps(cfg, ensure_ascii=False)))
+        await s.commit()
+    _cache.update({"ts": 0.0, "routing": None})  # 立即失效缓存

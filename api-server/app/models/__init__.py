@@ -35,7 +35,7 @@ from app.models.duty_override import DutyOverride
 from app.models.permission import AlertSubscription, UserClusterPermission, UserDBConnection
 from app.models.project import Project, ProjectClusterNS, ProjectDBConnection, UserProjectPermission
 from app.models.pod_metric import PodMetric
-from app.models.prompt import PromptTemplate, PromptVersion
+from app.models.prompt import PromptTemplate, PromptVersion, PromptSuggestion
 from app.models.repair_plan import RepairPlan
 from app.models.resource import QuotaSnapshot, ResourceSnapshot
 from app.models.report_schedule import ReportSchedule

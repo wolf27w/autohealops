@@ -312,6 +312,43 @@ async def update_prompt_template(template_id: int, payload: dict):
     return {"code": 200, "message": "success", "data": None}
 
 
+# ============ R13 提示词建议（未分类故障 → AI 起草 → 人工采纳） ============
+@router.get("/prompt-suggestions")
+async def list_prompt_suggestions(status: str = ""):
+    from app.services import prompt_suggestion_service as pss
+    data = await pss.list_suggestions(status)
+    return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/prompt-suggestions/generate")
+async def generate_prompt_suggestion(payload: dict):
+    """由 api-server 在「未分类故障确认解决」后调用（内部）。"""
+    from app.services import prompt_suggestion_service as pss
+    data = await pss.generate(
+        payload.get("fault_type", ""), payload.get("sample_logs", ""),
+        payload.get("root_cause", ""), payload.get("source_refs", ""))
+    return {"code": 200, "message": "success", "data": data}
+
+
+@router.put("/prompt-suggestions/{suggestion_id}")
+async def update_prompt_suggestion(suggestion_id: int, payload: dict):
+    from app.services import prompt_suggestion_service as pss
+    data = await pss.update(suggestion_id, payload.get("system_prompt"), payload.get("user_prompt_template"), payload.get("name", ""))
+    return data
+
+
+@router.post("/prompt-suggestions/{suggestion_id}/accept")
+async def accept_prompt_suggestion(suggestion_id: int, payload: dict):
+    from app.services import prompt_suggestion_service as pss
+    return await pss.accept(suggestion_id, payload.get("name", ""), payload.get("system_prompt"), payload.get("user_prompt_template"))
+
+
+@router.post("/prompt-suggestions/{suggestion_id}/ignore")
+async def ignore_prompt_suggestion(suggestion_id: int):
+    from app.services import prompt_suggestion_service as pss
+    return await pss.ignore(suggestion_id)
+
+
 @router.post("/rag/embed-test")
 async def rag_embed_test(payload: dict | None = None):
     """Embedding 连通性测试（可传配置先测再存；不传则测当前已保存配置）"""

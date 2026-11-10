@@ -140,3 +140,11 @@ def sql_backfill_case(column: str = "fault_type", resource_column: str = "resour
         f"WHEN {resource_column} = 'db' THEN '{DB}' "
         f"ELSE '{APP}' END"
     )
+
+
+def is_known_fault_type(fault_type: str | None) -> bool:
+    """是否平台已登记的故障类型（R13 用：未登记 = 未分类 → 沉淀提示词建议候选）。"""
+    ft = (fault_type or "").strip()
+    if not ft:
+        return False
+    return ft in _FAULT_TYPE_CATEGORY or ft.startswith("db_")

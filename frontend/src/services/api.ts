@@ -151,6 +151,19 @@ export const getAiFeedback = (alertId: number) => http.get<AiFeedbackData>(`/fau
 export const addAiFeedback = (alertId: number, rating: number, comment = '') => http.post(`/fault-diagnoses/${alertId}/feedback`, { rating, comment })
 
 // ============ 提示词模板 ============
+// ============ 提示词建议（R13 未分类故障自学习） ============
+export interface PromptSuggestion {
+  id: number; fault_type: string; feature: string; hit_count: number
+  suggestion_name: string; system_prompt: string | null; user_prompt_template: string | null
+  status: 'pending' | 'accepted' | 'ignored'; similarity_note: string
+  sample_logs: string | null; root_cause: string | null; source_refs: string | null
+  created_at: string | null; decided_at: string | null; created_by: string
+}
+export const getPromptSuggestions = (status?: string) => http.get<PromptSuggestion[]>('/ai/prompt-suggestions', { params: { status } })
+export const updatePromptSuggestion = (id: number, data: Payload) => http.put(`/ai/prompt-suggestions/${id}`, data)
+export const acceptPromptSuggestion = (id: number, data: Payload) => http.post<{ template_id: number; name: string }>(`/ai/prompt-suggestions/${id}/accept`, data)
+export const ignorePromptSuggestion = (id: number) => http.post(`/ai/prompt-suggestions/${id}/ignore`)
+
 export const getPromptTemplates = () => http.get('/ai/prompt-templates')
 export const createPromptTemplate = (data: Payload) => http.post('/ai/prompt-templates', data)
 export const updatePromptTemplate = (id: number, data: Payload) => http.put(`/ai/prompt-templates/${id}`, data)

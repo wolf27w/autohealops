@@ -169,6 +169,12 @@ async def resolve_alert(alert_id: int, user=Depends(require_operator)):
         await send_recovery_notification(a, title="已解决")
     except Exception as e:  # noqa: BLE001
         logger.warning("人工解决告警 %d 通知失败: %s", alert_id, e)
+    # R13：未分类故障确认解决 → 异步触发「提示词建议」起草（不阻塞解决结果）
+    try:
+        from app.services.prompt_suggestion_trigger import maybe_generate
+        asyncio.create_task(maybe_generate(a))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("触发提示词建议失败: %s", e)
     return {"code": 200, "message": "success", "data": None}
 
 
@@ -206,6 +212,12 @@ async def manual_resolve(alert_id: int, payload: dict, user=Depends(require_oper
         await knowledge_service.add_knowledge(fault_type, full_root_cause, resolution, tags=f"{fault_type},{root_cause_type}")
     except Exception as e:  # noqa: BLE001
         logger.warning("知识库沉淀失败: %s", e)
+    # R13：未分类故障确认解决 → 异步触发「提示词建议」起草（不阻塞解决结果）
+    try:
+        from app.services.prompt_suggestion_trigger import maybe_generate
+        asyncio.create_task(maybe_generate(a))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("触发提示词建议失败: %s", e)
     return {"code": 200, "message": "success", "data": None}
 
 
@@ -247,6 +259,16 @@ async def batch_resolve(payload: dict, user=Depends(require_operator)):
             await knowledge_service.add_knowledge(ft, full_root_cause, resolution, tags=f"{ft},{root_cause_type}")
         except Exception as e:  # noqa: BLE001
             logger.warning("知识库沉淀失败: %s", e)
+    # R13：未分类故障批量解决 → 按类型各触发一次（去重）
+    try:
+        from app.services.prompt_suggestion_trigger import maybe_generate
+        seen = set()
+        for a in alerts:
+            if a.fault_type not in seen:
+                seen.add(a.fault_type)
+                asyncio.create_task(maybe_generate(a))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("触发提示词建议失败: %s", e)
     return {"code": 200, "message": "success", "data": {"resolved": len(alerts)}}
 
 

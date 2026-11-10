@@ -21,8 +21,36 @@ class PromptTemplate(Base):
     variables: Mapped[str] = mapped_column(String(500), default="[]")  # JSON 变量名列表
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # R13：自学习闭环——status(draft/active/archived)/source(manual/auto)/来源/演进/无效计数
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default="active")
+    source: Mapped[str] = mapped_column(String(20), default="manual", server_default="manual")
+    source_refs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    invalid_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class PromptSuggestion(Base):
+    """R13：未分类故障 → AI 起草的提示词建议（pending 待人工采纳，不自动建模板）"""
+
+    __tablename__ = "prompt_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fault_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    feature: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    hit_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    sample_logs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggestion_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_prompt_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    similarity_note: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    source_refs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(50), default="system", server_default="system")
 
 
 class PromptVersion(Base):

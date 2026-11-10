@@ -81,6 +81,7 @@ const menuItems: NavItem[] = [
     key: 'g-config', label: '知识配置', icon: <AppstoreOutlined />,
     children: [
       { key: '/ai-models', icon: <RobotOutlined />, label: 'AI 配置' },
+      { key: '/prompt-suggestions', icon: <RobotOutlined />, label: '提示词建议' },
       { key: '/knowledge', icon: <BookOutlined />, label: '知识库' },
       { key: '/log-sources', icon: <DatabaseOutlined />, label: '日志源' },
       { key: '/notify-center', icon: <NotificationOutlined />, label: '通知配置' },
@@ -100,7 +101,7 @@ const menuItems: NavItem[] = [
 // admin 专属菜单项（viewer/operator 不可见；App.tsx 路由同样有 RequireRole 守卫）
 const ADMIN_ONLY_KEYS = new Set([
   '/strategy', '/notify-center', '/user-permission', '/log-sources',
-  '/ai-models', '/custom-tasks', '/settings', '/resource-governance', '/alert-silences', '/node-management', '/host-management',
+  '/ai-models', '/custom-tasks', '/settings', '/prompt-suggestions', '/resource-governance', '/alert-silences', '/node-management', '/host-management',
 ])
 
 // 按角色过滤菜单：admin 全见；非 admin 去掉 admin 专属项（递归处理三级；空分组一并移除）
