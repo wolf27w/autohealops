@@ -35,6 +35,17 @@ AUTH_FRAME_TIMEOUT_SEC = 5
 
 # session_id -> {"websocket": ws, "user_id": int, "task": asyncio.Task | None}
 ACTIVE: dict[int, dict] = {}
+_AUDIT_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_audit(coro) -> None:
+    """后台落审计（异步生成器关闭时不能 await，交给独立任务）。"""
+    try:
+        t = asyncio.get_running_loop().create_task(coro)
+        _AUDIT_TASKS.add(t)
+        t.add_done_callback(_AUDIT_TASKS.discard)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _client_ip(websocket: WebSocket) -> str:
@@ -421,14 +432,11 @@ async def sftp_download(host_id: int, path: str, user: User = Depends(require_an
                     yield chunk
         finally:
             conn.close()
-            try:
-                await create_audit_record(
-                    generate_trace_id(),
-                    trigger_snapshot=json.dumps({"action": "host_sftp_download", "host_id": host_id}),
-                    execution_detail=f"下载文件 {p}（{total} 字节，sha256={h.hexdigest()}）来自 {host.name}",
-                )
-            except Exception:  # noqa: BLE001
-                pass
+            _spawn_audit(create_audit_record(
+                generate_trace_id(),
+                trigger_snapshot=json.dumps({"action": "host_sftp_download", "host_id": host_id}),
+                execution_detail=f"下载文件 {p}（{total} 字节，sha256={h.hexdigest()}）来自 {host.name}",
+            ))
 
     name = p.rsplit("/", 1)[-1] or "download"
     return StreamingResponse(iterator(), media_type="application/octet-stream",
