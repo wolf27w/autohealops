@@ -1986,7 +1986,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R28 OpenAPI 契约与代码漂移（2026-11-10 发现）— ❓ 待处理
+### R28 OpenAPI 契约与代码漂移（2026-11-10 发现）— ✅ 已解决（同日，`58408ca` 重新生成 openapi.json；`ci_check` 7/8 已绿）
 
 **现象**
 `./scripts/ci_check.sh` 第 7/8 步「OpenAPI 契约漂移检查」失败，`docs/openapi.json` 与代码不一致，diff 只有两个新增接口：
@@ -2030,3 +2030,37 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 `pod_metrics` 建唯一键前需要在百万行表上清重复。最初写成自连接 `DELETE a FROM t a JOIN t b ON ... AND a.id < b.id`，**无索引支撑**，在 HDD 上跑 4 分 51 秒仍未结束（只能 KILL，全表扫描 + 无索引 JOIN）。最终方案：先用 `GROUP BY ... HAVING COUNT(*)>1 LIMIT 1` 自检（实测 15s），有重复就报错并给出清理 SQL，让操作者确认后手工处理。
 
 **经验**：大表去重/唯一键迁移的顺序必须是「先建支撑索引 → 再去重 → 再改唯一键」，或直接用临时表重写；禁止在无索引的大表上做自连接 DML。
+
+---
+
+### R29 数据库异常检测「取最新指标值」查询优化（2026-11-10 完成）
+
+**问题（性能诊断发现）**
+`db_anomaly_service._latest_metrics()` 把 24h 窗口内**全部**采样行拉回 Python 再挑「每个指标第一条」：
+
+```sql
+SELECT metric_name, value, sampled_at FROM db_metric_snapshots
+WHERE db_connection_id = ? AND sampled_at >= ?   -- 单连接 24h ≈ 27 万行
+ORDER BY id DESC                                  -- 排序键与索引不符 → filesort
+```
+
+`performance_schema` digest：14 次调用 avg **1.59s** / max **4.26s**，平均每次扫 **27.2 万行**；本地实测单次 **6.6s**（57 个指标）。
+
+**改法**
+1. 指标名：`SELECT DISTINCT metric_name ... WHERE db_connection_id=?`，走 `ix_dbms_metric_conn_id (metric_name, db_connection_id, id)` 的索引跳跃，实测 ~140ms；**进程内缓存 5 分钟**（指标集基本不变）。
+2. 取值：每个指标 `WHERE metric_name=? AND db_connection_id=? AND sampled_at>=? ORDER BY id DESC LIMIT 1`（索引内单点回扫），用 `UNION ALL` 拼成**一次往返**，57 个指标 ~45ms。
+3. 兜底：指标数 > 200 时回到原查询（避免超长 SQL）。
+
+**效果（实测，同一连接 57 个指标）**
+
+| 场景 | 耗时 |
+|---|---|
+| 改前 | 6596 ms |
+| 改后首次（含指标名 DISTINCT） | **121 ms** |
+| 改后二次（指标名命中缓存） | **72 ms** |
+
+并做了**结果一致性校验**：新旧实现返回的 57 个 `metric_name → value` **完全一致（0 差异）**。
+
+**经验**：这类「每 key 取最新一条」的查询，正解是「按 key 逐个走复合索引 + 单次 UNION ALL 往返」，不要在 Python 侧对全窗口数据做 `if name not in dict` 去重；远程 MySQL 上 **往返次数**本身就是主要成本（57 次单查 833ms vs 合并一次 45ms）。
+
+**估时**：0.3d（已含测量与一致性验证）
