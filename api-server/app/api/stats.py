@@ -173,6 +173,47 @@ async def _cache_get(key: str):
         return None
 
 
+# R27-3：每集群「最新一批 Pod 采样」聚合值的短 TTL 缓存。
+# 该查询要按 (cluster_id, sampled_at) 等值 JOIN 取最新一批（历史上是慢查询来源），
+# 仪表盘/大屏每 5s 轮询一次 → 15s 缓存把 DB 压力降到 1/3，新鲜度感知无差异。
+_PM_USAGE_CACHE_KEY = "pm:latest_usage:v1"
+_PM_USAGE_TTL = 15  # 秒
+
+
+async def _latest_pod_usage(session) -> dict[int, tuple[float, int]]:
+    """每集群最新一批采样的 (CPU 核数合计, 内存字节合计)；带 Redis 缓存
+
+    过滤异常量级采样（个别 Pod 指标采集异常会脏化求和）：单 Pod >64 核 / >2TB 视为异常值。
+    """
+    cached = await _cache_get(_PM_USAGE_CACHE_KEY)
+    if isinstance(cached, dict):
+        try:
+            return {int(k): (float(v[0]), int(v[1])) for k, v in cached.items()}
+        except (TypeError, ValueError, IndexError):
+            pass  # 结构不符就重新计算
+
+    _pm_latest = (
+        select(PodMetric.cluster_id.label("cid"), func.max(PodMetric.sampled_at).label("ts"))
+        .group_by(PodMetric.cluster_id)
+        .subquery()
+    )
+    rows = (await session.execute(
+        select(PodMetric.cluster_id, func.coalesce(func.sum(PodMetric.cpu_usage), 0.0),
+               func.coalesce(func.sum(PodMetric.memory_usage), 0))
+        .join(_pm_latest, (_pm_latest.c.cid == PodMetric.cluster_id)
+              & (_pm_latest.c.ts == PodMetric.sampled_at))
+        .where(PodMetric.cpu_usage <= 64,
+               PodMetric.memory_usage <= 2_000_000_000_000)
+        .group_by(PodMetric.cluster_id)
+    )).all()
+    out = {int(cid): (float(cpu or 0.0), int(mem or 0)) for cid, cpu, mem in rows}
+    try:
+        await redis_pool.set(_PM_USAGE_CACHE_KEY, json.dumps(out), ex=_PM_USAGE_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 async def _compute_dashboard(
     range_: str = "24h",
     start: str = "",
@@ -877,30 +918,8 @@ async def _compute_dashboard(
             select(QuotaSnapshot.cluster_id, QuotaSnapshot.pod_limit, QuotaSnapshot.pod_used)
             .join(_p_latest, _p_latest.c.mid == QuotaSnapshot.id)
         )).all()
-        # 最新一次 PodMetric 时间戳（按集群）
-        latest_ts_rows = (await session.execute(
-            select(PodMetric.cluster_id, func.max(PodMetric.sampled_at)).group_by(PodMetric.cluster_id)
-        )).all()
-        latest_ts = {int(cid): ts for cid, ts in latest_ts_rows if ts}
-        _pm_latest = (
-            select(PodMetric.cluster_id.label("cid"), func.max(PodMetric.sampled_at).label("ts"))
-            .group_by(PodMetric.cluster_id)
-            .subquery()
-        )
-        usage_rows = []
-        if latest_ts:
-            # 过滤异常量级的采样（个别 Pod 指标采集异常会脏化求和），单 Pod >64 核/>2TB 视为异常值
-            # 用 (cluster_id, sampled_at) 等值 JOIN 取「每集群最新一批采样」：
-            # 原写法 sampled_at IN (各集群最新值列表) 会让 67 万行做范围扫描（实测 235ms → 6.6ms）
-            usage_rows = (await session.execute(
-                select(PodMetric.cluster_id, func.coalesce(func.sum(PodMetric.cpu_usage), 0.0),
-                       func.coalesce(func.sum(PodMetric.memory_usage), 0))
-                .join(_pm_latest, (_pm_latest.c.cid == PodMetric.cluster_id)
-                      & (_pm_latest.c.ts == PodMetric.sampled_at))
-                .where(PodMetric.cpu_usage <= 64
-                       , PodMetric.memory_usage <= 2_000_000_000_000)
-                .group_by(PodMetric.cluster_id)
-            )).all()
+        # 每集群「最新一批采样」的 CPU/内存求和（Redis 15s 缓存，见 _latest_pod_usage）
+        u_map_latest = await _latest_pod_usage(session)
 
     # MTTR（最近 24 小时**内产生的告警**的平均修复时长，分钟）+ 今日处理数
     # 口径统一（2026-10-21）：旧实现在这里取「24h 内检测 或 24h 内解决」的告警，
@@ -965,7 +984,7 @@ async def _compute_dashboard(
             continue
         q_map[cid] = {"pod_limit": pod_limit, "pod_used": pod_used, "cpu_limit": cpu_limit, "mem_limit": mem_limit,
                       "service_total": svc_total, "lb_count": lb_count}
-    u_map = {int(cid): (float(cpu or 0.0), int(mem or 0)) for cid, cpu, mem in usage_rows}
+    u_map = u_map_latest
     # 集群 Pod 总数（ns=_pods_ 最新）
     pods_map: dict[int, dict] = {}
     for cid, plimit, pused in pod_snap_rows:
