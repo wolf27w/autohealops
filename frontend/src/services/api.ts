@@ -165,6 +165,20 @@ export const deletePromptRouting = (id: number) => http.delete(`/ai/prompt-routi
 export const previewPromptTemplate = (id: number, vars: Record<string, string>) =>
   http.post<{ system_prompt: string; user_prompt: string; missing_vars: string[]; variables: string[] }>(`/ai/prompt-templates/${id}/preview`, { vars })
 
+// ============ R13 提示词模板健康度（采纳率/熔断/回滚） ============
+export interface PromptHealth {
+  id: number; name: string; scene: string; source: string; status: string; version: number
+  invalid_count: number; adoption_rate: number | null; rated: number; useful: number; useless: number
+  diagnosis_total: number
+  trip_threshold: { min_samples: number; min_rate: number; max_invalid: number; window_days: number }
+}
+export const getPromptHealth = () => http.get<PromptHealth[]>('/prompt-health')
+export const sweepPromptHealth = () => http.post('/prompt-health/sweep', {})
+export const getPromptVersions = (id: number) => http.get<{ id: number; version: number; changelog: string; created_at: string }[]>(`/prompt-health/${id}/versions`)
+export const rollbackPromptTemplate = (id: number, version?: number) => http.post(`/prompt-health/${id}/rollback`, version ? { version } : {})
+export const reactivatePromptTemplate = (id: number) => http.post(`/prompt-health/${id}/reactivate`, {})
+export const checkPromptTemplate = (id: number) => http.post(`/prompt-health/${id}/check`, {})
+
 // ============ 僵尸服务检测（R20，只读） ============
 export interface ZombieItem {
   namespace: string; deployment: string; replicas?: number; ready_replicas?: number

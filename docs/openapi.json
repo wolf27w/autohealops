@@ -11599,6 +11599,257 @@
         "summary": "Delete Project User"
       }
     },
+    "/api/v1/prompt-health": {
+      "get": {
+        "description": "模板健康度列表（采纳率/无效次数/状态/阈值）",
+        "operationId": "get_api_v1_prompt_health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Health List",
+        "tags": [
+          "提示词健康度"
+        ]
+      }
+    },
+    "/api/v1/prompt-health/sweep": {
+      "post": {
+        "description": "立即体检所有 auto 模板（等价于每小时定时任务）",
+        "operationId": "post_api_v1_prompt_health_sweep",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sweep",
+        "tags": [
+          "提示词健康度"
+        ]
+      }
+    },
+    "/api/v1/prompt-health/{template_id}/check": {
+      "post": {
+        "description": "单模板体检（按采纳率判定是否熔断）",
+        "operationId": "post_api_v1_prompt_health_template_id_check",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check",
+        "tags": [
+          "提示词健康度"
+        ]
+      }
+    },
+    "/api/v1/prompt-health/{template_id}/reactivate": {
+      "post": {
+        "description": "手动恢复（熔断后人工确认可用）",
+        "operationId": "post_api_v1_prompt_health_template_id_reactivate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reactivate",
+        "tags": [
+          "提示词健康度"
+        ]
+      }
+    },
+    "/api/v1/prompt-health/{template_id}/rollback": {
+      "post": {
+        "description": "回滚到上一版本（可传 version 指定），回滚后自动恢复上线",
+        "operationId": "post_api_v1_prompt_health_template_id_rollback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rollback",
+        "tags": [
+          "提示词健康度"
+        ]
+      }
+    },
+    "/api/v1/prompt-health/{template_id}/versions": {
+      "get": {
+        "description": "历史版本列表（回滚用）",
+        "operationId": "get_api_v1_prompt_health_template_id_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Versions",
+        "tags": [
+          "提示词健康度"
+        ]
+      }
+    },
     "/api/v1/release/batch-trigger": {
       "post": {
         "description": "批量发布：勾选多个服务 + 一个分支；逐服务查映射并触发（并发 5）。",
@@ -13595,7 +13846,7 @@
     },
     "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/events": {
       "get": {
-        "description": "单个 Pod 的事件（k8s Event，按时间倒序）",
+        "description": "单个 Pod 的事件（实时来自集群 + 平台自存历史；历史固定最近 7 天）",
         "operationId": "get_api_v1_resources_clusters_cluster_id_namespaces_namespace_pods_pod_name_events",
         "parameters": [
           {

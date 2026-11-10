@@ -9,8 +9,10 @@ import {
   getPromptTemplates, createPromptTemplate, updatePromptTemplate, previewPromptTemplate,
   getPromptFragments, createPromptFragment, updatePromptFragment, deletePromptFragment,
   getPromptRouting, createPromptRouting, updatePromptRouting, deletePromptRouting,
+  getPromptHealth, sweepPromptHealth, getPromptVersions, rollbackPromptTemplate,
+  reactivatePromptTemplate, checkPromptTemplate,
 } from '../services/api'
-import type { PromptFragment, PromptRouting } from '../services/api'
+import type { PromptFragment, PromptHealth, PromptRouting } from '../services/api'
 
 interface PromptTemplate {
   id: number
@@ -61,6 +63,10 @@ export default function PromptTemplates() {
   const [routeModal, setRouteModal] = useState<PromptRouting | null | undefined>(undefined)
   const [fragForm] = Form.useForm()
   const [routeForm] = Form.useForm()
+  // 健康度（R13 熔断）
+  const [health, setHealth] = useState<PromptHealth[]>([])
+  const [healthLoading, setHealthLoading] = useState(false)
+  const [verModal, setVerModal] = useState<{ id: number; name: string; items: { id: number; version: number; changelog: string; created_at: string }[] } | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -68,8 +74,12 @@ export default function PromptTemplates() {
   }
   const loadFrags = () => getPromptFragments().then((d) => setFrags(d || [])).catch(() => {})
   const loadRoutes = () => getPromptRouting().then((d) => setRoutes(d || [])).catch(() => {})
+  const loadHealth = () => {
+    setHealthLoading(true)
+    getPromptHealth().then((d) => setHealth(d || [])).catch(() => {}).finally(() => setHealthLoading(false))
+  }
   useEffect(load, [])
-  useEffect(() => { loadFrags(); loadRoutes() }, [])
+  useEffect(() => { loadFrags(); loadRoutes(); loadHealth() }, [])
 
   const openCreate = () => {
     setCreating(true); setEditing(true); setCurrent(null)
@@ -252,8 +262,110 @@ export default function PromptTemplates() {
               </>
             ),
           },
+          {
+            key: 'health',
+            label: `健康度（${health.filter((h) => h.status === 'draft').length} 已降级）`,
+            children: (
+              <>
+                <Space style={{ marginBottom: 12 }} wrap>
+                  <Button onClick={async () => {
+                    const r = await sweepPromptHealth() as { checked: number; tripped: number[] }
+                    message.success(`体检完成：${r.checked} 个自动模板，熔断 ${r.tripped.length} 个`)
+                    loadHealth(); load()
+                  }}>立即体检</Button>
+                  <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+                    规则：仅 <b>AI 起草（source=auto）</b> 模板自动熔断 —— 无效标记 ≥3 次，或样本 ≥5 且采纳率 &lt;40% → 降级草稿 + 解绑路由 + 通知管理员；每小时自动体检一次
+                  </span>
+                </Space>
+                <Table<PromptHealth>
+                  rowKey="id" size="small" loading={healthLoading} dataSource={health} pagination={false}
+                  columns={[
+                    { title: '模板', dataIndex: 'name', width: 220 },
+                    { title: '来源', dataIndex: 'source', width: 80, render: (v: string) => <Tag color={v === 'auto' ? 'purple' : 'default'}>{v === 'auto' ? 'AI起草' : '手写'}</Tag> },
+                    {
+                      title: '状态', dataIndex: 'status', width: 90,
+                      render: (v: string) => <Tag color={v === 'active' ? 'green' : v === 'draft' ? 'orange' : 'default'}>{v === 'active' ? '已上线' : v === 'draft' ? '已降级' : v}</Tag>,
+                    },
+                    {
+                      title: '采纳率', dataIndex: 'adoption_rate', width: 150,
+                      render: (v: number | null, r: PromptHealth) => (v === null
+                        ? <span style={{ color: '#999' }}>样本不足（{r.rated}）</span>
+                        : <span style={{ color: v < r.trip_threshold.min_rate && r.rated >= r.trip_threshold.min_samples ? '#cf1322' : '#3f8600' }}>
+                            {(v * 100).toFixed(0)}%（{r.useful}/{r.rated}）
+                          </span>),
+                    },
+                    { title: '无效标记', dataIndex: 'invalid_count', width: 90 },
+                    { title: '诊断数', dataIndex: 'diagnosis_total', width: 80 },
+                    { title: '版本', dataIndex: 'version', width: 70 },
+                    {
+                      title: '操作', width: 260,
+                      render: (_: unknown, r: PromptHealth) => (
+                        <Space size={4} wrap>
+                          <Button size="small" onClick={async () => {
+                            const items = await getPromptVersions(r.id)
+                            setVerModal({ id: r.id, name: r.name, items: items || [] })
+                          }}>版本</Button>
+                          {r.status === 'active'
+                            ? <Button size="small" onClick={async () => {
+                                const res = await checkPromptTemplate(r.id) as { tripped: boolean }
+                                message.info(res.tripped ? '已熔断，降级为草稿' : '未达熔断条件')
+                                loadHealth(); load()
+                              }}>体检</Button>
+                            : <Button size="small" type="primary" onClick={async () => {
+                                await reactivatePromptTemplate(r.id)
+                                message.success('已恢复上线（路由同步启用）')
+                                loadHealth(); load()
+                              }}>恢复</Button>}
+                          {r.status !== 'active' && (
+                            <Popconfirm title="回滚到上一版本并恢复上线？" onConfirm={async () => {
+                              try {
+                                const res = await rollbackPromptTemplate(r.id) as { rolled_back_to: number }
+                                message.success(`已回滚到 v${res.rolled_back_to} 并恢复上线`)
+                              } catch (e) { message.error(`回滚失败：${(e as Error).message}`) }
+                              loadHealth(); load()
+                            }}>
+                              <Button size="small" danger>回滚</Button>
+                            </Popconfirm>
+                          )}
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
+              </>
+            ),
+          },
         ]}
       />
+
+      {/* 版本历史 */}
+      <Modal
+        title={`版本历史：${verModal?.name || ''}`} open={!!verModal} onCancel={() => setVerModal(null)} footer={null} width={640}
+      >
+        <Table
+          rowKey="id" size="small" pagination={false}
+          dataSource={verModal?.items || []}
+          columns={[
+            { title: '版本', dataIndex: 'version', width: 80, render: (v: number) => `v${v}` },
+            { title: '说明', dataIndex: 'changelog' },
+            { title: '时间', dataIndex: 'created_at', width: 170 },
+            {
+              title: '操作', width: 100,
+              render: (_: unknown, r: { version: number }) => (
+                <Popconfirm title={`回滚到 v${r.version}？`} onConfirm={async () => {
+                  try {
+                    await rollbackPromptTemplate(verModal!.id, r.version)
+                    message.success(`已回滚到 v${r.version}`)
+                  } catch (e) { message.error(`回滚失败：${(e as Error).message}`) }
+                  setVerModal(null); loadHealth(); load()
+                }}>
+                  <Button size="small">回滚</Button>
+                </Popconfirm>
+              ),
+            },
+          ]}
+        />
+      </Modal>
 
       {/* 模板查看/编辑 */}
       <Drawer

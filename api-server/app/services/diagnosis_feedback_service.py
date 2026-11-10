@@ -20,6 +20,25 @@ from app.models import AIDiagnosisResult, AiFeedback
 logger = get_logger("api-server.diagnosis_feedback")
 
 
+async def _template_id_of(session, diag_id: int | None) -> int | None:
+    if not diag_id:
+        return None
+    return (await session.execute(
+        select(AIDiagnosisResult.template_id).where(AIDiagnosisResult.id == diag_id)
+    )).scalar_one_or_none()
+
+
+async def _bump_template_invalid(template_id: int, reason: str) -> None:
+    """R13 熔断：无效计数 +1 并判定是否降级（异常不影响主流程）"""
+    try:
+        from app.services import prompt_health_service as phs
+        r = await phs.record_invalid(template_id, reason)
+        if r and r.get("tripped"):
+            logger.warning("提示词模板 %d 已熔断（%s）", template_id, reason)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("模板熔断判定失败（忽略）: %s", e)
+
+
 async def _latest_diagnosis_id(session, alert_id: int) -> int | None:
     return (await session.execute(
         select(AIDiagnosisResult.id).where(AIDiagnosisResult.alert_id == alert_id)
@@ -39,9 +58,13 @@ async def user_feedback(alert_id: int, rating: int, comment: str = "", username:
                 update(AIDiagnosisResult).where(AIDiagnosisResult.id == diag_id)
                 .values(is_useful=1 if rating > 0 else -1)
             )
+        tpl_id = await _template_id_of(session, diag_id)
         await session.commit()
         await session.refresh(fb)
-        return {"id": fb.id, "diagnosis_id": diag_id}
+    # R13 熔断：人工判「无用」→ 给该模板记一次无效（异步判定，不阻塞反馈返回）
+    if rating < 0 and tpl_id:
+        await _bump_template_invalid(tpl_id, "人工标记诊断无效")
+    return {"id": fb.id, "diagnosis_id": diag_id}
 
 
 async def implicit_feedback(alert_id: int, solved: bool, note: str = "") -> None:
@@ -64,6 +87,8 @@ async def implicit_feedback(alert_id: int, solved: bool, note: str = "") -> None
             ))
             await session.commit()
             logger.info("隐式反馈：告警 %d 诊断 %d → %s", alert_id, diag_id, "有用" if solved else "无用")
+            if not solved and row.template_id:
+                await _bump_template_invalid(row.template_id, "修复验证未通过")
     except Exception as e:  # noqa: BLE001
         logger.warning("隐式反馈失败（忽略）: %s", e)
 
