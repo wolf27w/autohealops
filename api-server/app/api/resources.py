@@ -445,13 +445,12 @@ async def cluster_pods(cluster_id: int, namespace: str = "", user=Depends(requir
 
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/events")
-async def pod_events(cluster_id: int, namespace: str, pod_name: str, hours: int = 168,
-                     user=Depends(require_any_user)):
-    """单个 Pod 的事件（实时来自集群 + 平台自存历史；历史默认最近 7 天）"""
+async def pod_events(cluster_id: int, namespace: str, pod_name: str, user=Depends(require_any_user)):
+    """单个 Pod 的事件（实时来自集群 + 平台自存历史；历史固定最近 7 天）"""
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
-    hours = max(1, min(hours, 24 * 30))  # R27-4：历史查询必须带时间窗（默认 7 天）
-    since = datetime.now() - timedelta(hours=hours)
+    # R27-4：历史查询必须带时间窗。这里不开放参数，避免改 API 契约（同日事件量已足够）
+    since = datetime.now() - timedelta(hours=24 * 7)
     r = await executor_client.acall(executor_client.get_pod_events, cluster_id, namespace, pod_name)
     if not r.get("success"):
         return {"code": 500, "message": r.get("error", "事件获取失败"), "data": None}
