@@ -12,7 +12,7 @@ from app.api import (
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
     projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
-from app.api import hosts, host_groups, jvm, host_terminal
+from app.api import hosts, host_groups, jvm, host_terminal, zombie
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -95,7 +95,11 @@ async def _maintenance_loop() -> None:
                 logger.warning("指标降采样 异常: %s", e)
         if loop_count % 120 == 0:
             try:
-                from app.services.metrics_rollup import cleanup_metrics
+                from app.services.metrics_rollup import cleanup_metrics, maintain_pod_metric_partitions
+                # R27-2：先按天分区 DROP 整段过期的（秒级 + 回收磁盘），再 DELETE 不足一天的尾巴
+                part = await maintain_pod_metric_partitions()
+                if part.get("partitioned") and (part.get("dropped") or part.get("added")):
+                    logger.info("Pod 指标分区维护：%s", part)
                 await cleanup_metrics()
             except Exception as e:  # noqa: BLE001
                 logger.warning("指标清理 异常: %s", e)
@@ -598,5 +602,6 @@ app.include_router(agent.router)
 app.include_router(terminal.router)
 app.include_router(hosts.router)
 app.include_router(host_terminal.router)
+app.include_router(zombie.router)
 app.include_router(host_groups.router)
 app.include_router(mcp.router)

@@ -261,6 +261,26 @@ class ESClient:
 
     # ---------- 连通性测试 ----------
 
+    async def search_docs(self, src, body: dict) -> list[dict] | None:
+        """用指定 LogSource 跑一次原始 _search，返回 _source 列表（None=不可达/失败）。
+
+        供 R20 僵尸服务检测等需要自定义查询/聚合的场景复用（字段映射与鉴权沿用该日志源）。
+        """
+        cfg = self._cfg_from_source(src)
+        if not cfg["base_url"]:
+            return None
+        url = f"{cfg['base_url']}/{cfg['index']}/_search"
+        auth = (cfg["username"], cfg["password"]) if cfg["username"] and cfg["password"] else None
+        try:
+            client = get_http_client(trust_env=False)
+            resp = await client.post(url, json=body, auth=auth, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            return [h.get("_source") or {} for h in (data.get("hits", {}).get("hits") or [])]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ES search_docs 失败: %s", e)
+            return None
+
     async def test_connection(self, base_url: str, index_pattern: str = "", username: str = "", password: str = "") -> dict:
         """测试 ES 连通性，返回 {success, message, status_code}。
 

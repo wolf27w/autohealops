@@ -40,6 +40,7 @@ const HostManagement = lazy(() => import('./pages/HostManagement'))
 const WebTerminal = lazy(() => import('./pages/WebTerminal'))
 const HostSessionReplay = lazy(() => import('./pages/HostSessionReplay'))
 const PromptSuggestions = lazy(() => import('./pages/PromptSuggestions'))
+const ZombieServices = lazy(() => import('./pages/ZombieServices'))
 const OnDuty = lazy(() => import('./pages/OnDuty'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -115,6 +116,7 @@ export default function App() {
         <Route path="web-terminal/:hostId" element={<WebTerminal />} />
         <Route path="host-sessions/:id/replay" element={<HostSessionReplay />} />
         <Route path="prompt-suggestions" element={<RequireRole role="admin"><PromptSuggestions /></RequireRole>} />
+        <Route path="zombie-services" element={<ZombieServices />} />
         <Route path="agent" element={<AgentChat />} />
         <Route path="diagnostic" element={<DiagnosticCenter />} />
         <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />

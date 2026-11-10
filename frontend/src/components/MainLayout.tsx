@@ -43,6 +43,7 @@ const menuItems: NavItem[] = [
     children: [
       { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
       { key: '/clusters', icon: <ClusterOutlined />, label: '集群管理' },
+      { key: '/zombie-services', icon: <StopOutlined />, label: '僵尸服务' },
     ],
   },
   {

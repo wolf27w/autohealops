@@ -151,6 +151,23 @@ export const getAiFeedback = (alertId: number) => http.get<AiFeedbackData>(`/fau
 export const addAiFeedback = (alertId: number, rating: number, comment = '') => http.post(`/fault-diagnoses/${alertId}/feedback`, { rating, comment })
 
 // ============ 提示词模板 ============
+// ============ 僵尸服务检测（R20，只读） ============
+export interface ZombieItem {
+  namespace: string; deployment: string; replicas?: number; ready_replicas?: number
+  requests: number | null; status: 'zombie' | 'active' | 'unknown' | 'unmapped'
+  evidence: string; matched?: string[]
+}
+export interface ZombieScanResult {
+  cluster_id: number; namespace: string; days: number; threshold: number
+  source: 'prometheus' | 'nginx_log' | 'none'; source_note: string
+  summary: { deployments: number; zombie: number; active: number; unknown: number; unmapped: number; unattributed_traffic_keys: string[] }
+  items: ZombieItem[]; scanned_at: string
+}
+export const scanZombieServices = (params: { cluster_id: number; namespace?: string; days?: number }) =>
+  http.get<ZombieScanResult>('/zombie/scan', { params })
+export const getZombieConfig = () => http.get<{ config: Record<string, unknown>; defaults: Record<string, unknown> }>('/zombie/config')
+export const updateZombieConfig = (config: Record<string, unknown>) => http.put('/zombie/config', { config })
+
 // ============ 提示词建议（R13 未分类故障自学习） ============
 export interface PromptSuggestion {
   id: number; fault_type: string; feature: string; hit_count: number
