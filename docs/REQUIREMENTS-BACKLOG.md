@@ -1983,3 +1983,50 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 5. 关键监控查询均带时间窗（review checklist 落地）
 
 **估时**：R27-1 0.3d；R27-2 0.7d（含迁移与历史数据验证）；R27-3 0.5d；R27-4 0.3d → 合计 **约 1.8d**（方案 A/B 不在本次估算内）
+
+---
+
+### R28 OpenAPI 契约与代码漂移（2026-11-10 发现）— ❓ 待处理
+
+**现象**
+`./scripts/ci_check.sh` 第 7/8 步「OpenAPI 契约漂移检查」失败，`docs/openapi.json` 与代码不一致，diff 只有两个新增接口：
+
+- `GET /api/v1/prompt-health`（模板健康度列表）
+- `POST /api/v1/prompt-health/sweep`（立即体检所有 auto 模板）
+
+**根因**
+代码已提交（`6b1a4cd feat(R13): 提示词模板采纳率熔断 + 版本回滚`），但 `docs/openapi.json` 没有随之重新生成（应执行 `./scripts/openapi.sh`）。
+
+**影响**
+1. CI 第 7 步常态化红灯，真实回归会被淹没；
+2. 契约文件与实际接口不一致 —— 前端、MCP、外部接入若按契约生成客户端，会缺这两个接口；
+3. 新人按 `docs/openapi.json` 理解平台能力会判断错误。
+
+**处置步骤（建议在无并行改动时一次做完）**
+1. 确认工作区没有并行 WIP（见下方「现状备注」），否则生成物会把别人的半成品一起固化；
+2. 执行 `./scripts/openapi.sh`；
+3. `git diff docs/openapi.json` 复核：**只应出现 prompt-health 相关新增**；若混入其它接口变化，说明有未提交的 API 改动，先收敛再重生成；
+4. 按路径 `git add docs/openapi.json`（禁止 `git add -A`），单独提交；
+5. 复跑 `./scripts/ci_check.sh` 确认 8/8 全绿。
+
+**现状备注（2026-11-10 18:29 记录）**
+仓库当时还有并行未提交改动，生成契约前需先确认归属：
+- `api-server/app/api/db_connections.py`（已修改）
+- `frontend/src/pages/DBMonitor.tsx`、`frontend/src/services/api.ts`（已修改）
+- `api-server/tests/test_slow_compare.py`（未跟踪）
+- `frontend/tsconfig.tsbuildinfo`（构建产物，建议不纳入提交）
+
+**估时**：0.2d（主要是确认并行改动归属 + 复核 diff）
+
+**验收标准**
+1. `ci_check.sh` 8/8 全绿（第 7 步不再报漂移）；
+2. `docs/openapi.json` 中的接口集合与 `app/api/*.py` 实际注册一致；
+3. 该次提交只包含 `docs/openapi.json`，不夹带任何代码改动。
+
+---
+
+### 备注：R27-2 迁移踩坑（大表去重必须先有索引）
+
+`pod_metrics` 建唯一键前需要在百万行表上清重复。最初写成自连接 `DELETE a FROM t a JOIN t b ON ... AND a.id < b.id`，**无索引支撑**，在 HDD 上跑 4 分 51 秒仍未结束（只能 KILL，全表扫描 + 无索引 JOIN）。最终方案：先用 `GROUP BY ... HAVING COUNT(*)>1 LIMIT 1` 自检（实测 15s），有重复就报错并给出清理 SQL，让操作者确认后手工处理。
+
+**经验**：大表去重/唯一键迁移的顺序必须是「先建支撑索引 → 再去重 → 再改唯一键」，或直接用临时表重写；禁止在无索引的大表上做自连接 DML。
