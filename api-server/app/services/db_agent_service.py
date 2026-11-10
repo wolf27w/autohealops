@@ -75,6 +75,18 @@ def map_metrics(m: dict) -> list[dict]:
     if m.get("rollbacks") is not None:
         out.append({"metric_type": "throughput", "metric_name": "com_rollback", "value": _num(m.get("rollbacks")), "detail": ""})
 
+    # R1 补全：版本 / 死锁 / 缓存命中率（agent 已采集，之前没映射成指标 → 页面上看不到）
+    ver = (m.get("version") or "").strip()
+    if ver:
+        out.append({"metric_type": "info", "metric_name": "version", "value": 0.0, "detail": ver[:200]})
+    if m.get("deadlocks") is not None:
+        out.append({"metric_type": "lock_wait", "metric_name": "deadlocks",
+                    "value": _num(m.get("deadlocks")), "detail": ""})
+    hit, read = m.get("cache_hit_blocks"), m.get("cache_read_blocks")
+    if hit is not None and read is not None and (_num(hit) + _num(read)) > 0:
+        out.append({"metric_type": "cache", "metric_name": "cache_hit_pct",
+                    "value": round(_num(hit) / (_num(hit) + _num(read)) * 100, 2), "detail": ""})
+
     tables = m.get("top_tables") or []
     if isinstance(tables, list) and tables:
         size_mb = sum(_num(t.get("size_mb")) for t in tables if isinstance(t, dict))

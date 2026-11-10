@@ -43,12 +43,12 @@ const TYPE_LABEL: Record<string, string> = {
   connections: '连接', throughput: '吞吐', network: '网络', cache: '缓存/缓冲池',
   query_quality: '查询质量', innodb: 'InnoDB', tablespace: '表空间/文件',
   config: '参数配置', lock_wait: '锁等待', replication: '主从复制', rate: '速率', memory: '内存',
-  vacuum: '自动清理', wait: '等待事件',
+  vacuum: '自动清理', wait: '等待事件', info: '基本信息',
 }
 const TYPE_COLOR: Record<string, string> = {
   connections: 'blue', throughput: 'geekblue', network: 'cyan', cache: 'green',
   query_quality: 'orange', innodb: 'purple', tablespace: 'magenta', config: 'default',
-  lock_wait: 'red', replication: 'gold', rate: 'lime', memory: 'volcano',
+  lock_wait: 'red', replication: 'gold', rate: 'lime', memory: 'volcano', info: 'default',
   vacuum: '#87d068', wait: '#c41d7f',
 }
 
@@ -66,7 +66,7 @@ const NAME_LABEL: Record<string, string> = {  connections_used: '当前连接数
   open_tables: '打开表', table_open_cache_usage_pct: '表缓存使用率(%)', open_files: '打开文件',
   opened_tables: '已打开表累计', long_query_time: '慢查询阈值(s)', slow_query_log: '慢查询日志(1已开)',
   innodb_buffer_pool_size_mb: '缓冲池配置(MB)', slave_running: '从库运行(1正常)', replication_lag_seconds: '复制延迟(s)',
-  lock_wait_count: '锁等待数', bytes_received: '累计接收字节', bytes_sent: '累计发送字节',
+  lock_wait_count: '锁等待数', version: '数据库版本', cache_hit_pct: '缓存命中率(%)', bytes_received: '累计接收字节', bytes_sent: '累计发送字节',
   rx_bytes_per_sec: '接收速率(B/s)', tx_bytes_per_sec: '发送速率(B/s)',
   aborted_connects_per_sec: '连接失败速率(/s)', aborted_clients_per_sec: '客户端异常断开速率(/s)',
   com_select: 'SELECT 次数', com_insert: 'INSERT 次数', com_update: 'UPDATE 次数', com_delete: 'DELETE 次数',
