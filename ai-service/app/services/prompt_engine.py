@@ -111,6 +111,12 @@ DEFAULT_TEMPLATES = [
         "user_prompt_template": "请分析以下慢SQL并给出优化建议：\nSQL语句：\n{sql_text}\n执行信息（执行次数/平均耗时/最大耗时）：\n{exec_output}",
     },
     {
+        "name": "default_diagnosis",
+        "category": "diagnosis",
+        "system_prompt": "你是一个Kubernetes/云原生通用排障专家。请分析以下故障信息并返回JSON格式的诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",
+        "user_prompt_template": "请诊断以下故障：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n节点名称：{node_name}\n故障类型：{fault_type}\n重启次数：{restart_count}\n状态信息：{status_info}\n节点Conditions：{conditions}\n最近事件：{recent_events}\n最近日志：{recent_logs}\n指标趋势：\n{metrics_trend}\n探针配置与实测：\n{probe_evidence}",
+    },
+    {
         "name": "repair_plan_generation",
         "category": "repair_plan",
         "system_prompt": "你是一个Kubernetes自动化运维专家。请基于诊断结果生成安全的修复方案。返回JSON格式，包含steps数组。每个step必须包含：command（kubectl命令）、description（步骤描述）、expected_result（预期结果）、rollback_command（回滚命令）。\n\n【命令占位符规范-必须遵守】命令禁止写死具体资源名，一律使用占位符，执行时由平台按当前告警上下文自动填充：\n- 命名空间用 {namespace}\n- Pod 名用 {pod_name}\n- Deployment 名用 {deployment_name}\n- 节点名用 {node_name}\n- 资源类型用 {resource_type}\n- 其他资源名用 {resource_name}\n例如：kubectl -n {namespace} delete pod {pod_name}；kubectl -n {namespace} rollout restart deployment {deployment_name}。\n不得出现 qa-eft、xxx-abc123 这类写死的环境名/资源名。",

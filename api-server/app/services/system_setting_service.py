@@ -77,6 +77,8 @@ DEFAULT_SETTINGS = {
     "sftp_allow_paths": ("/tmp,/var/tmp,/home", "SFTP 允许目录（逗号分隔，优先匹配）"),
     "sftp_deny_paths": ("/etc,/boot,/dev,/proc,/sys,/root/.ssh", "SFTP 禁止目录（逗号分隔，命中即拒绝）"),
     "sftp_max_mb": ("200", "SFTP 单文件大小上限（MB）"),
+    # R11 诊断模板路由（fault_type → 诊断模板，JSON：exact/prefix/default；留空用内置默认表）
+    "diagnosis_template_routing": ("", "诊断模板路由 JSON（exact 精确/prefix 前缀/default 兜底；留空用内置默认表）"),
     # 统一告警通知策略（N8）：分级渠道 + 全局静默窗口，全平台一份
     "alert_notify_policy": (json.dumps(ALERT_NOTIFY_POLICY_DEFAULT, ensure_ascii=False), "统一告警通知策略 JSON（分级渠道/静默窗口）"),
     # 外部系统接入 token（供外部监控/运维系统调 /api/v1/external 查询/创建工单）

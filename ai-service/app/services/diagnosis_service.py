@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.models import AIDiagnosisResult, ModelAccuracyStat, PromptTemplate
-from app.services import prompt_engine
+from app.services import prompt_engine, template_routing
 from app.services.es_client import ESClient
 from app.services.model_adapter import call_with_fallback
 from app.services.prometheus_client import PrometheusClient
@@ -113,18 +113,18 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
     fault_type = alert_data.get("fault_type", "")
     severity = alert_data.get("severity", "high")
 
-    # 匹配模板
-    if fault_type == "application_diagnosis":
-        template_name = "application_diagnosis"
-    elif fault_type == "sql_optimization":
-        template_name = "sql_optimization"
-    elif fault_type in POD_FAULTS:
-        template_name = "pod_crash_diagnosis"
-    else:
-        template_name = "node_pressure_diagnosis"
+    # R11：诊断模板路由（可配置，exact → prefix → default）
+    routing = await template_routing.load_routing()
+    template_name, matched = template_routing.resolve(routing, fault_type)
     tpl = await _get_template("diagnosis", template_name)
     if not tpl:
-        tpl = await _get_template("diagnosis", template_name)
+        # 路由到的模板不存在 → 退回通用模板；通用模板也没有 → 退回 pod 模板（历史兜底）
+        for fallback in ("default_diagnosis", "pod_crash_diagnosis"):
+            tpl = await _get_template("diagnosis", fallback)
+            if tpl:
+                template_name = fallback
+                matched = False
+                break
 
     # 采集上下文
     ctx = await _collect_context(alert_data)
@@ -182,6 +182,8 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "confidence": parsed.get("confidence", 0.0),
         "root_cause_layer": parsed.get("root_cause_layer", "A"),
         "model_used": model_used,
+        "template_name": template_name,
+        "template_missed": not matched,
     }
 
 
@@ -189,7 +191,8 @@ async def multi_diagnose(alert_data: dict, context_data: dict | None = None) -> 
     """多模型协同诊断（并发最多 3 个模型，共识 + 准确率仲裁）"""
     fault_type = alert_data.get("fault_type", "")
     severity = alert_data.get("severity", "high")
-    template_name = "pod_crash_diagnosis" if fault_type in POD_FAULTS else "node_pressure_diagnosis"
+    _routing = await template_routing.load_routing()
+    template_name, _matched = template_routing.resolve(_routing, fault_type)
 
     from app.models import AIModelConfig
 

@@ -121,6 +121,13 @@ export default function PlatformSettings() {
                     <Input placeholder="/etc,/boot,/dev,/proc,/sys,/root/.ssh" />
                   </Form.Item>
                   <Form.Item name="sftp_max_mb" label="单文件上限(MB)"><InputNumber min={1} max={10240} /></Form.Item>
+                  <Divider orientation="left">诊断模板路由（R11）</Divider>
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                    fault_type → 诊断模板 映射（JSON）。匹配顺序：exact 精确 → prefix 前缀 → default 兜底；留空用内置默认表。
+                  </div>
+                  <Form.Item name="diagnosis_template_routing" label="诊断模板路由 JSON">
+                    <Input.TextArea rows={6} placeholder={'{"exact":{"ContainerMemHigh":"application_diagnosis"},"prefix":{"PodRestart":"pod_crash_diagnosis"},"default":"default_diagnosis"}'} style={{ fontFamily: 'monospace' }} />
+                  </Form.Item>
                   <Divider orientation="left">镜像仓库（列标签 / 更新镜像）</Divider>
                   <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
                     私有仓库拉取标签需凭据：填全局用户名/密码即可；多仓库可用下方 JSON 按 host 覆盖（优先生效）。
