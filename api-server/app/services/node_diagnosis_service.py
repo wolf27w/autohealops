@@ -376,7 +376,7 @@ async def uncordon_ready_nodes() -> int:
     done = 0
     try:
         async with async_session() as s:
-            clusters = [int(c.id) for c in (await s.execute(select(Cluster.id))).scalars()]
+            clusters = [int(c) for c in (await s.execute(select(Cluster.id))).scalars()]
     except Exception as e:  # noqa: BLE001
         logger.warning("uncordon 扫描取集群失败: %s", e)
         return 0
