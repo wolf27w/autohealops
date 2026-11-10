@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/autohealops/k8s-executor/internal/bootstrap"
 	"github.com/autohealops/k8s-executor/internal/config"
@@ -76,8 +77,8 @@ func main() {
 	quotaCollector := quota.NewCollector(manager, logger)
 	quotaCollector.StartQuotaCollectScheduler(ctx)
 
-	// 7.5 Pod 指标采集（CPU/内存/网络，每分钟全量，保留 3 天）
-	metricsCollector := metrics.NewCollector(manager, logger)
+	// 7.5 Pod 指标采集（CPU/内存/网络，每分钟全量；保留期与 api-server 同口径，R27-1）
+	metricsCollector := metrics.NewCollector(manager, logger, time.Duration(cfg.MetricsRetentionHours)*time.Hour)
 	metricsCollector.StartCollectScheduler(ctx)
 
 	// k8s 事件历史（k8s 默认只留 1h，这里自存 7 天）

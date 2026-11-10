@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""指标分层存储：原始 60s 保 1 天 + 5 分钟聚合保 7 天。
+"""指标分层存储：原始 60s 保 24h + 5 分钟聚合保 7 天（可用 POD_METRICS_RAW_RETENTION_HOURS /
+POD_METRICS_ROLLUP_RETENTION_DAYS 调整，k8s-executor 侧同口径）。
 
 - 降采样：把原始 pod_metrics 按 5 分钟桶聚合成 pod_metrics_5m（幂等 upsert）
 - 清理：原始只保 1 天；聚合保 7 天
@@ -12,14 +13,33 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
 
 logger = get_logger("api-server.metrics_rollup")
 
 BUCKET_SECONDS = 300          # 5 分钟
-RAW_RETENTION_HOURS = 24      # 原始数据保留
-ROLLUP_RETENTION_DAYS = 7     # 聚合数据保留
+
+
+def _int_env(name: str, default: int) -> int:
+    """读整数配置（R27-1）：非法值回退默认值，且不允许 <= 0。"""
+    raw = getattr(settings, name, default)
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+# 保留期口径（R27-1）：与 k8s-executor 共用同一对环境变量，
+# 保证「平台直连」与「agent 接入」两种方式的 pod_metrics 可查时长一致。
+RAW_RETENTION_HOURS = _int_env("POD_METRICS_RAW_RETENTION_HOURS", 24)   # 原始数据保留
+ROLLUP_RETENTION_DAYS = _int_env("POD_METRICS_ROLLUP_RETENTION_DAYS", 7)  # 聚合数据保留
+if RAW_RETENTION_HOURS >= ROLLUP_RETENTION_DAYS * 24:
+    logger.warning(
+        "保留期配置异常：原始 %dh >= 聚合 %dd，降采样后将无法区分长短周期",
+        RAW_RETENTION_HOURS, ROLLUP_RETENTION_DAYS,
+    )
 BATCH = 5000  # 单条 DELETE 控制在 5000 行（原来 20000 在 HDD 上单次 2~10s，会进慢 SQL 榜）
 
 

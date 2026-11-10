@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -23,6 +24,10 @@ type Config struct {
 
 	// 实时日志跟随（P1-R5）：executor 本地 HTTP 端口，供 api-server 代理流式日志（空=关闭）
 	LogStreamAddr string // 监听地址，如 :9099
+
+	// Pod 指标原始采样保留小时数（R27-1）。与 api-server 的
+	// POD_METRICS_RAW_RETENTION_HOURS 共用同一个环境变量，保证两种接入方式口径一致。
+	MetricsRetentionHours int
 }
 
 // findEnvFile 向上查找项目根目录下的 .env 文件
@@ -64,6 +69,9 @@ func Load() (*Config, error) {
 		InternalToken: v.GetString("JWT_SECRET_KEY"),
 
 		LogStreamAddr: v.GetString("LOGSTREAM_ADDR"),
+
+		// 指标保留期（R27-1）：与 api-server 保持一致，默认 24 小时
+		MetricsRetentionHours: toInt(v.GetString("POD_METRICS_RAW_RETENTION_HOURS"), 24),
 	}
 	if cfg.LogStreamAddr == "" {
 		cfg.LogStreamAddr = ":9099" // 默认开启（api-server 经 EXECUTOR_LOGSTREAM_ADDR 访问）
@@ -115,4 +123,17 @@ func toGormDSN(url string) string {
 	hostPort := hostDB[:slash]
 	db := hostDB[slash+1:]
 	return fmt.Sprintf("%s@tcp(%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", userpass, hostPort, db)
+}
+
+// toInt 把字符串配置转整数（R27-1），非法/<=0 时回退默认值。
+func toInt(s string, def int) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }

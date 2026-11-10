@@ -31,6 +31,9 @@ data:
   # 前端实际访问域名（留空=使用代码内开发默认白名单）
   CORS_ORIGINS: "https://autohealops.example.com"
   COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon,drain,label,taint"
+  # ---------- 监控指标保留期（R27-1，须与 k8s-executor 同值）----------
+  POD_METRICS_RAW_RETENTION_HOURS: "24"
+  POD_METRICS_ROLLUP_RETENTION_DAYS: "7"
 
   # ---------- JVM 诊断（容器无 JDK 工具时注入 jattach）----------
   JVM_JATTACH_URL: "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
@@ -69,6 +72,8 @@ data:
   # 写入告警后回调平台立即处理（X-Internal-Token 复用 JWT_SECRET_KEY）
   API_SERVER_URL: "http://api-server:8080"
   COMMAND_WHITELIST: "get,list,describe,logs,top,explain,rollout,scale,set,apply,patch,delete,exec,create,edit,cordon,uncordon,drain,label,taint"
+  # 原始采样保留小时数（R27-1，与 api-server 同值）
+  POD_METRICS_RAW_RETENTION_HOURS: "24"
 ---
 apiVersion: v1
 kind: ConfigMap

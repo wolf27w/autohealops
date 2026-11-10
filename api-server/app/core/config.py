@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     REGISTRY_PASSWORD: str = ""
     REGISTRY_CREDS: str = ""
 
+    # 监控指标保留期（R27-1）：必须与 k8s-executor 读同一个环境变量，
+    # 否则「平台直连」与「agent 接入」两种方式的 pod_metrics 可查时长会不一致。
+    #   原始 60s 采样保留小时数（默认 24h）
+    POD_METRICS_RAW_RETENTION_HOURS: int = 24
+    #   5 分钟降采样保留天数（默认 7 天）
+    POD_METRICS_ROLLUP_RETENTION_DAYS: int = 7
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",

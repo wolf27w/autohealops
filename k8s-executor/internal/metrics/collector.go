@@ -13,10 +13,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// 采样与保留配置（保留 7 天，每分钟采样）
+// 采样与保留配置（每分钟采样；保留期见 Config.MetricsRetentionHours，R27-1 起与 api-server 同口径）
 const (
 	collectInterval = 1 * time.Minute
-	retentionDays   = 7
 	cleanupInterval = 1 * time.Hour
 
 	// 脏数据防护：metrics-server 偶发返回异常 CPU（累计值/单位错乱，实测单 Pod 报数万核）。
@@ -47,20 +46,27 @@ type NetworkStats struct {
 
 // Collector 指标采集器
 type Collector struct {
-	manager *k8sclient.Manager
-	logger  *zap.Logger
+	manager   *k8sclient.Manager
+	logger    *zap.Logger
+	retention time.Duration
 }
 
 // NewCollector 创建采集器
-func NewCollector(manager *k8sclient.Manager, logger *zap.Logger) *Collector {
-	return &Collector{manager: manager, logger: logger}
+// retention：pod_metrics 原始采样保留时长（<=0 时回退 24h；与 api-server 保持一致
+// 才能保证「平台直连」与「agent 接入」两种方式可查时长相同，见 R27-1）
+func NewCollector(manager *k8sclient.Manager, logger *zap.Logger, retention time.Duration) *Collector {
+	if retention <= 0 {
+		retention = 24 * time.Hour
+	}
+	return &Collector{manager: manager, logger: logger, retention: retention}
 }
 
 // StartCollectScheduler 启动采集调度器（启动即采一次，之后每分钟）+ 定期清理
 func (c *Collector) StartCollectScheduler(ctx context.Context) {
 	go c.runCollectLoop(ctx)
 	go c.runCleanupLoop(ctx)
-	c.logger.Info("指标采集调度器已启动（每 60s，保留 7 天）")
+	c.logger.Info("指标采集调度器已启动（每 60s）",
+		zap.Duration("retention", c.retention))
 }
 
 func (c *Collector) runCollectLoop(ctx context.Context) {
@@ -228,16 +234,17 @@ func fetchSummary(ctx context.Context, client *k8sclient.ClusterClient, nodeName
 	return &sum, nil
 }
 
-// cleanup 删除保留期（7 天）前的指标
+// cleanup 删除保留期前的指标
 func (c *Collector) cleanup() {
-	cutoff := time.Now().Add(-retentionDays * 24 * time.Hour)
+	cutoff := time.Now().Add(-c.retention)
 	res := database.GetDB().Where("sampled_at < ?", cutoff).Delete(&database.PodMetric{})
 	if res.Error != nil {
 		c.logger.Error("指标清理失败", zap.Error(res.Error))
 		return
 	}
 	if res.RowsAffected > 0 {
-		c.logger.Info("指标清理完成", zap.Int64("deleted", res.RowsAffected))
+		c.logger.Info("指标清理完成",
+			zap.Int64("deleted", res.RowsAffected), zap.Duration("retention", c.retention))
 	}
 }
 
