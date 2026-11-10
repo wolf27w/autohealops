@@ -1215,7 +1215,7 @@ AGENT_DB_CONFIG: '[{"key":"biz-mysql","type":"mysql",...}]'
 **与 R10 的关系**：R11 是 R10 的先行子集（先让「配置化路由 + 能用新模板」跑起来）；
 R10 落地后，这份 JSON 迁移成 `prompt_routing` 表并加场景/灰度/预览，语义不变。
 
-### R12 应用故障分类体系（把「应用错误」变成可记录的 fault_type）— 1.5~2d（老板 2026-11-05 提）
+### R12 应用故障分类体系（把「应用错误」变成可记录的 fault_type）— ✅ 已完成（2026-11-10，commit `bce802a`）
 
 **问题**
 - K8s 故障类型是**有限枚举**（CrashLoopBackOff / OOMKilled / NodeNotReady…），好记录、好路由。
