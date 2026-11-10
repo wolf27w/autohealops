@@ -83,18 +83,18 @@ class TestImportParsing(unittest.TestCase):
 
 class TestSftpGuard(unittest.TestCase):
     def test_allow(self):
-        self.assertEqual(host_terminal._sftp_guard("/tmp/a.txt"), "/tmp/a.txt")
-        self.assertEqual(host_terminal._sftp_guard("/home/user/x"), "/home/user/x")
+        self.assertEqual(host_terminal._path_allowed("/tmp/a.txt", "/tmp,/var/tmp,/home", "/etc"), "/tmp/a.txt")
+        self.assertEqual(host_terminal._path_allowed("/home/user/x", "/tmp,/var/tmp,/home", "/etc"), "/home/user/x")
 
     def test_deny(self):
         with self.assertRaises(HTTPException):
-            host_terminal._sftp_guard("/etc/passwd")
+            host_terminal._path_allowed("/etc/passwd", "/tmp,/home", "/etc")
         with self.assertRaises(HTTPException):
-            host_terminal._sftp_guard("/root/.ssh/id_rsa")
+            host_terminal._path_allowed("/root/.ssh/id_rsa", "/tmp,/home", "/root/.ssh")
 
     def test_outside_whitelist(self):
         with self.assertRaises(HTTPException):
-            host_terminal._sftp_guard("/opt/app")
+            host_terminal._path_allowed("/opt/app", "/tmp,/home", "/etc")
 
 
 if __name__ == "__main__":

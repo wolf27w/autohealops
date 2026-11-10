@@ -73,6 +73,10 @@ DEFAULT_SETTINGS = {
     "snapshot_retention_days": ("7", "快照/指标/慢SQL 历史保留天数（默认 7，超期每日清理）"),
     "inspection_retention_days": ("30", "巡检/诊断报告保留天数（默认 30，超期每日清理）"),
     "log_retention_days": ("7", "通知日志/执行日志/AI 调用日志保留天数（默认 7，超期每日清理；审计永久保留）"),
+    # 堡垒机 SFTP 文件传输（R8）：目录白名单 / 黑名单 / 单文件大小上限
+    "sftp_allow_paths": ("/tmp,/var/tmp,/home", "SFTP 允许目录（逗号分隔，优先匹配）"),
+    "sftp_deny_paths": ("/etc,/boot,/dev,/proc,/sys,/root/.ssh", "SFTP 禁止目录（逗号分隔，命中即拒绝）"),
+    "sftp_max_mb": ("200", "SFTP 单文件大小上限（MB）"),
     # 统一告警通知策略（N8）：分级渠道 + 全局静默窗口，全平台一份
     "alert_notify_policy": (json.dumps(ALERT_NOTIFY_POLICY_DEFAULT, ensure_ascii=False), "统一告警通知策略 JSON（分级渠道/静默窗口）"),
     # 外部系统接入 token（供外部监控/运维系统调 /api/v1/external 查询/创建工单）

@@ -341,23 +341,31 @@ async def kick_host_session(session_id: int, user: User = Depends(require_any_us
 # ---------------- SFTP 文件传输（列表 / 下载 / 上传）----------------
 
 
-def _sftp_guard(path: str) -> str:
-    """路径白名单/黑名单校验（默认允许 /tmp、/var/tmp、/home；拒绝系统关键目录）。"""
+def _path_allowed(path: str, allow: str, deny: str) -> str:
+    """路径白名单/黑名单校验（纯函数，便于单测）。命中黑名单或不在白名单 → 抛 403。"""
     import os
-    allow = [p for p in (os.getenv("HOST_SFTP_ALLOW") or "/tmp,/var/tmp,/home").split(",") if p.strip()]
-    deny = [p for p in (os.getenv("HOST_SFTP_DENY") or "/etc,/boot,/dev,/proc,/sys,/root/.ssh").split(",") if p.strip()]
+    allow_list = [p for p in (allow or "").split(",") if p.strip()]
+    deny_list = [p for p in (deny or "").split(",") if p.strip()]
     p = (path or "/tmp").strip() or "/tmp"
     if not p.startswith("/"):
         p = "/" + p
     p = os.path.normpath(p)
-    for d in deny:
+    for d in deny_list:
         if p == d or p.startswith(d.rstrip("/") + "/"):
             raise HTTPException(status_code=403, detail=f"越权路径（禁止访问 {d}）")
-    for a in allow:
+    for a in allow_list:
         a = a.rstrip("/") or "/"
         if a == "/" or p == a or p.startswith(a + "/"):
             return p
-    raise HTTPException(status_code=403, detail="路径不在允许范围内（白名单：/tmp、/var/tmp、/home）")
+    raise HTTPException(status_code=403, detail="路径不在允许范围内（白名单见系统设置）")
+
+
+async def _sftp_guard(path: str) -> str:
+    """读取系统设置的白名单/黑名单并校验（sftp_allow_paths / sftp_deny_paths）。"""
+    from app.services.system_setting_service import get_setting
+    allow = await get_setting("sftp_allow_paths", "/tmp,/var/tmp,/home")
+    deny = await get_setting("sftp_deny_paths", "/etc,/boot,/dev,/proc,/sys,/root/.ssh")
+    return _path_allowed(path, allow, deny)
 
 
 async def _sftp_conn(host_id: int, user: User, need: str = "operate"):
@@ -374,7 +382,7 @@ async def _sftp_conn(host_id: int, user: User, need: str = "operate"):
 
 @router.get("/hosts/{host_id}/sftp/list")
 async def sftp_list(host_id: int, path: str = "/tmp", user: User = Depends(require_any_user)):
-    p = _sftp_guard(path)
+    p = await _sftp_guard(path)
     host, conn = await _sftp_conn(host_id, user)
     try:
         async with conn.start_sftp_client() as sftp:
@@ -404,7 +412,7 @@ async def sftp_list(host_id: int, path: str = "/tmp", user: User = Depends(requi
 async def sftp_download(host_id: int, path: str, user: User = Depends(require_any_user)):
     """流式下载（不落服务器磁盘）。"""
     from fastapi.responses import StreamingResponse
-    p = _sftp_guard(path)
+    p = await _sftp_guard(path)
     host, conn = await _sftp_conn(host_id, user)
     sftp = await conn.start_sftp_client()
     try:
@@ -457,15 +465,16 @@ async def sftp_upload(host_id: int, request: Request, path: str = "/tmp", filena
     from app.services.audit_service import create_audit_record
     from app.core.security import generate_trace_id
 
-    max_mb = int(os.getenv("HOST_SFTP_MAX_MB") or 200)
+    from app.services.system_setting_service import get_setting
+    max_mb = int((await get_setting("sftp_max_mb", "200")) or 200)
     length = int(request.headers.get("content-length") or 0)
     if length and length > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"文件超过上限（{max_mb}MB）")
 
-    target_dir = _sftp_guard(path)
+    target_dir = await _sftp_guard(path)
     name = os.path.basename(filename or "") or "upload.bin"
     target = target_dir.rstrip("/") + "/" + name
-    _sftp_guard(target)
+    await _sftp_guard(target)
 
     host, conn = await _sftp_conn(host_id, user)
     written = 0

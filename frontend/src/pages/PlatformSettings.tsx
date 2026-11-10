@@ -42,6 +42,7 @@ export default function PlatformSettings() {
         ldap_port: Number(s.ldap_port),
         smtp_ssl: d.smtp_ssl !== 'false',
         smtp_port: Number(d.smtp_port),
+        sftp_max_mb: Number(d.sftp_max_mb ?? 200),
       })
     })
   }, [])
@@ -63,6 +64,7 @@ export default function PlatformSettings() {
       smtp_port: values.smtp_port === undefined
         ? String(settings.smtp_port ?? '465')
         : String(values.smtp_port),
+      sftp_max_mb: String(values.sftp_max_mb ?? settings.sftp_max_mb ?? 200),
     }
     await updateSettings(payload)
     message.success('设置已保存')
@@ -108,6 +110,17 @@ export default function PlatformSettings() {
                     <Form.Item name="inspection_retention_days" label="巡检报告保留(天)"><InputNumber min={1} max={365} /></Form.Item>
                     <Form.Item name="log_retention_days" label="日志保留(天)"><InputNumber min={1} max={365} /></Form.Item>
                   </Space>
+                  <Divider orientation="left">堡垒机 SFTP（文件传输）</Divider>
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                    上传/下载的目录范围与大小上限（逗号分隔；黑名单优先于白名单）。
+                  </div>
+                  <Form.Item name="sftp_allow_paths" label="允许目录（逗号分隔）">
+                    <Input placeholder="/tmp,/var/tmp,/home" />
+                  </Form.Item>
+                  <Form.Item name="sftp_deny_paths" label="禁止目录（逗号分隔）">
+                    <Input placeholder="/etc,/boot,/dev,/proc,/sys,/root/.ssh" />
+                  </Form.Item>
+                  <Form.Item name="sftp_max_mb" label="单文件上限(MB)"><InputNumber min={1} max={10240} /></Form.Item>
                   <Divider orientation="left">镜像仓库（列标签 / 更新镜像）</Divider>
                   <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
                     私有仓库拉取标签需凭据：填全局用户名/密码即可；多仓库可用下方 JSON 按 host 覆盖（优先生效）。
