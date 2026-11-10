@@ -13,23 +13,36 @@
    清 resolved_*、event_count+1（此时唯一索引键正好空闲，不会冲突）
 窗口：系统设置 `alert_merge_window_minutes`（默认 30 分钟，0 = 关闭复发合并）。
 """
+import time
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, or_, select
 
 from app.models import Alert
 
 DEFAULT_WINDOW_MINUTES = 30
 RESOLVED_STATUSES = ("resolved", "self_healed")
+ACTIVE_STATUSES = ("pending", "awaiting_approval")
+
+# 合并窗口读取缓存（进程内 10s）：修（2026-11-10）前每次告警事件都要查一次 system_settings，
+# 而告警摄取是高频路径（单次 RTT ~14ms，占单次合并开销的 1/3）。
+_WINDOW_CACHE: tuple[float, int] | None = None
+_WINDOW_TTL = 10
 
 
 async def get_window_minutes() -> int:
+    global _WINDOW_CACHE
+    now = time.time()
+    if _WINDOW_CACHE and now - _WINDOW_CACHE[0] < _WINDOW_TTL:
+        return _WINDOW_CACHE[1]
     try:
         from app.services.system_setting_service import get_setting
         raw = await get_setting("alert_merge_window_minutes", str(DEFAULT_WINDOW_MINUTES))
-        return max(0, int(str(raw or DEFAULT_WINDOW_MINUTES).strip() or DEFAULT_WINDOW_MINUTES))
+        val = max(0, int(str(raw or DEFAULT_WINDOW_MINUTES).strip() or DEFAULT_WINDOW_MINUTES))
     except Exception:  # noqa: BLE001
-        return DEFAULT_WINDOW_MINUTES
+        val = DEFAULT_WINDOW_MINUTES
+    _WINDOW_CACHE = (now, val)
+    return val
 
 
 def is_resource_dimension(fault_type: str, resource_type: str) -> bool:
@@ -56,25 +69,28 @@ async def find_merge_target(session, *, cluster_id: int, resource_type: str, fau
     else:
         base.append(Alert.deployment_name == deployment_name)
 
-    active = (await session.execute(
-        select(Alert).where(*base, Alert.status.in_(("pending", "awaiting_approval")))
-        .order_by(Alert.id.desc()).limit(1)
+    # 活跃告警 与「窗口内已解决」合成一次查询（2026-11-10）：
+    # 原来分两次查（无命中时必走两次），告警摄取高频路径上每次多一个往返（~14ms）。
+    # 用 CASE 保证「活跃优先」，语义与原来的两步完全一致。
+    conds = [Alert.status.in_(ACTIVE_STATUSES)]
+    if minutes > 0:
+        since = datetime.now() - timedelta(minutes=minutes)
+        conds.append(and_(
+            Alert.status.in_(RESOLVED_STATUSES),
+            or_(Alert.resolved_at >= since,
+                and_(Alert.resolved_at.is_(None), Alert.detected_at >= since)),
+        ))
+    row = (await session.execute(
+        select(Alert)
+        .where(*base, or_(*conds))
+        .order_by(case((Alert.status.in_(ACTIVE_STATUSES), 0), else_=1), Alert.id.desc())
+        .limit(1)
     )).scalars().first()
-    if active:
-        return active, False
-
-    if minutes <= 0:
+    if row is None:
         return None, False
-    since = datetime.now() - timedelta(minutes=minutes)
-    closed = (await session.execute(
-        select(Alert).where(
-            *base,
-            or_(and_(Alert.status.in_(RESOLVED_STATUSES), Alert.resolved_at >= since),
-                and_(Alert.status.in_(RESOLVED_STATUSES), Alert.resolved_at.is_(None),
-                    Alert.detected_at >= since)),
-        ).order_by(Alert.id.desc()).limit(1)
-    )).scalars().first()
-    return closed, bool(closed)
+    if row.status in ACTIVE_STATUSES:
+        return row, False
+    return row, True
 
 
 def apply_merge(row: Alert, *, message: str = "", resource_name: str = "",
