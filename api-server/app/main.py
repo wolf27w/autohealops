@@ -12,7 +12,7 @@ from app.api import (
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
     projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
-from app.api import hosts, host_groups, jvm, host_terminal, zombie
+from app.api import hosts, host_groups, jvm, host_terminal, zombie, prompt_health
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -303,6 +303,10 @@ async def startup_tasks() -> None:
         ("僵尸计划收尾", close_stale_repair_plans, 120.0),
     ):
         _background_tasks.append(asyncio.create_task(_interval_worker(name, 5 if name == "僵尸计划收尾" else 30, fn, timeout)))
+    # R13 熔断体检（每小时）：auto 模板采纳率 <40% 或无效 ≥3 次 → 降级 draft + 通知管理员
+    from app.services.prompt_health_service import sweep as prompt_health_sweep
+    _background_tasks.append(asyncio.create_task(
+        _interval_worker("提示词模板体检", 3600, prompt_health_sweep, 180.0)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
     _background_tasks.append(asyncio.create_task(_agent_cluster_health_loop()))
     # 接入凭证超时清理（每 10 分钟）：agent 接入 5 小时仍未连上 → 删除记录，令牌失效
@@ -598,6 +602,7 @@ app.include_router(db_connections.router)
 app.include_router(db_diagnosis.router)
 app.include_router(diagnostic.router)
 app.include_router(fault_diagnosis.router)
+app.include_router(prompt_health.router)
 app.include_router(agent.router)
 app.include_router(terminal.router)
 app.include_router(hosts.router)

@@ -19,6 +19,7 @@ import json
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -348,18 +349,26 @@ async def handle_pod_metrics(ev: dict) -> None:
             tx = int(r.get("network_tx") or 0)
         except (TypeError, ValueError):
             continue
-        objs.append(PodMetric(
-            cluster_id=int(r.get("cluster_id") or cid),
-            namespace=ns, pod_name=name,
-            cpu_usage=cpu, memory_usage=mem,
-            network_rx=rx, network_tx=tx,
-            sampled_at=_parse_dt(r.get("sampled_at")) or now,
-        ))
+        objs.append({
+            "cluster_id": int(r.get("cluster_id") or cid),
+            "namespace": ns, "pod_name": name,
+            "cpu_usage": cpu, "memory_usage": mem,
+            "network_rx": rx, "network_tx": tx,
+            "sampled_at": _parse_dt(r.get("sampled_at")) or now,
+        })
     if not objs:
         return
     try:
         async with async_session() as session:
-            session.add_all(objs)
+            # R27-2：幂等写入（uk_pod_metric_sample），重试/补采不会产生重复行
+            stmt = mysql_insert(PodMetric).values(objs)
+            stmt = stmt.on_duplicate_key_update(
+                cpu_usage=stmt.inserted.cpu_usage,
+                memory_usage=stmt.inserted.memory_usage,
+                network_rx=stmt.inserted.network_rx,
+                network_tx=stmt.inserted.network_tx,
+            )
+            await session.execute(stmt)
             await session.commit()
         logger.info("agent 指标落库 cluster=%s 共 %d 条", cid, len(objs))
     except Exception as e:  # noqa: BLE001

@@ -382,16 +382,17 @@ async def maintain_snapshot_partitions(retention_days: int = 7, ahead_days: int 
 
 
 async def cleanup_old_snapshots(retention_days: int = 7, batch_size: int = 10000) -> int:
-    """清理 N 天前的历史数据（资源/配额快照 + Pod 指标 + 慢SQL），分批 DELETE LIMIT，返回删除总行数
+    """清理 N 天前的历史数据（资源/配额快照 + 慢SQL），分批 DELETE LIMIT，返回删除总行数
 
     注：`resource_snapshots` 若已按天分区，则由 `maintain_snapshot_partitions()` 用
     DROP PARTITION 秒级清理（并回收磁盘），此处跳过它的 DELETE。
+    注：`pod_metrics` 不在本函数范围 —— 它的保留期由 `metrics_rollup` 统一管理
+    （POD_METRICS_RAW_RETENTION_HOURS，R27-1 口径统一），避免两套保留期互相覆盖。
     """
     cutoff = datetime.now() - timedelta(days=retention_days)
     tables = [
         ("resource_snapshots", "snapshot_time"),
         ("quota_snapshots", "snapshot_time"),
-        ("pod_metrics", "sampled_at"),
         ("slow_sql_records", "sampled_at"),
     ]
     if await _snapshot_partitions():

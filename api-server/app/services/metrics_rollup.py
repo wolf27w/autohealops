@@ -93,3 +93,94 @@ async def cleanup_metrics() -> dict:
     if any(out.values()):
         logger.info("指标清理完成：%s", out)
     return out
+
+
+# ---------------------------------------------------------------------------
+# R27-2：pod_metrics 按天分区维护
+# ---------------------------------------------------------------------------
+async def _partitions(table: str) -> list[tuple[str, str]]:
+    """读表的分区列表 [(name, description)]；未分区返回 []"""
+    try:
+        async with async_session() as session:
+            rows = (await session.execute(
+                text(
+                    "SELECT PARTITION_NAME, PARTITION_DESCRIPTION FROM information_schema.partitions "
+                    "WHERE table_schema = DATABASE() AND table_name = :t AND partition_name IS NOT NULL"
+                ), {"t": table},
+            )).all()
+        return [(r[0], r[1]) for r in rows if r[0]]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取分区信息失败 table=%s: %s", table, e)
+        return []
+
+
+async def maintain_pod_metric_partitions(retention_hours: int | None = None, ahead_days: int = 3) -> dict:
+    """`pod_metrics` 按天分区维护（幂等，可安全重复调用）
+
+    - 未分区 → 返回 {"partitioned": False}（调用方继续用分批 DELETE 清理）
+    - 已分区 → ① DROP 整段过期的每日分区（秒级 + 回收磁盘）
+                ② 补齐今天 ~ today+ahead_days 的分区（REORGANIZE pmax，防未来日期插入报 1526）
+
+    注意：分区只能整日丢弃，不足一天的「尾巴」仍由 `cleanup_metrics()` 分批 DELETE，
+    以此保证 POD_METRICS_RAW_RETENTION_HOURS 的小时级口径精确。
+    """
+    hours = retention_hours or RAW_RETENTION_HOURS
+    table = "pod_metrics"
+    parts = await _partitions(table)
+    if not parts:
+        return {"partitioned": False, "added": 0, "dropped": []}
+
+    has_pmax = any((d or "").strip().upper() == "MAXVALUE" for _, d in parts)
+    boundaries: list[tuple[str, datetime]] = []
+    for name, desc in parts:
+        d = (desc or "").strip().strip("'")
+        if not d or d.upper() == "MAXVALUE":
+            continue
+        try:
+            boundaries.append((name, datetime.fromisoformat(d)))
+        except ValueError:
+            continue
+    boundaries.sort(key=lambda x: x[1])
+
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = datetime.now() - timedelta(hours=hours)
+    # 分区边界 = 次日零点；边界 <= cutoff 说明整段都早于保留期
+    old = [n for n, b in boundaries if b <= cutoff]
+
+    dropped: list[str] = []
+    if old:
+        try:
+            async with async_session() as session:
+                await session.execute(text(
+                    f"ALTER TABLE {table} DROP PARTITION {', '.join(old)}"
+                ))
+                await session.commit()
+            dropped = old
+            logger.info("Pod 指标分区清理：DROP %d 个过期分区 %s", len(old), old)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("DROP 过期分区失败（保留 DELETE 兜底）: %s", e)
+
+    added = 0
+    if has_pmax:
+        keep = [(n, b) for n, b in boundaries if n not in old]
+        cursor = keep[-1][1] if keep else today_start
+        limit_day = today_start + timedelta(days=ahead_days)
+        new_defs: list[str] = []
+        while cursor <= limit_day:
+            nxt = cursor + timedelta(days=1)
+            new_defs.append(f"PARTITION p{nxt:%Y%m%d} VALUES LESS THAN ('{nxt:%Y-%m-%d} 00:00:00')")
+            cursor = nxt
+        if new_defs:
+            try:
+                async with async_session() as session:
+                    await session.execute(text(
+                        f"ALTER TABLE {table} REORGANIZE PARTITION pmax INTO ("
+                        + ", ".join(new_defs) + ", PARTITION pmax VALUES LESS THAN (MAXVALUE))"
+                    ))
+                    await session.commit()
+                added = len(new_defs)
+                logger.info("Pod 指标分区补齐：新增 %d 个（至 %s）", added, limit_day.date())
+            except Exception as e:  # noqa: BLE001
+                logger.warning("补齐 Pod 指标分区失败: %s", e)
+
+    return {"partitioned": True, "added": added, "dropped": dropped}

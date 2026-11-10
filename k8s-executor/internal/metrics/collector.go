@@ -10,6 +10,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/database"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"go.uber.org/zap"
+	"gorm.io/gorm/clause"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -121,7 +122,17 @@ func (c *Collector) collectCluster(ctx context.Context, clusterID uint) {
 	}
 	metrics := CollectClusterOnce(ctx, client, clusterID, c.logger)
 	if len(metrics) > 0 {
-		if err := database.GetDB().Create(&metrics).Error; err != nil {
+		// R27-2：幂等写入（uk_pod_metric_sample），重试/补采不会产生重复行
+		err := database.GetDB().Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "cluster_id"}, {Name: "namespace"},
+				{Name: "pod_name"}, {Name: "sampled_at"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"cpu_usage", "memory_usage", "network_rx", "network_tx",
+			}),
+		}).Create(&metrics).Error
+		if err != nil {
 			c.logger.Error("指标写入失败", zap.Uint("cluster", clusterID), zap.Error(err))
 		}
 	}
