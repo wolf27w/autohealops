@@ -617,6 +617,9 @@ export const getSlowSQL = (connId: number, limit = 50, start?: string, end?: str
 export const getDBAnomalies = (connId: number) => http.get(`/db-connections/${connId}/anomalies`)
 export const getSlowSQLTrend = (connId: number, hours = 24) => http.get(`/db-connections/${connId}/slow-sql-trend`, { params: { hours } })
 export const getSlowSQLDigestTrend = (connId: number, digest: string, hours = 24) => http.get(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/trend`, { params: { hours } })
+/** R3.2 两时间段慢 SQL TopN 并排对比 */
+export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: string; b_start?: string; b_end?: string; limit?: number }) =>
+  http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
 // ============ 权限管理（admin）============
@@ -915,8 +918,11 @@ export const getReleaseBuildLog = (buildId: number, start = 0) => http.get<{ tex
 export interface MyJenkinsToken { instance_id: number; instance_name: string; url: string; auth_type: string; username: string; has_token: boolean }
 export const getMyJenkinsTokens = () => http.get<MyJenkinsToken[]>('/release/my-tokens')
 export const setMyJenkinsToken = (instanceId: number, d: { username?: string; api_token?: string }) => http.put(`/release/my-tokens/${instanceId}`, d)
-export interface ReleaseBuild { id: number; cluster_id: number; namespace: string; service_name: string; job_name: string; branch: string; build_number: number; status: string; triggered_by_name: string; created_at: string }
+export interface ReleaseBuild { id: number; cluster_id: number; namespace: string; service_name: string; job_name: string; branch: string; build_number: number; status: string; triggered_by_name: string; created_at: string; rollback_of_build_id?: number | null; rollback_reason?: string }
 export const getReleaseBuilds = (params?: { cluster_id?: number; namespace?: string; service_name?: string; limit?: number }) => http.get<ReleaseBuild[]>('/release/builds', { params })
+/** R19 回滚：以指定历史构建的分支重新发布 */
+export const rollbackRelease = (buildId: number, d?: { branch?: string; reason?: string }) =>
+  http.post<{ build_id: number; build_number: number; job_name: string; rollback_of: number; branch: string }>(`/release/builds/${buildId}/rollback`, d || {})
 export interface ReleaseStage { id: number; name: string; status: string; start_time?: number; duration_ms?: number }
 export const getReleaseStages = (buildId: number) => http.get<ReleaseStage[]>(`/release/builds/${buildId}/stages`)
 export const getReleaseStageLog = (buildId: number, stageId: number) => http.get<{ text: string }>(`/release/builds/${buildId}/stages/${stageId}/log`)

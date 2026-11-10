@@ -63,6 +63,9 @@ class ReleaseBuild(Base):
     status: Mapped[str] = mapped_column(String(20), default="queued", server_default="queued")
     triggered_by: Mapped[int] = mapped_column(Integer, nullable=False)         # user id
     triggered_by_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    # R19 回滚：本次发布是基于哪条历史记录做的回滚（NULL = 正常发布）
+    rollback_of_build_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    rollback_reason: Mapped[str] = mapped_column(String(200), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

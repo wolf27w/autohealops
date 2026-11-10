@@ -1,7 +1,7 @@
 // 发布历史（R19）：构建记录列表 → 点开看 Blue Ocean 式阶段/日志
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag, Button, Space, Select, Modal } from 'antd'
-import { getReleaseBuilds, getClusters } from '../services/api'
+import { Card, Table, Tag, Button, Space, Select, Modal, Popconfirm, message } from 'antd'
+import { getReleaseBuilds, getClusters, rollbackRelease } from '../services/api'
 import type { ReleaseBuild } from '../services/api'
 import type { Cluster } from '../types'
 import PipelineView from '../components/PipelineView'
@@ -25,6 +25,20 @@ export default function ReleaseHistory() {
   const [ns, setNs] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [sel, setSel] = useState<ReleaseBuild | null>(null)
+  const [rolling, setRolling] = useState<number | null>(null)
+
+  const doRollback = async (r: ReleaseBuild) => {
+    setRolling(r.id)
+    try {
+      const res = await rollbackRelease(r.id)
+      message.success(`已触发回滚：基于 #${res.rollback_of} → 新构建 #${res.build_number}（分支 ${res.branch || '默认'}）`)
+      load()
+    } catch (e) {
+      message.error(`回滚失败：${(e as Error).message}`)
+    } finally {
+      setRolling(null)
+    }
+  }
 
   const load = () => {
     setLoading(true)
@@ -47,9 +61,23 @@ export default function ReleaseHistory() {
     { title: '分支', dataIndex: 'branch', width: 150, ellipsis: true },
     { title: '构建号', dataIndex: 'build_number', width: 80 },
     { title: '状态', dataIndex: 'status', width: 90, render: (s: string) => <Tag color={stColor(s)}>{stText(s)}</Tag> },
+    {
+      title: '来源', dataIndex: 'rollback_of_build_id', width: 100,
+      render: (v: number | null | undefined) => (v ? <Tag color="orange">回滚</Tag> : <span style={{ color: '#999' }}>发布</span>),
+    },
     { title: '操作人', dataIndex: 'triggered_by_name', width: 150, ellipsis: true },
-    { title: '操作', width: 80, render: (_: unknown, r: ReleaseBuild) => (
-      <Button size="small" type="link" onClick={() => setSel(r)}>查看</Button>
+    { title: '操作', width: 160, render: (_: unknown, r: ReleaseBuild) => (
+      <Space size={4}>
+        <Button size="small" type="link" onClick={() => setSel(r)}>查看</Button>
+        <Popconfirm
+          title={`回滚到构建 #${r.build_number}？`}
+          description={`将以 ${r.service_name} 的分支「${r.branch || '默认'}」重新触发 ${r.job_name}`}
+          okText="回滚" cancelText="取消" onConfirm={() => doRollback(r)}
+        >
+          <Button size="small" type="link" danger loading={rolling === r.id}
+            disabled={r.status === 'queued' || r.status === 'running'}>回滚</Button>
+        </Popconfirm>
+      </Space>
     ) },
   ]
 

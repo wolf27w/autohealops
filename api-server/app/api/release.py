@@ -438,6 +438,70 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
     return {"code": 200, "message": "success", "data": {"build_id": b.id, "build_number": number, "job_name": m.job_name, "auth_mode": mode}}
 
 
+@router.post("/builds/{build_id}/rollback")
+async def rollback_release(build_id: int, payload: dict | None = None, user=Depends(require_operator)):
+    """R19 回滚：以指定历史构建的分支重新发布（可覆盖分支），并记录回滚来源。
+
+    口径：平台不直接改集群镜像，回滚 = 「用该构建当时的分支重新触发同名 Job」，
+    真实产物 tag 由 Job 自身决定（Jenkins 侧可用 BUILD_NUMBER 参数做精确回退）。
+    """
+    payload = payload or {}
+    why = (payload.get("reason") or "").strip()[:200]
+    async with async_session() as session:
+        src = await session.get(ReleaseBuild, build_id)
+        if src is None:
+            return {"code": 404, "message": "发布记录不存在", "data": None}
+        cluster_id, namespace = src.cluster_id, src.namespace
+        service_name, branch0 = src.service_name, src.branch
+        src_number, src_job = src.build_number, src.job_name
+
+    branch = (payload.get("branch") or branch0 or "").strip()
+
+    if not await release_access.namespace_publish_enabled(cluster_id, namespace, force_refresh=True):
+        return {"code": 403, "message": "namespace 未开启发布", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_cluster_permission(user, cluster_id, namespace, "operate"):
+        return {"code": 403, "message": "无权限发布该集群", "data": None}
+
+    m, j = await _load_mapping(cluster_id, namespace, service_name)
+    if not m or not j:
+        return {"code": 400, "message": "该服务未配置发布映射（管理员在 系统设置→发布 里配置）", "data": None}
+
+    params = {m.service_param: service_name}
+    if branch:
+        params[m.branch_param] = branch
+    uname, token, mode = await _resolve_credential(j, user)
+    client = _make_client(j, uname, token)
+    try:
+        number = await client.trigger_build(m.job_name, params)
+        try:
+            who = getattr(user, "username", "") or ""
+            await client.set_build_description(
+                m.job_name, number, f"平台回滚发布：基于 #{src_number}（操作人 {who}，{mode}）")
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"回滚触发失败：{e}", "data": None}
+    finally:
+        await client.close()
+
+    async with async_session() as session:
+        b = ReleaseBuild(
+            cluster_id=cluster_id, namespace=namespace, service_name=service_name,
+            jenkins_instance_id=m.jenkins_instance_id, job_name=m.job_name,
+            branch=branch, build_number=number, status="queued",
+            triggered_by=user.id, triggered_by_name=f"{getattr(user, 'username', '') or ''}({mode})",
+            rollback_of_build_id=build_id, rollback_reason=why or f"回滚到 #{src_number}",
+        )
+        session.add(b)
+        await session.commit()
+        await session.refresh(b)
+    logger.info("回滚发布：%s/%s 基于 #%s → 新构建 #%s（job=%s）",
+                namespace, service_name, src_number, number, src_job)
+    return {"code": 200, "message": "success", "data": {
+        "build_id": b.id, "build_number": number, "job_name": m.job_name,
+        "rollback_of": src_number, "branch": branch, "auth_mode": mode}}
+
+
 @router.post("/batch-trigger")
 async def batch_trigger(payload: dict, user=Depends(require_operator)):
     """批量发布：勾选多个服务 + 一个分支；逐服务查映射并触发（并发 5）。"""
@@ -565,7 +629,9 @@ async def list_builds(cluster_id: int | None = None, namespace: str = "", servic
     return {"code": 200, "message": "success", "data": [
         {"id": b.id, "cluster_id": b.cluster_id, "namespace": b.namespace, "service_name": b.service_name,
          "job_name": b.job_name, "branch": b.branch, "build_number": b.build_number, "status": b.status,
-         "triggered_by_name": b.triggered_by_name, "created_at": str(b.created_at)} for b in rows
+         "triggered_by_name": b.triggered_by_name, "created_at": str(b.created_at),
+         "rollback_of_build_id": getattr(b, "rollback_of_build_id", None),
+         "rollback_reason": getattr(b, "rollback_reason", "") or ""} for b in rows
     ]}
 
 

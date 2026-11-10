@@ -959,6 +959,118 @@ async def list_slow_sql(conn_id: int, limit: int = 50, start: str = "", end: str
     ]}
 
 
+async def _aggregate_slow(conn_id: int, start: datetime | None, end: datetime | None, limit: int) -> dict:
+    """按 digest 聚合某时间段的慢 SQL（对比/列表共用）"""
+    from app.models import SlowSQLRecord
+    stmt = select(SlowSQLRecord).where(SlowSQLRecord.db_connection_id == conn_id)
+    if start:
+        stmt = stmt.where(SlowSQLRecord.sampled_at >= start)
+    if end:
+        stmt = stmt.where(SlowSQLRecord.sampled_at <= end)
+    stmt = stmt.order_by(SlowSQLRecord.avg_latency_ms.desc()).limit(max(1, min(limit, 500)) * 20)
+    async with async_session() as session:
+        rows = list((await session.execute(stmt)).scalars())
+    agg: dict[str, dict] = {}
+    for r in rows:
+        cur = agg.get(r.digest)
+        ec, avg = int(r.exec_count or 0), float(r.avg_latency_ms or 0.0)
+        if cur is None:
+            agg[r.digest] = {"digest": r.digest, "sql_text": r.sql_text, "schema_name": r.schema_name,
+                             "exec_count": ec, "sum_ms": avg * ec, "avg_latency_ms": avg,
+                             "max_latency_ms": float(r.max_latency_ms or 0.0)}
+        else:
+            cur["exec_count"] += ec
+            cur["sum_ms"] += avg * ec
+            cur["avg_latency_ms"] = (cur["sum_ms"] / cur["exec_count"]) if cur["exec_count"] else 0.0
+            cur["max_latency_ms"] = max(cur["max_latency_ms"], float(r.max_latency_ms or 0.0))
+    items = sorted(agg.values(), key=lambda x: x["avg_latency_ms"], reverse=True)[:max(1, min(limit, 500))]
+    return {
+        "start": str(start) if start else "", "end": str(end) if end else "",
+        "count": len(items),
+        "exec_count": sum(i["exec_count"] for i in items),
+        "sum_ms": round(sum(i["sum_ms"] for i in items), 1),
+        "avg_latency_ms": round(sum(i["sum_ms"] for i in items) / max(1, sum(i["exec_count"] for i in items)), 1),
+        "items": items,
+    }
+
+
+def classify_slow_diff(has_a: bool, has_b: bool, a_avg: float, b_avg: float) -> str:
+    """两时间段对比分类（纯函数）：gone 消失 / new 新增 / up 变慢 / down 变快 / same 持平
+
+    阈值：较基准变慢 >20% 记 up，变快 >20% 记 down；两者都有且幅度小 → same。
+    """
+    if has_a and not has_b:
+        return "gone"
+    if has_b and not has_a:
+        return "new"
+    if a_avg > 0 and b_avg > a_avg * 1.2:
+        return "up"
+    if b_avg > 0 and b_avg < a_avg * 0.8:
+        return "down"
+    return "same"
+
+
+def _parse_ts(v: str) -> tuple[datetime | None, str | None]:
+    if not v:
+        return None, None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")), None
+    except ValueError:
+        return None, v
+
+
+@router.get("/{conn_id}/slow-sql-compare")
+async def slow_sql_compare(conn_id: int, a_start: str = "", a_end: str = "", b_start: str = "", b_end: str = "",
+                           limit: int = 20, user=Depends(require_any_user)):
+    """R3.2 两时间段 TopN 并排对比：新增（new）/消失（gone）/变慢（up）/变快（down）
+
+    时间参数为 ISO 字符串，留空表示不限（a_start 与 b_start 至少给一个）。
+    """
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限", "data": None}
+    a1, bad = _parse_ts(a_start)
+    if bad:
+        return {"code": 400, "message": f"a_start 格式不正确：{bad}", "data": None}
+    a2, bad = _parse_ts(a_end)
+    if bad:
+        return {"code": 400, "message": f"a_end 格式不正确：{bad}", "data": None}
+    b1, bad = _parse_ts(b_start)
+    if bad:
+        return {"code": 400, "message": f"b_start 格式不正确：{bad}", "data": None}
+    b2, bad = _parse_ts(b_end)
+    if bad:
+        return {"code": 400, "message": f"b_end 格式不正确：{bad}", "data": None}
+    lim = max(1, min(limit, 100))
+    side_a = await _aggregate_slow(conn_id, a1, a2, lim)
+    side_b = await _aggregate_slow(conn_id, b1, b2, lim)
+
+    map_a = {i["digest"]: i for i in side_a["items"]}
+    map_b = {i["digest"]: i for i in side_b["items"]}
+    diff = []
+    for digest in set(map_a) | set(map_b):
+        x, y = map_a.get(digest), map_b.get(digest)
+        a_avg = float(x["avg_latency_ms"]) if x else 0.0
+        b_avg = float(y["avg_latency_ms"]) if y else 0.0
+        a_exec = int(x["exec_count"]) if x else 0
+        b_exec = int(y["exec_count"]) if y else 0
+        status = classify_slow_diff(bool(x), bool(y), a_avg, b_avg)
+        diff.append({
+            "digest": digest, "sql_text": (x or y)["sql_text"],
+            "a_exec": a_exec, "b_exec": b_exec, "exec_delta": b_exec - a_exec,
+            "a_avg": round(a_avg, 1), "b_avg": round(b_avg, 1),
+            "avg_delta_pct": round((b_avg - a_avg) / a_avg * 100, 1) if a_avg else None,
+            "a_sum_ms": round(float(x["sum_ms"]), 1) if x else 0.0,
+            "b_sum_ms": round(float(y["sum_ms"]), 1) if y else 0.0,
+            "status": status,
+        })
+    order = {"up": 0, "new": 1, "down": 2, "same": 3, "gone": 4}
+    diff.sort(key=lambda d: (order.get(d["status"], 9), -(d["b_avg"] or 0)))
+    return {"code": 200, "message": "success", "data": {
+        "a": side_a, "b": side_b, "diff": diff[:lim],
+        "summary": {k: sum(1 for d in diff if d["status"] == k) for k in ("new", "gone", "up", "down", "same")},
+    }}
+
+
 @router.get("/{conn_id}/slow-sql-trend")
 async def slow_sql_trend(conn_id: int, hours: int = 24, user=Depends(require_any_user)):
     """某连接的慢 SQL 按时间维度趋势（同一实例多轮采集对比）"""

@@ -4791,6 +4791,99 @@
         "summary": "List Slow Sql"
       }
     },
+    "/api/v1/db-connections/{conn_id}/slow-sql-compare": {
+      "get": {
+        "description": "R3.2 两时间段 TopN 并排对比：新增（new）/消失（gone）/变慢（up）/变快（down）\n\n时间参数为 ISO 字符串，留空表示不限（a_start 与 b_start 至少给一个）。",
+        "operationId": "get_api_v1_db_connections_conn_id_slow_sql_compare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "a_start",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "A Start",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "a_end",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "A End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "b_start",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "B Start",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "b_end",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "B End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Slow Sql Compare"
+      }
+    },
     "/api/v1/db-connections/{conn_id}/slow-sql-trend": {
       "get": {
         "description": "某连接的慢 SQL 按时间维度趋势（同一实例多轮采集对比）",
@@ -12066,6 +12159,66 @@
           }
         ],
         "summary": "Build Log"
+      }
+    },
+    "/api/v1/release/builds/{build_id}/rollback": {
+      "post": {
+        "description": "R19 回滚：以指定历史构建的分支重新发布（可覆盖分支），并记录回滚来源。\n\n口径：平台不直接改集群镜像，回滚 = 「用该构建当时的分支重新触发同名 Job」，\n真实产物 tag 由 Job 自身决定（Jenkins 侧可用 BUILD_NUMBER 参数做精确回退）。",
+        "operationId": "post_api_v1_release_builds_build_id_rollback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "build_id",
+            "required": true,
+            "schema": {
+              "title": "Build Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rollback Release"
       }
     },
     "/api/v1/release/builds/{build_id}/stages": {

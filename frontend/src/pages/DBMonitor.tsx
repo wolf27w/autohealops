@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react'
 import { Card, Select, Space, Table, Tag, Button, Empty, Spin, Tooltip, Switch, Modal, message } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, getDBAnomalies, getSlowSQLDigestTrend } from '../services/api'
+import { getDBConnections, getDbLatestMetrics, getSlowSQL, getDbTrends, getDBAnomalies, getSlowSQLDigestTrend, compareSlowSQL } from '../services/api'
+
+interface CmpSide { start: string; end: string; count: number; exec_count: number; avg_latency_ms: number; sum_ms: number }
+interface CmpDiff {
+  digest: string; sql_text: string; a_exec: number; b_exec: number; exec_delta: number
+  a_avg: number; b_avg: number; avg_delta_pct: number | null; status: string
+}
 
 interface Metric {
   metric_type: string
@@ -102,6 +108,38 @@ export default function DBMonitor() {
   const [groupByScale, setGroupByScale] = useState(false)
   const [slowRange, setSlowRange] = useState<string>('1d')
   const [digestTrend, setDigestTrend] = useState<{ digest: string; data: TrendPoint[] } | null>(null)
+  // R3.2 两时间段对比
+  const [cmpOpen, setCmpOpen] = useState(false)
+  const [cmpA, setCmpA] = useState('yesterday')
+  const [cmpB, setCmpB] = useState('today')
+  const [cmpLoading, setCmpLoading] = useState(false)
+  const [cmpData, setCmpData] = useState<{ a: CmpSide; b: CmpSide; diff: CmpDiff[]; summary: Record<string, number> } | null>(null)
+
+  // 预设时间段 → [start, end]
+  const rangeOf = (key: string): [string?, string?] => {
+    const now = new Date()
+    const at = (d: Date, h: number) => { const x = new Date(d); x.setHours(h, 0, 0, 0); return x.toISOString() }
+    const y = new Date(now); y.setDate(y.getDate() - 1)
+    switch (key) {
+      case 'today': return [at(now, 0), undefined]
+      case 'yesterday': return [at(y, 0), at(now, 0)]
+      case 'last1h': { const s = new Date(now.getTime() - 3600e3); return [s.toISOString(), undefined] }
+      case 'last24h': { const s = new Date(now.getTime() - 24 * 3600e3); return [s.toISOString(), undefined] }
+      case 'last7d': { const s = new Date(now.getTime() - 7 * 24 * 3600e3); return [s.toISOString(), undefined] }
+      default: return [undefined, undefined]
+    }
+  }
+  const runCompare = () => {
+    const id = connId
+    if (!id) return
+    const [a1, a2] = rangeOf(cmpA)
+    const [b1, b2] = rangeOf(cmpB)
+    setCmpLoading(true)
+    compareSlowSQL(id, { a_start: a1, a_end: a2, b_start: b1, b_end: b2, limit: 30 })
+      .then((d) => setCmpData(d as never))
+      .catch(() => setCmpData(null))
+      .finally(() => setCmpLoading(false))
+  }
 
   // R3.2：慢 SQL 时间段过滤（start ISO 串）
   const slowRangeStart = (r: string): string | undefined => {
@@ -278,14 +316,17 @@ export default function DBMonitor() {
           </Card>
 
           <Card size="small" title={`慢 SQL（Top ${slowSQL.length}）`} style={{ marginTop: 12 }}
-            extra={<Select size="small" value={slowRange} style={{ width: 110 }}
-              onChange={(v) => { setSlowRange(v); reloadSlow(v) }}
-              options={[
-                { value: '1d', label: '今天' },
-                { value: '2d', label: '昨天' },
-                { value: '7d', label: '近 7 天' },
-                { value: 'all', label: '全部' },
-              ]} />}>
+            extra={<Space>
+              <Button size="small" onClick={() => { setCmpOpen(true); setCmpData(null); runCompare() }}>两时段对比</Button>
+              <Select size="small" value={slowRange} style={{ width: 110 }}
+                onChange={(v) => { setSlowRange(v); reloadSlow(v) }}
+                options={[
+                  { value: '1d', label: '今天' },
+                  { value: '2d', label: '昨天' },
+                  { value: '7d', label: '近 7 天' },
+                  { value: 'all', label: '全部' },
+                ]} />
+            </Space>}>
             {slowSQL.length
               ? <Table rowKey="id" size="small" dataSource={slowSQL} columns={slowCols}
                   pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }} />
@@ -293,6 +334,47 @@ export default function DBMonitor() {
           </Card>
         </>
       )}
+
+      <Modal open={cmpOpen} onCancel={() => setCmpOpen(false)} footer={null} width={1000}
+        title="慢 SQL 两时间段对比（TopN）">
+        <Space style={{ marginBottom: 12 }} wrap>
+          <span>基准 A：</span>
+          <Select size="small" value={cmpA} style={{ width: 120 }} onChange={setCmpA}
+            options={[{ value: 'yesterday', label: '昨天' }, { value: 'today', label: '今天' }, { value: 'last24h', label: '近 24h' }, { value: 'last7d', label: '近 7 天' }]} />
+          <span>对比 B：</span>
+          <Select size="small" value={cmpB} style={{ width: 120 }} onChange={setCmpB}
+            options={[{ value: 'today', label: '今天（至今）' }, { value: 'yesterday', label: '昨天' }, { value: 'last1h', label: '近 1h' }, { value: 'last24h', label: '近 24h' }, { value: 'last7d', label: '近 7 天' }]} />
+          <Button size="small" type="primary" loading={cmpLoading} onClick={runCompare}>对比</Button>
+          <span style={{ color: '#8c8c8c', fontSize: 12 }}>变慢 &gt;20% / 变快 &lt;20% / 新增 / 消失</span>
+        </Space>
+        {cmpData && (
+          <>
+            <Space size={16} style={{ marginBottom: 8 }} wrap>
+              <span>A：平均 {cmpData.a.avg_latency_ms}ms · 执行 {cmpData.a.exec_count}</span>
+              <span>B：平均 {cmpData.b.avg_latency_ms}ms · 执行 {cmpData.b.exec_count}</span>
+              <Tag color="red">变慢 {cmpData.summary.up}</Tag>
+              <Tag color="volcano">新增 {cmpData.summary.new}</Tag>
+              <Tag color="green">变快 {cmpData.summary.down}</Tag>
+              <Tag>消失 {cmpData.summary.gone}</Tag>
+            </Space>
+            <Table rowKey="digest" size="small" dataSource={cmpData.diff} pagination={{ pageSize: 10 }}
+              columns={[
+                { title: '状态', dataIndex: 'status', width: 80, render: (v: string) => (
+                  <Tag color={v === 'up' ? 'red' : v === 'new' ? 'volcano' : v === 'down' ? 'green' : v === 'gone' ? 'blue' : 'default'}>
+                    {{ up: '变慢', new: '新增', down: '变快', gone: '消失', same: '持平' }[v] || v}
+                  </Tag>) },
+                { title: 'SQL', dataIndex: 'sql_text', ellipsis: true },
+                { title: 'A 平均(ms)', dataIndex: 'a_avg', width: 100 },
+                { title: 'B 平均(ms)', dataIndex: 'b_avg', width: 100 },
+                { title: '变化', dataIndex: 'avg_delta_pct', width: 90, render: (v: number | null) =>
+                  (v === null ? '-' : <span style={{ color: v > 20 ? '#cf1322' : v < -20 ? '#3f8600' : 'inherit' }}>{v > 0 ? '+' : ''}{v}%</span>) },
+                { title: 'A 次数', dataIndex: 'a_exec', width: 100 },
+                { title: 'B 次数', dataIndex: 'b_exec', width: 100 },
+              ]} />
+          </>
+        )}
+        {!cmpData && <div style={{ color: '#999', padding: 8 }}>{cmpLoading ? '正在对比…' : '暂无数据'}</div>}
+      </Modal>
 
       <Modal open={!!digestTrend} onCancel={() => setDigestTrend(null)} footer={null} width={720}
         title={`慢 SQL 趋势（digest ${digestTrend?.digest?.slice(0, 16) ?? ''}…）`}>
