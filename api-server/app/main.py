@@ -88,8 +88,9 @@ async def _maintenance_loop() -> None:
         if loop_count % 20 == 0:
             try:
                 from app.services.metrics_rollup import rollup_5m
-                # 首次（启动后 10 分钟）回溯 26h 补齐停机空档；之后只回溯 2h（降采样每 10 分钟一次，够用）
-                await rollup_5m(26 if loop_count <= 20 else 2)
+                # 首次（启动后 10 分钟）回溯 6h 补齐停机空档；之后只回溯 2h（降采样每 10 分钟一次，够用）
+                # 注：26h 在 HDD 上单次要 27s（还会进慢 SQL 榜），6h 约 250k 行足以覆盖常见停机
+                await rollup_5m(6 if loop_count <= 20 else 2)
             except Exception as e:  # noqa: BLE001
                 logger.warning("指标降采样 异常: %s", e)
         if loop_count % 120 == 0:
