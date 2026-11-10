@@ -23,7 +23,7 @@ ROLLUP_RETENTION_DAYS = 7     # 聚合数据保留
 BATCH = 20000
 
 
-async def rollup_5m(lookback_hours: int = 26) -> int:
+async def rollup_5m(lookback_hours: int = 2) -> int:
     """把 [now-lookback, now-5min] 的原始采样聚合成 5 分钟桶（幂等）。"""
     now = datetime.now()
     # 只处理已完成的桶（留 5 分钟余量）

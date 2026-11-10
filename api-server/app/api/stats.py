@@ -384,16 +384,19 @@ async def _compute_dashboard(
         if db_conns:
             wanted = ("connections_used", "max_connections", "connection_usage_pct",
                       "qps", "tps", "buffer_pool_hit_rate")
+            # 索引 ix_dbms_metric_conn_id(metric_name, db_connection_id, id)：
+            # GROUP BY 顺序必须与索引一致（metric_name 先），MySQL 才能走 loose index scan（实测 878k 行扫描 → 2ms）
             latest_ids = (
                 select(func.max(DBMetricSnapshot.id).label("mid"))
                 .where(DBMetricSnapshot.metric_name.in_(wanted),
                        DBMetricSnapshot.db_connection_id.in_([c.id for c in db_conns]))
-                .group_by(DBMetricSnapshot.db_connection_id, DBMetricSnapshot.metric_name)
+                .group_by(DBMetricSnapshot.metric_name, DBMetricSnapshot.db_connection_id)
+                .subquery()
             )
             db_metric_rows = (await session.execute(
                 select(DBMetricSnapshot.db_connection_id, DBMetricSnapshot.metric_name,
                        DBMetricSnapshot.value, DBMetricSnapshot.sampled_at)
-                .where(DBMetricSnapshot.id.in_(latest_ids))
+                .join(latest_ids, latest_ids.c.mid == DBMetricSnapshot.id)
             )).all()
             for cid, mname, val, ts in db_metric_rows:
                 db_metric_map.setdefault(int(cid), {})[mname] = (val, ts)
@@ -850,18 +853,29 @@ async def _compute_dashboard(
             .group_by(Alert.cluster_id, Alert.fault_type)
         )).all()
         # 集群健康：节点数/就绪 + CPU/内存容量（QuotaSnapshot ns=_cluster_ 最新）
+        # 每集群只取最新一条（索引 ix_quota_ns_cluster_id；原来取全量再在 Python 去重，行数随历史增长）
+        _q_latest = (
+            select(func.max(QuotaSnapshot.id).label("mid"))
+            .where(QuotaSnapshot.namespace == "_cluster_")
+            .group_by(QuotaSnapshot.cluster_id)
+            .subquery()
+        )
         quota_rows = (await session.execute(
             select(QuotaSnapshot.cluster_id, QuotaSnapshot.id, QuotaSnapshot.pod_limit, QuotaSnapshot.pod_used,
                    QuotaSnapshot.cpu_limit, QuotaSnapshot.memory_limit,
                    QuotaSnapshot.service_limit, QuotaSnapshot.service_used)
-            .where(QuotaSnapshot.namespace == "_cluster_")
-            .order_by(QuotaSnapshot.id.desc())
+            .join(_q_latest, _q_latest.c.mid == QuotaSnapshot.id)
         )).all()
         # 集群 Pod 总数（ns=_pods_ 最新，kubectl get pods -A 口径，避免分批落库的 resource_snapshots 计数波动）
+        _p_latest = (
+            select(func.max(QuotaSnapshot.id).label("mid"))
+            .where(QuotaSnapshot.namespace == "_pods_")
+            .group_by(QuotaSnapshot.cluster_id)
+            .subquery()
+        )
         pod_snap_rows = (await session.execute(
             select(QuotaSnapshot.cluster_id, QuotaSnapshot.pod_limit, QuotaSnapshot.pod_used)
-            .where(QuotaSnapshot.namespace == "_pods_")
-            .order_by(QuotaSnapshot.id.desc())
+            .join(_p_latest, _p_latest.c.mid == QuotaSnapshot.id)
         )).all()
         # 最新一次 PodMetric 时间戳（按集群）
         latest_ts_rows = (await session.execute(
