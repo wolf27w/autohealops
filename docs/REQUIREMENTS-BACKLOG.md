@@ -1932,3 +1932,54 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 - 集群 API 返回该字段；前端开关调用更新接口。
 
 **估时**：0.5~1d（含开关 UI + 跳过逻辑 + 单测）
+
+---
+
+### R27 监控采集落库演进（写入路径 / 保留期口径）— ❓ 待拍板（2026-11-10 讨论，暂不动手）
+
+**背景（现状，代码核实）**
+- 监控数据**采完直接写 MySQL**，没有消息队列、写缓冲或时序库：
+  - 平台直连集群：executor（Go）每 60s 采集 → `db.Create()` / upsert 直写
+  - agent 接入集群：agent 集群内采集 → 隧道 event 帧（`PodMetrics` / `CollectSnapshot` / `Events` / `HostMetrics` / `DbMetrics`）→ api-server（Python）`session.add_all()` + `commit`
+- 落库表：`pod_metrics`、`pod_metrics_5m`（5 分钟降采样）、`quota_snapshots`、`resource_snapshots`、`k8s_events`、`db_metric_snapshots`、`slow_sql_records`
+- 不落库：日志（查日志源 ES/Loki）、Prometheus 曲线（按需 `query_range`，仅缓存数据源解析结果 60s）
+- 现存量级：`resource_snapshots` 700 万+ 行、`db_metric_snapshots` 87.8 万行；`pod_metrics` 原始保 1 天 + 5m 聚合保 7 天
+
+**本次讨论结论**
+1. **暂不引入 Redis write-behind**。理由：实测 digest 中已无 ≥0.5s 查询，最慢是事件批量 upsert（~160ms）；历史上 11~14s 的慢查询都是「取最新一条」的查询写法问题（已用时间窗+索引修掉）。当前瓶颈不在写入侧，引入缓冲属于「先加组件再找收益」。
+2. Redis 前置只能解决**写入侧削峰**和**最新值读取**，**不能消除查询侧慢 SQL**（历史/趋势聚合仍扫 MySQL 大表）。
+3. 若将来要做，必须用 **Redis Stream（消费组 + ack）**，不能用 KV/hash 当缓冲区；并且要求：幂等键（`pod_metrics` 目前无唯一键，重试会重复）、双阈值 flush（5~10s 或 2000~5000 行先到先发）、`MAXLEN` 截断、`maxmemory` 显式限制 + `noeviction`、独立 db/实例隔离缓存。
+
+**需求项（按优先级）**
+
+| # | 需求 | 落点 | 优先级 | 说明 |
+|---|---|---|---|---|
+| R27-1 | **保留期口径统一** | executor `internal/metrics/collector.go` 的 `cleanup()`（7 天） vs api-server `metrics_rollup.cleanup_metrics()`（原始 24h + 聚合 7 天） | P1 | 同一功能在「直连」与「agent」两种接入方式下历史可查时长不一致，属隐性口径 bug |
+| R27-2 | **`pod_metrics` 幂等键 + 分区** | 迁移：`(cluster_id, namespace, pod_name, sampled_at)` 唯一键（或等价幂等键）；按天分区 + 到期 drop | P1 | 为将来重试/补采、以及写缓冲方案打地基；drop 分区替代大表 `DELETE` |
+| R27-3 | **仪表盘最新值走 Redis** | 复用现有 `cache:dashboard` 代次机制，扩展"每集群/命名空间最新快照"短 TTL 键 | P2 | 减少「取最新一条」类查询压大表 |
+| R27-4 | **查询强制带时间窗** | Code review 检查项 + 关键接口加默认窗口（如 30~60min） | P2 | 已有教训：无窗口的 `DISTINCT` / `MAX(id) GROUP BY` 会全历史扫描 |
+
+**备选方案（触发条件未到，先记录口径）**
+
+- **方案 A：Redis Stream write-behind**
+  - 链路：采集 → `XADD`（`MAXLEN`）+ 最新值 hash → flusher `XREADGROUP` 批量事务写 MySQL → 成功 `XACK`
+  - 同步间隔：**5~10s 或累计 2000~5000 行，先到先发**；单批设上限（HDD 上大事务同样慢）
+  - 数据可见性：DB 落地有 5~10s 延迟，排查口径要写明「Redis 有、DB 可能还没有」
+  - **风险（务必先解决）**：当前 Redis `192.168.6.99:6379` 为 `maxmemory=0` + `noeviction`，与 MySQL 同机（7G RAM），db0 与缓存/锁共用。不设上限就承载监控数据 = 可能把 MySQL 一起拖死。估算：3000 Pod × 1440 条/天 × ~100B ≈ 430MB/天
+- **方案 B：时序库（VictoriaMetrics / remote write）**
+  - 指标类切时序存储（内建降采样与过期），MySQL 只保留「最新快照 + 业务状态」，`resource_snapshots` 可降级为每命名空间一行 upsert
+  - 属大改，仅在其他方案都不够时考虑
+
+**触发条件（满足任一才启动方案 A/B）**
+1. `pod_metrics` 日增量或总行数较当前翻 5~10 倍；
+2. 出现「DB 抖动/慢查询导致采集断档、丢样本」的实际事故；
+3. 纳管集群数或 Pod 规模翻倍，批量写入开始进入慢 SQL 榜。
+
+**验收标准（R27-1 ~ R27-4）**
+1. 两种接入方式下，`pod_metrics` 原始数据保留时长一致，文档与页面对「可查时长」的表述统一
+2. 同一 `(cluster_id, namespace, pod_name, sampled_at)` 重复写入不产生重复行
+3. `pod_metrics` 历史清理走分区 drop，不再对大表执行 `DELETE ... WHERE sampled_at < ?`
+4. 仪表盘首屏「最新值」不再触发全表/全历史扫描；接口 P99 与现状持平或更好
+5. 关键监控查询均带时间窗（review checklist 落地）
+
+**估时**：R27-1 0.3d；R27-2 0.7d（含迁移与历史数据验证）；R27-3 0.5d；R27-4 0.3d → 合计 **约 1.8d**（方案 A/B 不在本次估算内）
