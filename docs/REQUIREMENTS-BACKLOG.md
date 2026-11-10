@@ -1955,9 +1955,9 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 | # | 需求 | 落点 | 优先级 | 说明 |
 |---|---|---|---|---|
 | R27-1 ✅ | **保留期口径统一**（2026-11-10 完成） | executor `internal/metrics/collector.go` 的 `cleanup()` vs api-server `metrics_rollup.cleanup_metrics()` | P1 | 两端统一读 `POD_METRICS_RAW_RETENTION_HOURS`（默认 24h）/ `POD_METRICS_ROLLUP_RETENTION_DAYS`（默认 7d）；executor 原写死 7 天已改 |
-| R27-2 | **`pod_metrics` 幂等键 + 分区** | 迁移：`(cluster_id, namespace, pod_name, sampled_at)` 唯一键（或等价幂等键）；按天分区 + 到期 drop | P1 | 为将来重试/补采、以及写缓冲方案打地基；drop 分区替代大表 `DELETE` |
-| R27-3 | **仪表盘最新值走 Redis** | 复用现有 `cache:dashboard` 代次机制，扩展"每集群/命名空间最新快照"短 TTL 键 | P2 | 减少「取最新一条」类查询压大表 |
-| R27-4 | **查询强制带时间窗** | Code review 检查项 + 关键接口加默认窗口（如 30~60min） | P2 | 已有教训：无窗口的 `DISTINCT` / `MAX(id) GROUP BY` 会全历史扫描 |
+| R27-2 ✅ | **`pod_metrics` 幂等键 + 分区**（2026-11-10 完成） | 迁移 `j7e8f9a0b1c2`：`uk_pod_metric_sample` + PK `(id,sampled_at)` + 按天分区 | P1 | 写入改 `ON DUPLICATE KEY UPDATE`（Go GORM `OnConflict` / Python `mysql_insert`）；`maintain_pod_metric_partitions()` 每小时 drop 过期分区，尾巴仍由分批 DELETE 保证 24h 精确 |
+| R27-3 ✅ | **仪表盘最新值走 Redis**（2026-11-10 完成） | `stats.py::_latest_pod_usage()`，键 `pm:latest_usage:v1`，TTL 15s | P2 | 仪表盘/大屏 5s 轮询 → DB 聚合查询压力降到 1/3；缓存失效/结构异常自动回退直查 |
+| R27-4 ✅ | **查询强制带时间窗**（2026-11-10 完成） | `docs/REVIEW-CHECKLIST-QUERIES.md` + `pod_events`/Pod 名回溯补窗口 | P2 | 检查单含铁律 6 条、真实反例 5 例（含实测数字）；历史类接口统一 `min(hours, 24*30)` 钳制 |
 
 **备选方案（触发条件未到，先记录口径）**
 
