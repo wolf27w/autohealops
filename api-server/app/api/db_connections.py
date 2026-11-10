@@ -924,16 +924,38 @@ async def list_slow_sql(conn_id: int, limit: int = 50, start: str = "", end: str
             stmt = stmt.where(SlowSQLRecord.sampled_at <= datetime.fromisoformat(end.replace("Z", "+00:00")))
         except ValueError:
             return {"code": 400, "message": "end 时间格式不正确", "data": None}
-    stmt = stmt.order_by(SlowSQLRecord.avg_latency_ms.desc()).limit(max(1, min(limit, 500)))
+    # 列表按 digest 聚合（同一 SQL 只显示一行）：执行次数求和、平均耗时按次数加权、最大耗时取最大
+    stmt = stmt.order_by(SlowSQLRecord.avg_latency_ms.desc()).limit(max(1, min(limit, 500)) * 20)
     async with async_session() as session:
-        records = list((await session.execute(stmt)).scalars())
+        raw_rows = list((await session.execute(stmt)).scalars())
+
+    agg: dict[str, dict] = {}
+    for r in raw_rows:
+        cur = agg.get(r.digest)
+        ec, avg = int(r.exec_count or 0), float(r.avg_latency_ms or 0.0)
+        if cur is None:
+            agg[r.digest] = {"id": r.id, "digest": r.digest, "sql_text": r.sql_text,
+                             "schema_name": r.schema_name, "exec_count": ec,
+                             "sum_ms": avg * ec, "avg_latency_ms": avg,
+                             "max_latency_ms": float(r.max_latency_ms or 0.0),
+                             "sampled_at": r.sampled_at}
+        else:
+            cur["exec_count"] += ec
+            cur["sum_ms"] += avg * ec
+            cur["avg_latency_ms"] = (cur["sum_ms"] / cur["exec_count"]) if cur["exec_count"] else 0.0
+            cur["max_latency_ms"] = max(cur["max_latency_ms"], float(r.max_latency_ms or 0.0))
+            if r.sampled_at and (not cur["sampled_at"] or r.sampled_at > cur["sampled_at"]):
+                cur["sampled_at"] = r.sampled_at
+    records = sorted(agg.values(), key=lambda x: x["avg_latency_ms"], reverse=True)[:max(1, min(limit, 500))]
+
     from app.services import db_anomaly_service
     return {"code": 200, "message": "success", "data": [
-        {"id": r.id, "digest": r.digest, "sql_text": r.sql_text, "schema_name": r.schema_name,
-         "exec_count": r.exec_count, "avg_latency_ms": r.avg_latency_ms, "max_latency_ms": r.max_latency_ms,
-         "sampled_at": str(r.sampled_at),
-         "hit_rules": db_anomaly_service.analyze_slow_sql(r.sql_text)["hit_rules"],
-         "suggestions": db_anomaly_service.analyze_slow_sql(r.sql_text)["suggestions"]} for r in records
+        {"id": r["id"], "digest": r["digest"], "sql_text": r["sql_text"], "schema_name": r["schema_name"],
+         "exec_count": r["exec_count"], "avg_latency_ms": round(r["avg_latency_ms"], 1),
+         "max_latency_ms": r["max_latency_ms"],
+         "sampled_at": str(r["sampled_at"]),
+         "hit_rules": db_anomaly_service.analyze_slow_sql(r["sql_text"])["hit_rules"],
+         "suggestions": db_anomaly_service.analyze_slow_sql(r["sql_text"])["suggestions"]} for r in records
     ]}
 
 

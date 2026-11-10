@@ -30,6 +30,9 @@ SELECT DIGEST, DIGEST_TEXT, SCHEMA_NAME, COUNT_STAR,
        MAX_TIMER_WAIT / 1000000000 AS max_ms
 FROM performance_schema.events_statements_summary_by_digest
 WHERE SCHEMA_NAME = %s
+  AND DIGEST_TEXT IS NOT NULL
+  AND DIGEST_TEXT NOT LIKE 'SELECT SLEEP%%'
+  AND DIGEST_TEXT NOT REGEXP '^(ALTER|CREATE|DROP|TRUNCATE|OPTIMIZE|ANALYZE|REPAIR|RENAME|GRANT|REVOKE|FLUSH) '
 ORDER BY SUM_TIMER_WAIT DESC
 LIMIT 200
 """
@@ -41,6 +44,9 @@ SELECT DIGEST, DIGEST_TEXT, SCHEMA_NAME, COUNT_STAR,
        MAX_TIMER_WAIT / 1000000000 AS max_ms
 FROM performance_schema.events_statements_summary_by_digest
 WHERE SCHEMA_NAME IS NOT NULL
+  AND DIGEST_TEXT IS NOT NULL
+  AND DIGEST_TEXT NOT LIKE 'SELECT SLEEP%%'
+  AND DIGEST_TEXT NOT REGEXP '^(ALTER|CREATE|DROP|TRUNCATE|OPTIMIZE|ANALYZE|REPAIR|RENAME|GRANT|REVOKE|FLUSH) '
 ORDER BY SUM_TIMER_WAIT DESC
 LIMIT 200
 """
@@ -260,17 +266,35 @@ async def collect_connection_slow_sql(conn_id: int) -> int:
     if not records:
         return 0
 
+    # 按小时聚合：同一 (连接, digest, 小时) 只有一条，采集时累加（避免每分钟一行刷满列表）
+    # 用显式 SQL 保证求值顺序：avg 必须在 exec_count 更新前用「旧值」计算
+    from sqlalchemy import text as _text
+    bucket = datetime.now().replace(minute=0, second=0, microsecond=0)
+    now = datetime.now()
+    upsert_sql = _text("""
+        INSERT INTO slow_sql_records
+            (db_connection_id, digest, sql_text, schema_name, exec_count,
+             avg_latency_ms, max_latency_ms, sampled_at, bucket_at)
+        VALUES (:cid, :digest, :sql_text, :schema_name, :exec_count, :avg_ms, :max_ms, :now, :bucket)
+        ON DUPLICATE KEY UPDATE
+            avg_latency_ms = (avg_latency_ms * exec_count + VALUES(avg_latency_ms) * VALUES(exec_count))
+                             / (exec_count + VALUES(exec_count)),
+            max_latency_ms = GREATEST(max_latency_ms, VALUES(max_latency_ms)),
+            exec_count = exec_count + VALUES(exec_count),
+            sql_text = VALUES(sql_text),
+            sampled_at = VALUES(sampled_at)
+    """)
     async with async_session() as session:
         c2 = await session.get(DBConnection, conn_id)
         if c2:
             c2.status = "connected"
         for r in records:
-            session.add(SlowSQLRecord(
-                db_connection_id=conn_id,
-                digest=r["digest"], sql_text=r["sql_text"], schema_name=r["schema_name"],
-                exec_count=r["exec_count"], avg_latency_ms=r["avg_latency_ms"],
-                max_latency_ms=r["max_latency_ms"],
-            ))
+            await session.execute(upsert_sql, {
+                "cid": conn_id, "digest": r["digest"], "sql_text": r["sql_text"],
+                "schema_name": r["schema_name"], "exec_count": int(r["exec_count"] or 0),
+                "avg_ms": float(r["avg_latency_ms"] or 0.0), "max_ms": float(r["max_latency_ms"] or 0.0),
+                "now": now, "bucket": bucket,
+            })
         await session.commit()
     return len(records)
 

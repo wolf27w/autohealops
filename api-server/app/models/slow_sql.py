@@ -22,3 +22,5 @@ class SlowSQLRecord(Base):
     avg_latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     max_latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     sampled_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    # 按小时聚合桶（同一连接+digest+小时只保留一条，采集时 upsert 累加，避免每分钟一行把列表刷满）
+    bucket_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)

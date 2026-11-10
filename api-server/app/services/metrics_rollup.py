@@ -20,7 +20,7 @@ logger = get_logger("api-server.metrics_rollup")
 BUCKET_SECONDS = 300          # 5 分钟
 RAW_RETENTION_HOURS = 24      # 原始数据保留
 ROLLUP_RETENTION_DAYS = 7     # 聚合数据保留
-BATCH = 20000
+BATCH = 5000  # 单条 DELETE 控制在 5000 行（原来 20000 在 HDD 上单次 2~10s，会进慢 SQL 榜）
 
 
 async def rollup_5m(lookback_hours: int = 2) -> int:
