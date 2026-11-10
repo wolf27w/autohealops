@@ -1,16 +1,18 @@
 // 主机/虚拟机纳管（N11 + R25）：SSH 采集进程监控；分组 + 分组权限
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, List, Menu, Modal, Popconfirm,
-  Radio, Segmented, Select, Space, Steps, Switch, Table, Tag, Tooltip, message,
+  Alert, Button, Card, Drawer, Form, Input, InputNumber, List, Menu, Modal, Popconfirm,
+  Radio, Segmented, Select, Space, Steps, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
 } from 'antd'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   getHosts, createHost, updateHost, deleteHost, checkHost,
   getHostGroups, createHostGroup, updateHostGroup, deleteHostGroup,
   getHostGroupMembers, addHostGroupMember, removeHostGroupMember, getUsers,
+  importHosts, getHostImportTemplate,
 } from '../services/api'
-import type { HostItem, HostCheckResult, HostGroup, HostGroupMember } from '../services/api'
+import type { HostItem, HostCheckResult, HostGroup, HostGroupMember, HostImportResult } from '../services/api'
 import type { User } from '../types'
 
 const STATUS: Record<string, { color: string; label: string }> = {
@@ -20,8 +22,13 @@ const KIND: Record<string, { color: string; label: string }> = {
   host: { color: 'blue', label: '主机' }, vm: { color: 'purple', label: '虚拟机' },
 }
 const ROLE_LABEL: Record<string, string> = { admin: '组管理', operator: '操作', viewer: '只读' }
+const IMPORT_STATUS: Record<string, { color: string; label: string }> = {
+  created: { color: 'green', label: '新建' }, updated: { color: 'blue', label: '更新' },
+  skipped: { color: 'orange', label: '跳过' }, failed: { color: 'red', label: '失败' },
+}
 
 export default function HostManagement() {
+  const navigate = useNavigate()
   const [hosts, setHosts] = useState<HostItem[]>([])
   const [groups, setGroups] = useState<HostGroup[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
@@ -44,6 +51,19 @@ export default function HostManagement() {
   const [groupEdit, setGroupEdit] = useState<HostGroup | null>(null)
   const [groupForm] = Form.useForm()
   const [memberModal, setMemberModal] = useState<HostGroup | null>(null)
+
+  // 批量导入
+  const [importOpen, setImportOpen] = useState(false)
+  const [importTab, setImportTab] = useState<'paste' | 'file'>('paste')
+  const [pasteContent, setPasteContent] = useState('')
+  const [fileContent, setFileContent] = useState('')
+  const [fileName, setFileName] = useState('')
+  const [onDup, setOnDup] = useState<'skip' | 'update'>('skip')
+  const [defaultGroupId, setDefaultGroupId] = useState<number | null>(null)
+  const [importPreview, setImportPreview] = useState<HostImportResult | null>(null)
+  const [importing, setImporting] = useState(false)
+
+  const authType = Form.useWatch('auth_type', form) as 'password' | 'key' | undefined
 
   // 当前用户可创建主机/虚拟机的组（operator|admin）
   const createableGroups = useMemo(
@@ -72,13 +92,13 @@ export default function HostManagement() {
   const openCreate = () => {
     setEditing(null); setStep(0); setWizardKind('host')
     form.resetFields()
-    form.setFieldsValue({ ssh_port: 22, ssh_user: 'root', enabled: true, process_paths: [] })
+    form.setFieldsValue({ ssh_port: 22, ssh_user: 'root', enabled: true, auth_type: 'password', process_paths: [] })
     setModal(true)
   }
   const openEdit = (h: HostItem) => {
     setEditing(h); setStep(1)
     form.resetFields()
-    form.setFieldsValue({ ...h, process_paths: h.process_paths || [], group_id: h.group_id ?? undefined })
+    form.setFieldsValue({ ...h, auth_type: h.auth_type || 'password', process_paths: h.process_paths || [], group_id: h.group_id ?? undefined })
     setModal(true)
   }
 
@@ -111,6 +131,47 @@ export default function HostManagement() {
 
   const delGroup = async (id: number) => { await deleteHostGroup(id); message.success('已删除分组'); loadGroups() }
 
+  // ===== 批量导入 =====
+  const importContent = importTab === 'paste' ? pasteContent : fileContent
+  const openImport = () => {
+    setImportTab('paste'); setPasteContent(''); setFileContent(''); setFileName(''); setOnDup('skip')
+    setDefaultGroupId(null); setImportPreview(null); setImportOpen(true)
+  }
+  const downloadTemplate = async () => {
+    try { await getHostImportTemplate() } catch { message.error('模板下载失败') }
+  }
+  const doPreview = async () => {
+    if (!importContent.trim()) { message.warning('请先粘贴内容或上传文件'); return }
+    setImporting(true)
+    try {
+      const r = await importHosts({ content: importContent, format: importTab === 'paste' ? 'table' : 'csv', on_duplicate: onDup, default_group_id: defaultGroupId, dry_run: true })
+      setImportPreview(r)
+    } catch { /* */ } finally { setImporting(false) }
+  }
+  const doImport = async () => {
+    if (!importContent.trim()) { message.warning('请先粘贴内容或上传文件'); return }
+    setImporting(true)
+    try {
+      const r = await importHosts({ content: importContent, format: importTab === 'paste' ? 'table' : 'csv', on_duplicate: onDup, default_group_id: defaultGroupId, dry_run: false })
+      setImportPreview(r)
+      message.success(`导入完成：成功 ${r.success}（含新建/更新），跳过 ${r.skipped}，失败 ${r.failed}${r.groups_created.length ? `，新建分组 ${r.groups_created.length} 个` : ''}`)
+      load(); loadGroups()
+    } catch { /* */ } finally { setImporting(false) }
+  }
+  const exportFailedCsv = () => {
+    const failed = (importPreview?.rows || []).filter((r) => r.status === 'failed')
+    if (!failed.length) return
+    const esc = (c: unknown) => `"${String(c ?? '').replace(/"/g, '""')}"`
+    const lines = [['行号', '名称', '地址', '状态', '原因'].join(',')]
+      .concat(failed.map((r) => [r.line, r.name, r.address, r.status, r.reason].map(esc).join(',')))
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = 'hosts-import-failed.csv'
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   const menuItems = [
     { key: 'all', label: '全部主机' },
     { key: 'ungrouped', label: '未分组' },
@@ -120,12 +181,18 @@ export default function HostManagement() {
   const groupOptions = createableGroups.map((g) => ({ value: g.id, label: g.name }))
 
   const columns = [
-    { title: '名称', dataIndex: 'name' },
+    { title: '名称', render: (_: unknown, r: HostItem) => r.description ? <Tooltip title={r.description}>{r.name}</Tooltip> : <>{r.name}</> },
     { title: '分组', width: 110, render: (_: unknown, r: HostItem) => r.group_name
       ? <Tag>{r.group_name}</Tag> : <Tag color="warning">未分组</Tag> },
     { title: '类型', width: 90, render: (_: unknown, r: HostItem) => <Tag color={KIND[r.kind]?.color}>{KIND[r.kind]?.label || r.kind}</Tag> },
     { title: '来源', width: 90, render: (_: unknown, r: HostItem) => r.source === 'agent' ? <Tag color="cyan">agent</Tag> : <Tag>直连</Tag> },
     { title: '地址', render: (_: unknown, r: HostItem) => `${r.address}:${r.ssh_port}` },
+    { title: '凭据', width: 100, render: (_: unknown, r: HostItem) => (
+      <Space size={4}>
+        <Tag color={r.has_password ? 'green' : 'default'}>密码</Tag>
+        <Tag color={r.has_key ? 'cyan' : 'default'}>密钥</Tag>
+      </Space>
+    ) },
     { title: '状态', dataIndex: 'status', width: 80, render: (s: string, r: HostItem) => {
       const tag = <Tag color={STATUS[s]?.color}>{STATUS[s]?.label || s}</Tag>
       return s === 'offline' && r.last_error ? <Tooltip title={r.last_error}>{tag}</Tooltip> : tag
@@ -135,6 +202,7 @@ export default function HostManagement() {
     { title: '操作', width: 170, render: (_: unknown, r: HostItem) => (
       <Space size="small">
         {r.can.operate && r.source === 'agent' && <Button size="small" type="link" onClick={() => setCheckResult({ online: r.last_metrics?.online ?? false, error: '', paths: r.last_metrics?.paths || [] })}>指标</Button>}
+        {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" onClick={() => navigate(`/web-terminal/${r.id}`)}>终端</Button>}
         {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" loading={checking === r.id} icon={<SyncOutlined />} onClick={() => doCheck(r.id)}>检测</Button>}
         {r.can.operate && <Button size="small" type="link" onClick={() => openEdit(r)}>编辑</Button>}
         {r.can.delete && <Popconfirm title="删除该主机？" onConfirm={() => del(r.id)}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>}
@@ -149,6 +217,7 @@ export default function HostManagement() {
       extra={<Space>
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
         {isAdmin && <Button icon={<TeamOutlined />} onClick={() => setGroupDrawer(true)}>分组管理</Button>}
+        {(isAdmin || createableGroups.length > 0) && <Button icon={<ImportOutlined />} onClick={openImport}>批量导入</Button>}
         {(isAdmin || createableGroups.length > 0) && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加主机</Button>}
       </Space>}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
@@ -225,11 +294,29 @@ export default function HostManagement() {
               </Form.Item>
             </Space.Compact>
             <Space.Compact block style={{ width: '100%' }}>
-              <Form.Item name="ssh_user" label="SSH 用户" style={{ width: '40%' }}><Input /></Form.Item>
-              <Form.Item name="ssh_password" label="SSH 口令（可选，留空=用密钥）" style={{ width: '40%' }}><Input.Password placeholder={editing?.has_password ? '已设置（留空不变）' : ''} /></Form.Item>
-              <Form.Item name="env_tag" label="环境标签" style={{ width: '20%' }}><Input placeholder="如 prod" /></Form.Item>
+              <Form.Item name="ssh_user" label="SSH 用户" style={{ width: '34%' }}><Input /></Form.Item>
+              <Form.Item name="auth_type" label="认证方式" style={{ width: '34%' }} rules={[{ required: true }]}>
+                <Select options={[{ value: 'password', label: '密码' }, { value: 'key', label: '私钥' }]} />
+              </Form.Item>
+              <Form.Item name="env_tag" label="环境标签" style={{ width: '32%' }}><Input placeholder="如 prod" /></Form.Item>
             </Space.Compact>
-            <Form.Item name="ssh_key_path" label="私钥路径（可选，留空=默认 ~/.ssh/id_rsa）"><Input /></Form.Item>
+            {authType === 'password' && (
+              <Form.Item name="ssh_password" label="SSH 密码" preserve={false}>
+                <Input.Password placeholder={editing ? '留空则不修改' : '留空则使用私钥认证'} autoComplete="new-password" />
+              </Form.Item>
+            )}
+            {authType === 'key' && (
+              <>
+                <Form.Item name="ssh_private_key" label="私钥内容" preserve={false} extra="支持 OpenSSH / PEM 格式，留空则不修改">
+                  <Input.TextArea rows={5} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" style={{ fontFamily: 'monospace' }} />
+                </Form.Item>
+                <Form.Item name="ssh_key_passphrase" label="私钥口令（可选）" preserve={false}>
+                  <Input.Password placeholder="私钥加密时填写，留空则不修改" autoComplete="new-password" />
+                </Form.Item>
+              </>
+            )}
+            <Form.Item name="description" label="说明"><Input placeholder="可选，最多 300 字" maxLength={300} /></Form.Item>
+            <Form.Item name="ssh_key_path" label="本地私钥路径（兼容旧配置，本地文件方式，留空=默认 ~/.ssh/id_rsa）"><Input /></Form.Item>
             <Form.Item name="enabled" label="启用监控" valuePropName="checked"><Switch /></Form.Item>
             <Form.Item label="监控进程路径（一行一个服务：名称 + 命令行匹配路径）">
               <Form.List name="process_paths">
@@ -248,6 +335,73 @@ export default function HostManagement() {
               </Form.List>
             </Form.Item>
           </Form>
+        )}
+      </Modal>
+
+      {/* 批量导入 */}
+      <Modal title="批量导入主机" open={importOpen} onCancel={() => setImportOpen(false)} width={760} destroyOnClose
+        footer={[
+          <Button key="tpl" icon={<DownloadOutlined />} onClick={downloadTemplate}>下载模板</Button>,
+          <Button key="c" onClick={() => setImportOpen(false)}>关闭</Button>,
+          <Button key="p" loading={importing} onClick={doPreview}>校验预览</Button>,
+          <Button key="s" type="primary" loading={importing} onClick={doImport}>确认导入</Button>,
+        ]}>
+        <Tabs activeKey={importTab} onChange={(k) => { setImportTab(k as 'paste' | 'file'); setImportPreview(null) }}
+          items={[
+            {
+              key: 'paste', label: '粘贴表格',
+              children: <Input.TextArea rows={8} value={pasteContent} onChange={(e) => { setPasteContent(e.target.value); setImportPreview(null) }}
+                placeholder={'支持逗号 / 制表符分隔，带表头（中文列名）。示例：\n名称,地址,端口,用户名,认证方式,密码,私钥,分组,进程路径,说明\nbiz-app-01,192.168.6.41,22,root,password,******,,生产,/opt/app/app.jar,业务应用 A'} />,
+            },
+            {
+              key: 'file', label: '上传 CSV',
+              children: (
+                <>
+                  <Upload.Dragger accept=".csv,.txt" maxCount={1} showUploadList={false}
+                    beforeUpload={(file) => {
+                      const reader = new FileReader()
+                      reader.onload = () => { setFileContent(String(reader.result || '')); setFileName(file.name); setImportPreview(null) }
+                      reader.readAsText(file)
+                      return false
+                    }}>
+                    <p className="ant-upload-drag-icon"><UploadOutlined /></p>
+                    <p className="ant-upload-text">点击或拖拽 CSV 文件到此处</p>
+                    <p className="ant-upload-hint">文件在本机读取，不会真正上传；支持中文/英文表头</p>
+                  </Upload.Dragger>
+                  {fileName && <div style={{ marginTop: 8, color: '#888' }}>已读取：{fileName}</div>}
+                </>
+              ),
+            },
+          ]}
+        />
+        <Space style={{ marginTop: 12, width: '100%' }} wrap>
+          <span>重复处理：</span>
+          <Select style={{ width: 120 }} value={onDup} onChange={setOnDup} options={[{ value: 'skip', label: '跳过' }, { value: 'update', label: '覆盖' }]} />
+          <span style={{ marginLeft: 12 }}>默认分组（可选）：</span>
+          <Select style={{ width: 200 }} allowClear placeholder="不指定（按表内分组列）" value={defaultGroupId ?? undefined}
+            onChange={(v) => setDefaultGroupId(v ?? null)} options={groups.map((g) => ({ value: g.id, label: g.name }))} />
+        </Space>
+
+        {importPreview && (
+          <>
+            <Alert style={{ marginTop: 12 }} type={importPreview.failed > 0 ? 'warning' : 'success'} showIcon
+              message={importPreview.dry_run
+                ? `校验预览（未导入）：共 ${importPreview.total} 行，可成功 ${importPreview.success}，跳过 ${importPreview.skipped}，失败 ${importPreview.failed}`
+                : `导入完成：共 ${importPreview.total} 行，成功 ${importPreview.success}，跳过 ${importPreview.skipped}，失败 ${importPreview.failed}`}
+              description={importPreview.groups_created.length ? `自动新建分组：${importPreview.groups_created.join('、')}` : undefined} />
+            <Table rowKey={(r: HostImportResult['rows'][number], i?: number) => `${r.line}-${i ?? 0}`} size="small" style={{ marginTop: 12 }} pagination={false}
+              dataSource={importPreview.rows}
+              columns={[
+                { title: '行', dataIndex: 'line', width: 60 },
+                { title: '名称', dataIndex: 'name', ellipsis: true },
+                { title: '地址', dataIndex: 'address', ellipsis: true },
+                { title: '状态', dataIndex: 'status', width: 90, render: (s: string) => <Tag color={IMPORT_STATUS[s]?.color}>{IMPORT_STATUS[s]?.label || s}</Tag> },
+                { title: '原因', dataIndex: 'reason', ellipsis: true },
+              ]} />
+            {importPreview.failed > 0 && (
+              <Button size="small" style={{ marginTop: 8 }} icon={<DownloadOutlined />} onClick={exportFailedCsv}>导出失败明细 CSV</Button>
+            )}
+          </>
         )}
       </Modal>
 

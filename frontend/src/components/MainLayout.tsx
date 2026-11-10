@@ -74,6 +74,7 @@ const menuItems: NavItem[] = [
       { key: '/strategy', icon: <SafetyOutlined />, label: '策略配置' },
       { key: '/custom-tasks', icon: <ClockCircleOutlined />, label: '定时任务' },
       { key: '/host-management', icon: <DesktopOutlined />, label: '主机/虚拟机' },
+      { key: '/web-terminal', icon: <DesktopOutlined />, label: '堡垒机终端' },
     ],
   },
   {

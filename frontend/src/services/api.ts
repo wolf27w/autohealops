@@ -707,7 +707,9 @@ export const getIsolatedPods = (clusterId: number, ns: string) =>
 export interface HostCan { view: boolean; operate: boolean; manage: boolean; delete: boolean }
 export interface HostItem {
   id: number; name: string; address: string; ssh_port: number; ssh_user: string
-  has_password: boolean; ssh_key_path: string
+  has_password: boolean; has_key: boolean; has_key_passphrase: boolean
+  auth_type: 'password' | 'key'; description?: string
+  ssh_key_path: string
   process_paths: { name: string; path: string }[]
   enabled: boolean; status: string; last_seen?: string | null; last_error?: string
   kind: 'host' | 'vm'; group_id: number | null; group_name?: string; env_tag?: string
@@ -734,6 +736,35 @@ export const deleteHostGroup = (id: number) => http.delete<{ id: number }>(`/hos
 export const getHostGroupMembers = (id: number) => http.get<HostGroupMember[]>(`/host-groups/${id}/members`)
 export const addHostGroupMember = (id: number, d: Record<string, unknown>) => http.post<Record<string, unknown>>(`/host-groups/${id}/members`, d)
 export const removeHostGroupMember = (id: number, userId: number) => http.delete<Record<string, unknown>>(`/host-groups/${id}/members/${userId}`)
+
+// ============ 主机批量导入（R8.2）============
+export interface HostImportRow { line: number; name: string; address: string; status: 'created' | 'updated' | 'skipped' | 'failed'; reason: string }
+export interface HostImportResult {
+  total: number; success: number; skipped: number; failed: number
+  rows: HostImportRow[]; groups_created: string[]; dry_run: boolean
+}
+export const importHosts = (d: {
+  content: string; format?: 'csv' | 'table'; on_duplicate?: 'skip' | 'update'
+  default_group_id?: number | null; dry_run?: boolean
+}) => http.post<HostImportResult>('/hosts/import', d)
+// 下载导入模板（CSV）。该接口直接返回文件流（非 {code,message,data} 包装），
+// 走 fetch + Authorization 头 + Blob 下载，避免经过 http 拦截器解包。
+export const getHostImportTemplate = async () => {
+  const token = localStorage.getItem('token')
+  const resp = await fetch('/api/v1/hosts/import/template', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!resp.ok) throw new Error(`模板下载失败（HTTP ${resp.status}）`)
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'hosts-import-template.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 
 export interface AggLogPod { pod: string; phase: string; success: boolean; logs: string; error: string }
 export const getWorkloadLogs = (clusterId: number, namespace: string, kind: string, name: string, params?: { container?: string; tail?: number; previous?: boolean }) =>
