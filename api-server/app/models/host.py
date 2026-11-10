@@ -23,6 +23,11 @@ class Host(Base):
     ssh_user: Mapped[str] = mapped_column(String(50), default="root")
     ssh_password_encrypted: Mapped[str] = mapped_column(Text, default="")        # 可选（AES 加密）；空=走密钥
     ssh_key_path: Mapped[str] = mapped_column(String(300), default="")           # 可选，空=默认密钥
+    # R8：凭据保存改造——认证方式（password|key）+ 私钥内容（AES 加密，优先于 ssh_key_path）+ 私钥口令
+    auth_type: Mapped[str] = mapped_column(String(10), default="password", server_default="password")
+    ssh_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)   # 私钥内容（加密），永不下发前端
+    ssh_key_passphrase_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str] = mapped_column(String(300), default="", server_default="")
     process_paths: Mapped[str] = mapped_column(Text, default="[]")               # JSON: [{name,path}]
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="unknown")           # online/offline/unknown

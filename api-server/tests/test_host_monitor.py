@@ -39,14 +39,14 @@ class _FakeConn:
 
 class TestSshPsClassification(unittest.IsolatedAsyncioTestCase):
     async def test_auth_failure(self):
-        with patch("app.services.host_monitor_service.asyncssh.connect",
+        with patch("app.services.host_ssh.asyncssh.connect",
                    side_effect=asyncssh.PermissionDenied("auth failed")):
             out, err = await host_monitor_service.ssh_ps(_host())
         self.assertIsNone(out)
         self.assertIn("认证失败", err)
 
     async def test_network_unreachable(self):
-        with patch("app.services.host_monitor_service.asyncssh.connect",
+        with patch("app.services.host_ssh.asyncssh.connect",
                    side_effect=OSError(113, "No route to host")):
             out, err = await host_monitor_service.ssh_ps(_host())
         self.assertIsNone(out)
@@ -54,7 +54,7 @@ class TestSshPsClassification(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout(self):
         import asyncio
-        with patch("app.services.host_monitor_service.asyncssh.connect",
+        with patch("app.services.host_ssh.asyncssh.connect",
                    side_effect=asyncio.TimeoutError()):
             out, err = await host_monitor_service.ssh_ps(_host())
         self.assertIsNone(out)
@@ -64,7 +64,7 @@ class TestSshPsClassification(unittest.IsolatedAsyncioTestCase):
         conn = _FakeConn(stdout="PID CPU MEM RSS ARGS\n1 0.0 1.0 100 /usr/sbin/sshd\n")
         async def _connect(*a, **k):
             return conn
-        with patch("app.services.host_monitor_service.asyncssh.connect", side_effect=_connect):
+        with patch("app.services.host_ssh.asyncssh.connect", side_effect=_connect):
             out, err = await host_monitor_service.ssh_ps(_host())
         self.assertEqual(err, "")
         self.assertIn("/usr/sbin/sshd", out or "")

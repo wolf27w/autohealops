@@ -12,7 +12,7 @@ from app.api import (
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
     projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resources, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
-from app.api import hosts, host_groups, jvm
+from app.api import hosts, host_groups, jvm, host_terminal
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -400,6 +400,19 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("会话定时采集启动失败: %s", e)
 
+    # R8.5 堡垒机会话录制清理：录制块保留 7 天（会话元信息不清理），每 12 小时扫一次
+    try:
+        from app.services.host_session_service import cleanup_chunks as _cleanup_host_chunks
+        async def _cleanup_host_chunks_job():
+            n = await _cleanup_host_chunks(7)
+            if n:
+                logger.info("已清理过期堡垒机录制块 %s 条", n)
+        _background_tasks.append(asyncio.create_task(
+            _interval_worker("堡垒机录制清理", 43200, _cleanup_host_chunks_job, 300.0)))
+        logger.info("堡垒机录制清理已启动（每 12 小时，保留 7 天）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("堡垒机录制清理启动失败: %s", e)
+
     # D1 凭据到期主动通知（2026-10-29）：30/7/1 天三档提醒，每小时扫一次（Redis 去重）
     try:
         from app.services.credential_notice_service import check_credentials
@@ -582,5 +595,6 @@ app.include_router(fault_diagnosis.router)
 app.include_router(agent.router)
 app.include_router(terminal.router)
 app.include_router(hosts.router)
+app.include_router(host_terminal.router)
 app.include_router(host_groups.router)
 app.include_router(mcp.router)

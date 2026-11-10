@@ -9,6 +9,7 @@ from app.models.resource_alert_rule import ResourceAlertRule
 from app.models.db_metric_snapshot import DBMetricSnapshot
 from app.models.host import Host
 from app.models.host_group import HostGroup, HostGroupMember
+from app.models.host_session import HostSession, HostSessionChunk
 from app.models.alert import Alert, AlertComment
 from app.models.alert_silence import AlertSilence
 from app.models.alert_policy import AlertPolicy

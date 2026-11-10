@@ -2,7 +2,7 @@
 """主机/虚拟机纳管 API（N11 + R25）：CRUD + 进程监控检查 + 分组权限收敛"""
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import or_, select
 
 from app.core.database import async_session
@@ -11,6 +11,7 @@ from app.core.security import encrypt_aes256_gcm, generate_trace_id
 from app.middleware.permission import require_any_user
 from app.models import Host, HostGroup, User
 from app.services import host_group_service as hgs
+from app.services import host_import_service as his
 from app.services.audit_service import create_audit_record
 
 router = APIRouter(prefix="/api/v1/hosts")
@@ -26,6 +27,10 @@ def _row(h: Host, group_name: str = "", can: dict | None = None) -> dict:
     return {
         "id": h.id, "name": h.name, "address": h.address, "ssh_port": h.ssh_port,
         "ssh_user": h.ssh_user, "has_password": bool(h.ssh_password_encrypted),
+        "has_key": bool(getattr(h, "ssh_key_encrypted", None)),
+        "has_key_passphrase": bool(getattr(h, "ssh_key_passphrase_encrypted", None)),
+        "auth_type": getattr(h, "auth_type", "password") or "password",
+        "description": getattr(h, "description", "") or "",
         "ssh_key_path": h.ssh_key_path, "process_paths": paths,
         "enabled": h.enabled, "status": h.status,
         "last_error": getattr(h, "last_error", "") or "",
@@ -46,6 +51,22 @@ async def _load_group_names(group_ids: set[int]) -> dict[int, str]:
     async with async_session() as s:
         rows = (await s.execute(select(HostGroup).where(HostGroup.id.in_(group_ids)))).scalars()
         return {g.id: g.name for g in rows}
+
+
+def _validate_private_key(key: str, passphrase: str) -> str | None:
+    """校验私钥格式；返回错误文案（None=通过）。"""
+    if not key.strip():
+        return None
+    import asyncssh
+    try:
+        asyncssh.import_private_key(key, passphrase=passphrase or None)
+        return None
+    except asyncssh.KeyEncryptionKeyRequired:
+        return "私钥已加密，请填写私钥口令"
+    except asyncssh.KeyImportError as e:
+        return f"私钥格式不正确：{' '.join(str(e).split())[:80]}"
+    except Exception as e:  # noqa: BLE001
+        return f"私钥解析失败：{' '.join(str(e).split())[:80]}"
 
 
 async def _audit_host(trace_id: str, detail: str, host_id: int) -> None:
@@ -125,12 +146,26 @@ async def create_host(payload: dict, user=Depends(require_any_user)):
 
     paths = payload.get("process_paths") or []
     pwd = payload.get("ssh_password") or ""
+    key = (payload.get("ssh_private_key") or "").strip()
+    passphrase = payload.get("ssh_key_passphrase") or ""
+    auth_type = (payload.get("auth_type") or ("key" if key else "password")).strip().lower()
+    if auth_type not in ("password", "key"):
+        return {"code": 400, "message": "auth_type 仅支持 password / key", "data": None}
+    if auth_type == "key" and not key and not (payload.get("ssh_key_path") or "").strip():
+        return {"code": 400, "message": "认证方式为 key 时必须填写私钥", "data": None}
+    key_err = _validate_private_key(key, passphrase)
+    if key_err:
+        return {"code": 400, "message": key_err, "data": None}
     async with async_session() as s:
         h = Host(name=name, address=address,
                  ssh_port=int(payload.get("ssh_port") or 22),
                  ssh_user=(payload.get("ssh_user") or "root").strip(),
                  ssh_password_encrypted=encrypt_aes256_gcm(pwd) if pwd else "",
+                 auth_type=auth_type,
+                 ssh_key_encrypted=encrypt_aes256_gcm(key) if key else None,
+                 ssh_key_passphrase_encrypted=encrypt_aes256_gcm(passphrase) if passphrase else None,
                  ssh_key_path=(payload.get("ssh_key_path") or "").strip(),
+                 description=(payload.get("description") or "")[:300],
                  process_paths=json.dumps(paths, ensure_ascii=False),
                  enabled=bool(payload.get("enabled", True)),
                  kind=kind, group_id=group_id,
@@ -178,6 +213,25 @@ async def update_host(host_id: int, payload: dict, user=Depends(require_any_user
         pwd = payload.get("ssh_password") or ""
         if pwd:
             h.ssh_password_encrypted = encrypt_aes256_gcm(pwd)
+        if payload.get("auth_type") is not None:
+            at = str(payload["auth_type"]).strip().lower()
+            if at not in ("password", "key"):
+                return {"code": 400, "message": "auth_type 仅支持 password / key", "data": None}
+            h.auth_type = at
+        key = (payload.get("ssh_private_key") or "").strip()
+        passphrase = payload.get("ssh_key_passphrase") or ""
+        key_err = _validate_private_key(key, passphrase)
+        if key_err:
+            return {"code": 400, "message": key_err, "data": None}
+        if key:
+            h.ssh_key_encrypted = encrypt_aes256_gcm(key)
+        if passphrase:
+            h.ssh_key_passphrase_encrypted = encrypt_aes256_gcm(passphrase)
+        if payload.get("clear_ssh_key"):
+            h.ssh_key_encrypted = None
+            h.ssh_key_passphrase_encrypted = None
+        if payload.get("description") is not None:
+            h.description = str(payload["description"])[:300]
         await s.commit()
         await s.refresh(h)
         hid = h.id
@@ -215,3 +269,43 @@ async def check_host(host_id: int, user=Depends(require_any_user)):
         raise HTTPException(status_code=403, detail="无该主机操作权限")
     res = await hms.check_and_notify(h)
     return {"code": 200, "message": "success", "data": {"host": _row(h), "check": res}}
+
+
+@router.get("/import/template")
+async def import_template(user=Depends(require_any_user)):
+    """CSV 导入模板（UTF-8，含 BOM 便于 Excel 打开不乱码）。"""
+    content = "\ufeff" + his.IMPORT_TEMPLATE_CSV
+    return Response(content=content, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="hosts-import-template.csv"'})
+
+
+@router.post("/import")
+async def import_hosts(payload: dict, user=Depends(require_any_user)):
+    """批量导入主机（CSV / 粘贴表格）。
+
+    body: {content, format: csv|table, on_duplicate: skip|update, default_group_id, dry_run}
+    """
+    content = payload.get("content") or ""
+    if not content.strip():
+        return {"code": 400, "message": "content 不能为空", "data": None}
+    is_admin = hgs.is_platform_admin(user)
+    if not is_admin:
+        roles = await hgs.get_group_roles(user)
+        if not any(r in ("admin", "operator") for r in roles.values()):
+            raise HTTPException(status_code=403, detail="无导入权限（需要某个分组的操作权限）")
+    fmt = (payload.get("format") or "csv").strip().lower()
+    on_dup = (payload.get("on_duplicate") or "skip").strip().lower()
+    if on_dup not in ("skip", "update"):
+        on_dup = "skip"
+    default_group_id = payload.get("default_group_id")
+    if default_group_id is not None:
+        default_group_id = int(default_group_id)
+    data = await his.import_hosts(
+        user, content, fmt=fmt, on_duplicate=on_dup,
+        default_group_id=default_group_id, dry_run=bool(payload.get("dry_run")),
+    )
+    if not payload.get("dry_run"):
+        await _audit_host(generate_trace_id(),
+                          f"批量导入主机：成功 {data['success']}，跳过 {data['skipped']}，失败 {data['failed']}",
+                          0)
+    return {"code": 200, "message": "success", "data": data}

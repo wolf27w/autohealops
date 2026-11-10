@@ -8,25 +8,17 @@
 import asyncio
 import json
 
-import asyncssh
-
 from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.redis_client import redis_pool
-from app.core.security import decrypt_aes256_gcm
 from app.models import Host
+from app.services import host_ssh
 
 logger = get_logger("api-server.host-monitor")
 
 CHECK_INTERVAL_SEC = 60
-
-
-def _squash(e: BaseException) -> str:
-    """把异常精简成一行可展示的文本。"""
-    s = str(e).strip() or e.__class__.__name__
-    return " ".join(s.split())[:120]
 
 
 def _parse_paths(host: Host) -> list[dict]:
@@ -43,44 +35,13 @@ async def ssh_ps(host: Host) -> tuple[str | None, str]:
     认证优先级（R9，老板 2026-11-05 定）：保存的密码 → 私钥路径 → 系统默认密钥。
     失败原因区分：认证失败 / 网络不可达 / 超时，不再统一显示「离线」。
     """
-    password = ""
-    if host.ssh_password_encrypted:
-        try:
-            password = decrypt_aes256_gcm(host.ssh_password_encrypted)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("主机 %s 密码解密失败: %s", host.name, e)
-            password = ""
-    client_keys = None
-    if (host.ssh_key_path or "").strip():
-        client_keys = [host.ssh_key_path.strip()]
-
     conn = None
     try:
-        conn = await asyncio.wait_for(
-            asyncssh.connect(
-                host.address, port=host.ssh_port or 22,
-                username=host.ssh_user or "root",
-                password=password or None,
-                client_keys=client_keys,
-                known_hosts=None,
-                connect_timeout=8,
-            ),
-            timeout=12,
-        )
+        conn = await asyncio.wait_for(host_ssh.connect(host, connect_timeout=8), timeout=12)
     except asyncio.TimeoutError:
         return None, "连接超时"
-    except asyncssh.PermissionDenied:
-        return None, "认证失败（用户名/密码/密钥错误）"
-    except asyncssh.PasswordChangeRequired:
-        return None, "认证失败（要求修改密码）"
-    except asyncssh.ConnectionLost:
-        return None, "网络不可达（连接被关闭/拒绝）"
-    except (OSError, asyncssh.DisconnectError) as e:
-        return None, f"网络不可达：{_squash(e)}"
-    except asyncssh.Error as e:
-        return None, f"SSH 失败：{_squash(e)}"
     except Exception as e:  # noqa: BLE001
-        return None, f"SSH 失败：{_squash(e)}"
+        return None, host_ssh.describe_error(e)
 
     try:
         result = await asyncio.wait_for(
@@ -92,7 +53,7 @@ async def ssh_ps(host: Host) -> tuple[str | None, str]:
     except asyncio.TimeoutError:
         return None, "命令执行超时"
     except Exception as e:  # noqa: BLE001
-        return None, f"命令执行失败：{_squash(e)}"
+        return None, f"命令执行失败：{' '.join(str(e).split())[:120]}"
     finally:
         conn.close()
         await conn.wait_closed()
