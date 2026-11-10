@@ -1452,6 +1452,19 @@ async def _process_one(alert: Alert) -> bool:
             root_cause = diagnosis.get("root_cause", "")
             repair_steps_text = "; ".join(diagnosis.get("suggestions", []))
             root_cause_layer = diagnosis.get("root_cause_layer", "")
+            # C2：AI 返回空结论（无根因且无建议）→ 单独记录 empty_result + 转人工（不静默当成功）
+            if not (root_cause or "").strip() and not diagnosis.get("suggestions"):
+                try:
+                    from app.services import diagnosis_failure_service as _dfail2
+                    await _dfail2.record(
+                        alert_id=alert.id, cluster_id=alert.cluster_id, fault_type=alert.fault_type,
+                        stage="diagnose", reason="empty_result", attempts=2, error="模型返回空结论（无根因/无建议）",
+                        namespace=alert.namespace or "", resource_type=alert.resource_type,
+                        resource_name=alert.resource_name or "")
+                except Exception as _e2:  # noqa: BLE001
+                    logger.debug("记录空结论失败: %s", _e2)
+                await _mark_manual_and_notify(alert, "AI 诊断无结论", "模型未给出可执行结论，需人工排查")
+                return True
         except Exception as e:  # noqa: BLE001
             # AI 诊断失败 → 主动转人工 + 通知值班人（不静默跳过）
             logger.warning("告警 %d AI 诊断失败，转人工: %s", alert.id, e)

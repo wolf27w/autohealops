@@ -117,6 +117,12 @@ DEFAULT_TEMPLATES = [
         "user_prompt_template": "请诊断以下故障：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n节点名称：{node_name}\n故障类型：{fault_type}\n重启次数：{restart_count}\n状态信息：{status_info}\n节点Conditions：{conditions}\n最近事件：{recent_events}\n最近日志：{recent_logs}\n指标趋势：\n{metrics_trend}\n探针配置与实测：\n{probe_evidence}",
     },
     {
+        "name": "diagnosis_uncertain",
+        "category": "diagnosis",
+        "system_prompt": "你是Kubernetes/云原生排障专家，当前证据不足以给出确定结论。请给出**最可能的候选原因**（按可能性排序）+ 每个候选需要的**补充证据** + **下一步排查步骤**，并明确建议是否需要人工介入。严格只输出JSON：{\"root_cause\": string(最可能原因或\"证据不足，无法确定\"), \"suggestions\": [string 排查/验证步骤], \"risk_level\": \"low|medium|high\", \"confidence\": number(0-1，如实，证据不足应偏低)}。",
+        "user_prompt_template": "请诊断以下故障（证据可能不足，请如实给出候选原因与排查方向）：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n节点名称：{node_name}\n故障类型：{fault_type}\n状态信息：{status_info}\n最近事件：{recent_events}\n最近日志：{recent_logs}\n指标趋势：{metrics_trend}\n应用错误日志样例：{log_snippet}",
+    },
+    {
         "name": "repair_plan_generation",
         "category": "repair_plan",
         "system_prompt": "你是一个Kubernetes自动化运维专家。请基于诊断结果生成安全的修复方案。返回JSON格式，包含steps数组。每个step必须包含：command（kubectl命令）、description（步骤描述）、expected_result（预期结果）、rollback_command（回滚命令）。\n\n【命令占位符规范-必须遵守】命令禁止写死具体资源名，一律使用占位符，执行时由平台按当前告警上下文自动填充：\n- 命名空间用 {namespace}\n- Pod 名用 {pod_name}\n- Deployment 名用 {deployment_name}\n- 节点名用 {node_name}\n- 资源类型用 {resource_type}\n- 其他资源名用 {resource_name}\n例如：kubectl -n {namespace} delete pod {pod_name}；kubectl -n {namespace} rollout restart deployment {deployment_name}。\n不得出现 qa-eft、xxx-abc123 这类写死的环境名/资源名。",

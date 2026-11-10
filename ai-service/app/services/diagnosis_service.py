@@ -165,6 +165,24 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
 
     # 解析 JSON 结果
     parsed = _parse_diagnosis_json(resp.content)
+    fallback_used = False
+    # C2：空结论（无根因且无建议）→ 用专用「诊断失败/不确定」模板兜底重问一次，再不行才放弃
+    if not (parsed.get("root_cause") or "").strip() and not parsed.get("suggestions"):
+        fallback_tpl = await _get_template("diagnosis", "diagnosis_uncertain")
+        if fallback_tpl:
+            try:
+                fb_user = prompt_engine.render_template(fallback_tpl.user_prompt_template, render_ctx)
+                fb_resp, fb_model = await call_with_fallback(
+                    fallback_tpl.system_prompt + _INPUT_BOUNDARY_GUARD, fb_user, "diagnosis", severity)
+                fb_parsed = _parse_diagnosis_json(fb_resp.content)
+                if (fb_parsed.get("root_cause") or "").strip() or fb_parsed.get("suggestions"):
+                    parsed = fb_parsed
+                    model_used = fb_model
+                    template_name = "diagnosis_uncertain"
+                    matched = False
+                    fallback_used = True
+            except Exception:  # noqa: BLE001
+                fallback_used = False
     alert_id = alert_data.get("alert_id", 0)
 
     async with async_session() as session:
@@ -190,6 +208,7 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "model_used": model_used,
         "template_name": template_name,
         "template_missed": not matched,
+        "fallback_used": fallback_used,
     }
 
 
