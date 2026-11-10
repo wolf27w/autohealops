@@ -20,6 +20,11 @@ class LogAlertRule(Base):
     log_source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 日志源（空=默认源）
     notify_config_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # 通知渠道（空=走统一告警通知策略）
     keywords: Mapped[str] = mapped_column(Text, nullable=False)  # JSON 数组，命中任一计数
+    # R12：应用故障分类——命中后写入的故障类型 / 分类 / 优先级（同服务多类命中取最高）/ 证据抽取正则
+    fault_type: Mapped[str] = mapped_column(String(50), default="LogKeyword", server_default="LogKeyword")
+    category: Mapped[str] = mapped_column(String(20), default="app", server_default="app")
+    priority: Mapped[int] = mapped_column(Integer, default=100, server_default="100")  # 数值越小优先级越高
+    sample_pattern: Mapped[str] = mapped_column(String(300), default="", server_default="")
     namespace_filter: Mapped[str] = mapped_column(String(100), default="")  # 可选限定 namespace
     time_window: Mapped[int] = mapped_column(Integer, default=5)   # 统计窗口（分钟）
     threshold: Mapped[int] = mapped_column(Integer, default=3)     # 窗口内命中次数阈值

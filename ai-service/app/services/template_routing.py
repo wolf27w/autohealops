@@ -34,6 +34,17 @@ DEFAULT_ROUTING = {
         "CreateContainerConfigError": "pod_crash_diagnosis",
         # 应用/资源类
         "ContainerMemHigh": "application_diagnosis",
+        # R12：应用故障分类（日志规则命中的标准类型）
+        "AppOOM": "pod_crash_diagnosis",
+        "AppCrash": "pod_crash_diagnosis",
+        "AppConnRefused": "application_diagnosis",
+        "AppTimeout": "application_diagnosis",
+        "AppSQL": "application_diagnosis",
+        "AppConfigError": "application_diagnosis",
+        "AppPermission": "application_diagnosis",
+        "AppDependency": "application_diagnosis",
+        "AppBusiness": "application_diagnosis",
+        "LogKeyword": "application_diagnosis",
         # 节点类
         "NodeNotReady": "node_pressure_diagnosis",
         "MemoryPressure": "node_pressure_diagnosis",

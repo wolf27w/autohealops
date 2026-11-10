@@ -415,6 +415,8 @@ export const getLogAlertRules = () => http.get('/log-alert-rules')
 export const createLogAlertRule = (data: Payload) => http.post('/log-alert-rules', data)
 export const updateLogAlertRule = (id: number, data: Payload) => http.put(`/log-alert-rules/${id}`, data)
 export const deleteLogAlertRule = (id: number) => http.delete(`/log-alert-rules/${id}`)
+// R12：一键导入内置应用故障分类规则（java/go/node/python/all）
+export const importBuiltinLogAlertRules = (lang: string) => http.post<{ created: number; skipped: number; lang: string; total: number }>('/log-alert-rules/import-builtin', { lang })
 
 // ============ 日志源（ES 多实例） ============
 export const getLogSources = () => http.get<LogSource[]>('/log-sources')

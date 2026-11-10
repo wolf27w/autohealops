@@ -8906,6 +8906,49 @@
         "summary": "Create Rule"
       }
     },
+    "/api/v1/log-alert-rules/import-builtin": {
+      "post": {
+        "description": "一键导入内置应用故障分类规则（按语言栈：java/go/node/python/all；按名称幂等）。",
+        "operationId": "post_api_v1_log_alert_rules_import_builtin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Builtin"
+      }
+    },
     "/api/v1/log-alert-rules/{rule_id}": {
       "delete": {
         "operationId": "delete_api_v1_log_alert_rules_rule_id",

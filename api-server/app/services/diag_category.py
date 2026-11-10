@@ -67,6 +67,16 @@ APP_FAULT_TYPES: set[str] = {
     "ContainerMemHigh",
     # 日志关键词类（log_alert_service）
     "LogKeyword",
+    # R12：应用故障分类（log 规则命中后写入的标准 fault_type）
+    "AppOOM",
+    "AppCrash",
+    "AppConnRefused",
+    "AppTimeout",
+    "AppSQL",
+    "AppConfigError",
+    "AppPermission",
+    "AppDependency",
+    "AppBusiness",
 }
 
 # 数据库层（db_alert_service）

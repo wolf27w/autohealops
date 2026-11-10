@@ -18,6 +18,7 @@ export default function AlertList() {
   const [status, setStatus] = useState<string>()
   const [env, setEnv] = useState<string>()
   const [manualOnly, setManualOnly] = useState<boolean | undefined>()
+  const [faultType, setFaultType] = useState<string>()
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
   const writable = canWrite()
@@ -37,8 +38,8 @@ export default function AlertList() {
 
   // react-query：告警列表查询（5s 轮询 + 缓存 + 筛选变化自动重查；服务端分页）
   const { data: alertsData, isLoading: loading, refetch } = useQuery({
-    queryKey: ['alerts', severity, status, env, manualOnly, page],
-    queryFn: () => getAlertsPaged({ severity, status, env_tag: env, manual_required: manualOnly, page, page_size: PAGE_SIZE }),
+    queryKey: ['alerts', severity, status, env, manualOnly, faultType, page],
+    queryFn: () => getAlertsPaged({ severity, status, env_tag: env, manual_required: manualOnly, fault_type: faultType, page, page_size: PAGE_SIZE }),
     refetchInterval: 5000,
   })
   const alerts = alertsData?.items ?? []
@@ -148,6 +149,19 @@ export default function AlertList() {
           options={[{ value: 'qa', label: 'qa' }, { value: 'release', label: 'release' }, { value: 'prod', label: 'prod' }]} />
         <Select placeholder="严重级别" allowClear style={{ width: 140 }} onChange={(v) => { setSeverity(v); setPage(1) }}
           options={['critical', 'high', 'medium', 'low'].map((s) => ({ value: s, label: s }))} />
+        <Select placeholder="故障类型" allowClear showSearch style={{ width: 180 }} onChange={(v) => { setFaultType(v); setPage(1) }}
+          options={[
+            { value: 'AppOOM', label: 'AppOOM 内存溢出' },
+            { value: 'AppCrash', label: 'AppCrash 进程崩溃' },
+            { value: 'AppConnRefused', label: 'AppConnRefused 连接拒绝' },
+            { value: 'AppTimeout', label: 'AppTimeout 超时' },
+            { value: 'AppSQL', label: 'AppSQL SQL异常' },
+            { value: 'AppConfigError', label: 'AppConfigError 配置错误' },
+            { value: 'AppPermission', label: 'AppPermission 权限拒绝' },
+            { value: 'AppDependency', label: 'AppDependency 下游依赖' },
+            { value: 'AppBusiness', label: 'AppBusiness 业务错误' },
+            { value: 'LogKeyword', label: 'LogKeyword 兜底' },
+          ]} />
         <Select placeholder="状态" allowClear style={{ width: 140 }} onChange={(v) => { setStatus(v); setPage(1) }}
           options={[
             { value: 'pending', label: '待处理' },

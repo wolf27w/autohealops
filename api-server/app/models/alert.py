@@ -33,6 +33,8 @@ class Alert(Base):
     manual_reason: Mapped[str] = mapped_column(String(255), default="")
     # 聚合告警的事件计数（同故障 5 分钟内合并）
     event_count: Mapped[int] = mapped_column(Integer, default=1)
+    # R12：日志规则优先级（同服务多类命中取最高优先级合并时比较用；仅 log 告警写入）
+    rule_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 故障实际发生时间（报错时间，从事件对象提取，区别于检测时间）
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
