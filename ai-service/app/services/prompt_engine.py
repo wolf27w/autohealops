@@ -1,12 +1,56 @@
 # -*- coding: utf-8 -*-
 """提示词引擎：模板渲染 + 版本管理 + 默认模板种子"""
 import json
+import logging
 import re
+import time
 
 from sqlalchemy import select
 
 from app.core.database import async_session
-from app.models import PromptTemplate, PromptVersion
+from app.models import PromptFragment, PromptTemplate, PromptVersion
+
+logger = logging.getLogger("ai-service.prompt-engine")
+
+# R10：公共片段引用 {{fragment:key}}
+FRAGMENT_RE = re.compile(r"\{\{fragment:([A-Za-z0-9_\-]+)\}\}")
+_frag_cache: dict = {"ts": 0.0, "map": {}}
+_FRAG_TTL = 60.0
+
+
+async def load_fragments() -> dict[str, str]:
+    """读取启用的公共片段（60s 缓存）→ {key: content}"""
+    now = time.monotonic()
+    if _frag_cache["map"] and now - _frag_cache["ts"] < _FRAG_TTL:
+        return _frag_cache["map"]
+    try:
+        async with async_session() as s:
+            rows = list((await s.execute(select(PromptFragment).where(PromptFragment.enabled.is_(True)))).scalars())
+        mp = {r.key: (r.content or "") for r in rows}
+        _frag_cache.update({"ts": now, "map": mp})
+        return mp
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取公共片段失败: %s", e)
+        return _frag_cache["map"]
+
+
+async def expand_fragments(text: str) -> str:
+    """把 {{fragment:key}} 替换成片段内容；未知片段替换为空并记 debug 日志"""
+    if not text or "{{fragment:" not in text:
+        return text
+    mp = await load_fragments()
+    def _sub(m):
+        key = m.group(1)
+        if key not in mp:
+            logger.debug("模板引用了不存在的片段: %s", key)
+            return ""
+        return mp[key]
+    return FRAGMENT_RE.sub(_sub, text)
+
+
+async def render(template: str, context: dict) -> str:
+    """先展开公共片段，再渲染 {变量}（R10 统一入口）"""
+    return render_template(await expand_fragments(template), context)
 
 
 def extract_variables(template: str) -> list[str]:
@@ -123,6 +167,17 @@ DEFAULT_TEMPLATES = [
         "user_prompt_template": "请诊断以下故障（证据可能不足，请如实给出候选原因与排查方向）：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n节点名称：{node_name}\n故障类型：{fault_type}\n状态信息：{status_info}\n最近事件：{recent_events}\n最近日志：{recent_logs}\n指标趋势：{metrics_trend}\n应用错误日志样例：{log_snippet}",
     },
     {
+        "name": "cluster_diagnosis",
+        "category": "diagnosis",
+        "scene": "cluster",
+        "system_prompt": (
+            "你是 Kubernetes 集群层面的排障专家。分析集群容量、调度失败、核心组件异常等问题。"
+            "{{fragment:output_json}}\n{{fragment:red_lines}}\n{{fragment:evidence_rule}}"
+        ),
+        "user_prompt_template": ("请诊断以下集群问题：\n集群：{cluster_name}\n命名空间：{namespace}\n资源：{resource_kind}/{resource_name}\n"
+                                 "故障类型：{fault_type}\n状态：{status_info}\n事件：{recent_events}\n节点/集群指标：{metrics_trend}"),
+    },
+    {
         "name": "repair_plan_generation",
         "category": "repair_plan",
         "system_prompt": "你是一个Kubernetes自动化运维专家。请基于诊断结果生成安全的修复方案。返回JSON格式，包含steps数组。每个step必须包含：command（kubectl命令）、description（步骤描述）、expected_result（预期结果）、rollback_command（回滚命令）。\n\n【命令占位符规范-必须遵守】命令禁止写死具体资源名，一律使用占位符，执行时由平台按当前告警上下文自动填充：\n- 命名空间用 {namespace}\n- Pod 名用 {pod_name}\n- Deployment 名用 {deployment_name}\n- 节点名用 {node_name}\n- 资源类型用 {resource_type}\n- 其他资源名用 {resource_name}\n例如：kubectl -n {namespace} delete pod {pod_name}；kubectl -n {namespace} rollout restart deployment {deployment_name}。\n不得出现 qa-eft、xxx-abc123 这类写死的环境名/资源名。",
@@ -157,5 +212,48 @@ async def seed_default_templates() -> None:
                 system_prompt=tpl["system_prompt"],
                 user_prompt_template=tpl["user_prompt_template"],
                 variables=json.dumps(extract_variables(tpl["user_prompt_template"])),
+                scene=tpl.get("scene", ""),
             ))
         await session.commit()
+
+
+# ============ R10 默认公共片段（seed 用） ============
+DEFAULT_FRAGMENTS = [
+    {
+        "key": "output_json", "name": "输出 JSON 约定", "category": "common",
+        "content": ("【输出格式】严格只输出一个 JSON 对象，不要 markdown 代码块、不要额外解释。"
+                    "字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high/critical）、"
+                    "confidence（0~1 小数）。证据不足时 confidence 要如实偏低，并在 root_cause 里说明缺什么证据。"),
+    },
+    {
+        "key": "red_lines", "name": "红线（只给方案不执行）", "category": "common",
+        "content": ("【红线】你只输出诊断结论与修复建议，**绝不执行任何变更**（不跑 kubectl 写操作、不重启、不删数据、不改配置）；"
+                    "具体操作由平台按审批流程执行。不要编造未提供的日志/指标/字段。"),
+    },
+    {
+        "key": "evidence_rule", "name": "证据引用要求", "category": "common",
+        "content": ("【证据】结论必须能对上前面的证据（事件/日志/指标/KB 命中）。引用时写清是「事件」「日志」还是「指标」，"
+                    "不要用「可能/也许」堆砌；没有证据支撑的判断要显式标注为推测。"),
+    },
+]
+
+
+async def seed_default_fragments() -> int:
+    """启动时补齐默认片段（按 key 幂等）。返回新增条数。"""
+    n = 0
+    try:
+        async with async_session() as s:
+            existing = {k for k in (await s.execute(select(PromptFragment.key))).scalars()}
+            for f in DEFAULT_FRAGMENTS:
+                if f["key"] in existing:
+                    continue
+                s.add(PromptFragment(**f))
+                n += 1
+            if n:
+                await s.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("seed 公共片段失败: %s", e)
+        return 0
+    if n:
+        _frag_cache.update({"ts": 0.0, "map": {}})
+    return n

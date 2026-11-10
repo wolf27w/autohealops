@@ -287,7 +287,9 @@ async def list_prompt_templates():
     return {"code": 200, "message": "success", "data": [
         {"id": t.id, "name": t.name, "category": t.category, "system_prompt": t.system_prompt,
          "user_prompt_template": t.user_prompt_template, "variables": t.variables,
-         "version": t.version, "is_active": t.is_active} for t in templates
+         "version": t.version, "is_active": t.is_active,
+         "scene": getattr(t, "scene", "") or "", "sample_vars": getattr(t, "sample_vars", "") or "",
+         "status": getattr(t, "status", "active"), "source": getattr(t, "source", "manual")} for t in templates
     ]}
 
 
@@ -306,9 +308,26 @@ async def create_prompt_template(payload: dict):
 
 @router.put("/prompt-templates/{template_id}")
 async def update_prompt_template(template_id: int, payload: dict):
-    """更新提示词模板（version+1，旧版本存档）"""
+    """更新提示词模板（version+1，旧版本存档）；scene/sample_vars/is_active 单独更新"""
+    from app.models import PromptTemplate
     from app.services.prompt_engine import update_template
-    await update_template(template_id, payload.get("system_prompt", ""), payload.get("user_prompt_template", ""))
+    if payload.get("system_prompt") is not None or payload.get("user_prompt_template") is not None:
+        from sqlalchemy import select as _sel
+        async with async_session() as _s:
+            _t = await _s.get(PromptTemplate, template_id)
+            sys_p = payload.get("system_prompt", _t.system_prompt if _t else "")
+            usr_p = payload.get("user_prompt_template", _t.user_prompt_template if _t else "")
+        await update_template(template_id, sys_p, usr_p)
+    async with async_session() as s:
+        t = await s.get(PromptTemplate, template_id)
+        if t:
+            if payload.get("scene") is not None:
+                t.scene = str(payload["scene"])[:30]
+            if payload.get("sample_vars") is not None:
+                t.sample_vars = payload["sample_vars"]
+            if payload.get("is_active") is not None:
+                t.is_active = bool(payload["is_active"])
+            await s.commit()
     return {"code": 200, "message": "success", "data": None}
 
 
@@ -347,6 +366,154 @@ async def accept_prompt_suggestion(suggestion_id: int, payload: dict):
 async def ignore_prompt_suggestion(suggestion_id: int):
     from app.services import prompt_suggestion_service as pss
     return await pss.ignore(suggestion_id)
+
+
+# ============ R10 公共片段 / 路由规则 / 模板预览 ============
+@router.get("/prompt-fragments")
+async def list_fragments():
+    from app.models import PromptFragment
+    async with async_session() as s:
+        rows = list((await s.execute(select(PromptFragment).order_by(PromptFragment.id))).scalars())
+    return {"code": 200, "message": "success", "data": [
+        {"id": r.id, "key": r.key, "name": r.name, "category": r.category,
+         "content": r.content, "enabled": bool(r.enabled)} for r in rows]}
+
+
+@router.post("/prompt-fragments")
+async def create_fragment(payload: dict):
+    from app.models import PromptFragment
+    from app.services import prompt_engine as pe
+    async with async_session() as s:
+        row = PromptFragment(key=(payload.get("key") or "").strip(),
+                             name=payload.get("name", ""), category=payload.get("category", "common"),
+                             content=payload.get("content", ""), enabled=bool(payload.get("enabled", True)))
+        if not row.key:
+            return {"code": 400, "message": "key 必填", "data": None}
+        s.add(row)
+        await s.commit()
+        await s.refresh(row)
+        fid = row.id
+    pe._frag_cache.update({"ts": 0.0, "map": {}})
+    return {"code": 200, "message": "success", "data": {"id": fid}}
+
+
+@router.put("/prompt-fragments/{fid}")
+async def update_fragment(fid: int, payload: dict):
+    from app.models import PromptFragment
+    from app.services import prompt_engine as pe
+    async with async_session() as s:
+        row = await s.get(PromptFragment, fid)
+        if not row:
+            return {"code": 404, "message": "片段不存在", "data": None}
+        for f in ("name", "category", "content"):
+            if payload.get(f) is not None:
+                setattr(row, f, payload[f])
+        if payload.get("enabled") is not None:
+            row.enabled = bool(payload["enabled"])
+        await s.commit()
+    pe._frag_cache.update({"ts": 0.0, "map": {}})
+    return {"code": 200, "message": "success", "data": None}
+
+
+@router.delete("/prompt-fragments/{fid}")
+async def delete_fragment(fid: int):
+    from app.models import PromptFragment
+    from app.services import prompt_engine as pe
+    async with async_session() as s:
+        row = await s.get(PromptFragment, fid)
+        if row:
+            await s.delete(row)
+            await s.commit()
+    pe._frag_cache.update({"ts": 0.0, "map": {}})
+    return {"code": 200, "message": "success", "data": None}
+
+
+@router.get("/prompt-routing")
+async def list_routing():
+    from app.models import PromptRouting
+    async with async_session() as s:
+        rows = list((await s.execute(
+            select(PromptRouting).order_by(PromptRouting.priority.asc(), PromptRouting.id.asc()))).scalars())
+    return {"code": 200, "message": "success", "data": [
+        {"id": r.id, "match_type": r.match_type, "match_value": r.match_value, "match_mode": r.match_mode,
+         "template_name": r.template_name, "priority": r.priority, "enabled": bool(r.enabled)} for r in rows]}
+
+
+@router.post("/prompt-routing")
+async def create_routing(payload: dict):
+    from app.models import PromptRouting
+    from app.services import template_routing
+    async with async_session() as s:
+        row = PromptRouting(
+            match_type=payload.get("match_type", "fault_type"),
+            match_value=payload.get("match_value", ""),
+            match_mode=payload.get("match_mode", "exact"),
+            template_name=payload.get("template_name", ""),
+            priority=int(payload.get("priority", 100)),
+            enabled=bool(payload.get("enabled", True)),
+        )
+        if not row.template_name:
+            return {"code": 400, "message": "template_name 必填", "data": None}
+        s.add(row)
+        await s.commit()
+        await s.refresh(row)
+        rid = row.id
+    template_routing._cache.update({"ts": 0.0, "routing": None})
+    return {"code": 200, "message": "success", "data": {"id": rid}}
+
+
+@router.put("/prompt-routing/{rid}")
+async def update_routing(rid: int, payload: dict):
+    from app.models import PromptRouting
+    from app.services import template_routing
+    async with async_session() as s:
+        row = await s.get(PromptRouting, rid)
+        if not row:
+            return {"code": 404, "message": "规则不存在", "data": None}
+        for f in ("match_type", "match_value", "match_mode", "template_name"):
+            if payload.get(f) is not None:
+                setattr(row, f, payload[f])
+        if payload.get("priority") is not None:
+            row.priority = int(payload["priority"])
+        if payload.get("enabled") is not None:
+            row.enabled = bool(payload["enabled"])
+        await s.commit()
+    template_routing._cache.update({"ts": 0.0, "routing": None})
+    return {"code": 200, "message": "success", "data": None}
+
+
+@router.delete("/prompt-routing/{rid}")
+async def delete_routing(rid: int):
+    from app.models import PromptRouting
+    from app.services import template_routing
+    async with async_session() as s:
+        row = await s.get(PromptRouting, rid)
+        if row:
+            await s.delete(row)
+            await s.commit()
+    template_routing._cache.update({"ts": 0.0, "routing": None})
+    return {"code": 200, "message": "success", "data": None}
+
+
+@router.post("/prompt-templates/{template_id}/preview")
+async def preview_template(template_id: int, payload: dict):
+    """预览渲染：传入样例变量，返回最终 system/user prompt（含公共片段展开）"""
+    from app.models import PromptTemplate
+    from app.services import prompt_engine as pe
+    async with async_session() as s:
+        tpl = await s.get(PromptTemplate, template_id)
+        if not tpl:
+            return {"code": 404, "message": "模板不存在", "data": None}
+        system_raw, user_raw = tpl.system_prompt, tpl.user_prompt_template
+    variables = payload.get("vars") if isinstance(payload.get("vars"), dict) else {}
+    missing = [v for v in (pe.extract_variables(user_raw) + pe.extract_variables(system_raw))
+               if v not in variables]
+    system = await pe.expand_fragments(system_raw)
+    user = await pe.render(user_raw, variables)
+    return {"code": 200, "message": "success", "data": {
+        "system_prompt": pe.render_template(system, variables), "user_prompt": user,
+        "missing_vars": sorted(set(missing)), "variables": pe.extract_variables(user_raw),
+    }}
 
 
 @router.post("/rag/embed-test")

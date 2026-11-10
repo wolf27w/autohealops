@@ -12,7 +12,7 @@ import time
 from sqlalchemy import select
 
 from app.core.database import async_session
-from app.models import SystemSetting
+from app.models import PromptRouting, SystemSetting
 
 CONFIG_TTL = 60.0
 _cache = {"ts": 0.0, "routing": None}
@@ -85,11 +85,50 @@ def _normalize(cfg: dict) -> dict:
     return routing
 
 
+def _routing_from_rules(rules: list) -> dict | None:
+    """DB 路由行 → {exact, prefix, default}（priority 小的先占位）"""
+    exact: dict[str, str] = {}
+    prefix: dict[str, str] = {}
+    default = ""
+    for r in rules:
+        mode = (r.match_mode or "exact").lower()
+        name = (r.template_name or "").strip()
+        if not name or (r.match_type or "fault_type") not in ("fault_type", "scene"):
+            continue
+        val = (r.match_value or "").strip()
+        if mode == "exact" and val and val not in exact:
+            exact[val] = name
+        elif mode == "prefix" and val and val not in prefix:
+            prefix[val] = name
+        elif mode == "default" and not default:
+            default = name
+    if not (exact or prefix or default):
+        return None
+    return {"exact": exact, "prefix": prefix, "default": default or DEFAULT_ROUTING["default"]}
+
+
+async def _load_db_rules() -> list:
+    try:
+        async with async_session() as s:
+            return list((await s.execute(
+                select(PromptRouting).where(PromptRouting.enabled.is_(True))
+                .order_by(PromptRouting.priority.asc(), PromptRouting.id.asc())
+            )).scalars())
+    except Exception:  # noqa: BLE001 表不存在（迁移未应用）时退回 JSON/内置
+        return []
+
+
 async def load_routing() -> dict:
-    """读配置（60s 缓存；无配置用内置默认表）。"""
+    """读配置（60s 缓存）：优先 prompt_routing 表 → system_settings JSON → 内置默认表。"""
     now = time.monotonic()
     if _cache["routing"] is not None and now - _cache["ts"] < CONFIG_TTL:
         return _cache["routing"]
+
+    db_routing = _routing_from_rules(await _load_db_rules())
+    if db_routing:
+        _cache.update({"ts": now, "routing": db_routing})
+        return db_routing
+
     routing = DEFAULT_ROUTING
     try:
         async with async_session() as s:
@@ -144,4 +183,52 @@ async def bind_fault_type(fault_type: str, template_name: str) -> None:
         else:
             s.add(SystemSetting(key="diagnosis_template_routing", value=json.dumps(cfg, ensure_ascii=False)))
         await s.commit()
+    # 同时写 DB 路由表（R10 起为权威来源；R13 采纳的模板也从这里生效）
+    try:
+        async with async_session() as s:
+            row = (await s.execute(
+                select(PromptRouting).where(
+                    PromptRouting.match_type == "fault_type",
+                    PromptRouting.match_mode == "exact",
+                    PromptRouting.match_value == fault_type,
+                )
+            )).scalars().first()
+            if row:
+                row.template_name = template_name
+                row.enabled = True
+            else:
+                s.add(PromptRouting(match_type="fault_type", match_value=fault_type,
+                                    match_mode="exact", template_name=template_name, priority=10))
+            await s.commit()
+    except Exception as e:  # noqa: BLE001 表不存在时忽略（迁移未应用）
+        logger.debug("写 DB 路由失败: %s", e)
     _cache.update({"ts": 0.0, "routing": None})  # 立即失效缓存
+
+
+async def seed_default_routing() -> int:
+    """首次启动把内置默认路由表写入 prompt_routing（表为空时）。返回新增条数。"""
+    n = 0
+    try:
+        async with async_session() as s:
+            exists = (await s.execute(select(PromptRouting.id).limit(1))).scalars().first()
+            if exists:
+                return 0
+            pri = 10
+            for ft, tpl in DEFAULT_ROUTING["exact"].items():
+                s.add(PromptRouting(match_type="fault_type", match_value=ft, match_mode="exact",
+                                    template_name=tpl, priority=pri))
+                n += 1
+            for pre, tpl in DEFAULT_ROUTING["prefix"].items():
+                s.add(PromptRouting(match_type="fault_type", match_value=pre, match_mode="prefix",
+                                    template_name=tpl, priority=50))
+                n += 1
+            s.add(PromptRouting(match_type="fault_type", match_value="", match_mode="default",
+                                template_name=DEFAULT_ROUTING["default"], priority=1000))
+            n += 1
+            await s.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("seed 路由失败: %s", e)
+        return 0
+    if n:
+        _cache.update({"ts": 0.0, "routing": None})
+    return n

@@ -151,8 +151,8 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测（由 api-server 采集）
         "probe_evidence": _sanitize_external(ctx.get("probe_evidence") or alert_data.get("probe_evidence", "")),
     }
-    system_prompt = tpl.system_prompt + _INPUT_BOUNDARY_GUARD
-    user_prompt = prompt_engine.render_template(tpl.user_prompt_template, render_ctx)
+    system_prompt = await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD
+    user_prompt = await prompt_engine.render(tpl.user_prompt_template, render_ctx)
     # 模板里没有探针段（存量模板未改）→ 统一追加在末尾，不依赖改库里的提示词
     _probe_text = (ctx.get("probe_evidence") or alert_data.get("probe_evidence") or "").strip()
     if _probe_text and "{probe_evidence}" not in (tpl.user_prompt_template or ""):
@@ -242,13 +242,13 @@ async def multi_diagnose(alert_data: dict, context_data: dict | None = None) -> 
         "recent_logs": _sanitize_external(ctx.get("recent_logs") or alert_data.get("recent_logs", "")),
         "metrics_trend": _sanitize_external(ctx.get("metrics_trend", "")),
     }
-    user_prompt = prompt_engine.render_template(tpl.user_prompt_template, render_ctx)
+    user_prompt = await prompt_engine.render(tpl.user_prompt_template, render_ctx)
 
     async def _call_one(cfg):
         from app.services.model_adapter import ModelFactory
         try:
             adapter = ModelFactory.get_adapter(cfg)
-            resp = await adapter.chat_completion(tpl.system_prompt + _INPUT_BOUNDARY_GUARD, user_prompt)
+            resp = await adapter.chat_completion(await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD, user_prompt)
             return cfg, resp, None
         except Exception as e:  # noqa: BLE001
             return cfg, None, str(e)

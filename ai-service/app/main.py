@@ -11,13 +11,22 @@ from app.api.core_api import router as core_router
 from app.core.config import settings
 from app.core.http_client import close_http_clients
 from app.services.embedding_service import EmbeddingConfigError
-from app.services.prompt_engine import seed_default_templates
+from app.services.prompt_engine import seed_default_fragments, seed_default_templates
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动事件：预置默认提示词模板（不建表，表由 api-server alembic 管理）"""
     await seed_default_templates()
+    # R10：公共片段 + 场景/路由种子
+    try:
+        from app.services import template_routing
+        n_frag = await seed_default_fragments()
+        n_route = await template_routing.seed_default_routing()
+        if n_frag or n_route:
+            print(f"[seed] 公共片段 +{n_frag}，路由规则 +{n_route}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[seed] R10 种子失败: {e}")
     yield
     await close_http_clients()
 

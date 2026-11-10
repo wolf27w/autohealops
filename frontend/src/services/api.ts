@@ -151,6 +151,20 @@ export const getAiFeedback = (alertId: number) => http.get<AiFeedbackData>(`/fau
 export const addAiFeedback = (alertId: number, rating: number, comment = '') => http.post(`/fault-diagnoses/${alertId}/feedback`, { rating, comment })
 
 // ============ 提示词模板 ============
+// ============ R10 提示词场景体系：公共片段 / 路由 / 预览 ============
+export interface PromptFragment { id: number; key: string; name: string; category: string; content: string; enabled: boolean }
+export interface PromptRouting { id: number; match_type: string; match_value: string; match_mode: string; template_name: string; priority: number; enabled: boolean }
+export const getPromptFragments = () => http.get<PromptFragment[]>('/ai/prompt-fragments')
+export const createPromptFragment = (d: Payload) => http.post('/ai/prompt-fragments', d)
+export const updatePromptFragment = (id: number, d: Payload) => http.put(`/ai/prompt-fragments/${id}`, d)
+export const deletePromptFragment = (id: number) => http.delete(`/ai/prompt-fragments/${id}`)
+export const getPromptRouting = () => http.get<PromptRouting[]>('/ai/prompt-routing')
+export const createPromptRouting = (d: Payload) => http.post('/ai/prompt-routing', d)
+export const updatePromptRouting = (id: number, d: Payload) => http.put(`/ai/prompt-routing/${id}`, d)
+export const deletePromptRouting = (id: number) => http.delete(`/ai/prompt-routing/${id}`)
+export const previewPromptTemplate = (id: number, vars: Record<string, string>) =>
+  http.post<{ system_prompt: string; user_prompt: string; missing_vars: string[]; variables: string[] }>(`/ai/prompt-templates/${id}/preview`, { vars })
+
 // ============ 僵尸服务检测（R20，只读） ============
 export interface ZombieItem {
   namespace: string; deployment: string; replicas?: number; ready_replicas?: number

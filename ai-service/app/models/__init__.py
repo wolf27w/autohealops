@@ -82,6 +82,9 @@ class PromptTemplate(Base):
     source_refs: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     invalid_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # R10：场景 + 预览样例变量
+    scene: Mapped[str] = mapped_column(String(30), default="", server_default="")
+    sample_vars: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -209,5 +212,34 @@ class KnowledgeEntry(Base):
     pending_review: Mapped[bool] = mapped_column(Boolean, default=False)
     # 治理：失效停用（false 后不参与检索，与 api-server 模型保持一致）
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class PromptFragment(Base):
+    """R10 公共片段（输出格式/红线/术语），模板用 `{{fragment:key}}` 引用"""
+    __tablename__ = "prompt_fragments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(60), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    category: Mapped[str] = mapped_column(String(30), default="common", server_default="common")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class PromptRouting(Base):
+    """R10 路由规则：fault_type/scene → 模板名（exact/prefix/default，priority 越小越优先）"""
+    __tablename__ = "prompt_routing"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_type: Mapped[str] = mapped_column(String(20), default="fault_type", server_default="fault_type")
+    match_value: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    match_mode: Mapped[str] = mapped_column(String(10), default="exact", server_default="exact")
+    template_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
