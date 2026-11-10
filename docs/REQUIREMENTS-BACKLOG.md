@@ -791,7 +791,7 @@
 
 > 说明：把当天讨论的需求补上「验收标准 / 技术落点 / 拆分 / 估时 / 风险」，便于排期与验收。
 
-### R1 PostgreSQL 支持（经 agent 查库 + 健康采集）— ✅ 已实现（2026-11-09，commit `1b7a008`；agent 0.2.15 已升级测试集群；待真 PG 实例验证）
+### R1 PostgreSQL 支持（经 agent 查库 + 健康采集）— ✅ 已实现（2026-11-09，commit `1b7a008`；agent 0.2.15 已升级测试集群；**真 PG 实例已验证**（2026-11-10，PG 11.14 经 agent 隧道，查询类型/13 项指标/表空间 TOP10/pg_stat_statements 缺失不报错，`022780e`））
 
 **验收**
 - 配置 `db_type=postgres` 的连接后，只读 SQL 能返回列/行（NULL、时间、数字类型正确）
@@ -1567,7 +1567,7 @@ GET /api/v1/monitoring/clusters/{cid}/workloads/{kind}/{ns}/{name}/metrics?range
 
 ---
 
-### R19 集群管理内发布（对接 Jenkins）— ✅ 已实现（2026-11-09，`5e129e8`…`e496b07`；含 namespace 标签门控 / 映射 / 单发+批量 / Blue Ocean 阶段日志 / 发布历史 / 每用户 Token；回滚到指定构建号未做）
+### R19 集群管理内发布（对接 Jenkins）— ✅ 已实现（2026-11-09，`5e129e8`…`e496b07`；含 namespace 标签门控 / 映射 / 单发+批量 / Blue Ocean 阶段日志 / 发布历史 / 每用户 Token；回滚到指定构建号已做 `58408ca`）
 
 **目标**：在「集群管理」里直接发布服务，不用再去 Jenkins 页面点；后台统一配置 Jenkins 与服务映射，发布后弹出 pipeline 阶段视图与实时日志。
 
