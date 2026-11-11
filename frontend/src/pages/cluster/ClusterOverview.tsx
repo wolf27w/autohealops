@@ -1,7 +1,7 @@
 // 集群概览（R32-P1）：参照 KubeSphere 集群「概览」——集群信息 + 资源使用率 + 节点状态 + 资源统计。
 // 数据源：getCluster / getNodes / getResourceOverview / getClusterDetail / getMiscResources（均已存在，不新增接口）。
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Col, Row, Statistic, Table, Tag, Typography, Progress, Empty, Spin } from 'antd'
+import { Card, Col, Row, Statistic, Tag, Typography, Progress, Spin } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { getCluster, getNodes, getResourceOverview, getClusterDetail, getMiscResources, type K8sNode } from '../../services/api'
 
@@ -164,6 +164,30 @@ export default function ClusterOverview({ clusterId }: { clusterId: number }) {
         </Col>
       </Row>
 
+      {/* 集群资源总量（可分配量） */}
+      <Card size="small" title="集群资源总量（可分配）" style={{ marginTop: 12 }}>
+        <Row gutter={12}>
+          <Col span={8}>
+            <Statistic title="CPU" value={cpuTotal != null ? `${cpuTotal} 核` : '-'} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              已用 {cpuUsed != null ? cpuUsed.toFixed(1) : '-'} 核
+            </Typography.Text>
+          </Col>
+          <Col span={8}>
+            <Statistic title="内存" value={memTotal != null ? fmtBytes(memTotal) : '-'} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              已用 {fmtBytes(memUsed)}
+            </Typography.Text>
+          </Col>
+          <Col span={8}>
+            <Statistic title="Pod" value={overview?.nodes ?? '-'} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              已用 {overview?.ready_nodes ?? '-'}
+            </Typography.Text>
+          </Col>
+        </Row>
+      </Card>
+
       {/* 资源统计 */}
       <Card size="small" title="资源统计" style={{ marginTop: 12 }}>
         <Row gutter={[8, 12]}>
@@ -181,29 +205,6 @@ export default function ClusterOverview({ clusterId }: { clusterId: number }) {
         </Row>
       </Card>
 
-      {/* 节点状态 */}
-      <Card size="small" title={`节点状态（${readyNodes}/${nodes.length} 就绪）`} style={{ marginTop: 12 }}>
-        {nodes.length === 0 ? <Empty description="暂无节点数据" /> : (
-          <Table
-            rowKey="name"
-            size="small"
-            pagination={false}
-            dataSource={nodes}
-            columns={[
-              {
-                title: '名称', dataIndex: 'name',
-                render: (v: string, r: K8sNode) => <a onClick={() => navigate(`/clusters/${clusterId}/nodes`)}>{v}</a>,
-              },
-              { title: '状态', dataIndex: 'ready', width: 110, render: (v: string) => <Tag color={v === 'Ready' ? 'green' : 'red'}>{v}</Tag> },
-              { title: '角色', dataIndex: 'roles', width: 130, render: (v: string) => v || '-' },
-              { title: 'CPU 使用', width: 110, render: (_: unknown, r: K8sNode) => r.cpu_pct != null ? `${r.cpu_pct}%` : '-' },
-              { title: '内存使用', width: 110, render: (_: unknown, r: K8sNode) => r.mem_pct != null ? `${r.mem_pct}%` : '-' },
-              { title: 'Pod', dataIndex: 'pods_count', width: 70, render: (v: number) => v ?? '-' },
-              { title: '版本', dataIndex: 'kubelet_version', width: 120, render: (v: string) => v || '-' },
-            ]}
-          />
-        )}
-      </Card>
     </div>
   )
 }
