@@ -1,7 +1,7 @@
 // 服务详情页（专项 D）：工作负载概览 + 副本增减 + 探针编辑 + 回滚/重启/重建 + Pods 列表（监控/日志/进容器/YAML）
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Popconfirm, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider, Collapse, Spin } from 'antd'
-import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined, DownloadOutlined } from '@ant-design/icons'
+import { Card, Descriptions, Button, Space, Table, Tag, InputNumber, Modal, Form, Select, Input, message, Tabs, Drawer, Segmented, Empty, Dropdown, Switch, Tooltip, Divider, Collapse, Spin } from 'antd'
+import { ArrowLeftOutlined, ReloadOutlined, DownOutlined, MinusOutlined, PlusOutlined, QuestionCircleOutlined, DownloadOutlined, MoreOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Line } from '@ant-design/charts'
 import TerminalModal from '../components/TerminalModal'
@@ -381,37 +381,55 @@ export default function ServiceDetail() {
                   if (r.memory_request || r.memory_limit) parts.push(`内存 ${r.memory_request || '-'}~${r.memory_limit || '-'}`)
                   return parts.join(' ｜ ') || '-'
                 } },
-                { title: '操作', render: (_, r) => (
-                  <Space size="small">
-                    <Button size="small" type="link" onClick={() => setMetricsPod({ ...r, clusterId })}>监控</Button>
-                    <Button size="small" type="link" onClick={() => setLogPod({ ...r, clusterId })}>日志</Button>
-                    <Button size="small" type="link" onClick={() => setExecTarget({ ...r, clusterId })}>进容器</Button>
-                    <Button size="small" type="link" onClick={() => setJvmPod({ ...r, clusterId })}>JVM诊断</Button>
-                    {isolated.has(r.name) ? (
-                      <Popconfirm title="取消隔离？（还原标签，回到 Service 流量）" onConfirm={async () => { await unisolatePod(clusterId, r.namespace, r.name); message.success('已取消隔离'); loadPods() }}>
-                        <Button size="small" type="link">取消隔离</Button>
-                      </Popconfirm>
-                    ) : (
-                      <Popconfirm title="隔离该 Pod？（app / app.kubernetes.io/name 等标签改为 xxx-ALERT，脱离 Service 流量）" onConfirm={async () => { await isolatePod(clusterId, r.namespace, r.name); message.success('已隔离'); loadPods() }}>
-                        <Button size="small" type="link">隔离</Button>
-                      </Popconfirm>
-                    )}
-                    <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId })}>YAML</Button>
-                    <Popconfirm
-                      title={`删除容器 ${r.name}？`}
-                      description="Deployment/StatefulSet 托管的 Pod 会被自动重建；裸 Pod 删除后不再恢复。"
-                      okButtonProps={{ danger: true }}
-                      onConfirm={async () => {
-                        try {
-                          await deleteWorkload(clusterId, 'pod', r.namespace, r.name)
-                          message.success('已删除')
-                          loadPods()
-                        } catch { message.error('删除失败') }
-                      }}
-                    >
-                      <Button size="small" type="link" danger>删除</Button>
-                    </Popconfirm>
-                  </Space>
+                { title: '操作', width: 90, render: (_, r) => (
+                  // 与「无状态」保持一致：操作收进下拉，避免一排按钮误点
+                  <Dropdown trigger={['click']} menu={{ items: [
+                    { key: 'metrics', label: '监控' },
+                    { key: 'logs', label: '日志' },
+                    { key: 'exec', label: '进容器' },
+                    { key: 'jvm', label: 'JVM 诊断' },
+                    { key: 'yaml', label: '编辑 YAML' },
+                    { type: 'divider' as const },
+                    { key: 'isolate', label: isolated.has(r.name) ? '取消隔离' : '隔离（脱离 Service 流量）' },
+                    { type: 'divider' as const },
+                    { key: 'delete', label: '删除容器', danger: true },
+                  ], onClick: ({ key }) => {
+                    if (key === 'metrics') setMetricsPod({ ...r, clusterId })
+                    else if (key === 'logs') setLogPod({ ...r, clusterId })
+                    else if (key === 'exec') setExecTarget({ ...r, clusterId })
+                    else if (key === 'jvm') setJvmPod({ ...r, clusterId })
+                    else if (key === 'yaml') setYamlPod({ ...r, clusterId })
+                    else if (key === 'isolate') {
+                      if (isolated.has(r.name)) {
+                        Modal.confirm({
+                          title: `取消隔离 ${r.name}？`,
+                          content: '还原标签后该 Pod 会重新进入 Service 流量。',
+                          onOk: async () => { await unisolatePod(clusterId, r.namespace, r.name); message.success('已取消隔离'); loadPods() },
+                        })
+                      } else {
+                        Modal.confirm({
+                          title: `隔离 ${r.name}？`,
+                          content: 'app / app.kubernetes.io/name 等标签改为 xxx-ALERT，使该 Pod 脱离 Service 流量（用于故障隔离）。',
+                          onOk: async () => { await isolatePod(clusterId, r.namespace, r.name); message.success('已隔离'); loadPods() },
+                        })
+                      }
+                    } else if (key === 'delete') {
+                      Modal.confirm({
+                        title: `删除容器 ${r.name}？`,
+                        content: 'Deployment/StatefulSet 托管的 Pod 会被自动重建；裸 Pod 删除后不再恢复。',
+                        okButtonProps: { danger: true },
+                        onOk: async () => {
+                          try {
+                            await deleteWorkload(clusterId, 'pod', r.namespace, r.name)
+                            message.success('已删除')
+                            loadPods()
+                          } catch { message.error('删除失败') }
+                        },
+                      })
+                    }
+                  } }}>
+                    <Button size="small" type="link"><MoreOutlined /></Button>
+                  </Dropdown>
                 ) },
               ]}
               locale={{ emptyText: <Empty description="暂无 Pod（可能未采集或名称不匹配）" /> }} />
