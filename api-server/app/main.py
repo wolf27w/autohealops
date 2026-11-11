@@ -351,6 +351,10 @@ async def startup_tasks() -> None:
     _background_tasks.append(asyncio.create_task(_agent_cluster_health_loop()))
     # R14：pull 模式集群直连目标刷新（每 30s）
     _background_tasks.append(asyncio.create_task(_pull_clusters_refresh_loop()))
+    # 诊断会话历史保留期清理（每 6 小时；保留天数看系统设置 agent_session_retention_days，0=不清理）
+    from app.services.agent_session_store import cleanup_expired as _cleanup_sessions
+    _background_tasks.append(asyncio.create_task(
+        _interval_worker("会话历史保留期清理", 21600, _cleanup_sessions, 300.0)))
     # 接入凭证超时清理（每 10 分钟）：agent 接入 5 小时仍未连上 → 删除记录，令牌失效
     from app.services.cluster_credential_service import cleanup_stale_pending_clusters
     _background_tasks.append(asyncio.create_task(

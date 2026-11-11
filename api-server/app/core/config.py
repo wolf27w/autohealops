@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     AGENT_NAMESPACE: str = "autohealops"
     #   平台自建 CA 目录（相对路径按仓库根解析；私钥 0600，不进 git）
     AGENT_CA_DIR: str = "data/agent-ca"
+    #   诊断会话历史目录（JSONL，一行一条消息；相对路径按仓库根解析）
+    #   历史正文落文件，数据库只留元数据；保留天数见系统设置 agent_session_retention_days
+    AGENT_SESSION_DIR: str = "data/agent-sessions"
 
     # 镜像仓库（R3）：列仓库标签用。可选全局只读凭据；或 REGISTRY_CREDS 按 host 配（JSON）
     #   例：REGISTRY_CREDS={"harbor.efreight.cn":{"username":"ro","password":"***"}}

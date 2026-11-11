@@ -58,6 +58,7 @@ data:
   # 平台自建 CA 目录 —— 必须挂持久卷（PVC autohealops-agent-ca），
   # 丢了会让所有已下发 agent 的客户端证书失效
   AGENT_CA_DIR: "/var/lib/autohealops/agent-ca"
+  AGENT_SESSION_DIR: "/var/lib/autohealops/agent-sessions"
 ---
 apiVersion: v1
 kind: ConfigMap

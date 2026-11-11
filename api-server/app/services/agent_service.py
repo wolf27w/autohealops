@@ -109,13 +109,24 @@ def classify_fault(problem: str) -> list[dict]:
 
 async def _persist_message(session_id: int, role: str, content: str = "",
                            tool_name: str = "", tool_args: str = "", tool_output: str = "") -> None:
-    """持久化一条会话消息（工具调用留痕）"""
+    """持久化一条会话消息：正文落文件（JSONL），数据库只留轻量元数据（老板 2026-11-11）
+
+    数据库行仍保留，用于排序/统计与兼容存量读取；大字段（content/tool_*）不再写库。
+    """
+    from app.services import agent_session_store as store
     async with async_session() as s:
-        s.add(DiagnosisMessage(
-            session_id=session_id, role=role, content=content,
-            tool_name=tool_name, tool_args=tool_args, tool_output=tool_output,
-        ))
+        m = DiagnosisMessage(
+            session_id=session_id, role=role, content="",
+            tool_name=tool_name, tool_args="", tool_output="",
+        )
+        s.add(m)
         await s.commit()
+        await s.refresh(m)
+        mid, created = m.id, m.created_at
+    store.append_message(session_id, {
+        "id": mid, "role": role, "content": content, "tool_name": tool_name,
+        "tool_args": tool_args, "tool_output": tool_output, "created_at": created,
+    })
 
 
 async def _execute_tool(tool_name: str, args: dict, session: DiagnosisSession) -> dict:
@@ -319,17 +330,29 @@ async def run_agent_turn(session: DiagnosisSession, user_input: str, cluster_nam
     max_tool_steps = await _get_max_tool_steps()
     # 2. 构建历史上下文（含本轮之前的消息 + 本轮工具执行记录）
     history: list[dict] = []  # 给 LLM 的多轮上下文（本轮工具结果也追加进来）
-    async with async_session() as s:
-        result = await s.execute(
-            select(DiagnosisMessage).where(DiagnosisMessage.session_id == session.id).order_by(DiagnosisMessage.id)
-        )
-        for m in result.scalars():
-            if m.role == "user":
-                history.append({"role": "user", "content": m.content})
-            elif m.role == "assistant":
-                history.append({"role": "assistant", "content": m.content})
-            elif m.role == "tool":
-                history.append({"role": "tool", "tool": m.tool_name, "content": m.tool_output})
+    from app.services import agent_session_store as _store
+    _file_msgs = _store.read_messages(session.id)
+    if _file_msgs is not None:
+        for m in _file_msgs:
+            if m.get("role") == "user":
+                history.append({"role": "user", "content": m.get("content", "")})
+            elif m.get("role") == "assistant":
+                history.append({"role": "assistant", "content": m.get("content", "")})
+            elif m.get("role") == "tool":
+                history.append({"role": "tool", "tool": m.get("tool_name", ""), "content": m.get("tool_output", "")})
+    else:
+        # 存量会话（文件不存在）→ 仍从数据库读
+        async with async_session() as s:
+            result = await s.execute(
+                select(DiagnosisMessage).where(DiagnosisMessage.session_id == session.id).order_by(DiagnosisMessage.id)
+            )
+            for m in result.scalars():
+                if m.role == "user":
+                    history.append({"role": "user", "content": m.content})
+                elif m.role == "assistant":
+                    history.append({"role": "assistant", "content": m.content})
+                elif m.role == "tool":
+                    history.append({"role": "tool", "tool": m.tool_name, "content": m.tool_output})
 
     # 3. 决策循环（工具集来自统一注册表；域按会话类别选，2026-11-11）
     #    app → application（Pod 级工具全套）

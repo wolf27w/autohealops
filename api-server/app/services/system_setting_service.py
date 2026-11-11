@@ -92,6 +92,9 @@ DEFAULT_SETTINGS = {
     "sftp_allow_paths": ("/tmp,/var/tmp,/home", "SFTP 允许目录（逗号分隔，优先匹配）"),
     "sftp_deny_paths": ("/etc,/boot,/dev,/proc,/sys,/root/.ssh", "SFTP 禁止目录（逗号分隔，命中即拒绝）"),
     "sftp_max_mb": ("200", "SFTP 单文件大小上限（MB）"),
+    # 诊断会话历史保留期（2026-11-11）：历史正文落文件（data/agent-sessions/*.jsonl），
+    # 超过 N 天的会话连文件一起清理；0 = 不清理
+    "agent_session_retention_days": ("30", "诊断会话历史保留天数（正文存文件；0=不清理）"),
     # R20 僵尸服务检测配置（JSON：days/max_requests/nginx 关键字/排除项；留空用内置默认）
     "zombie_detect_config": ("", "僵尸服务检测配置 JSON（留空用内置默认：7 天、阈值 0、排除探针）"),
     # R11 诊断模板路由（fault_type → 诊断模板，JSON：exact/prefix/default；留空用内置默认表）
