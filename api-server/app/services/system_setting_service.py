@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """系统设置服务：key-value 配置读写（Prometheus/ES/LDAP 等）"""
 import json
+import time
 
 from sqlalchemy import select
 
@@ -10,6 +11,20 @@ from app.models import SystemSetting
 
 # 脱敏占位符（前端回显 + 更新时跳过）
 MASKED = "***"
+
+# 进程内读缓存（R30 附带，2026-11-11）：get_setting 在仪表盘/规则引擎/告警策略等高频路径被反复调用，
+# 每次都是一次远程 MySQL 往返（~14ms）。设置项很少改，10s TTL 够用；
+# update_settings 写入后立即清空，保证「改完即生效」。
+_CACHE_TTL = 10.0
+_cache: dict[str, tuple[float, str]] = {}
+
+
+def invalidate_setting_cache(key: str | None = None) -> None:
+    """清空设置读缓存（key=None 清空全部）；写入设置后自动调用"""
+    if key is None:
+        _cache.clear()
+    else:
+        _cache.pop(key, None)
 
 # ============ 统一告警通知策略（N8）：全平台一份 ============
 # 分级渠道（severity → 允许发送的渠道类型）、静默/维护窗口（全局）。
@@ -129,17 +144,27 @@ async def update_settings(settings_dict: dict) -> None:
             else:
                 session.add(SystemSetting(key=key, value=str(value), description=DEFAULT_SETTINGS[key][1]))
         await session.commit()
+    # 写后失效：下一次读取立即拿到新值（含敏感字段重新解密）
+    invalidate_setting_cache()
 
 
 async def get_setting(key: str, default: str = "") -> str:
-    """读取单个设置；敏感字段解密返回（兼容存量明文）"""
+    """读取单个设置；敏感字段解密返回（兼容存量明文）
+
+    进程内缓存 10s（R30 附带）：高频调用路径不再每次都查库；写设置时立即失效。
+    """
+    now = time.monotonic()
+    hit = _cache.get(key)
+    if hit and (now - hit[0]) < _CACHE_TTL:
+        return hit[1]
     async with async_session() as session:
         result = await session.execute(select(SystemSetting).where(SystemSetting.key == key))
         s = result.scalar_one_or_none()
     value = s.value if s else DEFAULT_SETTINGS.get(key, (default, ""))[0]
     if key in SENSITIVE_KEYS and value:
         try:
-            return decrypt_aes256_gcm(value)
+            value = decrypt_aes256_gcm(value)
         except Exception:  # noqa: BLE001 存量明文数据，兼容返回原值
-            return value
+            pass
+    _cache[key] = (now, value)
     return value

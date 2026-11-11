@@ -19,7 +19,8 @@
 - 恢复关闭：复用 alert_auto_service._cancel_related_approvals（告警已恢复→取消审批）
 """
 import asyncio
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 
 import aiomysql
 from sqlalchemy import or_, select
@@ -38,6 +39,17 @@ SCAN_INTERVAL = 60
 
 # DB 告警 fault_type（统一走告警策略；auto_process_alerts 跳过，不自动修复）
 DB_ALERT_FAULT_TYPES = ("DBConnFailed", "DBAuthFailed")
+
+# 配置缺失类错误特征（agent 侧没下发/不存在该库的凭据）：这类不是「数据库故障」，
+# 而是平台与 agent 配置不一致 —— 人工解决后下一轮必然重建，体验上像「关不掉」（2026-11-11 老板反馈）。
+# 处理：同库同故障「最近一次已解决且在冷却期内」→ 不再新建告警（只保留原单，等真正恢复/人工处置）。
+CONFIG_ERROR_MARKERS = (
+    "agent 配置里没有 key",
+    "未下发",
+    "agent 未配置",
+)
+# 配置类告警冷却时长（分钟），可用环境变量覆盖
+CONFIG_ALERT_COOLDOWN_MIN = int(os.getenv("DB_CONFIG_ALERT_COOLDOWN_MIN", "60") or 60)
 
 # 认证失败特征（连接失败/认证失败分流，仅影响 fault_type 展示与策略匹配）
 AUTH_MARKERS = (
@@ -58,6 +70,12 @@ def _classify_failure(err: str) -> str:
     if any(m in err_l for m in AUTH_MARKERS):
         return "DBAuthFailed"
     return "DBConnFailed"
+
+
+def _is_config_error(err: str) -> bool:
+    """是否为「平台与 agent 配置不一致」类错误（非数据库真实故障）"""
+    err_l = (err or "").lower()
+    return any(m.lower() in err_l for m in CONFIG_ERROR_MARKERS)
 
 
 def _build_message(c: DBConnection, fault_type: str, err: str) -> str:
@@ -129,6 +147,24 @@ async def _upsert_db_alert(c: DBConnection, fault_type: str, err: str) -> int:
             existing.message = _build_message(c, fault_type, err)
             await session.commit()
             return 0
+        # 配置类告警冷却：人工解决后不要下一分钟就重建（老板 2026-11-11 反馈「关不掉」）
+        if _is_config_error(err):
+            since = now - timedelta(minutes=CONFIG_ALERT_COOLDOWN_MIN)
+            recent = (await session.execute(
+                select(Alert).where(
+                    Alert.resource_type == "db",
+                    Alert.fault_type == fault_type,
+                    Alert.resource_name == c.name,
+                    Alert.status == "resolved",
+                    Alert.resolved_at >= since.strftime("%Y-%m-%d %H:%M:%S"),
+                ).order_by(Alert.id.desc()).limit(1)
+            )).scalar_one_or_none()
+            if recent:
+                logger.info(
+                    "数据库【%s】配置类错误在 %d 分钟冷却期内（上次告警 #%s 已解决），本轮不新建告警：%s",
+                    c.name, CONFIG_ALERT_COOLDOWN_MIN, recent.id, (err or "")[:120],
+                )
+                return 0
         env_val = (getattr(c, "env_tag", "") or "").strip()
         if not env_val and (getattr(c, "source", "direct") or "direct") == "agent" and c.cluster_id:
             try:
