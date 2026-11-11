@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>集群详情 · 应用负载（Demo v3：两级导航 + 类型下拉）</title>
+<style>
+  :root{--blue:#1f6feb;--blue-l:#e8f1ff;--bg:#f5f7fa;--line:#e6e9ef;--tx:#242e42;--tx2:#6b7a90}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;color:var(--tx);background:var(--bg)}
+  a{color:inherit;text-decoration:none}
+  .app{display:flex;min-height:100vh}
+
+  /* 左：集群导航（只有两级） */
+  .side{width:220px;background:#fff;border-right:1px solid var(--line);padding:12px 10px;flex:0 0 220px;display:flex;flex-direction:column}
+  .cluster{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;background:var(--blue-l);margin-bottom:10px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#2fc25b}
+  .cname{font-weight:600}
+  .env{font-size:11px;color:var(--tx2)}
+  .nav .item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:6px;cursor:pointer;color:var(--tx)}
+  .nav .item:hover{background:#f2f5fa}
+  .nav .item.on{background:var(--blue-l);color:var(--blue);font-weight:600}
+  .nav .item .ico{width:16px;text-align:center;opacity:.85}
+  .nav .sub{margin:2px 0 6px 26px}
+  .nav .sub .item{font-size:13px;padding:7px 10px}
+
+  /* 左栏底部的「类型下拉」——第三级用下拉，不占导航层级 */
+  .switcher{margin-top:auto;padding:10px 6px 4px;border-top:1px solid var(--line)}
+  .switcher .lbl{font-size:12px;color:var(--tx2);margin:0 4px 6px}
+  .switcher select{width:100%;height:32px;border:1px solid var(--line);border-radius:4px;background:#fff;font-size:13px;color:var(--tx);padding:0 8px}
+
+  /* 右：内容 */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .crumb{display:flex;align-items:center;gap:8px;padding:16px 20px 4px;color:var(--tx2);font-size:13px}
+  .crumb b{color:var(--tx);font-size:18px;font-weight:600}
+  .tools{display:flex;align-items:center;gap:10px;padding:14px 20px}
+  .sel,.search,.btn{height:32px;border:1px solid var(--line);background:#fff;border-radius:4px;padding:0 10px;font-size:13px;color:var(--tx)}
+  .sel{display:flex;align-items:center;gap:6px;min-width:190px;justify-content:space-between;cursor:pointer}
+  .search{width:240px}
+  .btn{cursor:pointer}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .spacer{flex:1}
+
+  .card{margin:0 20px 16px;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--tx2);font-weight:500;background:#fbfcfe}
+  tr:last-child td{border-bottom:none}
+  tr.row:hover{background:#f9fbff}
+  .name{color:var(--blue);cursor:pointer;font-weight:500}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;line-height:18px}
+  .tag.ok{background:#e8f8ee;color:#1f9d4d}
+  .tag.warn{background:#fff4e5;color:#b25f00}
+  .tag.err{background:#fdecec;color:#c62828}
+  .tag.gray{background:#eef1f5;color:#5b6b82}
+  .muted{color:var(--tx2)}
+  .dots{cursor:pointer;color:var(--tx2);padding:0 6px}
+
+  .drawer{position:fixed;top:0;right:0;height:100%;width:520px;background:#fff;box-shadow:-6px 0 24px rgba(0,0,0,.12);
+          transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .drawer .hd{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .drawer .bd{padding:16px 20px;overflow:auto}
+  .dtabs{display:flex;gap:22px;padding:0 20px;border-bottom:1px solid var(--line)}
+  .dtab{padding:10px 2px;color:var(--tx2);cursor:pointer;border-bottom:2px solid transparent}
+  .dtab.on{color:var(--blue);border-color:var(--blue);font-weight:600}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px}
+  .kv .k{color:var(--tx2)}
+  .tip{margin:0 20px 20px;padding:10px 12px;background:#fffbe6;border:1px solid #ffe58f;border-radius:6px;color:#8a6d3b;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 左：只有两级导航 -->
+  <aside class="side">
+    <div class="cluster"><span class="dot"></span><div><div class="cname">测试环境</div><div class="env">qa · v1.23.4</div></div></div>
+
+    <div class="nav">
+      <div class="item"><span class="ico">▤</span>概览</div>
+      <div class="item"><span class="ico">◫</span>节点</div>
+
+      <div class="item on" style="margin-top:6px"><span class="ico">▦</span>应用负载</div>
+      <div class="sub">
+        <div class="item on">工作负载</div>
+        <div class="item">服务</div>
+        <div class="item">容器组</div>
+      </div>
+
+      <div class="item"><span class="ico">▧</span>存储</div>
+      <div class="item"><span class="ico">⚙</span>配置</div>
+      <div class="item"><span class="ico">◔</span>监控告警</div>
+      <div class="item"><span class="ico">✎</span>巡检与诊断</div>
+    </div>
+
+    <!-- 第三级改成左栏底部下拉 -->
+    <div class="switcher">
+      <div class="lbl">工作负载类型</div>
+      <select id="kind">
+        <option value="deployment" selected>部署（12）</option>
+        <option value="statefulset">有状态副本集（3）</option>
+        <option value="daemonset">守护进程集（4）</option>
+        <option value="cronjob">定时任务（2）</option>
+      </select>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="crumb">集群管理 / 应用负载 / <b id="title">部署</b><span class="tag gray" style="margin-left:8px">全部命名空间</span></div>
+
+    <div class="tools">
+      <div class="sel" title="命名空间（可多选）">命名空间：全部（3）<span>▾</span></div>
+      <input class="search" placeholder="按名称搜索" />
+      <div class="spacer"></div>
+      <button class="btn">刷新</button>
+      <button class="btn primary">创建</button>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:26%">名称</th><th style="width:16%">状态</th><th style="width:10%">副本</th>
+            <th style="width:26%">镜像</th><th style="width:14%">更新时间</th><th style="width:8%">操作</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div class="tip">
+      Demo v3：导航只有两级（应用负载 → 工作负载/服务/容器组）；「部署 / 有状态副本集 / 守护进程集 / 定时任务」放在**左栏底部的下拉**里切换，切换时只刷新表格。
+    </div>
+  </main>
+</div>
+
+<div class="drawer" id="drawer">
+  <div class="hd"><b id="d-title">—</b><span class="dots" onclick="closeDrawer()">✕</span></div>
+  <div class="dtabs"><div class="dtab on">概览</div><div class="dtab">资源状态</div><div class="dtab">元数据</div><div class="dtab">环境变量</div><div class="dtab">事件</div></div>
+  <div class="bd">
+    <div class="kv">
+      <div class="k">命名空间</div><div id="d-ns">—</div>
+      <div class="k">副本</div><div id="d-rep">—</div>
+      <div class="k">镜像</div><div id="d-img">—</div>
+      <div class="k">创建时间</div><div>2026-10-28 10:12</div>
+      <div class="k">更新策略</div><div>RollingUpdate（25% / 25%）</div>
+    </div>
+    <div class="tip" style="margin:16px 0 0">「资源状态 / 元数据 / 环境变量 / 事件」页签在这里；Pod 列表在「资源状态」下钻。</div>
+  </div>
+</div>
+
+<script>
+const DATA = {
+  deployment:[
+    ["eft-module-hrs","qa-aero-chain","ok","运行中","2 / 2","harbor/…/eft-module-hrs:1.4.2","11-11 15:32"],
+    ["eft-module-oms","qa-aero-chain","warn","1 / 2 就绪","2 / 2","harbor/…/eft-module-oms:2.0.7","11-11 14:58"],
+    ["cud-reporting-service","qa-cud-saas","err","异常","0 / 1","harbor/…/cud-reporting:0.9.1","11-11 11:20"],
+    ["nacos-config","nacos","ok","运行中","1 / 1","nacos/nacos-server:v2.2.3","11-09 09:12"],
+  ],
+  statefulset:[
+    ["broker-a","stg","ok","运行中","1 / 1","rocketmq:4.9.4","11-08 20:11"],
+    ["broker-b","stg","ok","运行中","1 / 1","rocketmq:4.9.4","11-08 20:11"],
+    ["mysql","stg","ok","运行中","1 / 1","mysql:8.0.33","09-05 10:02"],
+  ],
+  daemonset:[
+    ["filebeat","kube-system","ok","运行中","6 / 6","filebeat:8.5.0","10-30 09:20"],
+    ["node-exporter","kube-system","ok","运行中","6 / 6","node-exporter:v1.6.1","08-20 11:03"],
+    ["fluent-bit","logging","warn","5 / 6 就绪","6 / 6","fluent-bit:2.1.8","11-10 17:45"],
+  ],
+  cronjob:[
+    ["backup-mysql","stg","ok","运行中","-","mysql:8.0.33","11-11 03:00"],
+    ["cleanup-logs","ops","ok","运行中","-","busybox:1.36","11-11 02:00"],
+  ],
+};
+const TITLE = {deployment:"部署", statefulset:"有状态副本集", daemonset:"守护进程集", cronjob:"定时任务"};
+
+function render(kind){
+  document.getElementById('title').textContent = TITLE[kind];
+  document.getElementById('rows').innerHTML = DATA[kind].map(r=>`
+    <tr class="row">
+      <td><span class="name" data-n="${r[0]}" data-ns="${r[1]}" data-rep="${r[4]}" data-img="${r[5]}">${r[0]}</span>
+          <div class="muted" style="font-size:12px">${r[1]}</div></td>
+      <td><span class="tag ${r[2]}">${r[3]}</span></td>
+      <td>${r[4]}</td>
+      <td class="muted">${r[5]}</td>
+      <td class="muted">${r[6]}</td>
+      <td><span class="dots" data-n="${r[0]}" data-ns="${r[1]}" data-rep="${r[4]}" data-img="${r[5]}">⋯</span></td>
+    </tr>`).join('');
+  document.querySelectorAll('.name,.dots').forEach(el=>el.onclick=(e)=>{
+    e.stopPropagation();
+    const d=el.dataset;
+    document.getElementById('d-title').textContent=d.n;
+    document.getElementById('d-ns').textContent=d.ns;
+    document.getElementById('d-rep').textContent=d.rep;
+    document.getElementById('d-img').textContent=d.img;
+    document.getElementById('drawer').classList.add('open');
+  });
+}
+function closeDrawer(){document.getElementById('drawer').classList.remove('open')}
+document.getElementById('kind').onchange=(e)=>render(e.target.value);
+document.querySelectorAll('.dtabs .dtab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.dtabs .dtab').forEach(x=>x.classList.remove('on'));t.classList.add('on');
+});
+render('deployment');
+</script>
+</body>
+</html>
