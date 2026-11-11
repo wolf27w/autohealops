@@ -19,6 +19,9 @@ type ClusterWithExtra = Cluster & {
   agent_status?: string
   agent_last_seen_at?: string
   agent_version?: string
+  agent_mode?: string
+  agent_pull_url?: string
+  has_pull_token?: boolean
   description?: string
   rbac_status?: string
   version?: string
@@ -49,6 +52,14 @@ export default function ClusterList() {
   const [batchEnv, setBatchEnv] = useState('prod')
   const [batchBusy, setBatchBusy] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
+  // R14 双接入：push=agent 主动连平台（反向隧道，默认）/ pull=平台直连 agent
+  const [agentMode, setAgentMode] = useState<'push' | 'pull'>('push')
+  const [agentPullUrl, setAgentPullUrl] = useState('')
+  const [agentPullToken, setAgentPullToken] = useState('')
+  // 编辑既有 agent 集群的 pull 参数
+  const [editAgentMode, setEditAgentMode] = useState<'push' | 'pull'>('push')
+  const [editPullUrl, setEditPullUrl] = useState('')
+  const [editPullToken, setEditPullToken] = useState('')
   const [agentName, setAgentName] = useState('')
   const [agentEnv, setAgentEnv] = useState('prod')
   const [agentResult, setAgentResult] = useState<{ id: number; token: string; install_command: string } | null>(null)
@@ -82,6 +93,9 @@ export default function ClusterList() {
     let mw: { enabled: boolean; start: string; end: string; days: string } = { enabled: false, start: '02:00', end: '04:00', days: '1,2,3,4,5' }
     try { mw = JSON.parse(c.maintenance_window || '{}') } catch { mw = { enabled: false, start: '02:00', end: '04:00', days: '1,2,3,4,5' } }
     form.setFieldsValue({ description: c.description, env_tag: c.env_tag, mw_enabled: mw.enabled, mw_start: mw.start, mw_end: mw.end, mw_days: mw.days, inspect_enabled: c.inspect_enabled !== false, inspect_cron: c.inspect_cron || '' })
+    setEditAgentMode((c.agent_mode as 'push' | 'pull') || 'push')
+    setEditPullUrl(c.agent_pull_url || '')
+    setEditPullToken('')
     setModalOpen(true)
   }
 
@@ -94,7 +108,10 @@ export default function ClusterList() {
         end: values.mw_end || '04:00',
         days: values.mw_days || '1,2,3,4,5',
       }
-      await updateCluster(editing.id, { description: values.description, env_tag: values.env_tag, maintenance_window: mw, inspect_enabled: values.inspect_enabled ?? true, inspect_cron: values.inspect_cron || '' })
+      const _pullPatch = editing.source === 'agent'
+        ? { agent_mode: editAgentMode, agent_pull_url: editAgentMode === 'pull' ? editPullUrl.trim() : '', ...(editPullToken.trim() ? { agent_pull_token: editPullToken.trim() } : {}) }
+        : {}
+      await updateCluster(editing.id, { description: values.description, env_tag: values.env_tag, maintenance_window: mw, inspect_enabled: values.inspect_enabled ?? true, inspect_cron: values.inspect_cron || '', ..._pullPatch })
       if (newKubeconfig.trim()) {
         await replaceClusterKubeconfig(editing.id, newKubeconfig.trim())
         message.success('已更新（凭据已替换）')
@@ -122,7 +139,13 @@ export default function ClusterList() {
     if (!agentName.trim()) { message.warning('请填集群名称'); return }
     setAgentBusy(true)
     try {
-      const d = await agentOnboardCluster({ name: agentName.trim(), env_tag: agentEnv }) as { id: number; token: string; install_command: string }
+      if (agentMode === 'pull' && !agentPullUrl.trim()) { message.warning('pull 模式请填 agent 访问地址'); return }
+      const d = await agentOnboardCluster({
+        name: agentName.trim(), env_tag: agentEnv,
+        agent_mode: agentMode,
+        agent_pull_url: agentMode === 'pull' ? agentPullUrl.trim() : '',
+        agent_pull_token: agentMode === 'pull' ? agentPullToken.trim() : '',
+      }) as { id: number; token: string; install_command: string }
       setAgentResult(d)
       load()
     } catch { /* 拦截器已提示 */ } finally { setAgentBusy(false) }
@@ -188,7 +211,7 @@ export default function ClusterList() {
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加集群</Button>
         <Button onClick={() => { setBatchOpen(true); setBatchKc(''); setBatchCtxs([]); setBatchSel([]); setBatchEnv('prod') }}>批量接入（多 context）</Button>
-        <Button onClick={() => { setAgentOpen(true); setAgentName(''); setAgentEnv('prod'); setAgentResult(null) }}>Agent 接入</Button>
+        <Button onClick={() => { setAgentOpen(true); setAgentName(''); setAgentEnv('prod'); setAgentResult(null); setAgentMode('push'); setAgentPullUrl(''); setAgentPullToken('') }}>Agent 接入</Button>
         <Button onClick={() => openAgentUpgrade(null)}>Agent 升级 / 回退</Button>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       </Space>
@@ -312,6 +335,25 @@ export default function ClusterList() {
               <div style={{ fontSize: 12, color: '#999', marginTop: -8 }}>维护窗口内该集群不告警（1-7 表示周一到周日；跨天如 23:00-02:00 支持）。与「通知配置」里的全平台静默窗口任一命中即静默</div>
             </>
           )}
+          {editing && editing.source === 'agent' && (
+            <>
+              <Form.Item label="接入模式（R14 双接入）" extra="pull 模式下平台直连 agent 端口，不走反向隧道">
+                <Select value={editAgentMode} onChange={(v) => setEditAgentMode(v as 'push' | 'pull')} style={{ width: 320 }} options={[
+                  { value: 'push', label: 'push（反向隧道）' }, { value: 'pull', label: 'pull（平台拉取）' },
+                ]} />
+              </Form.Item>
+              {editAgentMode === 'pull' && (
+                <>
+                  <Form.Item label="agent 访问地址" required>
+                    <Input value={editPullUrl} onChange={(e) => setEditPullUrl(e.target.value)} placeholder="如 10.0.0.12:31000" />
+                  </Form.Item>
+                  <Form.Item label="重设 pull 令牌（留空=不改）">
+                    <Input.Password value={editPullToken} onChange={(e) => setEditPullToken(e.target.value)} placeholder="留空则不修改现有令牌" />
+                  </Form.Item>
+                </>
+              )}
+            </>
+          )}
           {editing && (
             <Form.Item label="更新凭据（粘贴新 kubeconfig，可选）" tooltip="证书/Token 过期时在此粘贴新文件替换，不删集群、不丢历史告警/工单；留空=不更新">
               <Input.TextArea rows={4} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder="粘贴新 kubeconfig（留空=不更新凭据）" onChange={(e) => setNewKubeconfig(e.target.value)} />
@@ -404,6 +446,21 @@ export default function ClusterList() {
                 { value: 'qa', label: 'qa（测试）' }, { value: 'release', label: 'release（预发）' }, { value: 'prod', label: 'prod（生产）' },
               ]} />
             </Form.Item>
+            <Form.Item label="接入模式" extra="push=agent 主动连平台（集群可出网）；pull=平台直连 agent 端口（集群不出网）">
+              <Select value={agentMode} onChange={(v) => setAgentMode(v as 'push' | 'pull')} style={{ width: 320 }} options={[
+                { value: 'push', label: 'push（反向隧道，默认）' }, { value: 'pull', label: 'pull（平台拉取）' },
+              ]} />
+            </Form.Item>
+            {agentMode === 'pull' && (
+              <>
+                <Form.Item label="agent 访问地址" required extra="平台能访问到的 nodeIP:nodePort 或 agent 所在 Pod IP:9100">
+                  <Input value={agentPullUrl} onChange={(e) => setAgentPullUrl(e.target.value)} placeholder="如 10.0.0.12:31000" />
+                </Form.Item>
+                <Form.Item label="pull 访问令牌" extra="与 agent 侧 -pull-token 一致；留空则 agent 不校验（仅限内网调试）">
+                  <Input.Password value={agentPullToken} onChange={(e) => setAgentPullToken(e.target.value)} placeholder="建议随机长串" />
+                </Form.Item>
+              </>
+            )}
             <Button type="primary" loading={agentBusy} onClick={handleAgentOnboard}>生成接入令牌</Button>
           </Form>
         ) : (

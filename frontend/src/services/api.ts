@@ -74,7 +74,7 @@ export const parseClusterKubeconfig = (kubeconfig: string) => http.post('/cluste
 // 多 context 批量接入
 export const importMultiClusters = (data: { kubeconfig: string; contexts: string[]; env_tag: string }) => http.post('/clusters/import-multi', data)
 // Agent 接入（M3）：生成令牌 + 安装命令
-export const agentOnboardCluster = (data: { name: string; env_tag: string; description?: string }) => http.post('/clusters/agent-onboard', data)
+export const agentOnboardCluster = (data: { name: string; env_tag: string; description?: string; agent_mode?: 'push' | 'pull'; agent_pull_url?: string; agent_pull_token?: string }) => http.post('/clusters/agent-onboard', data)
 export interface AgentUpgradeResult {
   cluster_id: number; ok: boolean; previous_version?: string; new_version?: string
   old_image?: string; image?: string; reconnected?: boolean; unchanged?: boolean; error?: string

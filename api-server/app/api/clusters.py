@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.clients.executor_client import executor_client
 from app.core.config import settings
 from app.core.database import async_session
-from app.core.security import encrypt_aes256_gcm
+from app.core.security import decrypt_aes256_gcm, encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_any_user, require_operator
 from app.models import Alert, Cluster, Task
 from app.services import user_permission_service
@@ -194,31 +194,46 @@ async def agent_onboard(payload: dict, user=Depends(require_admin)):
     if env_tag not in ("qa", "release", "prod"):
         env_tag = "prod"
     token = _new_agent_token()
+    # R14 双接入：push（默认，反向隧道）/ pull（平台直连 agent）
+    agent_mode = (payload.get("agent_mode") or "push").strip().lower()
+    if agent_mode not in ("push", "pull"):
+        agent_mode = "push"
+    pull_url = (payload.get("agent_pull_url") or "").strip()
+    pull_token = (payload.get("agent_pull_token") or "").strip()
+    if agent_mode == "pull" and not pull_url:
+        return {"code": 400, "message": "pull 模式必须填写 agent 访问地址（host:port）", "data": None}
     async with async_session() as session:
         if (await session.execute(select(Cluster).where(Cluster.name == name))).scalar_one_or_none():
             return {"code": 400, "message": "集群名称已存在", "data": None}
         cl = Cluster(name=name, description=payload.get("description", ""),
                      kubeconfig_encrypted=encrypt_aes256_gcm(""),
                      env_tag=env_tag, source="agent", api_server_url="", cred_type="unknown",
+                     agent_mode=agent_mode, agent_pull_url=pull_url,
+                     agent_pull_token_encrypted=(encrypt_aes256_gcm(pull_token) if pull_token else ""),
                      agent_token_hash=_hash_token(token), agent_status="pending", status="unknown")
         session.add(cl)
         await session.commit()
         await session.refresh(cl)
+    # R14：pull 集群建完立即生效（不等后台 30s 刷新）
+    if agent_mode == "pull" and pull_url:
+        from app.clients import executor_client as _ec
+        _ec.set_pull_target(cl.id, pull_url, pull_token)
     base = _public_base_url().rstrip("/")
     from urllib.parse import quote
     _img = (getattr(settings, "AGENT_IMAGE", "") or "").strip()
     _pull = (getattr(settings, "AGENT_IMAGE_PULL_SECRET", "") or "").strip()
     # 安装地址里显式带 image，运维可按环境自行修改后再执行（namespace 固定）
-    install_command = (
-        f"kubectl apply -f {base}/api/v1/clusters/{cl.id}/agent/install.yaml"
-        f"?token={token}&image={quote(_img, safe='')}&pull_secret={quote(_pull, safe='')}"
-    )
+    _qs = f"?token={token}&image={quote(_img, safe='')}&pull_secret={quote(_pull, safe='')}"
+    if agent_mode == "pull":
+        _qs += f"&mode=pull&pull_token={quote(pull_token, safe='')}"
+    install_command = f"kubectl apply -f {base}/api/v1/clusters/{cl.id}/agent/install.yaml{_qs}"
     return {"code": 200, "message": "success", "data": {
         "id": cl.id, "name": cl.name, "token": token, "install_command": install_command}}
 
 
 @router.get("/{cluster_id}/agent/install.yaml")
-async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", pull_secret: str = ""):
+async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", pull_secret: str = "",
+                              mode: str = "push", pull_token: str = "", node_port: int = 0):
     """Agent 接入向导：渲染一键安装清单（**集群侧直接拉取，不需要登录**）
 
     鉴权只靠接入令牌（sha256 比对，可吊销）：集群里的运维/CI 没有平台账号，
@@ -337,6 +352,46 @@ async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", 
         )
 
     # 多文档 YAML 直接拼字符串（避免 --- 序列化问题）
+    # R14 pull 模式：agent 不连平台，改为监听 gRPC 端口；平台按 URL 直连
+    mode = (mode or "push").strip().lower()
+    pull_token = (pull_token or "").strip()
+    if mode not in ("push", "pull"):
+        mode = "push"
+    if pull_token and not _re.fullmatch(r"[A-Za-z0-9._:/@+-]{1,200}", pull_token):
+        return Response("pull_token 非法", status_code=400, media_type="text/plain")
+
+    if mode == "pull":
+        agent_args = (
+            f'\n            - "-mode=pull"'
+            f'\n            - "-listen=:9100"'
+            + (f'\n            - "-pull-token={pull_token}"' if pull_token else "")
+            + f'\n            - "-cluster-id={cluster_id}"'
+        )
+        _np = f"\n    nodePort: {int(node_port)}" if node_port else ""
+        pull_service = f"""---
+apiVersion: v1
+kind: Service
+metadata:
+  name: autohealops-agent-pull
+  namespace: {ns}
+spec:
+  type: NodePort
+  selector:
+    app: autohealops-agent
+  ports:
+    - name: grpc-pull
+      port: 9100
+      targetPort: 9100{_np}
+"""
+    else:
+        agent_args = (
+            f'\n            - "-platform={gateway_addr}"'
+            f'\n            - "-cluster-id={cluster_id}"'
+            f'\n            - "-token={token}"'
+            f'\n            - "-watch=true"'
+        )
+        pull_service = ""
+
     docs = f"""apiVersion: v1
 kind: Namespace
 metadata:
@@ -396,11 +451,10 @@ spec:
         - name: agent
           image: {image}
           imagePullPolicy: IfNotPresent
-          args:
-            - "-platform={gateway_addr}"
-            - "-cluster-id={cluster_id}"
-            - "-token={token}"
-            - "-watch=true"
+          args:{agent_args}
+          ports:
+            - name: grpc-pull
+              containerPort: 9100
 {tls_args}          env:
             # 统一时区（agent 容器默认 UTC，会让上报时间戳差 8 小时）
             - name: TZ
@@ -408,7 +462,7 @@ spec:
           resources:
             requests: {{ cpu: 100m, memory: 128Mi }}
             limits: {{ cpu: 500m, memory: 256Mi }}
-{tls_mount}"""
+{tls_mount}{pull_service}"""
     return Response(docs, media_type="application/yaml")
 
 
@@ -634,6 +688,9 @@ async def list_clusters(user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": [
         {"id": c.id, "name": c.name, "description": c.description, "status": c.status,
          "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
+         "agent_mode": getattr(c, "agent_mode", "push") or "push",
+         "agent_pull_url": getattr(c, "agent_pull_url", "") or "",
+         "has_pull_token": bool(getattr(c, "agent_pull_token_encrypted", "") or ""),
          "cred_type": c.cred_type or "unknown",
          "cred_expires_at": str(c.cred_expires_at) if c.cred_expires_at else "",
          "agent_status": c.agent_status or "",
@@ -661,6 +718,9 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
     return {"code": 200, "message": "success", "data": {
         "id": c.id, "name": c.name, "description": c.description, "status": c.status,
         "version": c.version, "env_tag": c.env_tag, "source": c.source or "kubeconfig",
+         "agent_mode": getattr(c, "agent_mode", "push") or "push",
+         "agent_pull_url": getattr(c, "agent_pull_url", "") or "",
+         "has_pull_token": bool(getattr(c, "agent_pull_token_encrypted", "") or ""),
         "cred_type": c.cred_type or "unknown",
         "cred_expires_at": str(c.cred_expires_at) if c.cred_expires_at else "",
         "agent_status": c.agent_status or "",
@@ -708,7 +768,34 @@ async def update_cluster(cluster_id: int, payload: dict, user=Depends(require_ad
             c.auto_heal_enabled = bool(payload.get("auto_heal_enabled", True))
         if "inspect_cron" in payload:
             c.inspect_cron = (payload.get("inspect_cron") or "").strip()
+        # R14：pull 模式参数（仅 agent 接入的集群可改）
+        _pull_changed = False
+        if "agent_mode" in payload:
+            m = (payload.get("agent_mode") or "push").strip().lower()
+            c.agent_mode = m if m in ("push", "pull") else "push"
+            _pull_changed = True
+        if "agent_pull_url" in payload:
+            c.agent_pull_url = (payload.get("agent_pull_url") or "").strip()
+            _pull_changed = True
+        if payload.get("agent_pull_token"):
+            c.agent_pull_token_encrypted = encrypt_aes256_gcm(payload["agent_pull_token"])
+            _pull_changed = True
+        if _pull_changed and (c.agent_mode or "push") == "pull" and not (c.agent_pull_url or "").strip():
+            return {"code": 400, "message": "pull 模式必须填写 agent 访问地址（host:port）", "data": None}
         await session.commit()
+        if _pull_changed:
+            # 立即生效，不等后台 30s 刷新
+            from app.clients import executor_client as _ec
+            if (c.agent_mode or "push") == "pull":
+                _tok = ""
+                if c.agent_pull_token_encrypted:
+                    try:
+                        _tok = decrypt_aes256_gcm(c.agent_pull_token_encrypted)
+                    except Exception:  # noqa: BLE001
+                        _tok = ""
+                _ec.set_pull_target(c.id, c.agent_pull_url, _tok)
+            else:
+                _ec.set_pull_target(c.id, "")
         # 刷新定时巡检任务
         if "inspect_enabled" in payload or "inspect_cron" in payload:
             from app.services import inspection_service

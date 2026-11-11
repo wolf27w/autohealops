@@ -94,6 +94,10 @@ class _TunnelAwareStub:
                         timeout=timeout or ExecutorClient.TIMEOUT,
                     )
                     return resp_cls.FromString(data)
+                # R14 pull 模式：平台直连 agent
+                out = _pull_call(cid, name, req, resp_cls, timeout or ExecutorClient.TIMEOUT)
+                if out is not None:
+                    return out
             return fn(req, timeout=timeout, metadata=metadata, **kwargs)
 
         return _call
@@ -120,6 +124,10 @@ class _TunnelAwareStub:
         ok, it = self._stream_via_agent(req, "ExecutePlan", executor_pb2.ExecutePlanResponse, timeout)
         if ok:
             return it
+        pull_it = _pull_stream(int(getattr(req, "cluster_id", 0) or 0), "ExecutePlan",
+                               req, executor_pb2.ExecutePlanResponse, timeout)
+        if pull_it is not None:
+            return pull_it
         return self._real.ExecutePlan(req, timeout=timeout, metadata=metadata, **kwargs)
 
     def BatchExecute(self, req, timeout=None, metadata=None, **kwargs):  # noqa: N802
@@ -166,7 +174,102 @@ class _TunnelAwareStub:
                     for data in agent_gateway.bidi_call(cid, "ExecPodStream", chain(), timeout):
                         yield executor_pb2.ExecPodStreamFrame.FromString(data)
                 return gen()
+            pull_gen = _pull_bidi(cid, "ExecPodStream", chain(), executor_pb2.ExecPodStreamFrame, timeout)
+            if pull_gen is not None:
+                return pull_gen
         return self._real.ExecPodStream(chain(), timeout=timeout, metadata=metadata, **kwargs)
+
+
+# ==================== R14：pull 模式（平台直连 agent） ====================
+# agent 出网受限时，平台直接连 agent 监听的 gRPC 端口（-mode=pull）。
+# 目标表由后台循环每 30s 从 clusters 表刷新（agent_mode='pull'），集群增删时立即同步，
+# 这样同步的 stub 里不需要查库（stub 跑在线程池，拿不到 async session）。
+_PULL_TARGETS: dict[int, tuple[str, str]] = {}
+_PULL_CHANNELS: dict[tuple[str, str], grpc.Channel] = {}
+
+
+def set_pull_target(cluster_id: int, url: str, token: str = "") -> None:
+    """设置/清除某集群的 pull 目标（url 为空=移除）"""
+    cid = int(cluster_id)
+    if not url:
+        _PULL_TARGETS.pop(cid, None)
+        return
+    _PULL_TARGETS[cid] = (url.strip(), token or "")
+
+
+def clear_pull_targets() -> None:
+    _PULL_TARGETS.clear()
+
+
+def pull_target(cluster_id: int) -> tuple[str, str] | None:
+    return _PULL_TARGETS.get(int(cluster_id or 0))
+
+
+def _pull_channel(url: str, timeout: float = 30.0) -> grpc.Channel:
+    """按 URL 复用 channel（同一 agent 只建一个连接）"""
+    key = url
+    ch = _PULL_CHANNELS.get(key)
+    if ch is None:
+        ch = grpc.insecure_channel(url)
+        _PULL_CHANNELS[key] = ch
+    return ch
+
+
+def _pull_md(token: str):
+    return (("authorization", f"Bearer {token}"),) if token else None
+
+
+def _pull_call(cluster_id: int, method: str, req, resp_cls, timeout: float):
+    """pull 模式 unary 调用；非 pull 集群返回 None（调用方走原路径）"""
+    tgt = pull_target(cluster_id)
+    if not tgt:
+        return None
+    url, token = tgt
+    fn = _pull_channel(url).unary_unary(
+        f"/executor.ExecutorService/{method}",
+        request_serializer=lambda m: m.SerializeToString(),
+        response_deserializer=resp_cls.FromString,
+    )
+    return fn(req, timeout=timeout or ExecutorClient.TIMEOUT, metadata=_pull_md(token))
+
+
+def _pull_stream(cluster_id: int, method: str, req, resp_cls, timeout: float):
+    """pull 模式服务端流式；非 pull 集群返回 None"""
+    tgt = pull_target(cluster_id)
+    if not tgt:
+        return None
+    url, token = tgt
+    fn = _pull_channel(url).unary_stream(
+        f"/executor.ExecutorService/{method}",
+        request_serializer=lambda m: m.SerializeToString(),
+        response_deserializer=resp_cls.FromString,
+    )
+
+    def gen():
+        for resp in fn(req, timeout=timeout, metadata=_pull_md(token)):
+            yield resp
+
+    return gen()
+
+
+def _pull_bidi(cluster_id: int, method: str, frames, resp_cls, timeout: float):
+    """pull 模式双向流（交互终端）；非 pull 集群返回 None"""
+    tgt = pull_target(cluster_id)
+    if not tgt:
+        return None
+    url, token = tgt
+    fn = _pull_channel(url).stream_stream(
+        f"/executor.ExecutorService/{method}",
+        request_serializer=lambda m: m.SerializeToString(),
+        response_deserializer=resp_cls.FromString,
+    )
+
+    def gen():
+        call = fn(iter(frames), timeout=timeout, metadata=_pull_md(token))
+        for resp in call:
+            yield resp
+
+    return gen()
 
 
 def _agent_call(cluster_id: int, method: str, req, resp_cls, timeout: float):

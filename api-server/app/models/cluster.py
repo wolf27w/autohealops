@@ -39,6 +39,13 @@ class Cluster(Base):
     agent_image: Mapped[str] = mapped_column(String(200), default="", server_default="")
     # 接入时用的镜像拉取凭据名（私有仓库需要；随集群记录，便于复现 install.yaml）
     agent_pull_secret: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    # ---- R14 双接入（2026-11-11）----
+    # push = agent 主动连平台（反向隧道，默认）；pull = 平台直连 agent 的 gRPC 端口
+    agent_mode: Mapped[str] = mapped_column(String(10), default="push", server_default="push")
+    # pull 模式下 agent 的访问地址（host:port，例如 10.0.0.12:9100）
+    agent_pull_url: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    # pull 模式访问令牌（AES-256-GCM 加密；接口只回 has_pull_token）
+    agent_pull_token_encrypted: Mapped[str] = mapped_column(Text, default="", server_default="")
     # 维护窗口配置 JSON：{"enabled": true, "start": "02:00", "end": "04:00", "days": "1,2,3,4,5"}
     maintenance_window: Mapped[str] = mapped_column(Text, default="{}")
     # 云原生 RBAC（专项 B）：接入状态

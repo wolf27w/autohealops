@@ -3171,6 +3171,36 @@
               "title": "Pull Secret",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "default": "push",
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pull_token",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Pull Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node_port",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Node Port",
+              "type": "integer"
+            }
           }
         ],
         "responses": {

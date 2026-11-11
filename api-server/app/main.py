@@ -217,6 +217,46 @@ async def _agent_cluster_health_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _pull_clusters_refresh_loop() -> None:
+    """R14：把 pull 模式集群的「直连地址+令牌」刷进 executor_client 的进程内表
+
+    stub 跑在线程池里拿不到 async session，所以这里每 30s 同步一次；
+    集群增删改时 API 侧会立即调用 set_pull_target，无需等下一轮。
+    """
+    import asyncio
+    from sqlalchemy import select
+    from app.core.database import async_session
+    from app.core.security import decrypt_aes256_gcm
+    from app.models import Cluster
+    from app.clients import executor_client
+
+    while True:
+        try:
+            async with async_session() as session:
+                rows = (await session.execute(
+                    select(Cluster).where(Cluster.agent_mode == "pull")
+                )).scalars().all()
+                targets = []
+                for c in rows:
+                    token = ""
+                    if getattr(c, "agent_pull_token_encrypted", ""):
+                        try:
+                            token = decrypt_aes256_gcm(c.agent_pull_token_encrypted)
+                        except Exception:  # noqa: BLE001
+                            token = ""
+                    targets.append((c.id, (c.agent_pull_url or "").strip(), token))
+            executor_client.clear_pull_targets()
+            for cid, url, token in targets:
+                if url:
+                    executor_client.set_pull_target(cid, url, token)
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pull 集群刷新失败: %s", e)
+            await asyncio.sleep(30)
+
+
 async def _auto_setup_rbac_on_startup() -> None:
     """启动时自动接入存量集群的云原生 RBAC（未接入的自动补上，无需人工触发）"""
     import asyncio
@@ -309,6 +349,8 @@ async def startup_tasks() -> None:
         _interval_worker("提示词模板体检", 3600, prompt_health_sweep, 180.0)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
     _background_tasks.append(asyncio.create_task(_agent_cluster_health_loop()))
+    # R14：pull 模式集群直连目标刷新（每 30s）
+    _background_tasks.append(asyncio.create_task(_pull_clusters_refresh_loop()))
     # 接入凭证超时清理（每 10 分钟）：agent 接入 5 小时仍未连上 → 删除记录，令牌失效
     from app.services.cluster_credential_service import cleanup_stale_pending_clusters
     _background_tasks.append(asyncio.create_task(
