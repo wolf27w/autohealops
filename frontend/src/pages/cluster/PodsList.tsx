@@ -174,9 +174,19 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
       <a onClick={() => setDetailPod({ clusterId, namespace: r.namespace, name: r.name })}>{v}</a>
     ) },
     { title: '命名空间', dataIndex: 'namespace', width: 180 },
-    { title: '状态', dataIndex: 'status', width: 160, render: (_: unknown, r: ClusterPod) => (
-      <Tag color={podStatusColor(podStatus(r))}>{podStatus(r)}</Tag>
-    ) },
+    { title: '状态', dataIndex: 'status', width: 160,
+      filters: [
+        { text: 'Running', value: 'Running' },
+        { text: 'Pending', value: 'Pending' },
+        { text: 'CrashLoopBackOff', value: 'CrashLoopBackOff' },
+        { text: 'Terminating', value: 'Terminating' },
+        { text: 'Succeeded', value: 'Succeeded' },
+        { text: 'Failed', value: 'Failed' },
+      ],
+      onFilter: (value: unknown, r: ClusterPod) => podStatus(r) === value,
+      render: (_: unknown, r: ClusterPod) => (
+        <Tag color={podStatusColor(podStatus(r))}>{podStatus(r)}</Tag>
+      ) },
     { title: '就绪', key: 'ready', width: 70, render: (_: unknown, r: ClusterPod) => podReadyText(r.ready_containers, r.total_containers) },
     { title: '重启', dataIndex: 'restart_count', width: 70, render: (v: number) => (v ?? '-') },
     { title: '节点', dataIndex: 'node_name', width: 160, render: (v: string) => v || '-' },

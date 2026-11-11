@@ -88,7 +88,7 @@ export default function ClusterLayout() {
         </Space>
       </Header>
       <Layout>
-      <Sider width={200} theme="light" collapsed={collapsed} collapsedWidth={200}
+      <Sider width={200} theme="light" className="cluster-sider" collapsed={collapsed} collapsedWidth={200}
         style={{ borderRight: '1px solid #f0f0f0', overflow: 'auto' }}>
         <Menu
           mode="inline"

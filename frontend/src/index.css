@@ -207,8 +207,14 @@ html[data-theme='dark'] .ant-card-head {
   border-bottom: 1px solid #1e293b;
 }
 
-/* 表格列头「筛选」图标紧贴标题（老板 2026-11-11：状态列筛选按钮与文字间距太大） */
+/* 集群内布局侧栏强制白底（全局默认深绿渐变，集群页要统一白色，老板 2026-11-11） */
+.ant-layout-sider.cluster-sider {
+  background: #ffffff !important;
+  border-right: 1px solid #f0f0f0 !important;
+}
+/* 表格列头「筛选」图标放到标题前面、紧贴（老板 2026-11-11：状态列筛选与文字间距太大） */
 .ant-table-filter-column {
+  flex-direction: row-reverse;
   justify-content: flex-start !important;
   gap: 4px;
 }
