@@ -2099,3 +2099,13 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 `system_setting_service.get_setting()` **每次调用都查一次库**，没有任何缓存。除本处外，还有多处高频路径（仪表盘/规则引擎/告警策略）会调用它。若后续继续优化，这是下一个低成本目标（Redis 短 TTL 或进程内缓存 + 设置变更时主动失效）。
 
 **估时**：0.3d（含 4 条语义场景验证）
+
+---
+
+### R31 诊断会话共享（2026-11-11 老板拍板，待开发）
+
+- 口径：**谁的回话谁看**（默认私有）；可选**共享给同一 namespace 的用户**（用于值班交接）。
+- 共享后：同集群 + 同 namespace 有读权限的用户可见、可读消息；取消共享即恢复私有。
+- 附带加固：会话列表按**当前权限**过滤（namespace 权限被收回 → 历史会话不再可见）。
+- 落点：`diagnosis_sessions.shared/shared_at/shared_by` + `POST /agent/sessions/{id}/share` +
+  `list_sessions` 可见性条件 + 前端「共享到本 namespace」开关与列表标签。详见 `docs/DEV-PLAN-2026-11-11.md` 第五节。
