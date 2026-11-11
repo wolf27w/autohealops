@@ -75,7 +75,15 @@
   .seg i{width:9px;height:9px;border-radius:2px;background:#22436e}
   .seg i.ok{background:var(--ok);box-shadow:0 0 6px rgba(46,212,122,.5)}
   .seg i.bad{background:var(--err);box-shadow:0 0 6px rgba(255,77,79,.55)}
-  .dep.ok{border-left:3px solid var(--ok)}
+  .dep.ok{border-left:3px solid var(--ok);animation:okGlow 2.4s ease-in-out infinite}
+  /* 正常（绿）状态的框轻微呼吸闪烁；错开相位避免整屏同频闪 */
+  .dep.ok:nth-child(3n){animation-delay:.8s}
+  .dep.ok:nth-child(3n+1){animation-delay:1.6s}
+  @keyframes okGlow{
+    0%,100%{box-shadow:0 0 0 rgba(46,212,122,0);border-color:var(--line)}
+    50%{box-shadow:0 0 10px rgba(46,212,122,.30);border-color:rgba(46,212,122,.55)}
+  }
+  @media (prefers-reduced-motion: reduce){.dep.ok{animation:none}}
   .dep.warn{border-left:3px solid var(--warn)}
   .dep.err{border-left:3px solid var(--err);background:rgba(38,16,20,.55)}
 
