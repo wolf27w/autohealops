@@ -1,7 +1,7 @@
 // 集群内「工作负载列表」页组件（独立于 ClusterDetail 的工作负载 Tab）
 // 数据来源：getClusterDetail（NamespaceDetail[]，按 kind 聚合），不请求新接口
 import { useEffect, useMemo, useState, type Key } from 'react'
-import { Table, Tag, Button, Space, Select, Input, Dropdown, Modal, InputNumber, message, Empty, Card } from 'antd'
+import { Table, Tag, Button, Space, Select, Input, Dropdown, Modal, InputNumber, message, Empty, Card, Segmented } from 'antd'
 import { MoreOutlined, SearchOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -348,9 +348,23 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
     </Space>
   ) : null
 
+  const KINDS = [
+    { label: '部署', value: 'deployment' },
+    { label: '有状态副本集', value: 'statefulset' },
+    { label: '守护进程集', value: 'daemonset' },
+    { label: '定时任务', value: 'cronjob' },
+  ]
+
   return (
     <div>
       <Card size="small">
+        <Segmented
+          size="middle"
+          style={{ marginBottom: 12 }}
+          value={kind}
+          onChange={(v) => navigate(`/clusters/${clusterId}/workloads/${v}`)}
+          options={KINDS}
+        />
         <Space size={8} wrap style={{ marginBottom: 12 }}>
           <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
           <Select

@@ -2,7 +2,7 @@
 // 老板 2026-11-11 口径：进集群后左栏整条换成集群导航，顶部「← 返回平台」；
 // 工作负载类型（部署/有状态/守护/定时）用左栏底部下拉切换，不占导航层级。
 import { useEffect, useMemo, useState } from 'react'
-import { Layout, Menu, Select, Tag, Typography, Spin, Button, Space } from 'antd'
+import { Layout, Menu, Tag, Typography, Spin, Button, Space } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams, Outlet } from 'react-router-dom'
 import { getCluster } from '../../services/api'
@@ -11,13 +11,6 @@ import { getCluster } from '../../services/api'
 interface ClusterInfo { id?: number; name?: string; env_tag?: string; version?: string }
 
 const { Sider, Content, Header } = Layout
-
-const KINDS = [
-  { value: 'deployment', label: '部署' },
-  { value: 'statefulset', label: '有状态副本集' },
-  { value: 'daemonset', label: '守护进程集' },
-  { value: 'cronjob', label: '定时任务' },
-]
 
 export default function ClusterLayout() {
   const { id } = useParams()
@@ -40,8 +33,6 @@ export default function ClusterLayout() {
     const m = location.pathname.match(/\/workloads\/([a-z]+)/)
     return m?.[1] || 'deployment'
   }, [location.pathname])
-
-  const inWorkloads = location.pathname.includes('/workloads')
 
   const selectedKey = useMemo(() => {
     const p = location.pathname
@@ -106,18 +97,6 @@ export default function ClusterLayout() {
           items={items as never}
           style={{ borderRight: 'none' }}
         />
-        {inWorkloads && (
-          <div style={{ padding: '10px 12px', borderTop: '1px solid #f0f0f0', marginTop: 8 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>工作负载类型</div>
-            <Select
-              size="small"
-              style={{ width: '100%' }}
-              value={wlKind}
-              onChange={(v) => navigate(`${base}/workloads/${v}`)}
-              options={KINDS}
-            />
-          </div>
-        )}
       </Sider>
       <Content style={{ padding: 16, overflow: 'auto' }}>
         <Outlet />
