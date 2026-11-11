@@ -3,9 +3,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Card, Drawer, Form, Input, InputNumber, List, Menu, Modal, Popconfirm,
-  Radio, Segmented, Select, Space, Steps, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
+  Radio, Select, Space, Steps, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
 } from 'antd'
-import { DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   getHosts, createHost, updateHost, deleteHost, checkHost,
   getHostGroups, createHostGroup, updateHostGroup, deleteHostGroup,
@@ -34,9 +34,9 @@ export default function HostManagement() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [loading, setLoading] = useState(false)
   const [groupFilter, setGroupFilter] = useState<string>('all')
-  const [kindFilter, setKindFilter] = useState<string>('')
   const [sourceFilter, setSourceFilter] = useState<string>('')
   const [keyword, setKeyword] = useState('')
+  const [kwInput, setKwInput] = useState('')  // 输入框即时值；300ms 防抖后写 keyword 触发查询
 
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<HostItem | null>(null)
@@ -80,14 +80,19 @@ export default function HostManagement() {
     const params: Record<string, unknown> = {}
     if (groupFilter === 'ungrouped') params.group_id = 0
     else if (groupFilter !== 'all') params.group_id = Number(groupFilter)
-    if (kindFilter) params.kind = kindFilter
     if (sourceFilter) params.source = sourceFilter
     if (keyword.trim()) params.keyword = keyword.trim()
     getHosts(params).then((d) => setHosts(d || [])).catch(() => {}).finally(() => setLoading(false))
   }
 
   useEffect(() => { loadGroups() }, [])
-  useEffect(() => { load() }, [groupFilter, kindFilter, sourceFilter, keyword])
+  // 搜索防抖：停止输入 300ms 才查询
+  useEffect(() => {
+    const t = setTimeout(() => setKeyword(kwInput.trim()), 300)
+    return () => clearTimeout(t)
+  }, [kwInput])
+
+  useEffect(() => { load() }, [groupFilter, sourceFilter, keyword])
 
   const openCreate = () => {
     setEditing(null); setStep(0); setWizardKind('host')
@@ -223,17 +228,23 @@ export default function HostManagement() {
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         {/* 左侧：分组树 + 类型 + 搜索 */}
         <div style={{ width: 200, flex: '0 0 200px' }}>
+          <Input
+            placeholder="搜索名称 / 地址 / 分组" allowClear prefix={<SearchOutlined />}
+            value={kwInput}
+            onChange={(e) => setKwInput(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          {isAdmin && (
+            <Button size="small" block icon={<PlusOutlined />} style={{ marginBottom: 8 }}
+              onClick={() => { setGroupEdit(null); groupForm.resetFields(); setGroupModalOpen(true) }}>新建分组</Button>
+          )}
           <Menu
             mode="inline" style={{ border: 'none' }}
             selectedKeys={[groupFilter]}
             items={menuItems}
             onClick={({ key }) => setGroupFilter(key)}
           />
-          <div style={{ padding: '8px 4px' }}>
-            <Segmented block options={[{ label: '全部', value: '' }, { label: '主机', value: 'host' }, { label: '虚拟机', value: 'vm' }]} value={kindFilter} onChange={(v) => setKindFilter(v as string)} />
-          </div>
-          <Select placeholder="来源" allowClear style={{ width: '100%', marginBottom: 8 }} value={sourceFilter || undefined} onChange={(v) => setSourceFilter(v || '')} options={[{ value: 'direct', label: '直连' }, { value: 'agent', label: 'agent 代采' }]} />
-          <Input.Search placeholder="搜索名称/地址" allowClear onSearch={(v) => setKeyword(v)} style={{ marginBottom: 8 }} />
+          <Select placeholder="来源" allowClear style={{ width: '100%', marginTop: 8, marginBottom: 0 }} value={sourceFilter || undefined} onChange={(v) => setSourceFilter(v || '')} options={[{ value: 'direct', label: '直连' }, { value: 'agent', label: 'agent 代采' }]} />
         </div>
 
         {/* 右侧：列表 */}
@@ -425,14 +436,16 @@ export default function HostManagement() {
             </List.Item>
           )}
         />
-        <Modal title={groupEdit ? '编辑分组' : '新建分组'} open={groupModalOpen} onCancel={() => setGroupModalOpen(false)} onOk={saveGroup} destroyOnClose>
-          <Form form={groupForm} layout="vertical">
-            <Form.Item name="name" label="分组名" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="description" label="描述"><Input /></Form.Item>
-            <Form.Item name="sort" label="排序"><InputNumber style={{ width: '100%' }} /></Form.Item>
-          </Form>
-        </Modal>
       </Drawer>
+
+      {/* 新建/编辑分组（左侧与分组管理抽屉共用） */}
+      <Modal title={groupEdit ? '编辑分组' : '新建分组'} open={groupModalOpen} onCancel={() => setGroupModalOpen(false)} onOk={saveGroup} destroyOnClose>
+        <Form form={groupForm} layout="vertical">
+          <Form.Item name="name" label="分组名" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="description" label="描述"><Input /></Form.Item>
+          <Form.Item name="sort" label="排序"><InputNumber style={{ width: '100%' }} /></Form.Item>
+        </Form>
+      </Modal>
 
       {/* 成员管理 */}
       <MemberModal group={memberModal} onClose={() => { setMemberModal(null); loadGroups() }} />

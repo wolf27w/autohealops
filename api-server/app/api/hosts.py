@@ -104,7 +104,14 @@ async def list_hosts(group_id: int | None = None, kind: str | None = None, sourc
             q = q.where(Host.source == source)
         if keyword:
             like = f"%{keyword}%"
-            q = q.where(or_(Host.name.like(like), Host.address.like(like)))
+            # 关键字支持 名称 / 地址 / 分组名（分组名命中 → 该组下主机也算命中）
+            gids = [g.id for g in (await s.execute(
+                select(HostGroup).where(HostGroup.name.like(like))
+            )).scalars()]
+            cond = or_(Host.name.like(like), Host.address.like(like))
+            if gids:
+                cond = or_(cond, Host.group_id.in_(gids))
+            q = q.where(cond)
         hosts = list((await s.execute(q.order_by(Host.id))).scalars())
 
     group_names = await _load_group_names({h.group_id for h in hosts if h.group_id})
