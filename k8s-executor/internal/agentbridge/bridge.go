@@ -17,6 +17,8 @@ package agentbridge
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -33,7 +35,12 @@ import (
 	pb "github.com/autohealops/k8s-executor/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -54,6 +61,7 @@ type Bridge struct {
 	conn      *grpc.ClientConn
 	server    *grpc.Server
 	lis       net.Listener
+	svc       *bridgeService
 	logger    *zap.Logger
 }
 
@@ -138,7 +146,103 @@ func New(clusterID uint, rc *rest.Config, cs *kubernetes.Clientset, whitelist []
 	}
 
 	logger.Info("agent 进程内 executor 已就绪", zap.Uint("cluster", clusterID), zap.String("addr", lis.Addr().String()))
-	return &Bridge{clusterID: clusterID, conn: conn, server: srv, lis: lis, logger: logger}, nil
+	return &Bridge{clusterID: clusterID, conn: conn, server: srv, lis: lis, svc: svc, logger: logger}, nil
+}
+
+// ServePull 以「被平台拉取」的方式对外提供 ExecutorService（R14 pull 模式）。
+//
+// 与 push 模式的区别：push 是 agent 主动连平台 gateway（反向隧道），pull 是 agent
+// 在集群内监听一个 gRPC 端口，平台侧直连调用（适合 agent 出网受限、平台能进集群的场景）。
+//
+// Auth：
+//   - token 非空 → 要求 metadata `authorization: Bearer <token>`，否则 Unauthenticated；
+//   - certFile/keyFile 都有 → 启用 TLS；
+//   - caFile 非空且启用 TLS → 要求并校验客户端证书（mTLS）。
+//
+// 注意：pull 模式只提供「平台拉取」能力，agent 侧的推送型功能（watcher 告警上报、
+// 指标/事件/配额定时推送）不启用 —— 平台改按需拉取。
+func (b *Bridge) ServePull(addr, token, certFile, keyFile, caFile string) error {
+	opts, err := b.pullServerOptions(token, certFile, keyFile, caFile)
+	if err != nil {
+		return err
+	}
+	srv := grpc.NewServer(opts...)
+	pb.RegisterExecutorServiceServer(srv, b.svc)
+	reflection.Register(srv)
+
+	lis, lerr := net.Listen("tcp", addr)
+	if lerr != nil {
+		return fmt.Errorf("pull 模式监听 %s 失败: %w", addr, lerr)
+	}
+	return b.servePullOn(lis, srv, token, certFile, keyFile, caFile)
+}
+
+// pullServerOptions 构建 pull 模式服务端选项（鉴权拦截器 + 可选 TLS/mTLS）
+func (b *Bridge) pullServerOptions(token, certFile, keyFile, caFile string) ([]grpc.ServerOption, error) {
+	opts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(pullUnaryAuth(token)),
+		grpc.StreamInterceptor(pullStreamAuth(token)),
+	}
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("加载 pull 服务端证书失败: %w", err)
+		}
+		tcfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+		if caFile != "" {
+			caPEM, e := os.ReadFile(caFile)
+			if e != nil {
+				return nil, fmt.Errorf("读取 pull CA 失败: %w", e)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caPEM) {
+				return nil, fmt.Errorf("pull CA 解析失败")
+			}
+			tcfg.ClientCAs = pool
+			tcfg.ClientAuth = tls.RequireAndVerifyClientCert // mTLS
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tcfg)))
+	}
+	return opts, nil
+}
+
+// servePullOn 在已建好的监听器上服务（测试用；生产走 ServePull）
+func (b *Bridge) servePullOn(lis net.Listener, srv *grpc.Server, token, certFile, keyFile, caFile string) error {
+	b.logger.Info("agent pull 模式已监听", zap.String("addr", lis.Addr().String()), zap.Bool("token", token != ""),
+		zap.Bool("tls", certFile != "" && keyFile != ""), zap.Bool("mtls", caFile != ""))
+	return srv.Serve(lis)
+}
+
+func pullAuthOK(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	vals := md.Get("authorization")
+	for _, v := range vals {
+		if v == "Bearer "+token || v == token {
+			return nil
+		}
+	}
+	return status.Error(codes.Unauthenticated, "pull 模式令牌无效")
+}
+
+func pullUnaryAuth(token string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err := pullAuthOK(ctx, token); err != nil {
+			return nil, err
+		}
+		return handler(ctx, req)
+	}
+}
+
+func pullStreamAuth(token string) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := pullAuthOK(ss.Context(), token); err != nil {
+			return err
+		}
+		return handler(srv, ss)
+	}
 }
 
 // Close 关闭桥

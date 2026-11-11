@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -70,6 +71,13 @@ func main() {
 	dbSlowInterval := flag.Duration("db-slow-interval", 60*time.Second, "慢 SQL 采集间隔（内部子循环）")
 	hostConfig := flag.String("host-config", "", "主机代采配置 hosts.json 路径（空=不启用）")
 	sshKey := flag.String("ssh-key", "", "主机代采 SSH 私钥路径")
+	// R14 双接入：push=主动连平台（反向隧道，默认）/ pull=平台直连拉取（agent 只监听）
+	mode := flag.String("mode", "push", "接入模式：push=主动连平台 / pull=平台拉取")
+	listen := flag.String("listen", ":9100", "pull 模式监听地址（如 :9100）")
+	pullToken := flag.String("pull-token", "", "pull 模式访问令牌（与平台侧配置一致；空=不校验，仅限内网调试）")
+	pullCert := flag.String("pull-cert", "", "pull 模式服务端 TLS 证书（与 -pull-key 一起提供才启用 TLS）")
+	pullKey := flag.String("pull-key", "", "pull 模式服务端 TLS 私钥")
+	pullCA := flag.String("pull-ca", "", "pull 模式客户端 CA（配置后要求并校验客户端证书 = mTLS）")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
 
@@ -155,13 +163,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[agent] 警告：未配置 -ca-file/-cert-file/-key-file，隧道为明文（仅限本地调试）")
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
-	conn, err := grpc.NewClient(*platform, dialOpts...)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "连接平台失败: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -170,6 +171,25 @@ func main() {
 		<-c
 		cancel()
 	}()
+
+	// R14 pull 模式：不连平台，直接监听 gRPC 端口等平台来拉取。
+	// 注意：推送型能力（watcher 告警上报 / 指标 / 事件 / 配额定时上报）依赖隧道，pull 模式下不启用。
+	if strings.EqualFold(strings.TrimSpace(*mode), "pull") {
+		fmt.Printf("[agent] pull 模式启动：监听 %s（令牌 %v，TLS %v，mTLS %v）\n",
+			*listen, *pullToken != "", *pullCert != "" && *pullKey != "", *pullCA != "")
+		if err := bridge.ServePull(*listen, *pullToken, *pullCert, *pullKey, *pullCA); err != nil {
+			fmt.Fprintf(os.Stderr, "[agent] pull 服务退出: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	conn, err := grpc.NewClient(*platform, dialOpts...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "连接平台失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
 
 	// 断线自动重连
 	for ctx.Err() == nil {
