@@ -142,6 +142,7 @@
         <div class="ftab" data-v="meta">元数据</div>
         <div class="ftab" data-v="env">环境变量</div>
         <div class="ftab" data-v="events">事件</div>
+        <div class="ftab" data-v="monitor">监控</div>
       </div>
 
       <!-- 概览 -->
@@ -195,6 +196,38 @@
         <div class="card" style="margin-top:16px"><div class="ttl">容器 eft-module-hrs</div>
           <div class="kv"><div class="k">TZ</div><div>Asia/Shanghai</div><div class="k">SPRING_PROFILES_ACTIVE</div><div>qa</div></div>
         </div>
+      </div>
+
+      <!-- 监控 -->
+      <div id="tab-monitor" class="hide">
+        <div class="card" style="margin-top:16px">
+          <div class="ttl">CPU 使用率（近 30 分钟）<span class="muted" style="font-weight:400;font-size:12px"> · 当前 38%</span></div>
+          <div class="kv" style="grid-template-columns:1fr;padding:12px 14px">
+            <svg viewBox="0 0 900 120" preserveAspectRatio="none" style="width:100%;height:120px">
+              <polyline fill="none" stroke="#1f6feb" stroke-width="2"
+                points="0,86 60,80 120,92 180,70 240,64 300,58 360,74 420,62 480,50 540,44 600,52 660,40 720,46 780,36 840,42 900,38"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ttl">内存使用（近 30 分钟）<span class="muted" style="font-weight:400;font-size:12px"> · 当前 61%（limit 1536Mi）</span></div>
+          <div class="kv" style="grid-template-columns:1fr;padding:12px 14px">
+            <svg viewBox="0 0 900 120" preserveAspectRatio="none" style="width:100%;height:120px">
+              <polyline fill="none" stroke="#fa8c16" stroke-width="2"
+                points="0,70 60,66 120,72 180,60 240,56 300,50 360,54 420,44 480,40 540,36 600,30 660,26 720,30 780,24 840,28 900,26"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ttl">网络 I/O / 重启次数</div>
+          <div class="kv">
+            <div class="k">入站</div><div>1.2 MB/s</div>
+            <div class="k">出站</div><div>0.8 MB/s</div>
+            <div class="k">24h 重启</div><div>1 次（11-11 14:58 OOMKilled）</div>
+            <div class="k">数据源</div><div class="muted">集群 Prometheus（container_* 指标）</div>
+          </div>
+        </div>
+        <div class="tip">真实页面这里接 ECharts（和现有「工作负载监控」抽屉同一套数据），按 Pod / 容器切换维度。</div>
       </div>
 
       <!-- 事件 -->
@@ -265,14 +298,17 @@ function goList(){
 }
 function selectTab(v){
   document.querySelectorAll('.ftab').forEach(t=>t.classList.toggle('on', t.dataset.v===v));
-  ['overview','pods','meta','env','events'].forEach(k=>{
+  ['overview','pods','meta','env','events','monitor'].forEach(k=>{
     document.getElementById('tab-'+k).classList.toggle('hide', k!==v);
   });
 }
 document.querySelectorAll('.ftab').forEach(t=>t.onclick=()=>selectTab(t.dataset.v));
 renderList('deployment');
 // 直接看详情页：打开 cluster-demo.html#detail
-if (location.hash === '#detail') openDetail(DATA.deployment[0]);
+if (location.hash.startsWith('#detail')) {
+  openDetail(DATA.deployment[0]);
+  if (location.hash.includes('monitor')) selectTab('monitor');
+}
 </script>
 </body>
 </html>
