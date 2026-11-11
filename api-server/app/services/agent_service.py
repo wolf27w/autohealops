@@ -331,11 +331,16 @@ async def run_agent_turn(session: DiagnosisSession, user_input: str, cluster_nam
             elif m.role == "tool":
                 history.append({"role": "tool", "tool": m.tool_name, "content": m.tool_output})
 
-    # 3. 决策循环（工具集来自统一注册表，应用诊断域）
+    # 3. 决策循环（工具集来自统一注册表；域按会话类别选，2026-11-11）
+    #    app → application（Pod 级工具全套）
+    #    db  → database（库健康等）+ all 公共工具
+    #    node/cluster → all（当前没有节点专用工具，先用公共工具 + 指标查询）
     tool_steps: list[dict] = []
     final_answer = None
     last_error = None
-    diagnostic_tools = tool_registry.list_tools(domain="application")
+    _cat = (getattr(session, "category", "") or "app").lower()
+    _domain = {"db": "database", "node": "all", "cluster": "all"}.get(_cat, "application")
+    diagnostic_tools = tool_registry.list_tools(domain=_domain)
     seen_calls: set[str] = set()  # 已执行过的 (tool, args) 去重
 
     used_steps = 0       # 有效工具执行步数（重复调用不占）
