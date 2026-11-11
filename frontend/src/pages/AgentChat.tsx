@@ -94,14 +94,10 @@ export default function AgentChat() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<number | null>(null)  // 当前会话 id（轮询时防竞态）
 
-  // 会话筛选（老板 2026-11-11）：会话多了以后按集群/类别/来源过滤，避免一长串混在一起
+  // 会话筛选（老板 2026-11-11 定稿）：只按集群筛选，别的选项不要
   const [filterCluster, setFilterCluster] = useState<number>(0)
-  const [filterCategory, setFilterCategory] = useState<string>('')
-  const [filterSource, setFilterSource] = useState<string>('')
   const loadSessions = () => getAgentSessions({
     cluster_id: filterCluster || undefined,
-    category: filterCategory || undefined,
-    source: filterSource || undefined,
   }).then((d) => setSessions((d || []) as Session[]))
 
   const handleDeleteSession = async (sid: number) => {
@@ -113,7 +109,7 @@ export default function AgentChat() {
     } catch { /* 拦截器已提示 */ }
   }
 
-  useEffect(() => { loadSessions() }, [filterCluster, filterCategory, filterSource])
+  useEffect(() => { loadSessions() }, [filterCluster])
 
   // 支持从 JVM 诊断等入口带 ?session=<id> 直接打开会话
   useEffect(() => {
@@ -366,16 +362,8 @@ export default function AgentChat() {
         }}>
           新建诊断会话
         </Button>
-        <Space.Compact style={{ marginTop: 8, width: '100%' }}>
-          <Select size="small" style={{ width: '38%' }} value={filterCluster} onChange={setFilterCluster}
-            options={[{ value: 0, label: '全部集群' }, ...clusters.map((c) => ({ value: Number(c.id), label: c.name }))]} />
-          <Select size="small" style={{ width: '31%' }} value={filterCategory} onChange={setFilterCategory}
-            options={[{ value: '', label: '全部类型' }, { value: 'app', label: '应用' }, { value: 'node', label: '节点' },
-                      { value: 'db', label: '数据库' }, { value: 'cluster', label: '集群' }]} />
-          <Select size="small" style={{ width: '31%' }} value={filterSource} onChange={setFilterSource}
-            options={[{ value: '', label: '全部来源' }, { value: 'alert', label: '告警转来' },
-                      { value: 'agent', label: '手动发起' }, { value: 'proactive', label: '平台巡检' }]} />
-        </Space.Compact>
+        <Select size="small" style={{ marginTop: 8, width: '100%' }} value={filterCluster} onChange={setFilterCluster}
+          options={[{ value: 0, label: '全部集群' }, ...clusters.map((c) => ({ value: Number(c.id), label: c.name }))]} />
         <div style={{ marginTop: 8, overflowY: 'auto', flex: 1 }}>
           {sessions.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
           {sessionGroups.map(([day, items]) => {
