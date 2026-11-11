@@ -27,6 +27,8 @@ class PromptTemplate(Base):
     source_refs: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     invalid_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # R10 收尾：auto 模板灰度比例（0~100；100 = 全量，不改变现有行为）
+    gray_pct: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
     # R10：场景（pod/node/workload/database/cluster/platform/action）+ 预览样例变量
     scene: Mapped[str] = mapped_column(String(30), default="", server_default="")
     sample_vars: Mapped[str | None] = mapped_column(Text, nullable=True)

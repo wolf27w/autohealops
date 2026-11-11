@@ -4,15 +4,16 @@ import {
   Alert, Button, Card, Descriptions, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Select, Space,
   Table, Tabs, Tag, message,
 } from 'antd'
-import { PlusOutlined, EyeOutlined } from '@ant-design/icons'
+import { PlusOutlined, EyeOutlined, DiffOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import {
   getPromptTemplates, createPromptTemplate, updatePromptTemplate, previewPromptTemplate,
   getPromptFragments, createPromptFragment, updatePromptFragment, deletePromptFragment,
   getPromptRouting, createPromptRouting, updatePromptRouting, deletePromptRouting,
   getPromptHealth, sweepPromptHealth, getPromptVersions, rollbackPromptTemplate,
   reactivatePromptTemplate, checkPromptTemplate,
+  getPromptTemplateVersions, getPromptTemplateDiff, dryRunPromptTemplate,
 } from '../services/api'
-import type { PromptFragment, PromptHealth, PromptRouting } from '../services/api'
+import type { PromptFragment, PromptHealth, PromptRouting, PromptTemplateVersion, PromptTemplateDiff, PromptDryRun } from '../services/api'
 
 interface PromptTemplate {
   id: number
@@ -25,6 +26,9 @@ interface PromptTemplate {
   system_prompt?: string
   user_prompt_template?: string
   variables?: string
+  gray_pct?: number
+  parent_id?: number | null
+  source?: string
   [key: string]: unknown
 }
 
@@ -38,6 +42,30 @@ const SCENES = [
   { value: 'action', label: '动作类（方案/风险/验证）' },
 ]
 const SCENE_LABEL: Record<string, string> = Object.fromEntries(SCENES.map((s) => [s.value, s.label]))
+
+function DiffView({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>{title}</div>
+      <pre style={{
+        maxHeight: 260, overflow: 'auto', background: '#fafafa', padding: 8,
+        fontFamily: 'monospace', fontSize: 12, lineHeight: 1.5, margin: 0,
+      }}>
+        {lines.map((ln, i) => {
+          let bg: string | undefined
+          if (ln.startsWith('+') && !ln.startsWith('+++')) bg = '#e6ffec'
+          else if (ln.startsWith('-') && !ln.startsWith('---')) bg = '#ffebe9'
+          else if (ln.startsWith('@@')) bg = '#f0f5ff'
+          return (
+            <div key={i} style={{ background: bg, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+              {ln || ' '}
+            </div>
+          )
+        })}
+      </pre>
+    </div>
+  )
+}
 
 export default function PromptTemplates() {
   const [tab, setTab] = useState('templates')
@@ -67,6 +95,15 @@ export default function PromptTemplates() {
   const [health, setHealth] = useState<PromptHealth[]>([])
   const [healthLoading, setHealthLoading] = useState(false)
   const [verModal, setVerModal] = useState<{ id: number; name: string; items: { id: number; version: number; changelog: string; created_at: string }[] } | null>(null)
+  // 版本对比 / 试跑（R10 收尾）
+  const [diffModal, setDiffModal] = useState<{ id: number; name: string } | null>(null)
+  const [diffVersions, setDiffVersions] = useState<PromptTemplateVersion[]>([])
+  const [diffAgainst, setDiffAgainst] = useState<number>(0)
+  const [diffResult, setDiffResult] = useState<PromptTemplateDiff | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+  const [dryModal, setDryModal] = useState<PromptTemplate | null>(null)
+  const [dryVarsText, setDryVarsText] = useState('{}')
+  const [dryResult, setDryResult] = useState<PromptDryRun | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -128,6 +165,50 @@ export default function PromptTemplates() {
     setPreviewOut(await previewPromptTemplate(previewTpl.id, vars))
   }
 
+  const openDiff = async (t: PromptTemplate) => {
+    setDiffModal({ id: t.id, name: t.name })
+    setDiffResult(null)
+    setDiffAgainst(0)
+    try {
+      const vs = (await getPromptTemplateVersions(t.id)) || []
+      setDiffVersions(vs)
+      const others = vs.filter((v) => v.id !== t.id)
+      setDiffAgainst(others.length ? others[others.length - 1].id : 0)
+    } catch { setDiffVersions([]) }
+  }
+  const doDiff = async () => {
+    if (!diffModal || !diffAgainst) { message.warning('请选择对比版本'); return }
+    setDiffLoading(true)
+    try {
+      setDiffResult(await getPromptTemplateDiff(diffModal.id, diffAgainst))
+    } catch { /* 拦截器已提示 */ } finally { setDiffLoading(false) }
+  }
+
+  const openDryRun = (t: PromptTemplate) => {
+    setDryModal(t)
+    setDryResult(null)
+    let vars: Record<string, string> = {}
+    try {
+      const sv = t.sample_vars ? JSON.parse(t.sample_vars) : null
+      const keys: string[] = (() => { try { return JSON.parse((t.variables as string) || '[]') } catch { return [] } })()
+      if (sv && typeof sv === 'object' && !Array.isArray(sv)) vars = sv as Record<string, string>
+      else keys.forEach((k) => { vars[k] = `<${k}>` })
+    } catch { /* ignore */ }
+    setDryVarsText(JSON.stringify(vars, null, 2))
+  }
+  const doDryRun = async () => {
+    if (!dryModal) return
+    let vars: Record<string, string>
+    try {
+      vars = JSON.parse(dryVarsText)
+      if (typeof vars !== 'object' || Array.isArray(vars)) throw new Error('必须是 JSON 对象')
+    } catch (e) {
+      message.error(`变量 JSON 不合法：${(e as Error).message}`)
+      return
+    }
+    setDryResult(await dryRunPromptTemplate(dryModal.id, vars))
+  }
+
   const saveFrag = async () => {
     const v = await fragForm.validateFields()
     if (fragModal) await updatePromptFragment(fragModal.id, v)
@@ -178,13 +259,23 @@ export default function PromptTemplates() {
                     { title: '版本', dataIndex: 'version', width: 80 },
                     { title: '状态', dataIndex: 'is_active', width: 80, render: (v: boolean) => (v ? '启用' : '停用') },
                     {
-                      title: '操作', width: 220,
+                      title: '来源', dataIndex: 'source', width: 80,
+                      render: (v: string) => (v === 'auto' ? <Tag color="purple">AI起草</Tag> : <Tag>手写</Tag>),
+                    },
+                    {
+                      title: '灰度', dataIndex: 'gray_pct', width: 70,
+                      render: (v: number) => (v === undefined || v === null || v === 100 ? <span style={{ color: '#999' }}>100%</span> : <Tag color="orange">{v}%</Tag>),
+                    },
+                    {
+                      title: '操作', width: 340,
                       render: (_: unknown, r: PromptTemplate) => (
-                        <>
-                          <Button size="small" icon={<EyeOutlined />} style={{ marginRight: 8 }} onClick={() => openPreview(r)}>预览</Button>
-                          <Button size="small" onClick={() => openView(r)} style={{ marginRight: 8 }}>查看</Button>
+                        <Space size={4} wrap>
+                          <Button size="small" icon={<EyeOutlined />} onClick={() => openPreview(r)}>预览</Button>
+                          <Button size="small" onClick={() => openView(r)}>查看</Button>
                           <Button size="small" type="primary" onClick={() => openEdit(r)}>编辑</Button>
-                        </>
+                          <Button size="small" icon={<DiffOutlined />} onClick={() => openDiff(r)}>对比</Button>
+                          <Button size="small" icon={<PlayCircleOutlined />} onClick={() => openDryRun(r)}>试跑</Button>
+                        </Space>
                       ),
                     },
                   ]}
@@ -391,6 +482,11 @@ export default function PromptTemplates() {
               <Descriptions.Item label="版本">{current?.version}</Descriptions.Item>
             </Descriptions>
           )}
+          {!creating && (
+            <Form.Item name="gray_pct" label="灰度比例（% 0~100）" tooltip="仅 source=auto 模板生效：按 集群+故障 稳定 hash 分流，命中灰度才用本模板，否则回退 parent 上一版；100 = 全量（默认，不改变现有行为）">
+              <InputNumber min={0} max={100} disabled={!editing} style={{ width: '100%' }} />
+            </Form.Item>
+          )}
           <Form.Item name="system_prompt" label="System Prompt（可用 {{fragment:key}} 引用公共片段）" rules={[{ required: true }]}>
             <Input.TextArea rows={5} disabled={!editing} />
           </Form.Item>
@@ -459,6 +555,59 @@ export default function PromptTemplates() {
             <Select options={[{ value: true, label: '启用' }, { value: false, label: '停用' }]} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 版本对比 */}
+      <Modal
+        title={`版本对比：${diffModal?.name || ''}`} open={!!diffModal} onCancel={() => setDiffModal(null)}
+        footer={null} width={860}
+      >
+        <Space style={{ marginBottom: 12 }}>
+          <span>对比版本：</span>
+          <Select
+            style={{ width: 340 }} value={diffAgainst || undefined}
+            onChange={(v) => { setDiffAgainst(v); setDiffResult(null) }}
+            placeholder="选择历史版本"
+            options={diffVersions.filter((v) => v.id !== diffModal?.id).map((v) => ({
+              value: v.id, label: `v${v.version} · ${v.name} · 灰度${v.gray_pct ?? 100}%`,
+            }))}
+          />
+          <Button type="primary" loading={diffLoading} onClick={doDiff}>对比</Button>
+        </Space>
+        {diffVersions.filter((v) => v.id !== diffModal?.id).length === 0 && (
+          <Alert type="info" showIcon style={{ marginBottom: 12 }} message="该模板暂无历史版本（parent_id 链为空），无法对比。" />
+        )}
+        {diffResult && (
+          <>
+            <DiffView title="System Prompt（+新增 / -删除）" lines={diffResult.system_prompt_diff} />
+            <DiffView title="User Prompt 模板（+新增 / -删除）" lines={diffResult.user_prompt_diff} />
+          </>
+        )}
+      </Modal>
+
+      {/* 试跑渲染 */}
+      <Modal
+        title={`试跑：${dryModal?.name || ''}`} open={!!dryModal} onCancel={() => setDryModal(null)}
+        onOk={doDryRun} okText="试跑" width={820}
+      >
+        <div style={{ marginBottom: 8, color: '#8c8c8c', fontSize: 12 }}>变量值（JSON；留空则用模板 sample_vars）</div>
+        <Input.TextArea rows={6} value={dryVarsText} onChange={(e) => setDryVarsText(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+        <Button type="primary" onClick={doDryRun} style={{ marginTop: 8 }}>试跑</Button>
+        {dryResult && (
+          <div style={{ marginTop: 12 }}>
+            {dryResult.missing_vars.length > 0 && (
+              <Alert type="warning" showIcon style={{ marginBottom: 8 }}
+                message={`缺少变量：${dryResult.missing_vars.join(', ')}（渲染后会变成空串）`} />
+            )}
+            {dryResult.used_vars.length > 0 && (
+              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>已用变量：{dryResult.used_vars.join(', ')}</div>
+            )}
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>System Prompt</div>
+            <pre style={{ maxHeight: 160, overflow: 'auto', background: '#fafafa', padding: 8, fontSize: 12 }}>{dryResult.system_prompt}</pre>
+            <div style={{ fontSize: 12, color: '#8c8c8c', margin: '8px 0 4px' }}>User Prompt</div>
+            <pre style={{ maxHeight: 240, overflow: 'auto', background: '#fafafa', padding: 8, fontSize: 12 }}>{dryResult.user_prompt}</pre>
+          </div>
+        )}
       </Modal>
     </div>
   )

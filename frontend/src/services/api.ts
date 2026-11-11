@@ -213,6 +213,25 @@ export const getPromptTemplates = () => http.get('/ai/prompt-templates')
 export const createPromptTemplate = (data: Payload) => http.post('/ai/prompt-templates', data)
 export const updatePromptTemplate = (id: number, data: Payload) => http.put(`/ai/prompt-templates/${id}`, data)
 
+// ============ R10 收尾：灰度 / 版本对比 / 试跑 ============
+export interface PromptTemplateVersion {
+  id: number; name: string; version: number; gray_pct: number; source: string; created_at: string | null
+}
+export interface PromptTemplateDiff {
+  base: PromptTemplateVersion
+  against: PromptTemplateVersion
+  system_prompt_diff: string[]
+  user_prompt_diff: string[]
+}
+export interface PromptDryRun {
+  system_prompt: string; user_prompt: string; missing_vars: string[]; used_vars: string[]; variables: string[]
+}
+export const getPromptTemplateVersions = (id: number) => http.get<PromptTemplateVersion[]>(`/ai/prompt-templates/${id}/versions`)
+export const getPromptTemplateDiff = (id: number, against: number) =>
+  http.get<PromptTemplateDiff>(`/ai/prompt-templates/${id}/diff`, { params: { against } })
+export const dryRunPromptTemplate = (id: number, vars: Record<string, string>) =>
+  http.post<PromptDryRun>(`/ai/prompt-templates/${id}/dry-run`, { vars })
+
 // ============ 决策 ============
 export const evaluateDecision = (planId: number) => http.post('/decisions/evaluate', null, { params: { plan_id: planId } })
 export const getDecisionPolicies = () => http.get('/decisions/policies')

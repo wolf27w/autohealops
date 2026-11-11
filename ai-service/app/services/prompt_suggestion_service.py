@@ -176,6 +176,10 @@ async def accept(suggestion_id: int, name: str, system_prompt: str, user_prompt_
 
     tid = await prompt_engine.create_template(name, "diagnosis", system_prompt or sug.system_prompt,
                                               user_prompt_template or sug.user_prompt_template)
+    # R10 收尾：parent_id 指向「被演进/归并的上一版模板」，否则版本链与灰度回退都没有目标
+    _note, parent_id = await _similarity_note(sug.fault_type)
+    if parent_id == tid:
+        parent_id = None
     # 标记 source=auto / status=active / source_refs / parent_id
     async with async_session() as s:
         tpl = await s.get(PromptTemplate, tid)
@@ -183,7 +187,7 @@ async def accept(suggestion_id: int, name: str, system_prompt: str, user_prompt_
             tpl.source = "auto"
             tpl.status = "active"
             tpl.source_refs = sug.source_refs
-            tpl.parent_id = None
+            tpl.parent_id = parent_id
         sug2 = await s.get(PromptSuggestion, suggestion_id)
         sug2.status = "accepted"
         sug2.decided_at = datetime.now()

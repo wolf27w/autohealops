@@ -289,7 +289,8 @@ async def list_prompt_templates():
          "user_prompt_template": t.user_prompt_template, "variables": t.variables,
          "version": t.version, "is_active": t.is_active,
          "scene": getattr(t, "scene", "") or "", "sample_vars": getattr(t, "sample_vars", "") or "",
-         "status": getattr(t, "status", "active"), "source": getattr(t, "source", "manual")} for t in templates
+         "status": getattr(t, "status", "active"), "source": getattr(t, "source", "manual"),
+         "gray_pct": getattr(t, "gray_pct", 100), "parent_id": getattr(t, "parent_id", None)} for t in templates
     ]}
 
 
@@ -327,6 +328,9 @@ async def update_prompt_template(template_id: int, payload: dict):
                 t.sample_vars = payload["sample_vars"]
             if payload.get("is_active") is not None:
                 t.is_active = bool(payload["is_active"])
+            if payload.get("gray_pct") is not None:
+                gray = int(payload["gray_pct"])
+                t.gray_pct = max(0, min(100, gray))
             await s.commit()
     return {"code": 200, "message": "success", "data": None}
 
@@ -514,6 +518,87 @@ async def preview_template(template_id: int, payload: dict):
         "system_prompt": pe.render_template(system, variables), "user_prompt": user,
         "missing_vars": sorted(set(missing)), "variables": pe.extract_variables(user_raw),
     }}
+
+
+@router.get("/prompt-templates/{template_id}/versions")
+async def prompt_template_versions(template_id: int):
+    """沿 parent_id 链取历史版本（从旧到新），供「版本对比」下拉选择。"""
+    from app.services import prompt_engine as pe
+    chain = await pe.get_version_chain(template_id)
+    if not chain:
+        return {"code": 404, "message": "模板不存在", "data": None}
+    return {"code": 200, "message": "success", "data": chain}
+
+
+@router.get("/prompt-templates/{template_id}/diff")
+async def prompt_template_diff(template_id: int, against: int = 0):
+    """两个版本的 system_prompt / user_prompt_template 行级 unified diff。
+
+    against 必须是本模板 parent_id 链上的历史版本；默认（0）取链上最近一个上一版。
+    """
+    from app.models import PromptTemplate
+    from app.services import prompt_engine as pe
+    async with async_session() as s:
+        base = await s.get(PromptTemplate, template_id)
+        if not base:
+            return {"code": 404, "message": "模板不存在", "data": None}
+    chain = await pe.get_version_chain(template_id)
+    ids = [v["id"] for v in chain]
+    if against:
+        if against not in ids:
+            return {"code": 400, "message": "对比版本不在该模板的版本链上", "data": None}
+        other_id = against
+    else:
+        # 链上最后一个（除当前）→ 最近一个上一版
+        others = [i for i in ids if i != template_id]
+        if not others:
+            return {"code": 400, "message": "无历史版本可对比", "data": None}
+        other_id = others[-1]
+    async with async_session() as s:
+        other = await s.get(PromptTemplate, other_id)
+        if not other:
+            return {"code": 404, "message": "对比版本不存在", "data": None}
+        base_sys, base_usr = base.system_prompt or "", base.user_prompt_template or ""
+        oth_sys, oth_usr = other.system_prompt or "", other.user_prompt_template or ""
+    meta = lambda t: {  # noqa: E731
+        "id": t.id, "name": t.name, "version": getattr(t, "version", 1),
+        "gray_pct": getattr(t, "gray_pct", 100), "source": getattr(t, "source", "manual"),
+        "created_at": str(t.created_at) if t.created_at else None,
+    }
+    return {"code": 200, "message": "success", "data": {
+        "base": meta(base), "against": meta(other),
+        "system_prompt_diff": pe.build_unified_diff(oth_sys, base_sys, "旧版", "新版"),
+        "user_prompt_diff": pe.build_unified_diff(oth_usr, base_usr, "旧版", "新版"),
+    }}
+
+
+@router.post("/prompt-templates/{template_id}/dry-run")
+async def prompt_template_dry_run(template_id: int, payload: dict):
+    """试跑渲染：走现有渲染入口（先展开片段再替换变量），不调用任何模型。
+
+    body: {"vars": {...}}；缺省用模板的 sample_vars。
+    """
+    from app.models import PromptTemplate
+    from app.services import prompt_engine as pe
+    import json as _json
+    async with async_session() as s:
+        tpl = await s.get(PromptTemplate, template_id)
+        if not tpl:
+            return {"code": 404, "message": "模板不存在", "data": None}
+        sample_vars = getattr(tpl, "sample_vars", "") or ""
+    variables = payload.get("vars") if isinstance(payload.get("vars"), dict) else None
+    if variables is None:
+        variables = {}
+        if sample_vars.strip():
+            try:
+                parsed = _json.loads(sample_vars)
+                if isinstance(parsed, dict):
+                    variables = parsed
+            except Exception:  # noqa: BLE001
+                variables = {}
+    data = await pe.dry_run_render(tpl, variables)
+    data["variables"] = sorted(set(pe.extract_variables(tpl.system_prompt or "") + pe.extract_variables(tpl.user_prompt_template or "")))
+    return {"code": 200, "message": "success", "data": data}
 
 
 @router.post("/rag/embed-test")

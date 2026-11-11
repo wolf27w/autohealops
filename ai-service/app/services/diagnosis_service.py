@@ -126,6 +126,13 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
                 matched = False
                 break
 
+    # R10 收尾：auto 模板按「集群 + 故障类型」灰度分流（未命中回退上一版 / 内置默认）
+    if tpl is not None:
+        _cluster_key = str(alert_data.get("cluster_id") or alert_data.get("cluster_name") or "")
+        tpl, _gray_fallback = await prompt_engine.resolve_effective_template(tpl, _cluster_key, fault_type)
+        if _gray_fallback:
+            template_name = getattr(tpl, "name", template_name)
+
     # 采集上下文
     ctx = await _collect_context(alert_data)
     if context_data:
@@ -228,6 +235,10 @@ async def multi_diagnose(alert_data: dict, context_data: dict | None = None) -> 
         configs = list(result.scalars())
 
     tpl = await _get_template("diagnosis", template_name)
+    # R10 收尾：auto 模板灰度分流（同上，多模型协同保持一致）
+    if tpl is not None:
+        _cluster_key = str(alert_data.get("cluster_id") or alert_data.get("cluster_name") or "")
+        tpl, _gray_fallback = await prompt_engine.resolve_effective_template(tpl, _cluster_key, fault_type)
     ctx = await _collect_context(alert_data)
     render_ctx = {
         "cluster_name": _sanitize_ident(alert_data.get("cluster_name", "")),
