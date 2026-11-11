@@ -1314,7 +1314,10 @@ async def workload_mounts(cluster_id: int, kind: str, namespace: str, name: str,
 _MOUNT_SOURCE_KEYS = {"configMap": "configMap", "secret": "secret", "pvc": "persistentVolumeClaim", "emptyDir": "emptyDir"}
 # envFrom 引用字段名
 _ENV_REF_KEYS = {"configMap": "configMapRef", "secret": "secretRef"}
-_WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset"}
+# 挂载/环境变量编辑只支持这三种工作负载（Pod 本身不可编辑模板）；
+# 注意别再用 _WORKLOAD_KINDS —— 那是对外「可删除类型」的集合（含 pod/cronjob），
+# 之前这里重名定义把它覆盖了，导致「删除 Pod」被误判成「不支持删除的类型 pod」。
+_MOUNT_WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset"}
 
 
 def _k8s_dns_label(s: str) -> str:
@@ -1384,7 +1387,7 @@ def _env_refs_from_doc(doc: dict) -> list[dict]:
 
 async def _load_workload_doc(cluster_id: int, kind: str, namespace: str, name: str):
     """拉工作负载 YAML 并解析成 dict；返回 (doc, error_response)"""
-    if kind not in _WORKLOAD_KINDS:
+    if kind not in _MOUNT_WORKLOAD_KINDS:
         return None, {"code": 400, "message": f"不支持的类型 {kind}（仅 deployment/statefulset/daemonset）", "data": None}
     r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
     if not r.get("success"):

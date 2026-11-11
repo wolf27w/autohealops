@@ -13,7 +13,7 @@ import WorkloadMountsPanel from '../components/WorkloadMountsPanel'
 import WorkloadEventsModal from '../components/WorkloadEventsModal'
 import WorkloadMetricsDrawer from '../components/WorkloadMetricsDrawer'
 import { getWorkloads, scaleWorkload, rolloutWorkload, getRolloutHistory, updateWorkloadProbe, recreateWorkload, updateWorkloadImage,
-  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers, getClusterPods } from '../services/api'
+  getPodMetrics, getPodLogs, getPodYaml, applyPodYaml, execPod, getClusters, getClusterDetail, getWorkloadEvents, getPodContainers, listPodFiles, readPodFile, isolatePod, unisolatePod, getWorkloadLogs, getRegistryTags, getNodes, scheduleWorkload, getIsolatedPods, getWorkloadContainers, getClusterPods, deleteWorkload } from '../services/api'
 import type { MetricPoint, PodTarget, Workload } from '../types'
 import { podStatusColor, podReadyText } from '../utils/podStatus'
 import type { AggLogPod, K8sNode } from '../services/api'
@@ -397,6 +397,20 @@ export default function ServiceDetail() {
                       </Popconfirm>
                     )}
                     <Button size="small" type="link" onClick={() => setYamlPod({ ...r, clusterId })}>YAML</Button>
+                    <Popconfirm
+                      title={`删除容器 ${r.name}？`}
+                      description="Deployment/StatefulSet 托管的 Pod 会被自动重建；裸 Pod 删除后不再恢复。"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={async () => {
+                        try {
+                          await deleteWorkload(clusterId, 'pod', r.namespace, r.name)
+                          message.success('已删除')
+                          loadPods()
+                        } catch { message.error('删除失败') }
+                      }}
+                    >
+                      <Button size="small" type="link" danger>删除</Button>
+                    </Popconfirm>
                   </Space>
                 ) },
               ]}
