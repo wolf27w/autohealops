@@ -62,7 +62,6 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const [loading, setLoading] = useState(false)
   const [activeNs, setActiveNs] = useState<string>('_all_')
   const [searchText, setSearchText] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
 
   // 弹窗状态
@@ -106,7 +105,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   }, [clusterId, kind])
 
   // 切换命名空间/状态/搜索时重置分页
-  useEffect(() => { setPage(1) }, [activeNs, statusFilter, searchText])
+  useEffect(() => { setPage(1) }, [activeNs, searchText])
 
   const paginationConfig = {
     current: page,
@@ -141,16 +140,12 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
       if (activeNs !== '_all_' && ns.namespace !== activeNs) continue
       for (const item of (ns[arrKey] as ResourceItem[]) || []) {
         if (q && !(item.name || '').toLowerCase().includes(q) && !ns.namespace.toLowerCase().includes(q)) continue
-        if (statusFilter) {
-          const st = workloadStatus(item)
-          if (st !== statusFilter) continue
-        }
         result.push({ ...item, namespace: ns.namespace })
       }
     }
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [namespaces, activeNs, searchText, statusFilter, arrKey])
+  }, [namespaces, activeNs, searchText, arrKey])
 
   // 命名空间下拉选项（从数据聚合）
   const nsOptions = useMemo(() => {
@@ -289,6 +284,12 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
     { title: '命名空间', dataIndex: 'namespace' },
     {
       title: '状态', key: 'status', dataIndex: 'status', width: 140,
+      filters: [
+        { text: '运行中', value: '运行中' },
+        { text: '更新中', value: '更新中' },
+        { text: '已停止', value: '已停止' },
+      ],
+      onFilter: (value: unknown, r: ResourceItem) => workloadStatus(r) === value,
       render: (_: unknown, r: ResourceItem) => {
         const st = workloadStatus(r)
         return st ? <Tag color={STATUS_COLOR[st]}>{st}</Tag> : '-'
@@ -384,19 +385,6 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
             style={{ width: 180 }}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-          />
-          <Select
-            size="small"
-            style={{ width: 130 }}
-            value={statusFilter}
-            placeholder="状态筛选"
-            allowClear
-            onChange={(v) => setStatusFilter(v as string | undefined)}
-            options={[
-              { value: '运行中', label: '运行中' },
-              { value: '更新中', label: '更新中' },
-              { value: '已停止', label: '已停止' },
-            ]}
           />
         </Space>
 
