@@ -111,6 +111,9 @@ export default function AgentChat() {
 
   useEffect(() => { loadSessions() }, [filterCluster])
 
+  // 集群下拉要在进页面时就有数据（原来只在点「新建会话」时才加载 → 筛选框只剩「全部集群」）
+  useEffect(() => { loadClusters().catch(() => { /* 无权限或接口异常时保持空列表 */ }) }, [])
+
   // 支持从 JVM 诊断等入口带 ?session=<id> 直接打开会话
   useEffect(() => {
     const sid = Number(searchParams.get('session') || 0)
