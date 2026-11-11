@@ -13,6 +13,7 @@ import {
   getWorkloads,
 } from '../../services/api'
 import WorkloadYamlModal, { type WorkloadTarget } from '../../components/WorkloadYamlModal'
+import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
 import ReleaseHistoryModal from '../../components/ReleaseHistoryModal'
 import ReleaseModal from '../../components/ReleaseModal'
 
@@ -68,6 +69,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [releaseTarget, setReleaseTarget] = useState<WorkloadTarget | null>(null)
   const [releaseHistoryTarget, setReleaseHistoryTarget] = useState<WorkloadTarget | null>(null)
+  const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
   const [scaleTarget, setScaleTarget] = useState<WorkloadTarget | null>(null)
   const [scaleValue, setScaleValue] = useState<number>(1)
 
@@ -387,6 +389,10 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
+          <Button type="primary" size="small"
+            onClick={() => setWlCreate({ clusterId, kind, namespace: activeNs === '_all_' ? 'default' : activeNs })}>
+            创建{kindLabel}
+          </Button>
         </Space>
 
         {batchBar}
@@ -403,6 +409,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
         />
       </Card>
 
+      <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       {releaseTarget && (
         <ReleaseModal open clusterId={releaseTarget.clusterId} namespace={releaseTarget.namespace}

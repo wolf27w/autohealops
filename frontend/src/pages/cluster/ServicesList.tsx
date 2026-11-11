@@ -126,7 +126,24 @@ export default function ServicesList({ clusterId }: { clusterId: number }) {
   return (
     <div>
       <Card size="small">
-        <Tabs activeKey={tab} onChange={setTab} items={items} />
+        <Tabs
+          activeKey={tab}
+          onChange={setTab}
+          items={items}
+          tabBarExtraContent={
+            tab === 'services' ? (
+              <Button type="primary" size="small"
+                onClick={() => setSvcObj({ clusterId, kind: 'service', namespace: 'default', name: '', create: true })}>
+                创建服务
+              </Button>
+            ) : (
+              <Button type="primary" size="small"
+                onClick={() => setIngObj({ clusterId, kind: 'ingress', namespace: 'default', name: '', create: true })}>
+                创建路由
+              </Button>
+            )
+          }
+        />
       </Card>
 
       <ConfigObjectYamlModal target={yamlObj} onClose={() => setYamlObj(null)} onSaved={load} />
