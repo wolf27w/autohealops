@@ -2,25 +2,17 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>AutoHealOps · 运行大屏 Demo v2（集群 Deployment 状态 + 工单）</title>
+<title>AutoHealOps · 运行大屏 Demo v3（集群全屏 + 现有功能）</title>
 <style>
-  :root{
-    --bg:#080e1a; --line:#1d3050; --tx:#dbe7ff; --tx2:#7d94b8;
-    --cyan:#2ee6d6; --blue:#3d8bff; --ok:#2ed47a; --warn:#ffb020; --err:#ff4d4f;
-  }
+  :root{--bg:#080e1a;--line:#1d3050;--tx:#dbe7ff;--tx2:#7d94b8;--cyan:#2ee6d6;--blue:#3d8bff;--ok:#2ed47a;--warn:#ffb020;--err:#ff4d4f}
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;color:var(--tx);overflow:hidden;
-    font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;
-    background:radial-gradient(1200px 600px at 50% -10%,#10233d 0,transparent 60%),
-               radial-gradient(900px 500px at 100% 100%,#0f2136 0,transparent 55%),var(--bg)}
+  body{margin:0;color:var(--tx);overflow:hidden;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 50% -10%,#10233d 0,transparent 60%),radial-gradient(900px 500px at 100% 100%,#0f2136 0,transparent 55%),var(--bg)}
   .screen{height:100vh;display:flex;flex-direction:column;padding:10px 16px 12px}
-
   .hd{display:flex;align-items:center;gap:14px;padding:6px 4px 12px;border-bottom:1px solid var(--line);position:relative}
-  .hd:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;
-    background:linear-gradient(90deg,transparent,rgba(46,230,214,.7),transparent)}
-  .title{font-size:24px;font-weight:700;letter-spacing:2px;
-    background:linear-gradient(90deg,#7fd8ff,#2ee6d6 60%,#8ea8ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hd:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,rgba(46,230,214,.7),transparent)}
+  .title{font-size:24px;font-weight:700;letter-spacing:2px;background:linear-gradient(90deg,#7fd8ff,#2ee6d6 60%,#8ea8ff);-webkit-background-clip:text;background-clip:text;color:transparent}
   .sub{font-size:12px;color:var(--tx2);letter-spacing:1px}
   .clock{margin-left:auto;text-align:right}
   .clock .t{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;color:#9fd7ff}
@@ -29,30 +21,25 @@
 
   .grid{flex:1;display:grid;grid-template-columns:300px 1fr 360px;gap:12px;min-height:0;padding-top:12px}
   .col{display:flex;flex-direction:column;gap:12px;min-height:0}
-  .panel{background:linear-gradient(180deg,rgba(20,36,60,.92),rgba(12,22,38,.92));border:1px solid var(--line);
-    border-radius:8px;display:flex;flex-direction:column;min-height:0;box-shadow:inset 0 0 40px rgba(61,139,255,.05)}
+  .panel{background:linear-gradient(180deg,rgba(20,36,60,.92),rgba(12,22,38,.92));border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-height:0;box-shadow:inset 0 0 40px rgba(61,139,255,.05)}
   .ph{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:13px;letter-spacing:1px;color:#a9c6f0;border-bottom:1px solid var(--line)}
   .ph .bar{width:3px;height:12px;background:linear-gradient(180deg,var(--cyan),var(--blue));border-radius:2px}
   .ph .r{margin-left:auto;font-size:11.5px;color:var(--tx2)}
   .pb{padding:10px 12px;overflow:auto;flex:1;min-height:0}
 
-  /* KPI */
   .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-  .kpi{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:8px;padding:12px 14px;
-    background:linear-gradient(180deg,rgba(24,42,70,.9),rgba(12,22,38,.9))}
+  .kpi{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:linear-gradient(180deg,rgba(24,42,70,.9),rgba(12,22,38,.9))}
   .kpi:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--blue)}
-  .kpi.err:before{background:var(--err)} .kpi.ok:before{background:var(--ok)} .kpi.warn:before{background:var(--warn)}
+  .kpi.err:before{background:var(--err)}.kpi.ok:before{background:var(--ok)}.kpi.warn:before{background:var(--warn)}
   .kpi .t{font-size:12.5px;color:var(--tx2)}
   .kpi .v{font-size:34px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums;margin-top:2px}
   .kpi .v small{font-size:14px;color:var(--tx2);margin-left:4px;font-weight:500}
   .kpi .d{font-size:12px;color:var(--tx2)}
   .kpi.err .v{color:var(--err);text-shadow:0 0 18px rgba(255,77,79,.5)}
-  .kpi.ok .v{color:var(--ok)} .kpi.warn .v{color:var(--warn)}
+  .kpi.ok .v{color:var(--ok)}.kpi.warn .v{color:var(--warn)}
 
-  /* 集群列表 */
-  .clitem{border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:rgba(14,24,40,.7);cursor:pointer;margin-bottom:9px}
-  .clitem:hover{border-color:#2c4a78}
-  .clitem.on{border-color:rgba(46,230,214,.65);box-shadow:0 0 0 1px rgba(46,230,214,.25) inset}
+  .clitem{border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:rgba(14,24,40,.7);cursor:pointer;margin-bottom:9px;transition:.15s}
+  .clitem:hover{border-color:rgba(46,230,214,.55);transform:translateY(-1px)}
   .clitem .l1{display:flex;align-items:center;gap:8px;font-size:13px}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
   .dot.w{background:var(--warn);box-shadow:0 0 8px var(--warn)}
@@ -63,30 +50,24 @@
   .track i{display:block;height:100%;background:linear-gradient(90deg,#2ee6d6,#3d8bff)}
   .track.w i{background:linear-gradient(90deg,#ffb020,#ff7a45)}
 
-  /* Deployment 矩阵 */
-  .toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-  .chip{border:1px solid var(--line);border-radius:14px;padding:2px 10px;font-size:12px;color:var(--tx2);cursor:pointer}
-  .chip.on{border-color:rgba(46,230,214,.6);color:#9ff3ea;background:rgba(46,230,214,.10)}
   .nsblock{margin-bottom:10px}
   .nshead{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#9fd7ff;padding:4px 2px 6px}
   .nshead .cnt{color:var(--tx2);font-size:11.5px}
-  .nshead .sev{margin-left:auto;font-size:11.5px;color:var(--tx2)}
-  .deps{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+  .nshead .sev{margin-left:auto;font-size:11.5px}
+  .deps{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:8px}
   .dep{border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:rgba(14,24,40,.65)}
   .dep .n{font-size:12.5px;color:#cfe0ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dep .r{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11.5px;color:var(--tx2)}
   .seg{display:flex;gap:3px}
-  .seg i{width:10px;height:10px;border-radius:2px;background:#22436e;display:block}
+  .seg i{width:10px;height:10px;border-radius:2px;background:#22436e}
   .seg i.ok{background:var(--ok);box-shadow:0 0 6px rgba(46,212,122,.5)}
   .seg i.bad{background:var(--err);box-shadow:0 0 6px rgba(255,77,79,.55)}
   .dep.ok{border-left:3px solid var(--ok)}
   .dep.warn{border-left:3px solid var(--warn)}
   .dep.err{border-left:3px solid var(--err);background:rgba(38,16,20,.55)}
 
-  /* 工单 */
-  .tk{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:5px;margin-bottom:8px;
-    background:rgba(16,26,42,.7);border-left:3px solid var(--blue);font-size:12.5px}
-  .tk.p1{border-color:var(--warn)} .tk.p0{border-color:var(--err);background:rgba(38,16,20,.5)}
+  .tk{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:5px;margin-bottom:8px;background:rgba(16,26,42,.7);border-left:3px solid var(--blue);font-size:12.5px}
+  .tk.p1{border-color:var(--warn)}.tk.p0{border-color:var(--err);background:rgba(38,16,20,.5)}
   .tk .m{flex:1;min-width:0}
   .tk .m .n{color:#dbe7ff}
   .tk .m .s{color:var(--tx2);font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -94,9 +75,7 @@
   .tk.p1 .st{background:rgba(255,176,32,.16);color:var(--warn)}
   .tk.p0 .st{background:rgba(255,77,79,.18);color:var(--err)}
 
-  /* 告警 */
-  .alitem{display:flex;gap:8px;padding:7px 10px;border-radius:4px;margin-bottom:7px;font-size:12.5px;
-    background:rgba(28,18,26,.55);border-left:3px solid var(--err)}
+  .alitem{display:flex;gap:8px;padding:7px 10px;border-radius:4px;margin-bottom:7px;font-size:12.5px;background:rgba(28,18,26,.55);border-left:3px solid var(--err)}
   .alitem.p1{border-color:var(--warn);background:rgba(32,26,14,.5)}
   .alitem.p2{border-color:var(--blue);background:rgba(16,26,42,.6)}
   .alitem .lv{font-size:11px;font-weight:700;padding:0 6px;border-radius:3px;background:rgba(255,77,79,.18);color:var(--err);flex:0 0 auto}
@@ -107,11 +86,31 @@
   .alitem .m .s{color:var(--tx2);font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .alitem .tm{color:var(--tx2);font-size:11px;flex:0 0 auto}
 
-  .ticker{margin-top:10px;border:1px solid var(--line);border-radius:6px;background:rgba(12,22,38,.85);
-    display:flex;align-items:center;gap:10px;padding:7px 12px;font-size:12.5px;overflow:hidden}
+  .rows{font-size:12.5px;line-height:1.9;color:var(--tx2)}
+  .rows b{color:#cfe0ff;font-weight:600}
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+  .tile{border:1px solid var(--line);border-radius:6px;padding:8px 4px}
+  .tile .n{font-size:20px;font-weight:700}
+  .tile .l{font-size:11.5px;color:var(--tx2)}
+
+  .ticker{margin-top:10px;border:1px solid var(--line);border-radius:6px;background:rgba(12,22,38,.85);display:flex;align-items:center;gap:10px;padding:7px 12px;font-size:12.5px;overflow:hidden}
   .ticker .tag{color:var(--cyan);border:1px solid rgba(46,230,214,.4);border-radius:4px;padding:0 6px;font-size:11px}
   .ticker .txt{color:#bcd3f5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ticker .tm{margin-left:auto;color:var(--tx2);font-size:11.5px}
+
+  /* ===== 集群全屏视图 ===== */
+  .fs{position:fixed;inset:0;background:var(--bg);z-index:50;display:none;flex-direction:column;padding:12px 18px 14px}
+  .fs.on{display:flex}
+  .fs-hd{display:flex;align-items:center;gap:14px;padding-bottom:10px;border-bottom:1px solid var(--line);position:relative}
+  .fs-hd:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,rgba(46,230,214,.7),transparent)}
+  .fs-hd .nm{font-size:22px;font-weight:700;color:#cfe9ff}
+  .fs-hd .env{border:1px solid var(--line);border-radius:10px;padding:0 8px;font-size:11.5px;color:var(--tx2)}
+  .close{margin-left:auto;border:1px solid var(--line);border-radius:6px;padding:6px 14px;font-size:13px;color:#9fd7ff;cursor:pointer;background:rgba(61,139,255,.08)}
+  .close:hover{background:rgba(61,139,255,.18)}
+  .fs-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:12px 0}
+  .fs-body{flex:1;min-height:0;display:grid;grid-template-columns:1fr 320px;gap:12px}
+  .fs-nsgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px;overflow:auto;padding-right:4px}
+  .hint{font-size:12px;color:var(--tx2);padding:2px 0 10px}
 </style>
 </head>
 <body>
@@ -119,72 +118,71 @@
   <div class="hd">
     <div>
       <div class="title">AutoHealOps 运行大屏</div>
-      <div class="sub">集群 Deployment 状态 · 工单 · 告警（无曲线，曲线看集群详情页）</div>
+      <div class="sub">集群 · Deployment · 工单 · 告警 · 主机/虚拟机 · 数据库（无曲线）</div>
     </div>
-    <span class="pill" id="hd-cluster">全部集群（3）</span>
-    <div class="clock"><div class="t">16:58:00</div><div class="d">2026-11-11 周三</div></div>
+    <span class="pill">全部集群（3）</span>
+    <div class="clock"><div class="t">17:02:00</div><div class="d">2026-11-11 周三</div></div>
   </div>
 
   <div class="grid">
-    <!-- 左：集群监控 -->
+    <!-- 左：集群监控 + 主机/虚拟机 + 数据库 -->
     <div class="col">
       <div class="panel" style="flex:0 0 auto">
-        <div class="ph"><span class="bar"></span>集群监控<span class="r">点击筛选</span></div>
+        <div class="ph"><span class="bar"></span>集群监控<span class="r">点击进全屏</span></div>
         <div class="pb" id="clusters"></div>
       </div>
+      <div class="panel" style="flex:0 0 auto">
+        <div class="ph"><span class="bar"></span>主机 / 虚拟机<span class="r">8 台</span></div>
+        <div class="pb rows">
+          在线 <b style="color:var(--ok)">8</b> · 离线 <b style="color:var(--err)">0</b> · 分组 <b>1</b><br>
+          直连 <b>6</b> · agent 代采 <b>2</b> · 最近检测 <b>16:58</b>
+        </div>
+      </div>
       <div class="panel" style="flex:1;min-height:0">
-        <div class="ph"><span class="bar"></span>汇总<span class="r">全部集群</span></div>
-        <div class="pb" id="summary"></div>
+        <div class="ph"><span class="bar"></span>数据库<span class="r">2 实例</span></div>
+        <div class="pb rows">
+          连接成功率 <b style="color:var(--ok)">100%</b><br>
+          慢查询 <b style="color:var(--warn)">6</b> 条 · 最长 <b>2.4s</b><br>
+          测试环境MySQL(stg) <b style="color:var(--ok)">已连接</b><br>
+          本机mysql <b style="color:var(--ok)">已连接</b>
+        </div>
       </div>
     </div>
 
-    <!-- 中：Deployment 状态（按 namespace） -->
+    <!-- 中：KPI + 全部集群 Deployment 矩阵 -->
     <div class="col">
       <div class="kpis">
         <div class="kpi err"><div class="t">未处理告警</div><div class="v">5</div><div class="d">P0 1 · P1 2 · P3 2</div></div>
-        <div class="kpi warn"><div class="t">进行中工单</div><div class="v" id="kpi-tk">3</div><div class="d">待验证 1 · 处理中 2</div></div>
-        <div class="kpi err"><div class="t">异常 Deployment</div><div class="v" id="kpi-bad">2</div><div class="d">就绪 < 期望</div></div>
+        <div class="kpi warn"><div class="t">进行中工单</div><div class="v">3</div><div class="d">待验证 1 · 处理中 2</div></div>
+        <div class="kpi err"><div class="t">异常 Deployment</div><div class="v" id="kpi-bad">2</div><div class="d">就绪 &lt; 期望</div></div>
         <div class="kpi ok"><div class="t">整体就绪率</div><div class="v" id="kpi-ready">97<small>%</small></div><div class="d">全部 namespace</div></div>
       </div>
-
       <div class="panel" style="flex:1;min-height:0">
-        <div class="ph"><span class="bar"></span>Deployment 状态（按 namespace）
-          <span class="r" id="dep-scope">全部集群</span></div>
-        <div class="toolbar" id="chips"></div>
+        <div class="ph"><span class="bar"></span>Deployment 状态（全部集群 · 按 namespace）<span class="r">点击左侧集群可全屏</span></div>
         <div class="pb" id="depmat"></div>
       </div>
     </div>
 
-    <!-- 右：工单 + 告警 -->
+    <!-- 右：工单 + 告警 + 自愈/僵尸 -->
     <div class="col">
-      <div class="panel" style="flex:0 0 46%;min-height:0">
+      <div class="panel" style="flex:0 0 42%;min-height:0">
         <div class="ph"><span class="bar"></span>工单<span class="r">进行中 3 / 今日 7</span></div>
         <div class="pb">
-          <div class="tk p0"><span class="st">P0 待处理</span><div class="m"><div class="n">cud-reporting-service 反复崩溃，需人工介入</div>
-            <div class="s">qa-cud-saas · 指派：吴永辉 · 已挂 12m</div></div></div>
-          <div class="tk p1"><span class="st">P1 处理中</span><div class="m"><div class="n">k8s-node28 内存压力，需扩容或迁移</div>
-            <div class="s">测试环境 · 指派：值班组 · 已挂 40m</div></div></div>
-          <div class="tk"><span class="st">P2 待验证</span><div class="m"><div class="n">eft-module-oms 探针失败已重启，待确认恢复</div>
-            <div class="s">qa-aero-chain · 指派：吴永辉 · 已挂 1h</div></div></div>
+          <div class="tk p0"><span class="st">P0 待处理</span><div class="m"><div class="n">cud-reporting-service 反复崩溃，需人工介入</div><div class="s">qa-cud-saas · 吴永辉 · 12m</div></div></div>
+          <div class="tk p1"><span class="st">P1 处理中</span><div class="m"><div class="n">k8s-node28 内存压力，需扩容/迁移</div><div class="s">测试环境 · 值班组 · 40m</div></div></div>
+          <div class="tk"><span class="st">P2 待验证</span><div class="m"><div class="n">eft-module-oms 探针失败已重启，待确认</div><div class="s">qa-aero-chain · 吴永辉 · 1h</div></div></div>
           <div class="tk" style="border-color:#2c4a78"><span class="st" style="background:rgba(46,212,122,.14);color:var(--ok)">已完成</span>
-            <div class="m"><div class="n">prod-eft-link 内存超阈值 → 自动扩容 2→3</div>
-              <div class="s">生产环境 · 系统自愈 · 16:54</div></div></div>
+            <div class="m"><div class="n">prod-eft-link 内存超阈值 → 自动扩容</div><div class="s">生产环境 · 系统自愈 · 16:54</div></div></div>
         </div>
       </div>
-
       <div class="panel" style="flex:1;min-height:0">
         <div class="ph"><span class="bar"></span>未处理告警<span class="r">5 条</span></div>
         <div class="pb">
-          <div class="alitem"><span class="lv">P0</span><div class="m"><div class="n">cud-reporting-service CrashLoopBackOff</div>
-            <div class="s">qa-cud-saas · 重启 12 次</div></div><span class="tm">2m</span></div>
-          <div class="alitem p1"><span class="lv">P1</span><div class="m"><div class="n">k8s-node28 内存压力 87%</div>
-            <div class="s">测试环境 · 持续 40 分钟</div></div><span class="tm">40m</span></div>
-          <div class="alitem p1"><span class="lv">P1</span><div class="m"><div class="n">eft-module-oms 就绪 1/2</div>
-            <div class="s">qa-aero-chain · 探针失败</div></div><span class="tm">1h</span></div>
-          <div class="alitem p2"><span class="lv">P2</span><div class="m"><div class="n">测试环境MySQL(stg) 慢 SQL 6 条</div>
-            <div class="s">最长 2.4s</div></div><span class="tm">1h</span></div>
-          <div class="alitem p2"><span class="lv">P3</span><div class="m"><div class="n">3 个服务 7 天零流量（僵尸候选）</div>
-            <div class="s">qa 环境</div></div><span class="tm">2h</span></div>
+          <div class="alitem"><span class="lv">P0</span><div class="m"><div class="n">cud-reporting-service CrashLoopBackOff</div><div class="s">qa-cud-saas · 重启 12 次</div></div><span class="tm">2m</span></div>
+          <div class="alitem p1"><span class="lv">P1</span><div class="m"><div class="n">k8s-node28 内存压力 87%</div><div class="s">测试环境 · 40 分钟</div></div><span class="tm">40m</span></div>
+          <div class="alitem p1"><span class="lv">P1</span><div class="m"><div class="n">eft-module-oms 就绪 1/2</div><div class="s">qa-aero-chain</div></div><span class="tm">1h</span></div>
+          <div class="alitem p2"><span class="lv">P2</span><div class="m"><div class="n">测试环境MySQL(stg) 慢 SQL 6 条</div><div class="s">最长 2.4s</div></div><span class="tm">1h</span></div>
+          <div class="alitem p2"><span class="lv">P3</span><div class="m"><div class="n">3 个服务 7 天零流量（僵尸候选）</div><div class="s">qa 环境</div></div><span class="tm">2h</span></div>
         </div>
       </div>
     </div>
@@ -192,49 +190,87 @@
 
   <div class="ticker">
     <span class="tag">最新</span>
-    <span class="txt" id="tick">16:54 生产环境 prod-eft-link/manifest-szxmft 内存 85% → 自动扩容 2→3 副本（成功）</span>
+    <span class="txt">16:54 生产环境 prod-eft-link/manifest-szxmft 内存 85% → 自动扩容 2→3 副本（成功）</span>
     <span class="tm">实时</span>
   </div>
 </div>
 
-<script>
-/* 集群与 Deployment 数据（mock） */
-const CLUSTERS = [
-  {id:'prod', name:'生产环境', env:'prod', cpu:66, mem:73, pods:3902, health:'ok'},
-  {id:'qa',   name:'测试环境', env:'qa',   cpu:42, mem:87, pods:1284, health:'warn'},
-  {id:'uat',  name:'uat环境',  env:'uat',  cpu:31, mem:54, pods:412,  health:'ok'},
-];
+<!-- ======== 集群全屏视图 ======== -->
+<div class="fs" id="fs">
+  <div class="fs-hd">
+    <span class="nm" id="fs-name">生产环境</span>
+    <span class="env" id="fs-env">prod</span>
+    <span class="pill" id="fs-ver">v1.23.4 · agent</span>
+    <div class="clock" style="margin-left:0"><div class="t" id="fs-clock"></div></div>
+    <button class="close" onclick="closeFs()">退出全屏（Esc）</button>
+  </div>
 
+  <div class="fs-kpis">
+    <div class="kpi"><div class="t">节点</div><div class="v" id="fs-node">46</div><div class="d">健康 45 · 异常 1</div></div>
+    <div class="kpi"><div class="t">命名空间</div><div class="v" id="fs-ns">4</div><div class="d">有工作负载</div></div>
+    <div class="kpi"><div class="t">Deployment</div><div class="v" id="fs-dep">10</div><div class="d">全部 namespace</div></div>
+    <div class="kpi err"><div class="t">异常</div><div class="v" id="fs-bad">0</div><div class="d">就绪 &lt; 期望</div></div>
+    <div class="kpi ok"><div class="t">就绪率</div><div class="v" id="fs-rate">100<small>%</small></div><div class="d">副本维度</div></div>
+  </div>
+
+  <div class="fs-body">
+    <div class="fs-nsgrid" id="fs-grid"></div>
+    <div class="col">
+      <div class="panel" style="flex:1;min-height:0">
+        <div class="ph"><span class="bar"></span>本集群工单/告警<span class="r">按集群过滤</span></div>
+        <div class="pb" id="fs-tk"></div>
+      </div>
+      <div class="panel" style="flex:0 0 auto">
+        <div class="ph"><span class="bar"></span>本集群自愈（24h）</div>
+        <div class="pb"><div class="tiles">
+          <div class="tile"><div class="n" style="color:var(--cyan)">12</div><div class="l">自愈</div></div>
+          <div class="tile"><div class="n" style="color:#9fd7ff">5</div><div class="l">重启</div></div>
+          <div class="tile"><div class="n" style="color:#9fd7ff">2</div><div class="l">伸缩</div></div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CLUSTERS = [
+  {id:'prod', name:'生产环境', env:'prod', cpu:66, mem:73, pods:3902, health:'ok', nodes:46, ver:'v1.23.4'},
+  {id:'qa',   name:'测试环境', env:'qa',   cpu:42, mem:87, pods:1284, health:'warn', nodes:12, ver:'v1.23.4'},
+  {id:'uat',  name:'uat环境',  env:'uat',  cpu:31, mem:54, pods:412,  health:'ok', nodes:8,  ver:'v1.22.8'},
+];
 const DEPS = {
   prod:[
-    {ns:'eft-web', items:[
-      {n:'eft-web-portal', r:4, want:4}, {n:'eft-web-admin', r:2, want:2}, {n:'eft-web-gateway', r:3, want:3}]},
-    {ns:'eft-base', items:[
-      {n:'eft-base-auth', r:2, want:2}, {n:'eft-base-user', r:2, want:2}, {n:'eft-base-msg', r:2, want:2}, {n:'eft-base-job', r:1, want:1}]},
-    {ns:'eft-link', items:[
-      {n:'manifest-szxmft', r:3, want:3}, {n:'eft-link-sync', r:2, want:2}]},
-    {ns:'gsa', items:[{n:'gsa-module-client', r:2, want:2}, {n:'gsa-module-server', r:2, want:2}]},
+    {ns:'eft-web', items:[{n:'eft-web-portal',r:4,want:4},{n:'eft-web-admin',r:2,want:2},{n:'eft-web-gateway',r:3,want:3}]},
+    {ns:'eft-base', items:[{n:'eft-base-auth',r:2,want:2},{n:'eft-base-user',r:2,want:2},{n:'eft-base-msg',r:2,want:2},{n:'eft-base-job',r:1,want:1}]},
+    {ns:'eft-link', items:[{n:'manifest-szxmft',r:3,want:3},{n:'eft-link-sync',r:2,want:2}]},
+    {ns:'gsa', items:[{n:'gsa-module-client',r:2,want:2},{n:'gsa-module-server',r:2,want:2}]},
   ],
   qa:[
-    {ns:'qa-aero-chain', items:[
-      {n:'eft-module-hrs', r:2, want:2}, {n:'eft-module-oms', r:1, want:2}, {n:'eft-module-wms', r:2, want:2}]},
-    {ns:'qa-cud-saas', items:[
-      {n:'cud-reporting-service', r:0, want:1}, {n:'cud-gateway', r:2, want:2}]},
-    {ns:'nacos', items:[{n:'nacos-config', r:1, want:1}]},
+    {ns:'qa-aero-chain', items:[{n:'eft-module-hrs',r:2,want:2},{n:'eft-module-oms',r:1,want:2},{n:'eft-module-wms',r:2,want:2}]},
+    {ns:'qa-cud-saas', items:[{n:'cud-reporting-service',r:0,want:1},{n:'cud-gateway',r:2,want:2}]},
+    {ns:'nacos', items:[{n:'nacos-config',r:1,want:1}]},
   ],
   uat:[
-    {ns:'uat-ebase', items:[{n:'issp-gateway', r:1, want:1}, {n:'issp-auth', r:1, want:1}, {n:'issp-ui', r:1, want:1}]},
-    {ns:'uat-cargo', items:[{n:'cargo-ui', r:1, want:1}, {n:'eft-module-work', r:1, want:1}]},
+    {ns:'uat-ebase', items:[{n:'issp-gateway',r:1,want:1},{n:'issp-auth',r:1,want:1},{n:'issp-ui',r:1,want:1}]},
+    {ns:'uat-cargo', items:[{n:'cargo-ui',r:1,want:1},{n:'eft-module-work',r:1,want:1}]},
   ],
 };
+const st = d => d.r>=d.want ? 'ok' : (d.r>0 ? 'warn' : 'err');
+const stText = s => s==='ok' ? '运行中' : s==='warn' ? '降级' : '异常';
+const stColor = s => s==='ok' ? 'var(--ok)' : s==='warn' ? 'var(--warn)' : 'var(--err)';
 
-let active = '';  // '' = 全部
+function depCard(d){
+  const s = st(d);
+  const seg = Array.from({length:d.want},(_,i)=>`<i class="${i<d.r?'ok':(s==='err'?'bad':'')}"></i>`).join('');
+  return `<div class="dep ${s}"><div class="n" title="${d.n}">${d.n}</div>
+    <div class="r"><span class="seg">${seg}</span>${d.r}/${d.want}
+      <span style="margin-left:auto;color:${stColor(s)}">${stText(s)}</span></div></div>`;
+}
 
-function statusOf(d){ return d.r>=d.want ? 'ok' : (d.r>0 ? 'warn' : 'err'); }
-
+/* 主视图 */
 function renderClusters(){
   document.getElementById('clusters').innerHTML = CLUSTERS.map(c=>`
-    <div class="clitem ${active===c.id?'on':''}" onclick="pick('${c.id}')">
+    <div class="clitem" onclick="openFs('${c.id}')" title="点击全屏查看该集群">
       <div class="l1"><span class="dot ${c.health==='warn'?'w':''}"></span>${c.name}<span class="env">${c.env}</span></div>
       <div class="meter">
         <div class="lb"><span>CPU ${c.cpu}%</span><span>内存 ${c.mem}%</span></div>
@@ -245,71 +281,78 @@ function renderClusters(){
       </div>
     </div>`).join('');
 }
-
-function renderSummary(){
-  const all = Object.values(DEPS).flat().flatMap(g=>g.items);
-  const bad = all.filter(d=>statusOf(d)!=='ok').length;
-  const totalWant = all.reduce((a,d)=>a+d.want,0), totalReady = all.reduce((a,d)=>a+d.r,0);
-  document.getElementById('summary').innerHTML = `
-    <div style="font-size:12.5px;line-height:2;color:var(--tx2)">
-      集群 <b style="color:#cfe0ff">3</b> · namespace <b style="color:#cfe0ff">${Object.values(DEPS).flat().length}</b><br>
-      Deployment <b style="color:#cfe0ff">${all.length}</b> · 异常 <b style="color:var(--err)">${bad}</b><br>
-      副本就绪 <b style="color:#cfe0ff">${totalReady}/${totalWant}</b><br>
-      工单进行中 <b style="color:var(--warn)">3</b> · 今日完成 <b style="color:var(--ok)">4</b>
-    </div>`;
-  document.getElementById('kpi-bad').textContent = bad;
-  document.getElementById('kpi-ready').innerHTML = Math.round(totalReady/totalWant*100) + '<small>%</small>';
-}
-
-function renderChips(){
-  const chips = [{id:'',label:'全部集群'},...CLUSTERS.map(c=>({id:c.id,label:c.name}))];
-  document.getElementById('chips').innerHTML = chips.map(c=>
-    `<span class="chip ${active===c.id?'on':''}" onclick="pick('${c.id}')">${c.label}</span>`).join('');
-}
-
-function renderDeps(){
-  const ids = active ? [active] : Object.keys(DEPS);
-  const html = ids.map(id=>{
+function renderMainMatrix(){
+  document.getElementById('depmat').innerHTML = Object.keys(DEPS).map(id=>{
     const c = CLUSTERS.find(x=>x.id===id);
     return DEPS[id].map(g=>{
-      const bad = g.items.filter(d=>statusOf(d)!=='ok').length;
-      return `
-        <div class="nsblock">
-          <div class="nshead">${c.name} / <b>${g.ns}</b><span class="cnt">${g.items.length} 个部署</span>
-            <span class="sev">${bad? `<span style="color:var(--err)">异常 ${bad}</span>` : '<span style="color:var(--ok)">全部就绪</span>'}</span></div>
-          <div class="deps">
-            ${g.items.map(d=>{
-              const st = statusOf(d);
-              const seg = Array.from({length:d.want},(_,i)=>`<i class="${i<d.r?'ok':(st==='err'?'bad':'')}"></i>`).join('');
-              return `<div class="dep ${st}">
-                  <div class="n" title="${d.n}">${d.n}</div>
-                  <div class="r"><span class="seg">${seg}</span>${d.r}/${d.want}
-                    <span style="margin-left:auto;color:${st==='ok'?'var(--ok)':st==='warn'?'var(--warn)':'var(--err)'}">
-                      ${st==='ok'?'运行中':st==='warn'?'降级':'异常'}</span></div>
-                </div>`;
-            }).join('')}
-          </div>
-        </div>`;
+      const bad = g.items.filter(d=>st(d)!=='ok').length;
+      return `<div class="nsblock">
+        <div class="nshead">${c.name} / <b>${g.ns}</b><span class="cnt">${g.items.length} 个部署</span>
+          <span class="sev" style="color:${bad?'var(--err)':'var(--ok)'}">${bad?`异常 ${bad}`:'全部就绪'}</span></div>
+        <div class="deps">${g.items.map(depCard).join('')}</div></div>`;
     }).join('');
   }).join('');
-  document.getElementById('depmat').innerHTML = html ||
-    '<div style="color:var(--tx2);padding:10px">暂无数据</div>';
-  document.getElementById('dep-scope').textContent = active ? (CLUSTERS.find(c=>c.id===active)||{}).name : '全部集群';
-  document.getElementById('hd-cluster').textContent = active ? (CLUSTERS.find(c=>c.id===active)||{}).name : '全部集群（3）';
+  const all = Object.values(DEPS).flat().flatMap(g=>g.items);
+  const bad = all.filter(d=>st(d)!=='ok').length;
+  const want = all.reduce((a,d)=>a+d.want,0), ready = all.reduce((a,d)=>a+d.r,0);
+  document.getElementById('kpi-bad').textContent = bad;
+  document.getElementById('kpi-ready').innerHTML = Math.round(ready/want*100)+'<small>%</small>';
 }
 
-function pick(id){ active = (active===id? '' : id); renderAll(); }
-function renderAll(){ renderClusters(); renderChips(); renderDeps(); renderSummary(); }
+/* 全屏集群视图 */
+function openFs(id){
+  const c = CLUSTERS.find(x=>x.id===id);
+  document.getElementById('fs-name').textContent = c.name;
+  document.getElementById('fs-env').textContent = c.env;
+  document.getElementById('fs-ver').textContent = `${c.ver} · agent`;
+  const groups = DEPS[id];
+  const all = groups.flatMap(g=>g.items);
+  const bad = all.filter(d=>st(d)!=='ok').length;
+  const want = all.reduce((a,d)=>a+d.want,0), ready = all.reduce((a,d)=>a+d.r,0);
+  document.getElementById('fs-node').textContent = c.nodes;
+  document.getElementById('fs-ns').textContent = groups.length;
+  document.getElementById('fs-dep').textContent = all.length;
+  document.getElementById('fs-bad').textContent = bad;
+  document.getElementById('fs-rate').innerHTML = Math.round(ready/want*100)+'<small>%</small>';
+
+  document.getElementById('fs-grid').innerHTML = groups.map(g=>{
+    const gb = g.items.filter(d=>st(d)!=='ok').length;
+    return `<div class="panel">
+      <div class="ph"><span class="bar"></span>namespace · <b style="color:#cfe0ff">${g.ns}</b>
+        <span class="r">${g.items.length} 个部署 · 异常 ${gb}</span></div>
+      <div class="pb"><div class="deps">${g.items.map(depCard).join('')}</div></div></div>`;
+  }).join('');
+
+  const mine = id==='qa'
+    ? [{p:'p0',st:'P0 待处理',n:'cud-reporting-service 反复崩溃，需人工介入',s:'qa-cud-saas · 吴永辉 · 12m'},
+       {p:'',st:'P2 待验证',n:'eft-module-oms 探针失败已重启，待确认',s:'qa-aero-chain · 吴永辉 · 1h'}]
+    : id==='prod'
+      ? [{p:'',st:'已完成',n:'prod-eft-link 内存超阈值 → 自动扩容 2→3',s:'系统自愈 · 16:54'}]
+      : [];
+  document.getElementById('fs-tk').innerHTML = (mine.length ? mine.map(t=>`
+      <div class="tk ${t.p}"><span class="st">${t.st}</span><div class="m"><div class="n">${t.n}</div><div class="s">${t.s}</div></div></div>`
+    ).join('') : '<div class="rows">本集群暂无工单</div>')
+    + `<div class="rows" style="margin-top:8px">本集群告警 <b style="color:var(--err)">${id==='qa'?4:id==='prod'?1:0}</b> 条</div>`;
+
+  document.getElementById('fs').classList.add('on');
+}
+function closeFs(){ document.getElementById('fs').classList.remove('on'); }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeFs(); });
 
 /* 时钟 */
 function tick(){
   const d=new Date(), p=n=>String(n).padStart(2,'0');
-  document.querySelector('.clock .t').textContent=`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const t=`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  document.querySelector('.clock .t').textContent=t;
+  document.getElementById('fs-clock').textContent=t;
   const w=['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
   document.querySelector('.clock .d').textContent=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${w}`;
 }
 tick(); setInterval(tick,1000);
-renderAll();
+renderClusters(); renderMainMatrix();
+// 直接打开某集群全屏：bigscreen-demo.html#fs=qa
+const m=(location.hash||'').match(/fs=(\w+)/);
+if(m) openFs(m[1]);
 </script>
 </body>
 </html>
