@@ -93,18 +93,18 @@
       <div class="grp">资源</div>
       <div class="item on"><span><span class="ico">▦</span>应用负载</span><span class="caret">▾</span></div>
       <div class="sub">
-        <div class="item on"><span>工作负载</span></div>
-        <div class="sub" style="padding-left:0">
+        <div class="item on"><span>工作负载</span><span class="caret">▾</span></div>
+        <div class="sub" style="padding-left:18px">
           <div class="item on">部署</div>
-          <div class="item">有状态副本集</div>
-          <div class="item">守护进程集</div>
-          <div class="item">定时任务</div>
+          <div class="item">有状态副本集 <span class="muted">3</span></div>
+          <div class="item">守护进程集 <span class="muted">4</span></div>
+          <div class="item">定时任务 <span class="muted">2</span></div>
         </div>
         <div class="item"><span>服务</span></div>
         <div class="item"><span>容器组</span></div>
       </div>
-      <div class="item"><span><span class="ico">▧</span>存储</span></div>
-      <div class="item"><span><span class="ico">⚙</span>配置</span></div>
+      <div class="item"><span><span class="ico">▧</span>存储</span><span class="caret">▸</span></div>
+      <div class="item"><span><span class="ico">⚙</span>配置</span><span class="caret">▸</span></div>
 
       <div class="grp">监控与运维</div>
       <div class="item"><span><span class="ico">◔</span>监控告警</span></div>
@@ -114,16 +114,7 @@
 
   <!-- 右：内容区 -->
   <main class="main">
-    <div class="crumb">集群管理 / <b>应用负载</b></div>
-
-    <!-- 页内一级 Tab（应用负载下的分页签，和 KubeSphere 一致） -->
-    <div class="tabs">
-      <div class="tab on" data-tab="wl">工作负载</div>
-      <div class="tab" data-tab="svc">服务</div>
-      <div class="tab" data-tab="pod">容器组</div>
-      <div class="tab" data-tab="store">存储</div>
-      <div class="tab" data-tab="cfg">配置</div>
-    </div>
+    <div class="crumb">集群管理 / 应用负载 / <b>部署</b><span class="tag gray" style="margin-left:8px">qa-aero-chain</span></div>
 
     <!-- 工具条：命名空间（多选）/ 搜索 / 刷新 / 创建 -->
     <div class="tools">
@@ -132,14 +123,6 @@
       <div class="spacer"></div>
       <button class="btn ghost">刷新</button>
       <button class="btn primary">创建</button>
-    </div>
-
-    <!-- 工作负载类型切换（部署/有状态副本集/守护进程集/定时任务） -->
-    <div class="tabs" style="padding:0 20px;border-bottom:none">
-      <div class="tab on">部署 <span class="muted">12</span></div>
-      <div class="tab">有状态副本集 <span class="muted">3</span></div>
-      <div class="tab">守护进程集 <span class="muted">4</span></div>
-      <div class="tab">定时任务 <span class="muted">2</span></div>
     </div>
 
     <div class="card">
@@ -192,8 +175,9 @@
     </div>
 
     <div class="tip">
-      Demo 说明：这是**布局样例**（无后端，数据是假的）。要对比的是"层级"——左栏集群导航 → 页内一级 Tab（工作负载/服务/容器组）→
-      工作负载下的类型切换（部署/有状态副本集/守护进程集/定时任务）→ 表内操作收进 ⋯。点名称会从右侧弹出详情抽屉。
+      Demo 说明（v2，去掉重复入口）：导航只保留**左侧一处** —— 应用负载 → 工作负载 → 部署 / 有状态副本集 / 守护进程集 / 定时任务，
+      服务、容器组与工作负载同级；页面上不再有第二、第三排页签，只剩 面包屑 + 工具条 + 表格。
+      表内操作收进 ⋯，点名称从右侧弹出详情抽屉。
     </div>
   </main>
 </div>
