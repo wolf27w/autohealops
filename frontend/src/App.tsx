@@ -99,18 +99,6 @@ export default function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="clusters" element={<ClusterList />} />
-        <Route path="clusters/:id" element={<ClusterLayout />}>
-          <Route index element={<ClusterOverviewRoute />} />
-          <Route path="nodes" element={<NodesRoute />} />
-          <Route path="workloads/:kind" element={<WorkloadsRoute />} />
-          <Route path="pods" element={<PodsRoute />} />
-          <Route path="services" element={<ServicesRoute />} />
-          <Route path="storage" element={<StorageRoute />} />
-          <Route path="configs" element={<ConfigsRoute />} />
-          <Route path="monitoring" element={<ComingSoon title="监控告警" note="集群维度的监控聚合在下一阶段接入；当前可在大屏或仪表盘查看" />} />
-          <Route path="inspection" element={<ComingSoon title="巡检与诊断" note="集群巡检报告入口在下一阶段迁移到集群内" />} />
-        </Route>
-        <Route path="clusters/:id/workloads/:kind/:namespace/:name" element={<WorkloadDetail />} />
         <Route path="alerts" element={<Navigate to="/alert-handling" replace />} />
         <Route path="tickets" element={<Tickets />} />
         <Route path="approvals" element={<Navigate to="/alert-handling" replace />} />
@@ -154,6 +142,27 @@ export default function App() {
         <Route path="im-groups" element={<Navigate to="/notify-center" replace />} />
         <Route path="settings" element={<RequireRole role="admin"><PlatformSettings /></RequireRole>} />
         <Route path="release-history" element={<ReleaseHistory />} />
+      </Route>
+
+      {/* R32-P1：点进集群 = 独立整页（不套平台 MainLayout），自带顶部返回条 + 集群左导航 */}
+      <Route
+        path="/clusters/:id"
+        element={
+          <RequireAuth>
+            <ClusterLayout />
+          </RequireAuth>
+        }
+      >
+        <Route index element={<ClusterOverviewRoute />} />
+        <Route path="nodes" element={<NodesRoute />} />
+        <Route path="workloads/:kind" element={<WorkloadsRoute />} />
+        <Route path="workloads/:kind/:namespace/:name" element={<WorkloadDetail />} />
+        <Route path="pods" element={<PodsRoute />} />
+        <Route path="services" element={<ServicesRoute />} />
+        <Route path="storage" element={<StorageRoute />} />
+        <Route path="configs" element={<ConfigsRoute />} />
+        <Route path="monitoring" element={<ComingSoon title="监控告警" note="集群维度的监控聚合在下一阶段接入；当前可在大屏或仪表盘查看" />} />
+        <Route path="inspection" element={<ComingSoon title="巡检与诊断" note="集群巡检报告入口在下一阶段迁移到集群内" />} />
       </Route>
     </Routes>
     </Suspense>

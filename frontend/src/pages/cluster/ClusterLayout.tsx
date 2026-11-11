@@ -2,14 +2,15 @@
 // 老板 2026-11-11 口径：进集群后左栏整条换成集群导航，顶部「← 返回平台」；
 // 工作负载类型（部署/有状态/守护/定时）用左栏底部下拉切换，不占导航层级。
 import { useEffect, useMemo, useState } from 'react'
-import { Layout, Menu, Select, Tag, Typography, Spin } from 'antd'
+import { Layout, Menu, Select, Tag, Typography, Spin, Button, Space } from 'antd'
+import { ReloadOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams, Outlet } from 'react-router-dom'
 import { getCluster } from '../../services/api'
 
 // 集群返回里带 version（后端有，公共类型未声明）
 interface ClusterInfo { id?: number; name?: string; env_tag?: string; version?: string }
 
-const { Sider, Content } = Layout
+const { Sider, Content, Header } = Layout
 
 const KINDS = [
   { value: 'deployment', label: '部署' },
@@ -74,30 +75,30 @@ export default function ClusterLayout() {
     { key: 'inspection', label: '巡检与诊断', onClick: () => navigate(`${base}/inspection`) },
   ]
 
+  const reload = () => {
+    // 顶栏刷新：触发当前路由重新挂载（简化实现：reload 一次）
+    window.location.reload()
+  }
+
   return (
-    <Layout style={{ height: 'calc(100vh - 56px)' }}>
+    <Layout style={{ height: '100vh' }}>
+      <Header style={{ height: 52, lineHeight: '52px', padding: '0 18px', background: '#fff',
+                       borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <Button type="text" size="small" onClick={() => navigate('/clusters')} style={{ color: '#8c8c8c' }}>
+          ← 返回平台
+        </Button>
+        <Typography.Text strong style={{ fontSize: 15 }}>
+          {loading ? '加载中…' : (cluster?.name || `集群 ${clusterId}`)}
+        </Typography.Text>
+        {cluster?.env_tag && <Tag color="blue" style={{ marginInlineEnd: 0 }}>{cluster.env_tag}</Tag>}
+        {cluster?.version && <Typography.Text type="secondary" style={{ fontSize: 11 }}>{cluster.version}</Typography.Text>}
+        <Space style={{ marginLeft: 'auto' }}>
+          <Button size="small" icon={<ReloadOutlined />} onClick={reload}>刷新</Button>
+        </Space>
+      </Header>
+      <Layout>
       <Sider width={200} theme="light" collapsed={collapsed} collapsedWidth={200}
         style={{ borderRight: '1px solid #f0f0f0', overflow: 'auto' }}>
-        <div
-          onClick={() => navigate('/clusters')}
-          style={{ padding: '10px 14px 6px', fontSize: 12.5, color: '#8c8c8c', cursor: 'pointer' }}
-          title="返回平台"
-        >
-          ← 返回平台
-        </div>
-        <div style={{ margin: '0 12px 10px', padding: '8px 10px', background: '#eef5ff', borderRadius: 6 }}>
-          {loading ? <Spin size="small" /> : (
-            <>
-              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{cluster?.name || `集群 ${clusterId}`}</div>
-              <div style={{ marginTop: 2, display: 'flex', gap: 6, alignItems: 'center' }}>
-                <Tag color="blue" style={{ marginInlineEnd: 0 }}>{cluster?.env_tag || '-'}</Tag>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {cluster?.version || ''}
-                </Typography.Text>
-              </div>
-            </>
-          )}
-        </div>
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
@@ -121,6 +122,7 @@ export default function ClusterLayout() {
       <Content style={{ padding: 16, overflow: 'auto' }}>
         <Outlet />
       </Content>
+      </Layout>
     </Layout>
   )
 }
