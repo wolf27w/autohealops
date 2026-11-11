@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>集群详情 · 应用负载（Demo v3：两级导航 + 类型下拉）</title>
+<title>集群详情 · 应用负载（Demo v4：进集群换左导航 + 详情独立页面）</title>
 <style>
   :root{--blue:#1f6feb;--blue-l:#e8f1ff;--bg:#f5f7fa;--line:#e6e9ef;--tx:#242e42;--tx2:#6b7a90}
   *{box-sizing:border-box}
@@ -10,28 +10,33 @@
   a{color:inherit;text-decoration:none}
   .app{display:flex;min-height:100vh}
 
-  /* 左：集群导航（只有两级） */
-  .side{width:220px;background:#fff;border-right:1px solid var(--line);padding:12px 10px;flex:0 0 220px;display:flex;flex-direction:column}
-  .cluster{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;background:var(--blue-l);margin-bottom:10px}
+  /* 左：进集群后整条换成集群导航 */
+  .side{width:220px;background:#fff;border-right:1px solid var(--line);padding:10px;flex:0 0 220px;display:flex;flex-direction:column}
+  .back{display:block;padding:6px 8px;font-size:12.5px;color:var(--tx2);cursor:pointer;border-radius:4px}
+  .back:hover{background:#f2f5fa;color:var(--blue)}
+  .cluster{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;background:var(--blue-l);margin:6px 0 10px}
   .dot{width:8px;height:8px;border-radius:50%;background:#2fc25b}
   .cname{font-weight:600}
   .env{font-size:11px;color:var(--tx2)}
-  .nav .item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:6px;cursor:pointer;color:var(--tx)}
+  .nav .item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:6px;cursor:pointer}
   .nav .item:hover{background:#f2f5fa}
   .nav .item.on{background:var(--blue-l);color:var(--blue);font-weight:600}
   .nav .item .ico{width:16px;text-align:center;opacity:.85}
   .nav .sub{margin:2px 0 6px 26px}
   .nav .sub .item{font-size:13px;padding:7px 10px}
-
-  /* 左栏底部的「类型下拉」——第三级用下拉，不占导航层级 */
   .switcher{margin-top:auto;padding:10px 6px 4px;border-top:1px solid var(--line)}
   .switcher .lbl{font-size:12px;color:var(--tx2);margin:0 4px 6px}
-  .switcher select{width:100%;height:32px;border:1px solid var(--line);border-radius:4px;background:#fff;font-size:13px;color:var(--tx);padding:0 8px}
+  .switcher select{width:100%;height:32px;border:1px solid var(--line);border-radius:4px;background:#fff;font-size:13px;padding:0 8px;color:var(--tx)}
 
   /* 右：内容 */
-  .main{flex:1;min-width:0;display:flex;flex-direction:column}
-  .crumb{display:flex;align-items:center;gap:8px;padding:16px 20px 4px;color:var(--tx2);font-size:13px}
+  .main{flex:1;min-width:0}
+  .crumb{display:flex;align-items:center;gap:6px;padding:16px 20px 4px;color:var(--tx2);font-size:13px;flex-wrap:wrap}
   .crumb b{color:var(--tx);font-size:18px;font-weight:600}
+  .crumb .sep{color:#c2ccdb}
+  .crumb a{color:var(--blue);cursor:pointer}
+  .head{display:flex;align-items:center;gap:10px;padding:6px 20px 0}
+  .head h2{margin:0;font-size:20px;font-weight:600}
+  .head .sp{flex:1}
   .tools{display:flex;align-items:center;gap:10px;padding:14px 20px}
   .sel,.search,.btn{height:32px;border:1px solid var(--line);background:#fff;border-radius:4px;padding:0 10px;font-size:13px;color:var(--tx)}
   .sel{display:flex;align-items:center;gap:6px;min-width:190px;justify-content:space-between;cursor:pointer}
@@ -41,6 +46,7 @@
   .spacer{flex:1}
 
   .card{margin:0 20px 16px;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .card .ttl{padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
   table{width:100%;border-collapse:collapse}
   th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px}
   th{color:var(--tx2);font-weight:500;background:#fbfcfe}
@@ -55,46 +61,40 @@
   .muted{color:var(--tx2)}
   .dots{cursor:pointer;color:var(--tx2);padding:0 6px}
 
-  .drawer{position:fixed;top:0;right:0;height:100%;width:520px;background:#fff;box-shadow:-6px 0 24px rgba(0,0,0,.12);
-          transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
-  .drawer.open{transform:none}
-  .drawer .hd{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-  .drawer .bd{padding:16px 20px;overflow:auto}
-  .dtabs{display:flex;gap:22px;padding:0 20px;border-bottom:1px solid var(--line)}
-  .dtab{padding:10px 2px;color:var(--tx2);cursor:pointer;border-bottom:2px solid transparent}
-  .dtab.on{color:var(--blue);border-color:var(--blue);font-weight:600}
-  .kv{display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px}
+  .ftabs{display:flex;gap:22px;padding:0 20px;border-bottom:1px solid var(--line);background:#fff}
+  .ftab{padding:11px 2px;color:var(--tx2);cursor:pointer;border-bottom:2px solid transparent}
+  .ftab.on{color:var(--blue);border-color:var(--blue);font-weight:600}
+  .kv{display:grid;grid-template-columns:140px 1fr;gap:10px 12px;font-size:13px;padding:14px}
   .kv .k{color:var(--tx2)}
   .tip{margin:0 20px 20px;padding:10px 12px;background:#fffbe6;border:1px solid #ffe58f;border-radius:6px;color:#8a6d3b;font-size:12.5px}
+  .hide{display:none}
 </style>
 </head>
 <body>
 <div class="app">
-  <!-- 左：只有两级导航 -->
+  <!-- 左：进集群后的整条集群导航（顶部可返回平台） -->
   <aside class="side">
+    <div class="back" onclick="alert('返回平台首页（demo）')">← 返回平台</div>
     <div class="cluster"><span class="dot"></span><div><div class="cname">测试环境</div><div class="env">qa · v1.23.4</div></div></div>
 
     <div class="nav">
       <div class="item"><span class="ico">▤</span>概览</div>
       <div class="item"><span class="ico">◫</span>节点</div>
-
-      <div class="item on" style="margin-top:6px"><span class="ico">▦</span>应用负载</div>
+      <div class="item on"><span class="ico">▦</span>应用负载</div>
       <div class="sub">
-        <div class="item on">工作负载</div>
+        <div class="item on" onclick="goList()">工作负载</div>
         <div class="item">服务</div>
         <div class="item">容器组</div>
       </div>
-
       <div class="item"><span class="ico">▧</span>存储</div>
       <div class="item"><span class="ico">⚙</span>配置</div>
       <div class="item"><span class="ico">◔</span>监控告警</div>
       <div class="item"><span class="ico">✎</span>巡检与诊断</div>
     </div>
 
-    <!-- 第三级改成左栏底部下拉 -->
     <div class="switcher">
       <div class="lbl">工作负载类型</div>
-      <select id="kind">
+      <select id="kind" onchange="renderList(this.value)">
         <option value="deployment" selected>部署（12）</option>
         <option value="statefulset">有状态副本集（3）</option>
         <option value="daemonset">守护进程集（4）</option>
@@ -103,48 +103,109 @@
     </div>
   </aside>
 
+  <!-- 内容：列表页 / 详情页 两个视图 -->
   <main class="main">
-    <div class="crumb">集群管理 / 应用负载 / <b id="title">部署</b><span class="tag gray" style="margin-left:8px">全部命名空间</span></div>
+    <!-- ===== 视图 1：列表 ===== -->
+    <section id="view-list">
+      <div class="crumb">集群管理<span class="sep">/</span>应用负载<span class="sep">/</span><b id="list-title">部署</b></div>
+      <div class="tools">
+        <div class="sel">命名空间：全部（3）<span>▾</span></div>
+        <input class="search" placeholder="按名称搜索" />
+        <div class="spacer"></div>
+        <button class="btn">刷新</button>
+        <button class="btn primary">创建</button>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th style="width:26%">名称</th><th style="width:16%">状态</th><th style="width:10%">副本</th>
+            <th style="width:26%">镜像</th><th style="width:14%">更新时间</th><th style="width:8%">操作</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="tip">Demo v4：点名称会**跳转到详情页**（不再是右侧抽屉）；左侧导航在进集群后整条替换（顶部有「返回平台」）。</div>
+    </section>
 
-    <div class="tools">
-      <div class="sel" title="命名空间（可多选）">命名空间：全部（3）<span>▾</span></div>
-      <input class="search" placeholder="按名称搜索" />
-      <div class="spacer"></div>
-      <button class="btn">刷新</button>
-      <button class="btn primary">创建</button>
-    </div>
+    <!-- ===== 视图 2：详情页（独立页面） ===== -->
+    <section id="view-detail" class="hide">
+      <div class="crumb">集群管理<span class="sep">/</span>应用负载<span class="sep">/</span>
+        <a onclick="goList()">部署</a><span class="sep">/</span><b id="d-title">—</b></div>
+      <div class="head">
+        <h2 id="d-title2">—</h2>
+        <span class="tag ok" id="d-state">运行中</span>
+        <span class="sp"></span>
+        <button class="btn">编辑设置</button>
+        <button class="btn">更多 ▾</button>
+      </div>
+      <div class="ftabs">
+        <div class="ftab on" data-v="overview">概览</div>
+        <div class="ftab" data-v="pods">资源状态</div>
+        <div class="ftab" data-v="meta">元数据</div>
+        <div class="ftab" data-v="env">环境变量</div>
+        <div class="ftab" data-v="events">事件</div>
+      </div>
 
-    <div class="card">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:26%">名称</th><th style="width:16%">状态</th><th style="width:10%">副本</th>
-            <th style="width:26%">镜像</th><th style="width:14%">更新时间</th><th style="width:8%">操作</th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
+      <!-- 概览 -->
+      <div id="tab-overview">
+        <div class="card" style="margin-top:16px">
+          <div class="ttl">属性</div>
+          <div class="kv">
+            <div class="k">项目 / 命名空间</div><div id="d-ns">—</div>
+            <div class="k">副本</div><div id="d-rep">—</div>
+            <div class="k">镜像</div><div id="d-img">—</div>
+            <div class="k">更新策略</div><div>RollingUpdate（maxSurge 25% / maxUnavailable 25%）</div>
+            <div class="k">创建时间</div><div>2026-10-28 10:12:03</div>
+            <div class="k">更新时间</div><div>2026-11-11 15:32:41</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ttl">容器组（2）</div>
+          <table>
+            <thead><tr><th>名称</th><th style="width:12%">状态</th><th style="width:10%">重启</th><th style="width:18%">节点</th><th style="width:18%">创建时间</th></tr></thead>
+            <tbody>
+              <tr class="row"><td class="muted">eft-module-hrs-588677c4d8-hdwj5</td><td><span class="tag ok">Running</span></td><td>0</td><td class="muted">k8s-node28</td><td class="muted">11-11 15:32</td></tr>
+              <tr class="row"><td class="muted">eft-module-hrs-588677c4d8-x2mnq</td><td><span class="tag ok">Running</span></td><td>1</td><td class="muted">k8s-node31</td><td class="muted">11-11 15:32</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-    <div class="tip">
-      Demo v3：导航只有两级（应用负载 → 工作负载/服务/容器组）；「部署 / 有状态副本集 / 守护进程集 / 定时任务」放在**左栏底部的下拉**里切换，切换时只刷新表格。
-    </div>
+      <!-- 资源状态 -->
+      <div id="tab-pods" class="hide">
+        <div class="card" style="margin-top:16px">
+          <div class="ttl">副本状态</div>
+          <div class="kv">
+            <div class="k">期望副本</div><div>2</div>
+            <div class="k">已更新</div><div>2</div>
+            <div class="k">就绪</div><div>2</div>
+            <div class="k">可用</div><div>2</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 元数据 -->
+      <div id="tab-meta" class="hide">
+        <div class="card" style="margin-top:16px">
+          <div class="ttl">标签</div>
+          <div class="kv"><div class="k">app</div><div>eft-module-hrs</div><div class="k">version</div><div>1.4.2</div></div>
+        </div>
+      </div>
+
+      <!-- 环境变量 -->
+      <div id="tab-env" class="hide">
+        <div class="card" style="margin-top:16px"><div class="ttl">容器 eft-module-hrs</div>
+          <div class="kv"><div class="k">TZ</div><div>Asia/Shanghai</div><div class="k">SPRING_PROFILES_ACTIVE</div><div>qa</div></div>
+        </div>
+      </div>
+
+      <!-- 事件 -->
+      <div id="tab-events" class="hide">
+        <div class="card" style="margin-top:16px"><div class="ttl">最近事件</div>
+          <div class="kv"><div class="k">11-11 15:32</div><div>Scaled up replica set eft-module-hrs-588677c4d8 to 2</div>
+            <div class="k">11-11 14:58</div><div>Readiness probe failed: HTTP probe failed with statuscode: 503</div></div>
+        </div>
+      </div>
+    </section>
   </main>
-</div>
-
-<div class="drawer" id="drawer">
-  <div class="hd"><b id="d-title">—</b><span class="dots" onclick="closeDrawer()">✕</span></div>
-  <div class="dtabs"><div class="dtab on">概览</div><div class="dtab">资源状态</div><div class="dtab">元数据</div><div class="dtab">环境变量</div><div class="dtab">事件</div></div>
-  <div class="bd">
-    <div class="kv">
-      <div class="k">命名空间</div><div id="d-ns">—</div>
-      <div class="k">副本</div><div id="d-rep">—</div>
-      <div class="k">镜像</div><div id="d-img">—</div>
-      <div class="k">创建时间</div><div>2026-10-28 10:12</div>
-      <div class="k">更新策略</div><div>RollingUpdate（25% / 25%）</div>
-    </div>
-    <div class="tip" style="margin:16px 0 0">「资源状态 / 元数据 / 环境变量 / 事件」页签在这里；Pod 列表在「资源状态」下钻。</div>
-  </div>
 </div>
 
 <script>
@@ -170,36 +231,48 @@ const DATA = {
     ["cleanup-logs","ops","ok","运行中","-","busybox:1.36","11-11 02:00"],
   ],
 };
-const TITLE = {deployment:"部署", statefulset:"有状态副本集", daemonset:"守护进程集", cronjob:"定时任务"};
+const TITLE={deployment:"部署",statefulset:"有状态副本集",daemonset:"守护进程集",cronjob:"定时任务"};
 
-function render(kind){
-  document.getElementById('title').textContent = TITLE[kind];
+function renderList(kind){
+  document.getElementById('list-title').textContent = TITLE[kind];
   document.getElementById('rows').innerHTML = DATA[kind].map(r=>`
     <tr class="row">
-      <td><span class="name" data-n="${r[0]}" data-ns="${r[1]}" data-rep="${r[4]}" data-img="${r[5]}">${r[0]}</span>
+      <td><span class="name" onclick='openDetail(${JSON.stringify(r)})'>${r[0]}</span>
           <div class="muted" style="font-size:12px">${r[1]}</div></td>
       <td><span class="tag ${r[2]}">${r[3]}</span></td>
-      <td>${r[4]}</td>
-      <td class="muted">${r[5]}</td>
-      <td class="muted">${r[6]}</td>
-      <td><span class="dots" data-n="${r[0]}" data-ns="${r[1]}" data-rep="${r[4]}" data-img="${r[5]}">⋯</span></td>
+      <td>${r[4]}</td><td class="muted">${r[5]}</td><td class="muted">${r[6]}</td>
+      <td><span class="dots">⋯</span></td>
     </tr>`).join('');
-  document.querySelectorAll('.name,.dots').forEach(el=>el.onclick=(e)=>{
-    e.stopPropagation();
-    const d=el.dataset;
-    document.getElementById('d-title').textContent=d.n;
-    document.getElementById('d-ns').textContent=d.ns;
-    document.getElementById('d-rep').textContent=d.rep;
-    document.getElementById('d-img').textContent=d.img;
-    document.getElementById('drawer').classList.add('open');
+}
+
+/* 跳转到详情页（独立视图，模拟路由 push） */
+function openDetail(r){
+  document.getElementById('view-list').classList.add('hide');
+  document.getElementById('view-detail').classList.remove('hide');
+  document.getElementById('d-title').textContent = r[0];
+  document.getElementById('d-title2').textContent = r[0];
+  document.getElementById('d-ns').textContent = r[1];
+  document.getElementById('d-rep').textContent = r[4];
+  document.getElementById('d-img').textContent = r[5];
+  const st = document.getElementById('d-state');
+  st.className = 'tag ' + r[2]; st.textContent = r[3];
+  selectTab('overview');
+  window.scrollTo(0,0);
+}
+function goList(){
+  document.getElementById('view-detail').classList.add('hide');
+  document.getElementById('view-list').classList.remove('hide');
+}
+function selectTab(v){
+  document.querySelectorAll('.ftab').forEach(t=>t.classList.toggle('on', t.dataset.v===v));
+  ['overview','pods','meta','env','events'].forEach(k=>{
+    document.getElementById('tab-'+k).classList.toggle('hide', k!==v);
   });
 }
-function closeDrawer(){document.getElementById('drawer').classList.remove('open')}
-document.getElementById('kind').onchange=(e)=>render(e.target.value);
-document.querySelectorAll('.dtabs .dtab').forEach(t=>t.onclick=()=>{
-  document.querySelectorAll('.dtabs .dtab').forEach(x=>x.classList.remove('on'));t.classList.add('on');
-});
-render('deployment');
+document.querySelectorAll('.ftab').forEach(t=>t.onclick=()=>selectTab(t.dataset.v));
+renderList('deployment');
+// 直接看详情页：打开 cluster-demo.html#detail
+if (location.hash === '#detail') openDetail(DATA.deployment[0]);
 </script>
 </body>
 </html>
