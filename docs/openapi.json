@@ -134,8 +134,40 @@
     },
     "/api/v1/agent/sessions": {
       "get": {
-        "description": "我的诊断会话列表（user_id 隔离）。\n\n- 普通用户：仅自己发起的会话。\n- admin：额外包含平台巡检自动发起的会话（source='proactive'，user_id=0），便于统一查看。",
+        "description": "我的诊断会话列表（user_id 隔离，可按集群/类别/来源筛选）。\n\n- 普通用户：仅自己发起的会话。\n- admin：额外包含平台巡检自动发起的会话（source='proactive'，user_id=0），便于统一查看。",
         "operationId": "get_api_v1_agent_sessions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cluster_id",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Cluster Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Category",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Source",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -144,6 +176,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -193,6 +235,49 @@
           }
         ],
         "summary": "Create Session"
+      }
+    },
+    "/api/v1/agent/sessions/from-alert": {
+      "post": {
+        "description": "告警 → 应用诊断助手（闭环入口）\n\n沿用 create_session 的去重/权限/首轮诊断逻辑，只是把告警上下文翻译成会话：\n- category 由告警的 diag_category + resource_type 推导（应用/节点/数据库/集群）\n- source=alert、alert_id 落库，会话与告警可互相跳转\n- 首条消息带上故障类型/资源/告警原文，助手可直接接着查",
+        "operationId": "post_api_v1_agent_sessions_from_alert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Session From Alert"
       }
     },
     "/api/v1/agent/sessions/seed": {

@@ -538,7 +538,11 @@ export const regenerateExternalToken = () => http.post('/external/tickets/token/
 export const createAgentSession = (data: Payload) => http.post('/agent/sessions', data)
 // 用已有诊断结果（如 JVM 综合诊断）落一个会话（同目标复用）
 export const seedAgentSession = (data: Payload) => http.post<{ id: number; title: string; created: boolean }>('/agent/sessions/seed', data)
-export const getAgentSessions = () => http.get('/agent/sessions')
+export const getAgentSessions = (params?: { cluster_id?: number; category?: string; source?: string }) =>
+  http.get('/agent/sessions', { params })
+// 告警 → 应用诊断助手（闭环）
+export const createAgentSessionFromAlert = (data: { alert_id: number; deep?: boolean }) =>
+  http.post<{ id: number; reused?: boolean }>('/agent/sessions/from-alert', data)
 export interface ProactiveScanResult {
   skipped?: boolean; reason?: string; clusters?: number; scanned_workloads?: number
   hits?: number; diagnosed?: number; skipped_open_alert?: number; skipped_cooldown?: number

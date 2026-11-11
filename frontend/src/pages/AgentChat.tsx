@@ -1,6 +1,6 @@
 // AI 诊断助手（会话式 Agent）对话页
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Layout, Button, Input, Tag, Space, Empty, Modal, Form, Select, Spin,
   Collapse, Typography, message, Switch, Tooltip, Popconfirm, ConfigProvider,
@@ -19,17 +19,21 @@ import { buildTheme } from '../utils/theme'
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
 
-interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string; collect_enabled?: boolean; collect_interval_min?: number; collect_items?: string; collect_last_at?: string | null }
+interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; category?: string; alert_id?: number | null; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string; collect_enabled?: boolean; collect_interval_min?: number; collect_items?: string; collect_last_at?: string | null }
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
 // 会话显示名：集群环境-namespace-容器名（老板 2026-10-16）
+const CATEGORY_LABEL: Record<string, string> = { app: '应用', node: '节点', db: '数据库', cluster: '集群' }
+const CATEGORY_COLOR: Record<string, string> = { app: 'blue', node: 'orange', db: 'purple', cluster: 'cyan' }
+
 function sessionName(s: Session): string {
   const label = s.env_tag || s.cluster_name || ''
   const last = s.container || s.service || s.pod_name
   const parts = [label, s.namespace, last].filter(Boolean)
-  if (parts.length) return parts.join('-')
-  return s.title || `会话 ${s.id}`
+  const body = parts.length ? parts.join('-') : (s.title || `会话 ${s.id}`)
+  const cat = s.category && s.category !== 'app' ? `【${CATEGORY_LABEL[s.category] || s.category}】` : ''
+  return `${cat}${body}`
 }
 
 const localDay = (iso?: string | Date): string => {
@@ -84,12 +88,21 @@ export default function AgentChat() {
   const ctnCache = useRef<Record<string, string[]>>({})
   const [olderOpen, setOlderOpen] = useState<Record<string, boolean>>({})
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [deep, setDeep] = useState(true)  // 深度诊断开关（多轮工具取证，默认开：直接给结果）
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<number | null>(null)  // 当前会话 id（轮询时防竞态）
 
-  const loadSessions = () => getAgentSessions().then((d) => setSessions((d || []) as Session[]))
+  // 会话筛选（老板 2026-11-11）：会话多了以后按集群/类别/来源过滤，避免一长串混在一起
+  const [filterCluster, setFilterCluster] = useState<number>(0)
+  const [filterCategory, setFilterCategory] = useState<string>('')
+  const [filterSource, setFilterSource] = useState<string>('')
+  const loadSessions = () => getAgentSessions({
+    cluster_id: filterCluster || undefined,
+    category: filterCategory || undefined,
+    source: filterSource || undefined,
+  }).then((d) => setSessions((d || []) as Session[]))
 
   const handleDeleteSession = async (sid: number) => {
     try {
@@ -100,7 +113,7 @@ export default function AgentChat() {
     } catch { /* 拦截器已提示 */ }
   }
 
-  useEffect(() => { loadSessions() }, [])
+  useEffect(() => { loadSessions() }, [filterCluster, filterCategory, filterSource])
 
   // 支持从 JVM 诊断等入口带 ?session=<id> 直接打开会话
   useEffect(() => {
@@ -353,7 +366,17 @@ export default function AgentChat() {
         }}>
           新建诊断会话
         </Button>
-        <div style={{ marginTop: 12, overflowY: 'auto', flex: 1 }}>
+        <Space.Compact style={{ marginTop: 8, width: '100%' }}>
+          <Select size="small" style={{ width: '38%' }} value={filterCluster} onChange={setFilterCluster}
+            options={[{ value: 0, label: '全部集群' }, ...clusters.map((c) => ({ value: Number(c.id), label: c.name }))]} />
+          <Select size="small" style={{ width: '31%' }} value={filterCategory} onChange={setFilterCategory}
+            options={[{ value: '', label: '全部类型' }, { value: 'app', label: '应用' }, { value: 'node', label: '节点' },
+                      { value: 'db', label: '数据库' }, { value: 'cluster', label: '集群' }]} />
+          <Select size="small" style={{ width: '31%' }} value={filterSource} onChange={setFilterSource}
+            options={[{ value: '', label: '全部来源' }, { value: 'alert', label: '告警转来' },
+                      { value: 'agent', label: '手动发起' }, { value: 'proactive', label: '平台巡检' }]} />
+        </Space.Compact>
+        <div style={{ marginTop: 8, overflowY: 'auto', flex: 1 }}>
           {sessions.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话" />}
           {sessionGroups.map(([day, items]) => {
             const open = olderOpen[day] !== undefined ? olderOpen[day] : day === todayKey
@@ -373,6 +396,11 @@ export default function AgentChat() {
                     style={{ cursor: 'pointer', padding: '7px 10px', borderRadius: 6, marginBottom: 2,
                              background: s.id === activeId ? '#e6f4ff' : 'transparent',
                              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                    {s.category && s.category !== 'app' && (
+                      <Tag color={CATEGORY_COLOR[s.category] || 'default'} style={{ marginInlineEnd: 0 }}>
+                        {CATEGORY_LABEL[s.category] || s.category}
+                      </Tag>
+                    )}
                     <Text ellipsis style={{ fontSize: 14.5, flex: 1, color: '#1f1f1f' }} title={sessionName(s)}>{sessionName(s)}</Text>
                     <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
                       <DeleteOutlined style={{ color: '#ccc', fontSize: 12 }} onClick={(e) => e.stopPropagation()} />
@@ -394,6 +422,9 @@ export default function AgentChat() {
                 <Text strong style={{ fontSize: 16 }}>{sessionName(activeSession)}</Text>
                 <Tag color="blue">{activeSession.cluster_id ? `集群 ${activeSession.cluster_id}` : ''}</Tag>
                 <Text type="secondary" style={{ fontSize: 14 }}>{activeSession.namespace}/{activeSession.pod_name}</Text>
+                {activeSession.alert_id ? (
+                  <a onClick={() => navigate('/alerts')} style={{ fontSize: 13 }}>来源告警 #{activeSession.alert_id}</a>
+                ) : null}
               </Space>
               <Space>
                 <Tooltip title="针对该容器定时采集 JVM 等信息，自动追加到会话（默认关）">

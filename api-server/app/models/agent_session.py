@@ -22,8 +22,13 @@ class DiagnosisSession(Base):
     service: Mapped[str] = mapped_column(String(200), default="")
     container: Mapped[str] = mapped_column(String(200), default="")
     title: Mapped[str] = mapped_column(String(200), default="")  # 会话标题（首条消息摘要）
-    # 来源：agent=用户在诊断助手主动发起 / proactive=平台巡检自动发起（异常但未告警）
+    # 来源：agent=用户在诊断助手主动发起 / proactive=平台巡检自动发起（异常但未告警）/ alert=从告警一键转来
     source: Mapped[str] = mapped_column(String(20), default="agent", index=True)
+    # 类别（2026-11-11 老板口径）：app=应用 / node=节点 / db=数据库 / cluster=集群；
+    # 会话标题带类别前缀，让「应用诊断助手」里的条目一眼能分清是哪类问题
+    category: Mapped[str] = mapped_column(String(20), default="app", server_default="app", index=True)
+    # 由告警转来时记下告警 id（闭环：会话 ↔ 告警互相可跳转）
+    alert_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # active=进行中 / closed=已闭环（处理完成，落盘知识库）
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     # 定时采集（针对该会话目标容器周期采集信息，追加到会话）

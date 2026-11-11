@@ -2,9 +2,10 @@
 import { envLabel, envColor } from '../utils/env'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Table, Tag, Button, Space, Modal, message, Input } from 'antd'
 import { getFaultDiagnosesPaged, getFaultDiagnosis, diagnoseAlert, getAiFeedback, addAiFeedback,
-  getDiagnosisFailures, getDiagnosisQuality } from '../services/api'
+  getDiagnosisFailures, getDiagnosisQuality, createAgentSessionFromAlert } from '../services/api'
 import { canWrite } from '../utils/auth'
 import type { AiFeedbackData, FaultDiagnosisItem, DiagnosisFailureItem, DiagnosisQuality } from '../types'
 import SeverityTag from '../components/SeverityTag'
@@ -41,6 +42,17 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
   const [detail, setDetail] = useState<FaultDiagnosisItem | null>(null)
   const [currentAlertId, setCurrentAlertId] = useState<number | null>(null)
   const [diagnosing, setDiagnosing] = useState<number | null>(null)
+  const [toAgent, setToAgent] = useState<number | null>(null)
+  const navigate = useNavigate()
+
+  // 闭环（老板 2026-11-11）：把这条告警交给「应用诊断助手」接着排查（建立关联会话后直接跳过去）
+  const handleToAgent = async (alertId: number) => {
+    setToAgent(alertId)
+    try {
+      const d = await createAgentSessionFromAlert({ alert_id: alertId, deep: true })
+      navigate(`/agent?session=${d.id}`)
+    } catch { /* 拦截器已提示 */ } finally { setToAgent(null) }
+  }
 
   const handleDiagnose = async (id: number) => {
     setDiagnosing(id)
@@ -120,10 +132,11 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
             : <Tag>未诊断</Tag> },
           { title: '根因摘要', dataIndex: 'root_cause', ellipsis: true, render: (v) => v || '-' },
           { title: '诊断时间', dataIndex: 'diagnosis_time', width: 160, render: (v) => v ? String(v).slice(0, 19) : '-' },
-          { title: '操作', width: 150, render: (_, r) => (
+          { title: '操作', width: 220, render: (_, r) => (
             <Space>
               {writable && <Button size="small" onClick={() => handleDiagnose(r.alert_id)} loading={diagnosing === r.alert_id}>诊断</Button>}
               {r.has_diagnosis && <Button size="small" type="link" onClick={() => { setCurrentAlertId(r.alert_id); viewDiagnosis(r.alert_id) }}>查看</Button>}
+              <Button size="small" type="link" onClick={() => handleToAgent(r.alert_id)} loading={toAgent === r.alert_id}>交给助手</Button>
             </Space>
           ) },
         ]} />

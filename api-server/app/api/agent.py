@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.middleware.permission import require_any_user, require_operator
-from app.models import Cluster, DiagnosisMessage, DiagnosisSession
+from app.models import Alert, Cluster, DiagnosisMessage, DiagnosisSession
 from app.services import agent_service, user_permission_service
 
 router = APIRouter(prefix="/api/v1/agent")
@@ -54,6 +54,11 @@ async def _run_turn(sid: int, content: str, cluster_name: str, deep: bool) -> No
 _POD_HASH_RE = re.compile(r"^(.+)-[a-z0-9]{5,10}-[a-z0-9]{5}$")
 
 
+# 会话类别（老板 2026-11-11）：应用 / 节点 / 数据库 / 集群；标题前缀便于在长列表里分辨
+_CATEGORY_TITLE = {"app": "【应用】", "node": "【节点】", "db": "【数据库】", "cluster": "【集群】"}
+_CATEGORY_VALUES = set(_CATEGORY_TITLE.keys())
+
+
 def derive_service(pod_name: str) -> str:
     """从 Pod 名推导工作负载名：`svc-7d9c8f-abcde` → `svc`；无法判定则原样返回。"""
     p = (pod_name or "").strip()
@@ -71,6 +76,12 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
     pod_name = payload.get("pod_name", "")
     problem = payload.get("problem", "")
     deep = bool(payload.get("deep", False))  # 深度诊断开关（默认关 = 快速单轮）
+    # 类别（应用/节点/数据库/集群）：标题前缀 + 列表筛选，均由前端或「告警转助手」传入
+    category = (payload.get("category") or "app").strip().lower()
+    if category not in _CATEGORY_VALUES:
+        category = "app"
+    alert_id = payload.get("alert_id")
+    alert_id = int(alert_id) if str(alert_id or "").isdigit() else None
     service = (payload.get("service") or "").strip() or derive_service(pod_name)
     # 容器名：显式传入兼容 agent/channel/xxx
     container = (payload.get("container") or "").strip()
@@ -107,6 +118,7 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
                 DiagnosisSession.namespace == namespace,
                 DiagnosisSession.service == service,
                 DiagnosisSession.container == container,
+                DiagnosisSession.category == category,
             )).order_by(DiagnosisSession.id.desc())
         )).scalars().first()
         if existing is not None:
@@ -117,7 +129,7 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
                 "diagnosing": False, "reused": True, "final_answer": None, "tool_steps": [],
             }}
 
-    title = _sess_name(pod_name)
+    title = _CATEGORY_TITLE.get(category, "") + _sess_name(pod_name)
     async with async_session() as s:
         sess = DiagnosisSession(
             user_id=user.id,
@@ -128,6 +140,9 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
             container=container,
             title=title[:200],
             status="active",
+            category=category,
+            alert_id=alert_id,
+            source=("alert" if alert_id else "agent"),
         )
         s.add(sess)
         await s.commit()
@@ -155,6 +170,68 @@ async def create_session(payload: dict, user=Depends(require_any_user)):
         "final_answer": None,
         "tool_steps": [],
     }}
+
+
+@router.post("/sessions/from-alert")
+async def session_from_alert(payload: dict, user=Depends(require_any_user)):
+    """告警 → 应用诊断助手（闭环入口）
+
+    沿用 create_session 的去重/权限/首轮诊断逻辑，只是把告警上下文翻译成会话：
+    - category 由告警的 diag_category + resource_type 推导（应用/节点/数据库/集群）
+    - source=alert、alert_id 落库，会话与告警可互相跳转
+    - 首条消息带上故障类型/资源/告警原文，助手可直接接着查
+    """
+    alert_id = int(payload.get("alert_id") or 0)
+    if not alert_id:
+        return {"code": 400, "message": "alert_id 必填", "data": None}
+    deep = bool(payload.get("deep", True))
+    async with async_session() as s:
+        a = await s.get(Alert, alert_id)
+        if not a:
+            return {"code": 404, "message": "告警不存在", "data": None}
+        cid = int(a.cluster_id or 0)
+        ns = a.namespace or ""
+        rtype = (a.resource_type or "").lower()
+        rname = a.resource_name or ""
+        fault_type = a.fault_type or ""
+        msg = (a.message or "")[:2000]
+        diag_cat = (getattr(a, "diag_category", "") or "").lower()
+    # 数据库告警的 cluster_id 固定为 0（无集群维度）→ 若能按库名找到 agent 侧归属集群，就用它
+    if not cid and (diag_cat == "db" or rtype == "db"):
+        from app.models import DBConnection
+        async with async_session() as s2:
+            from sqlalchemy import select as _sel
+            row = (await s2.execute(_sel(DBConnection).where(DBConnection.name == rname))).scalars().first()
+            if row is not None and row.cluster_id:
+                cid = int(row.cluster_id)
+    if not cid:
+        return {"code": 400, "message": "该告警没有关联集群，无法交给应用诊断助手（可在告警关联的集群上手动新建会话）", "data": None}
+
+    if diag_cat == "db" or rtype == "db":
+        category = "db"
+    elif rtype == "node":
+        category = "node"
+    elif diag_cat == "cluster":
+        category = "cluster"
+    else:
+        category = "app"
+
+    problem = (
+        f"来自告警 #{alert_id} 的排查请求。\n"
+        f"故障类型：{fault_type}\n"
+        f"资源：{rtype or '-'} / {ns or '-'} / {rname}\n"
+        f"告警内容：{msg}\n"
+        f"请结合现场证据给出根因判断与处理建议。"
+    )
+    return await create_session({
+        "cluster_id": cid,
+        "namespace": ns,
+        "pod_name": rname,
+        "problem": problem,
+        "deep": deep,
+        "category": category,
+        "alert_id": alert_id,
+    }, user=user)
 
 
 @router.post("/sessions/seed")
@@ -254,20 +331,29 @@ async def set_session_collect(session_id: int, payload: dict, user=Depends(requi
 
 
 @router.get("/sessions")
-async def list_sessions(user=Depends(require_any_user)):
-    """我的诊断会话列表（user_id 隔离）。
+async def list_sessions(cluster_id: int = 0, category: str = "", source: str = "",
+                        user=Depends(require_any_user)):
+    """我的诊断会话列表（user_id 隔离，可按集群/类别/来源筛选）。
 
     - 普通用户：仅自己发起的会话。
     - admin：额外包含平台巡检自动发起的会话（source='proactive'，user_id=0），便于统一查看。
     """
     is_admin = getattr(user, "role", "") == "admin"
     async with async_session() as s:
+        from sqlalchemy import and_
         cond = DiagnosisSession.user_id == user.id
         if is_admin:
             from sqlalchemy import or_
             cond = or_(DiagnosisSession.user_id == user.id, DiagnosisSession.source == "proactive")
+        filters = [cond]
+        if cluster_id:
+            filters.append(DiagnosisSession.cluster_id == cluster_id)
+        if category and category in _CATEGORY_VALUES:
+            filters.append(DiagnosisSession.category == category)
+        if source:
+            filters.append(DiagnosisSession.source == source)
         result = await s.execute(
-            select(DiagnosisSession).where(cond)
+            select(DiagnosisSession).where(and_(*filters))
             .order_by(DiagnosisSession.id.desc()).limit(500)
         )
         sessions = list(result.scalars())
@@ -298,6 +384,8 @@ async def list_sessions(user=Depends(require_any_user)):
          "cluster_name": cluster_info.get(x.cluster_id, ("", ""))[0] if x.cluster_id else "",
          "env_tag": cluster_info.get(x.cluster_id, ("", ""))[1] if x.cluster_id else "",
          "source": getattr(x, "source", "agent") or "agent",
+         "category": getattr(x, "category", "") or "app",
+         "alert_id": getattr(x, "alert_id", None),
          "merged_count": counts.get((x.cluster_id, x.namespace, x.pod_name), 0)
                           if (getattr(x, "source", "agent") or "agent") == "proactive" else 0,
          "created_at": str(x.created_at), "updated_at": str(x.updated_at),
