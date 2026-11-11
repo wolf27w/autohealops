@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>集群详情 · 应用负载（布局 Demo，参照 KubeSphere）</title>
+<style>
+  :root{
+    --blue:#1f6feb; --blue-l:#e8f1ff; --bg:#f5f7fa; --line:#e6e9ef; --tx:#242e42; --tx2:#6b7a90;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;color:var(--tx);background:var(--bg)}
+  a{color:inherit;text-decoration:none}
+  .app{display:flex;min-height:100vh}
+
+  /* ---------- 左侧集群导航（KubeSphere 二级导航） ---------- */
+  .side{width:220px;background:#fff;border-right:1px solid var(--line);padding:12px 8px;flex:0 0 220px}
+  .side .cluster{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;background:var(--blue-l);margin-bottom:10px}
+  .side .dot{width:8px;height:8px;border-radius:50%;background:#2fc25b}
+  .side .cname{font-weight:600;font-size:14px}
+  .side .env{font-size:11px;color:var(--tx2)}
+  .nav{margin-top:6px}
+  .nav .grp{padding:8px 10px;font-size:12px;color:var(--tx2);letter-spacing:.5px}
+  .nav .item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:6px;cursor:pointer;color:var(--tx)}
+  .nav .item:hover{background:#f2f5fa}
+  .nav .item.on{background:var(--blue-l);color:var(--blue);font-weight:600}
+  .nav .item .ico{width:16px;text-align:center;margin-right:8px;opacity:.8}
+  .nav .sub{padding-left:34px}
+  .nav .sub .item{font-size:13px;padding:6px 10px}
+  .caret{font-size:10px;color:#9aa7bd}
+
+  /* ---------- 右侧内容 ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .crumb{display:flex;align-items:center;gap:8px;padding:14px 20px 0;color:var(--tx2);font-size:13px}
+  .crumb b{color:var(--tx);font-size:18px;font-weight:600}
+  .tabs{display:flex;gap:24px;padding:10px 20px 0;border-bottom:1px solid var(--line)}
+  .tab{padding:10px 2px;color:var(--tx2);cursor:pointer;border-bottom:2px solid transparent}
+  .tab.on{color:var(--blue);border-color:var(--blue);font-weight:600}
+
+  .tools{display:flex;align-items:center;gap:10px;padding:14px 20px}
+  .sel,.search,.btn{height:32px;border:1px solid var(--line);background:#fff;border-radius:4px;padding:0 10px;font-size:13px;color:var(--tx)}
+  .sel{display:flex;align-items:center;gap:6px;min-width:190px;justify-content:space-between;cursor:pointer}
+  .search{width:240px}
+  .btn{cursor:pointer}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.ghost{background:#fff}
+  .spacer{flex:1}
+
+  .card{margin:0 20px 20px;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+  th{color:var(--tx2);font-weight:500;background:#fbfcfe}
+  tr:last-child td{border-bottom:none}
+  tr.row:hover{background:#f9fbff}
+  .name{color:var(--blue);cursor:pointer;font-weight:500}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;line-height:18px}
+  .tag.ok{background:#e8f8ee;color:#1f9d4d}
+  .tag.warn{background:#fff4e5;color:#b25f00}
+  .tag.err{background:#fdecec;color:#c62828}
+  .tag.gray{background:#eef1f5;color:#5b6b82}
+  .muted{color:var(--tx2)}
+  .dots{cursor:pointer;color:var(--tx2);padding:0 6px}
+
+  /* 抽屉 */
+  .drawer-mask{position:fixed;inset:0;background:rgba(20,30,45,.35);display:none}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:520px;background:#fff;box-shadow:-6px 0 24px rgba(0,0,0,.12);
+          transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .drawer.open + .drawer-mask,.drawer-mask.open{display:block}
+  .drawer .hd{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .drawer .hd b{font-size:16px}
+  .drawer .bd{padding:16px 20px;overflow:auto}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px}
+  .kv .k{color:var(--tx2)}
+  .tip{margin:12px 20px;padding:10px 12px;background:#fffbe6;border:1px solid #ffe58f;border-radius:6px;color:#8a6d3b;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 左：集群二级导航 -->
+  <aside class="side">
+    <div class="cluster">
+      <span class="dot"></span>
+      <div>
+        <div class="cname">测试环境</div>
+        <div class="env">qa · v1.23.4</div>
+      </div>
+    </div>
+
+    <div class="nav">
+      <div class="item"><span><span class="ico">▤</span>概览</span></div>
+      <div class="item"><span><span class="ico">◫</span>节点</span></div>
+
+      <div class="grp">资源</div>
+      <div class="item on"><span><span class="ico">▦</span>应用负载</span><span class="caret">▾</span></div>
+      <div class="sub">
+        <div class="item on"><span>工作负载</span></div>
+        <div class="sub" style="padding-left:0">
+          <div class="item on">部署</div>
+          <div class="item">有状态副本集</div>
+          <div class="item">守护进程集</div>
+          <div class="item">定时任务</div>
+        </div>
+        <div class="item"><span>服务</span></div>
+        <div class="item"><span>容器组</span></div>
+      </div>
+      <div class="item"><span><span class="ico">▧</span>存储</span></div>
+      <div class="item"><span><span class="ico">⚙</span>配置</span></div>
+
+      <div class="grp">监控与运维</div>
+      <div class="item"><span><span class="ico">◔</span>监控告警</span></div>
+      <div class="item"><span><span class="ico">✎</span>巡检与诊断</span></div>
+    </div>
+  </aside>
+
+  <!-- 右：内容区 -->
+  <main class="main">
+    <div class="crumb">集群管理 / <b>应用负载</b></div>
+
+    <!-- 页内一级 Tab（应用负载下的分页签，和 KubeSphere 一致） -->
+    <div class="tabs">
+      <div class="tab on" data-tab="wl">工作负载</div>
+      <div class="tab" data-tab="svc">服务</div>
+      <div class="tab" data-tab="pod">容器组</div>
+      <div class="tab" data-tab="store">存储</div>
+      <div class="tab" data-tab="cfg">配置</div>
+    </div>
+
+    <!-- 工具条：命名空间（多选）/ 搜索 / 刷新 / 创建 -->
+    <div class="tools">
+      <div class="sel" title="命名空间（可多选）">命名空间：全部（3）<span>▾</span></div>
+      <input class="search" placeholder="按名称搜索" />
+      <div class="spacer"></div>
+      <button class="btn ghost">刷新</button>
+      <button class="btn primary">创建</button>
+    </div>
+
+    <!-- 工作负载类型切换（部署/有状态副本集/守护进程集/定时任务） -->
+    <div class="tabs" style="padding:0 20px;border-bottom:none">
+      <div class="tab on">部署 <span class="muted">12</span></div>
+      <div class="tab">有状态副本集 <span class="muted">3</span></div>
+      <div class="tab">守护进程集 <span class="muted">4</span></div>
+      <div class="tab">定时任务 <span class="muted">2</span></div>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:26%">名称</th>
+            <th style="width:16%">状态</th>
+            <th style="width:10%">副本</th>
+            <th style="width:26%">镜像</th>
+            <th style="width:14%">更新时间</th>
+            <th style="width:8%">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row">
+            <td><span class="name" data-name="eft-module-hrs">eft-module-hrs</span><div class="muted" style="font-size:12px">qa-aero-chain</div></td>
+            <td><span class="tag ok">运行中</span></td>
+            <td>2 / 2</td>
+            <td class="muted">harbor/…/eft-module-hrs:1.4.2</td>
+            <td class="muted">11-11 15:32</td>
+            <td><span class="dots" data-name="eft-module-hrs">⋯</span></td>
+          </tr>
+          <tr class="row">
+            <td><span class="name" data-name="eft-module-oms">eft-module-oms</span><div class="muted" style="font-size:12px">qa-aero-chain</div></td>
+            <td><span class="tag warn">1 / 2 就绪</span></td>
+            <td>2 / 2</td>
+            <td class="muted">harbor/…/eft-module-oms:2.0.7</td>
+            <td class="muted">11-11 14:58</td>
+            <td><span class="dots" data-name="eft-module-oms">⋯</span></td>
+          </tr>
+          <tr class="row">
+            <td><span class="name" data-name="cud-reporting-service">cud-reporting-service</span><div class="muted" style="font-size:12px">qa-cud-saas</div></td>
+            <td><span class="tag err">异常</span></td>
+            <td>0 / 1</td>
+            <td class="muted">harbor/…/cud-reporting:0.9.1</td>
+            <td class="muted">11-11 11:20</td>
+            <td><span class="dots" data-name="cud-reporting-service">⋯</span></td>
+          </tr>
+          <tr class="row">
+            <td><span class="name" data-name="nacos-config">nacos-config</span><div class="muted" style="font-size:12px">nacos</div></td>
+            <td><span class="tag ok">运行中</span></td>
+            <td>1 / 1</td>
+            <td class="muted">nacos/nacos-server:v2.2.3</td>
+            <td class="muted">11-09 09:12</td>
+            <td><span class="dots" data-name="nacos-config">⋯</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tip">
+      Demo 说明：这是**布局样例**（无后端，数据是假的）。要对比的是"层级"——左栏集群导航 → 页内一级 Tab（工作负载/服务/容器组）→
+      工作负载下的类型切换（部署/有状态副本集/守护进程集/定时任务）→ 表内操作收进 ⋯。点名称会从右侧弹出详情抽屉。
+    </div>
+  </main>
+</div>
+
+<!-- 详情抽屉（KubeSphere 是右侧抽屉，不是新页面） -->
+<div class="drawer" id="drawer">
+  <div class="hd">
+    <b id="d-title">eft-module-hrs</b>
+    <span class="dots" onclick="closeDrawer()">✕</span>
+  </div>
+  <div class="tabs" style="padding:0 20px">
+    <div class="tab on">概览</div><div class="tab">资源状态</div><div class="tab">元数据</div><div class="tab">环境变量</div><div class="tab">事件</div>
+  </div>
+  <div class="bd">
+    <div class="kv">
+      <div class="k">命名空间</div><div>qa-aero-chain</div>
+      <div class="k">副本</div><div>2 / 2（就绪 2）</div>
+      <div class="k">镜像</div><div>harbor.efreight.cn/…/eft-module-hrs:1.4.2</div>
+      <div class="k">创建时间</div><div>2026-10-28 10:12</div>
+      <div class="k">更新策略</div><div>RollingUpdate（maxSurge 25% / maxUnavailable 25%）</div>
+      <div class="k">健康检查</div><div>liveness: /health 8080 · readiness: /ready 8080</div>
+    </div>
+    <div class="tip" style="margin:16px 0 0">这里放 KubeSphere 的「资源状态 / 元数据 / 环境变量 / 事件」页签，Pod 列表也在「资源状态」里下钻。</div>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll('.name').forEach(el=>el.onclick=()=>openDrawer(el.dataset.name));
+  document.querySelectorAll('.dots[data-name]').forEach(el=>el.onclick=(e)=>{e.stopPropagation();openDrawer(el.dataset.name)});
+  function openDrawer(n){document.getElementById('d-title').textContent=n;document.getElementById('drawer').classList.add('open')}
+  function closeDrawer(){document.getElementById('drawer').classList.remove('open')}
+  document.querySelectorAll('.tabs').forEach(g=>{
+    g.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+      g.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');
+    });
+  });
+</script>
+</body>
+</html>
