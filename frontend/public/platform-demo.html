@@ -123,13 +123,10 @@
 <!-- ================= 顶部栏 ================= -->
 <div class="topbar">
   <div class="logo" onclick="go('home')"><span class="mark">AH</span>AutoHealOps</div>
-  <div class="ctx">
-    <select id="ctx-env"><option>全部环境</option><option selected>生产环境</option><option>uat环境</option><option>测试环境</option></select>
-    <select id="ctx-cluster"><option selected>全部集群（3）</option><option>生产环境</option><option>uat环境</option><option>测试环境</option></select>
-  </div>
   <input class="gsearch" placeholder="搜索 集群 / 服务 / Pod / 告警编号…" />
   <div class="sp"></div>
-  <button class="tb bell" onclick="toggleBell(true)">🔔<span class="dot">5</span></button>
+  <button class="tb" title="刷新当前页" onclick="alert('刷新当前页（demo）')">↻</button>
+  <button class="tb bell" title="未处理告警" onclick="toggleBell(true)">🔔<span class="dot">5</span></button>
   <button class="tb">?</button>
   <button class="tb" onclick="alert('主题切换（demo）')">◐</button>
   <div class="user"><span class="avatar">吴</span><span>wuyonghui</span><span class="muted" style="font-size:12px">管理员</span></div>
@@ -203,7 +200,7 @@
         <div><div class="big">92</div><div class="lb">全局健康分 ↑2</div></div>
         <div class="sub">集群 96 · 告警 88 · 数据库 91<br><span class="muted">较昨日 +2（qa-cud 已恢复）</span></div>
         <div class="sp"></div>
-        <button class="btn">刷新</button>
+        <span class="sel">最近 24 小时 ▾</span>
       </div>
       <div class="kpis">
         <div class="kpi" onclick="go('alerts')"><div class="t">未处理告警</div><div class="v" style="color:#c62828">5</div><div class="muted" style="font-size:12px">P0 1 · P1 2</div></div>
@@ -215,7 +212,7 @@
 
       <div class="grid2">
         <div class="card">
-          <div class="hd">告警趋势（新增 / 已解决 / 自愈）<span class="more">告警列表 ›</span></div>
+          <div class="hd">告警趋势（新增 / 已解决 / 自愈）</div>
           <svg class="spark" viewBox="0 0 900 130" preserveAspectRatio="none">
             <polyline fill="none" stroke="#e5484d" stroke-width="2" points="0,96 75,84 150,90 225,72 300,80 375,62 450,68 525,54 600,60 675,48 750,54 825,42 900,46"/>
             <polyline fill="none" stroke="#1f9d4d" stroke-width="2" points="0,108 75,100 150,96 225,92 300,86 375,80 450,74 525,68 600,62 675,58 750,52 825,48 900,44"/>
@@ -244,7 +241,7 @@
         <table class="todo">
           <tbody>
             <tr><td style="width:64px"><span class="tag p0">P0</span></td><td>qa-cud-saas / cud-reporting-service 持续 CrashLoopBackOff（12 次）</td><td class="muted" style="width:120px">2 分钟前</td><td style="width:100px"><span class="link" onclick="go('alerts')">去处理 ›</span></td></tr>
-            <tr><td><span class="tag p1">P1</span></td><td>高风险变更待审批 2 单（生产扩容 / 删除 ConfigMap）</td><td class="muted">18 分钟前</td><td><span class="link">去审批 ›</span></td></tr>
+            <tr><td><span class="tag p1">P1</span></td><td>高风险变更待审批 2 单（生产扩容 / 删除 ConfigMap）</td><td class="muted">18 分钟前</td><td><span class="link" onclick="alert('审批（demo）')">去审批 ›</span></td></tr>
             <tr><td><span class="tag p2">P2</span></td><td>3 个服务 7 天零外部流量（僵尸候选）</td><td class="muted">1 小时前</td><td><span class="link">去看 ›</span></td></tr>
             <tr><td><span class="tag gray">P3</span></td><td>k8s-node28 内存 87%（阈值 85%），持续 40 分钟</td><td class="muted">40 分钟前</td><td><span class="link" onclick="go('clusters')">去看 ›</span></td></tr>
           </tbody>
@@ -252,7 +249,7 @@
       </div>
 
       <div class="card">
-        <div class="hd">集群资源水位<span class="more" onclick="go('clusters')">集群管理 ›</span></div>
+        <div class="hd">集群资源水位</div>
         <table>
           <thead><tr><th>集群</th><th style="width:22%">CPU</th><th style="width:22%">内存</th><th style="width:12%">Pod</th><th style="width:12%">健康</th></tr></thead>
           <tbody>
@@ -275,7 +272,7 @@
       <div class="tools">
         <input class="sel" placeholder="按名称搜索" style="min-width:220px" />
         <div class="sp"></div>
-        <button class="btn">刷新</button><button class="btn primary">添加集群</button>
+        <button class="btn primary">添加集群</button>
       </div>
       <div class="card">
         <table>
@@ -290,7 +287,7 @@
           </tbody>
         </table>
       </div>
-      <div class="foot">点集群名称 → 左侧整条换成集群导航（顶部「← 返回平台」）。</div>
+      <div class="foot">点集群名称 → 左侧整条换成集群导航（顶部「← 返回平台」）。顶部不再有环境/集群切换器；刷新统一在顶栏，页面内只有各自独有的主操作。</div>
     </section>
 
     <!-- ③ 集群内：工作负载列表 -->
@@ -300,7 +297,7 @@
         <div class="sel">命名空间：全部（3）▾</div>
         <input class="sel" placeholder="按名称搜索" style="min-width:220px" />
         <div class="sp"></div>
-        <button class="btn">刷新</button><button class="btn primary">创建</button>
+        <button class="btn primary">创建</button>
       </div>
       <div class="card">
         <table>
