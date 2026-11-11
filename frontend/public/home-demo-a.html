@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>首页 Demo A（5 段式：决策优先）</title>
+<style>
+  :root{--blue:#1f6feb;--blue-l:#eef5ff;--bg:#f5f7fa;--line:#e6e9ef;--tx:#242e42;--tx2:#6b7a90;--ok:#1f9d4d;--warn:#b25f00;--err:#c62828}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;color:var(--tx);background:var(--bg)}
+  .wrap{max-width:1440px;margin:0 auto;padding:16px 20px 28px}
+  .top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .top h1{font-size:20px;margin:0;font-weight:600}
+  .sel,.btn{height:32px;border:1px solid var(--line);background:#fff;border-radius:4px;padding:0 10px;font-size:13px;color:var(--tx);cursor:pointer}
+  .sel{display:inline-flex;align-items:center;gap:8px}
+  .sp{flex:1}
+  .score{display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 16px}
+  .score .big{font-size:30px;font-weight:700;color:var(--ok);line-height:1}
+  .score .lb{font-size:12px;color:var(--tx2)}
+  .score .sub{font-size:12px;color:var(--tx2);border-left:1px solid var(--line);padding-left:14px;line-height:1.7}
+
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .kpi{flex:1 1 180px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 16px;cursor:pointer}
+  .kpi:hover{border-color:#c7d7f5}
+  .kpi .t{font-size:12.5px;color:var(--tx2)}
+  .kpi .v{font-size:26px;font-weight:700;margin-top:4px}
+  .kpi .d{font-size:12px;color:var(--tx2);margin-top:2px}
+  .kpi.err .v{color:var(--err)} .kpi.warn .v{color:var(--warn)} .kpi.ok .v{color:var(--ok)}
+
+  .card{background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .card .hd{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
+  .card .hd .more{font-size:12.5px;color:var(--blue);font-weight:400;cursor:pointer}
+  .grid2{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
+  .grid-assets{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
+
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--tx2);font-weight:500;background:#fbfcfe}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;line-height:18px}
+  .tag.p0{background:#fdecec;color:#c62828} .tag.p1{background:#fff4e5;color:#b25f00}
+  .tag.p2{background:#eef5ff;color:#1f6feb} .tag.p3{background:#eef1f5;color:#5b6b82}
+  .tag.ok{background:#e8f8ee;color:#1f9d4d} .tag.warn{background:#fff4e5;color:#b25f00}
+  .muted{color:var(--tx2)} .link{color:var(--blue);cursor:pointer}
+  .todo td{padding:11px 14px}
+  .bar{height:6px;border-radius:3px;background:#eef1f5;overflow:hidden;min-width:80px}
+  .bar i{display:block;height:100%;background:var(--blue)}
+  .bar.w i{background:#fa8c16} .bar.e i{background:#e5484d}
+  .spark{width:100%;height:120px;display:block}
+  .foot{margin-top:10px;font-size:12px;color:var(--tx2)}
+  .collapse{margin-top:12px;background:#fff;border:1px solid var(--line);border-radius:8px}
+  .collapse .hd{cursor:pointer}
+  .collapse .bd{padding:12px 16px;display:none}
+  .collapse.open .bd{display:block}
+  .tl{list-style:none;margin:0;padding:0}
+  .tl li{display:flex;gap:10px;padding:7px 0;border-bottom:1px dashed #eef0f4;font-size:13px}
+  .tl li:last-child{border:none}
+  .tl .ts{color:var(--tx2);width:64px;flex:0 0 64px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ① 顶栏：上下文 + 全局健康分 -->
+  <div class="top">
+    <h1>运行态势</h1>
+    <span class="sel">全部环境 ▾</span>
+    <span class="sel">全部集群（3）▾</span>
+    <span class="sel">最近 24 小时 ▾</span>
+    <div class="sp"></div>
+    <button class="sel">刷新</button>
+    <div class="score">
+      <div><div class="big">92</div><div class="lb">全局健康分 ↑2</div></div>
+      <div class="sub">集群 96 · 告警 88 · 数据库 91<br><span class="muted">较昨日 +2（qa-cud 恢复）</span></div>
+    </div>
+  </div>
+
+  <!-- ② KPI（可点） -->
+  <div class="row">
+    <div class="kpi err"><div class="t">未处理告警</div><div class="v">5</div><div class="d">P0 1 · P1 2 · 其余 2</div></div>
+    <div class="kpi"><div class="t">今日新增</div><div class="v">12</div><div class="d">较昨日 -3</div></div>
+    <div class="kpi ok"><div class="t">自动处理率</div><div class="v">68%</div><div class="d">近 7 天 71%</div></div>
+    <div class="kpi warn"><div class="t">待办工单</div><div class="v">3</div><div class="d">最长已挂 6 小时</div></div>
+    <div class="kpi"><div class="t">AI 诊断成功率</div><div class="v">91%</div><div class="d">失败 4 条待看</div></div>
+  </div>
+
+  <!-- ③ 态势：趋势 + 健康构成 -->
+  <div class="grid2">
+    <div class="card">
+      <div class="hd">告警趋势（新增 / 已解决 / 自愈）<span class="more">查看全部 ›</span></div>
+      <svg class="spark" viewBox="0 0 900 120" preserveAspectRatio="none">
+        <polyline fill="none" stroke="#e5484d" stroke-width="2" points="0,86 75,74 150,80 225,62 300,70 375,52 450,58 525,44 600,50 675,40 750,46 825,34 900,38"/>
+        <polyline fill="none" stroke="#1f9d4d" stroke-width="2" points="0,96 75,90 150,84 225,80 300,76 375,70 450,64 525,60 600,54 675,50 750,46 825,42 900,40"/>
+        <polyline fill="none" stroke="#1f6feb" stroke-width="2" stroke-dasharray="4 4" points="0,104 75,100 150,98 225,94 300,92 375,88 450,86 525,82 600,80 675,76 750,74 825,70 900,68"/>
+      </svg>
+      <div class="foot" style="padding:0 16px 12px">红＝新增　绿＝已解决　蓝虚线＝自愈</div>
+    </div>
+    <div class="card">
+      <div class="hd">健康分构成</div>
+      <div style="padding:16px">
+        <svg viewBox="0 0 120 120" width="150" height="150" style="display:block;margin:0 auto">
+          <circle cx="60" cy="60" r="46" fill="none" stroke="#eef1f5" stroke-width="14"/>
+          <circle cx="60" cy="60" r="46" fill="none" stroke="#1f9d4d" stroke-width="14" stroke-dasharray="265 289" transform="rotate(-90 60 60)"/>
+          <text x="60" y="58" text-anchor="middle" font-size="22" font-weight="700" fill="#1f9d4d">92</text>
+          <text x="60" y="76" text-anchor="middle" font-size="10" fill="#6b7a90">健康</text>
+        </svg>
+        <div class="muted" style="font-size:12.5px;line-height:1.9;margin-top:8px">
+          集群健康 96（权重 40%）<br>告警健康 88（权重 30%）<br>数据库健康 91（权重 30%）
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ④ 行动区：需要我处理的 -->
+  <div class="card" style="margin-top:12px">
+    <div class="hd">需要我处理的 <span class="muted" style="font-weight:400;font-size:12.5px">按优先级排序 · 点击直接下钻</span></div>
+    <table class="todo">
+      <tbody>
+        <tr><td style="width:64px"><span class="tag p0">P0</span></td>
+            <td>qa-cud-saas / cud-reporting-service 持续 CrashLoopBackOff（12 次）</td>
+            <td class="muted" style="width:150px">2 分钟前</td><td style="width:110px"><span class="link">去处理 ›</span></td></tr>
+        <tr><td><span class="tag p1">P1</span></td>
+            <td>高风险变更待审批 2 单（生产环境扩容 / 删除 ConfigMap）</td>
+            <td class="muted">18 分钟前</td><td><span class="link">去审批 ›</span></td></tr>
+        <tr><td><span class="tag p2">P2</span></td>
+            <td>3 个服务 7 天零外部流量（僵尸候选，qa 环境）</td>
+            <td class="muted">1 小时前</td><td><span class="link">去看 ›</span></td></tr>
+        <tr><td><span class="tag p3">P3</span></td>
+            <td>k8s-node28 内存 87%（阈值 85%），已连续 40 分钟</td>
+            <td class="muted">40 分钟前</td><td><span class="link">去看 ›</span></td></tr>
+        <tr><td><span class="tag p3">P3</span></td>
+            <td>数据库「测试环境MySQL(stg)」慢 SQL 阈值超限 6 条</td>
+            <td class="muted">1 小时前</td><td><span class="link">去看 ›</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ⑤ 资产与容量 -->
+  <div class="grid-assets">
+    <div class="card">
+      <div class="hd">集群资源水位<span class="more">集群管理 ›</span></div>
+      <table>
+        <thead><tr><th>集群</th><th style="width:20%">CPU</th><th style="width:20%">内存</th><th style="width:10%">Pod</th><th style="width:12%">健康</th></tr></thead>
+        <tbody>
+          <tr><td>测试环境 <span class="muted">qa</span></td>
+            <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:42%"></i></div><span class="muted">42%</span></div></td>
+            <td><div style="display:flex;align-items:center;gap:8px"><div class="bar w"><i style="width:87%"></i></div><span class="muted">87%</span></div></td>
+            <td>1,284</td><td><span class="tag warn">关注</span></td></tr>
+          <tr><td>uat环境 <span class="muted">uat</span></td>
+            <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:31%"></i></div><span class="muted">31%</span></div></td>
+            <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:54%"></i></div><span class="muted">54%</span></div></td>
+            <td>412</td><td><span class="tag ok">健康</span></td></tr>
+          <tr><td>生产环境 <span class="muted">prod</span></td>
+            <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:66%"></i></div><span class="muted">66%</span></div></td>
+            <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:73%"></i></div><span class="muted">73%</span></div></td>
+            <td>3,902</td><td><span class="tag ok">健康</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="hd">数据库健康<span class="more">数据库监控 ›</span></div>
+      <table>
+        <thead><tr><th>实例</th><th style="width:26%">状态</th><th style="width:22%">慢 SQL</th></tr></thead>
+        <tbody>
+          <tr><td>测试环境MySQL(stg)</td><td><span class="tag ok">已连接</span></td><td class="muted">6 条</td></tr>
+          <tr><td>本机mysql</td><td><span class="tag ok">已连接</span></td><td class="muted">0</td></tr>
+          <tr><td>SonarQube PG</td><td><span class="tag warn">未采集</span></td><td class="muted">-</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 折叠区：自愈时间线 -->
+  <div class="collapse" onclick="this.classList.toggle('open')">
+    <div class="hd">AI 自愈时间线（最近 10 条）<span class="muted" style="font-weight:400;font-size:12.5px">点击展开</span></div>
+    <div class="bd">
+      <ul class="tl">
+        <li><span class="ts">15:32</span><span>qa-aero-chain / eft-module-hrs 内存超阈值 → 滚动重启（成功）</span></li>
+        <li><span class="ts">14:58</span><span>qa-cud-saas / cud-reporting 探针失败 → 重启（第 2 次，转工单）</span></li>
+        <li><span class="ts">14:20</span><span>prod-eft-link / manifest-szxmft 镜像拉取失败 → 改镜像 tag（成功）</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="foot">Demo A（5 段式）：顶栏上下文与健康分 → KPI → 趋势/构成 → 需要我处理 → 资产与容量；自愈时间线折叠。</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>首页 Demo B（KubeSphere 风格：概览卡片 + 2×2 图表）</title>
+<style>
+  :root{--blue:#1f6feb;--blue-l:#eef5ff;--bg:#f5f7fa;--line:#e6e9ef;--tx:#242e42;--tx2:#6b7a90;--ok:#1f9d4d;--warn:#b25f00;--err:#c62828}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;color:var(--tx);background:var(--bg)}
+  .wrap{max-width:1440px;margin:0 auto;padding:16px 20px 28px}
+  .top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .top h1{font-size:20px;margin:0;font-weight:600}
+  .sel,.btn{height:32px;border:1px solid var(--line);background:#fff;border-radius:4px;padding:0 10px;font-size:13px;color:var(--tx);cursor:pointer}
+  .sp{flex:1}
+
+  /* KubeSphere 式：一排 4 个概览卡片（大数字 + 迷你趋势） */
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .ov{flex:1 1 240px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:16px 18px;position:relative;overflow:hidden}
+  .ov .t{font-size:13px;color:var(--tx2)}
+  .ov .v{font-size:32px;font-weight:700;line-height:1.2;margin:6px 0 2px}
+  .ov .d{font-size:12px;color:var(--tx2)}
+  .ov .mini{position:absolute;right:0;bottom:0;width:120px;height:56px;opacity:.55}
+  .ov.err .v{color:var(--err)} .ov.ok .v{color:var(--ok)} .ov.blue .v{color:var(--blue)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .card .hd{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
+  .card .hd .more{font-size:12.5px;color:var(--blue);font-weight:400;cursor:pointer}
+  .card .bd{padding:14px 16px}
+  .spark{width:100%;height:140px;display:block}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--tx2);font-weight:500;background:#fbfcfe}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;line-height:18px}
+  .tag.ok{background:#e8f8ee;color:#1f9d4d} .tag.warn{background:#fff4e5;color:#b25f00} .tag.err{background:#fdecec;color:#c62828} .tag.gray{background:#eef1f5;color:#5b6b82}
+  .muted{color:var(--tx2)} .link{color:var(--blue);cursor:pointer}
+  .donut{display:flex;align-items:center;gap:18px}
+  .legend{font-size:12.5px;line-height:2;color:var(--tx2)}
+  .legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+  .foot{margin-top:10px;font-size:12px;color:var(--tx2)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .tile{border:1px solid var(--line);border-radius:6px;padding:10px;text-align:center}
+  .tile .n{font-size:20px;font-weight:700} .tile .l{font-size:12px;color:var(--tx2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>集群概览</h1>
+    <span class="sel">全部环境 ▾</span>
+    <span class="sel">最近 24 小时 ▾</span>
+    <div class="sp"></div>
+    <span class="sel">自动刷新 30s ▾</span>
+    <button class="btn">刷新</button>
+  </div>
+
+  <!-- 4 张概览卡（KubeSphere 那种大数字 + 迷你图） -->
+  <div class="row">
+    <div class="ov err">
+      <div class="t">未处理告警</div><div class="v">5</div><div class="d">P0 1 · P1 2 · 其余 2</div>
+      <svg class="mini" viewBox="0 0 120 56" preserveAspectRatio="none"><polyline fill="none" stroke="#e5484d" stroke-width="2" points="0,44 20,36 40,40 60,28 80,32 100,20 120,24"/></svg>
+    </div>
+    <div class="ov blue">
+      <div class="t">运行中工作负载</div><div class="v">1,342</div><div class="d">部署 1,120 · 有状态 96 · 守护 126</div>
+      <svg class="mini" viewBox="0 0 120 56" preserveAspectRatio="none"><polyline fill="none" stroke="#1f6feb" stroke-width="2" points="0,40 20,38 40,34 60,34 80,30 100,28 120,26"/></svg>
+    </div>
+    <div class="ov ok">
+      <div class="t">节点</div><div class="v">46</div><div class="d">健康 45 · 异常 1（k8s-node28 内存压力）</div>
+      <svg class="mini" viewBox="0 0 120 56" preserveAspectRatio="none"><polyline fill="none" stroke="#1f9d4d" stroke-width="2" points="0,30 20,30 40,28 60,28 80,28 100,26 120,26"/></svg>
+    </div>
+    <div class="ov">
+      <div class="t">数据库实例</div><div class="v">2</div><div class="d">已连接 2 · 慢 SQL 6 条</div>
+      <svg class="mini" viewBox="0 0 120 56" preserveAspectRatio="none"><polyline fill="none" stroke="#6b7a90" stroke-width="2" points="0,28 20,28 40,26 60,26 80,26 100,24 120,24"/></svg>
+    </div>
+  </div>
+
+  <!-- 2×2 图表区 -->
+  <div class="grid">
+    <div class="card">
+      <div class="hd">告警趋势（新增 / 已解决）<span class="more">告警列表 ›</span></div>
+      <svg class="spark" viewBox="0 0 900 140" preserveAspectRatio="none">
+        <polyline fill="none" stroke="#e5484d" stroke-width="2" points="0,100 75,88 150,94 225,74 300,82 375,62 450,70 525,54 600,60 675,48 750,54 825,42 900,46"/>
+        <polyline fill="none" stroke="#1f9d4d" stroke-width="2" points="0,112 75,104 150,98 225,94 300,88 375,82 450,76 525,70 600,64 675,60 750,54 825,50 900,46"/>
+      </svg>
+    </div>
+    <div class="card">
+      <div class="hd">告警分级分布<span class="more">策略配置 ›</span></div>
+      <div class="bd donut">
+        <svg viewBox="0 0 120 120" width="150" height="150">
+          <circle cx="60" cy="60" r="46" fill="none" stroke="#fdecec" stroke-width="18"/>
+          <circle cx="60" cy="60" r="46" fill="none" stroke="#e5484d" stroke-width="18" stroke-dasharray="60 229" transform="rotate(-90 60 60)"/>
+          <circle cx="60" cy="60" r="46" fill="none" stroke="#fa8c16" stroke-width="18" stroke-dasharray="72 217" stroke-dashoffset="-60" transform="rotate(-90 60 60)"/>
+          <circle cx="60" cy="60" r="46" fill="none" stroke="#1f6feb" stroke-width="18" stroke-dasharray="120 169" stroke-dashoffset="-132" transform="rotate(-90 60 60)"/>
+          <text x="60" y="58" text-anchor="middle" font-size="20" font-weight="700" fill="#242e42">12</text>
+          <text x="60" y="76" text-anchor="middle" font-size="10" fill="#6b7a90">今日新增</text>
+        </svg>
+        <div class="legend">
+          <div><i style="background:#e5484d"></i>critical 2</div>
+          <div><i style="background:#fa8c16"></i>high 3</div>
+          <div><i style="background:#1f6feb"></i>medium 5</div>
+          <div><i style="background:#eef1f5"></i>low 2</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd">资源使用率（Top 集群）<span class="more">集群管理 ›</span></div>
+      <div class="bd">
+        <table>
+          <thead><tr><th>集群</th><th>CPU</th><th>内存</th><th>Pod</th></tr></thead>
+          <tbody>
+            <tr><td>测试环境</td><td class="muted">42%</td><td><span class="tag warn">87%</span></td><td>1,284</td></tr>
+            <tr><td>uat环境</td><td class="muted">31%</td><td class="muted">54%</td><td>412</td></tr>
+            <tr><td>生产环境</td><td class="muted">66%</td><td class="muted">73%</td><td>3,902</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd">最近告警（未处理）<span class="more">去处理 ›</span></div>
+      <div class="bd">
+        <table>
+          <tbody>
+            <tr><td><span class="tag err">P0</span></td><td>qa-cud-saas / cud-reporting-service CrashLoopBackOff</td><td class="muted">2 分钟前</td></tr>
+            <tr><td><span class="tag warn">P1</span></td><td>k8s-node28 内存压力 87%</td><td class="muted">40 分钟前</td></tr>
+            <tr><td><span class="tag gray">P3</span></td><td>测试环境MySQL(stg) 慢 SQL 6 条</td><td class="muted">1 小时前</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自愈动作统计（KubeSphere 风格的 4 个方块） -->
+  <div class="row2">
+    <div class="card">
+      <div class="hd">自动处理动作（最近 24 小时）<span class="more">处理记录 ›</span></div>
+      <div class="bd">
+        <div class="tiles">
+          <div class="tile"><div class="n">18</div><div class="l">自愈</div></div>
+          <div class="tile"><div class="n">7</div><div class="l">重启</div></div>
+          <div class="tile"><div class="n">4</div><div class="l">伸缩</div></div>
+          <div class="tile"><div class="n">1</div><div class="l">回滚</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd">AI 诊断（最近 24 小时）<span class="more">诊断台账 ›</span></div>
+      <div class="bd">
+        <div class="tiles">
+          <div class="tile"><div class="n">23</div><div class="l">诊断次数</div></div>
+          <div class="tile"><div class="n">91%</div><div class="l">成功率</div></div>
+          <div class="tile"><div class="n">76%</div><div class="l">采纳率</div></div>
+          <div class="tile"><div class="n">4</div><div class="l">失败待看</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">Demo B（KubeSphere 风格）：4 张大数字概览卡 → 2×2 图表（趋势/分级/资源/告警）→ 两组动作与诊断统计方块。</div>
+</div>
+</body>
+</html>
