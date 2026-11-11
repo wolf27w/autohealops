@@ -72,7 +72,7 @@ export default function ClusterLayout() {
   }
 
   return (
-    <Layout style={{ height: '100vh' }}>
+    <Layout style={{ height: '100vh', background: '#fff' }}>
       <Header style={{ height: 52, lineHeight: '52px', padding: '0 18px', background: '#fff',
                        borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 12 }}>
         <Button type="text" size="small" onClick={() => navigate('/clusters')} style={{ color: '#8c8c8c' }}>
@@ -98,7 +98,7 @@ export default function ClusterLayout() {
           style={{ borderRight: 'none' }}
         />
       </Sider>
-      <Content style={{ padding: 16, overflow: 'auto' }}>
+      <Content style={{ padding: 16, overflow: 'auto', background: '#fff' }}>
         <Outlet />
       </Content>
       </Layout>

@@ -359,13 +359,14 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   return (
     <div>
       <Card size="small">
-        <Segmented
-          size="middle"
-          style={{ marginBottom: 12 }}
-          value={kind}
-          onChange={(v) => navigate(`/clusters/${clusterId}/workloads/${v}`)}
-          options={KINDS}
-        />
+        <div style={{ marginBottom: 12 }}>
+          <Segmented
+            size="middle"
+            value={kind}
+            onChange={(v) => navigate(`/clusters/${clusterId}/workloads/${v}`)}
+            options={KINDS}
+          />
+        </div>
         <Space size={8} wrap style={{ marginBottom: 12 }}>
           <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
           <Select

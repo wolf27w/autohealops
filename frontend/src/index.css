@@ -206,3 +206,9 @@ html[data-theme='dark'] .ant-card {
 html[data-theme='dark'] .ant-card-head {
   border-bottom: 1px solid #1e293b;
 }
+
+/* 表格列头「筛选」图标紧贴标题（老板 2026-11-11：状态列筛选按钮与文字间距太大） */
+.ant-table-filter-column {
+  justify-content: flex-start !important;
+  gap: 4px;
+}
