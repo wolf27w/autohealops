@@ -319,6 +319,33 @@ async def collect(cluster_id: int, user=Depends(require_operator)):
     return {"code": 200, "message": "success", "data": {"success": ok}}
 
 
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/jvm/diagnose")
+async def jvm_diagnose(cluster_id: int, namespace: str, pod_name: str, payload: dict, user=Depends(require_operator)):
+    """JVM 一键诊断（R2）：action=jstack/jfr/heapdump/jcmd；jfr/heapdump 产物落盘返回 file_path 本地下载"""
+    if denied := await _deny_cluster(user, cluster_id, namespace, "operate"):
+        return denied
+    action = (payload.get("action") or "").strip()
+    if action not in ("jstack", "jfr", "heapdump", "jcmd"):
+        return {"code": 400, "message": "action 必须是 jstack/jfr/heapdump/jcmd", "data": None}
+    container = (payload.get("container") or "").strip()
+    args = (payload.get("args") or "").strip()
+    r = await executor_client.acall(
+        executor_client.jvm_diagnose, cluster_id, namespace, pod_name, container, action, args
+    )
+    return {"code": 200 if r.get("success") else 500, "message": "success" if r.get("success") else (r.get("error") or "诊断失败"), "data": r}
+
+
+@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/jvm/params")
+async def jvm_params(cluster_id: int, namespace: str, pod_name: str, container: str = "", user=Depends(require_any_user)):
+    """采集 JVM 启动参数（R2）：-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(
+        executor_client.jvm_params, cluster_id, namespace, pod_name, container
+    )
+    return {"code": 200 if r.get("success") else 500, "message": "success" if r.get("success") else (r.get("error") or "采集失败"), "data": r}
+
+
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/metrics")
 async def pod_metrics(cluster_id: int, namespace: str, pod_name: str, range: str = "1h", user=Depends(require_any_user)):
     """Pod 指标时间序列（CPU/内存/网络，按时间桶聚合）"""

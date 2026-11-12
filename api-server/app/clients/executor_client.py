@@ -432,6 +432,35 @@ class ExecutorClient:
             logger.error("execute_command 失败: %s", e)
             return {"success": False, "output": "", "error": str(e)}
 
+    def jvm_diagnose(self, cluster_id: int, namespace: str, pod: str, container: str, action: str, args: str = "", trace_id: str = "") -> dict:
+        """JVM 一键诊断（R2）：action=jstack/jfr/heapdump/jcmd，返回 {success, output, file_path, error}"""
+        try:
+            req = executor_pb2.JvmDiagnoseRequest(
+                cluster_id=cluster_id, namespace=namespace, pod=pod, container=container,
+                action=action, args=args,
+            )
+            resp = _agent_call(cluster_id, "JvmDiagnose", req, executor_pb2.JvmDiagnoseResponse, 90.0)
+            if resp is None:
+                resp = _get_stub().JvmDiagnose(req, timeout=90.0, metadata=_metadata(trace_id))
+            return {"success": resp.success, "output": resp.output, "file_path": resp.file_path, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("jvm_diagnose 失败: %s", e)
+            return {"success": False, "output": "", "file_path": "", "error": str(e)}
+
+    def jvm_params(self, cluster_id: int, namespace: str, pod: str, container: str, trace_id: str = "") -> dict:
+        """采集 JVM 启动参数（R2），返回 {success, params, error}"""
+        try:
+            req = executor_pb2.JvmParamsRequest(
+                cluster_id=cluster_id, namespace=namespace, pod=pod, container=container,
+            )
+            resp = _agent_call(cluster_id, "JvmParams", req, executor_pb2.JvmParamsResponse, self.TIMEOUT)
+            if resp is None:
+                resp = _get_stub().JvmParams(req, timeout=self.TIMEOUT, metadata=_metadata(trace_id))
+            return {"success": resp.success, "params": resp.params, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("jvm_params 失败: %s", e)
+            return {"success": False, "params": "", "error": str(e)}
+
     def execute_plan(self, cluster_id: int, plan_id: int, plan_json: str, trace_id: str = ""):
         """流式执行修复计划，yield 每步进度"""
         try:

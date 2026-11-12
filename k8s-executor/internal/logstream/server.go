@@ -9,12 +9,15 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/autohealops/k8s-executor/internal/jvm"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/prometheus"
 )
@@ -39,6 +42,7 @@ func (s *Server) Start(_ context.Context) error {
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/watch", s.handleWatch)
 	mux.HandleFunc("/prom/range", s.handlePromRange)
+	mux.HandleFunc("/files", s.handleFile)
 	s.srv = &http.Server{Addr: s.addr, Handler: mux}
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -60,6 +64,21 @@ func (s *Server) Stop() {
 		defer cancel()
 		_ = s.srv.Shutdown(ctx)
 	}
+}
+
+// handleFile GET /files?path=<文件名>：R2 JVM 诊断产物（jfr/heapdump）下载
+func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("path")
+	if name == "" {
+		http.Error(w, "path 必填", http.StatusBadRequest)
+		return
+	}
+	// 只允许纯文件名，防路径穿越
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+		http.Error(w, "非法文件名", http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(jvm.ArtifactDir, name))
 }
 
 // handleLogs GET /logs?cluster_id=&namespace=&pod=&container=&tail=&previous=&follow=
