@@ -130,7 +130,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
   const createLabel = activeKey === 'pvcs' ? '创建存储' : activeKey === 'configmaps' ? '创建配置字典' : '创建密钥'
 
-  const tabs = [
+  const allTabs = [
     {
       key: 'pvcs',
       label: '持久卷声明（PVC）',
@@ -178,9 +178,13 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     },
   ]
 
+  // 存储页只显示 PVC；配置页只显示 ConfigMap + Secret
+  const tabs = initialTab === 'pvcs' ? allTabs.filter((t) => t.key === 'pvcs') : allTabs.filter((t) => t.key !== 'pvcs')
+  const pageTitle = initialTab === 'pvcs' ? '存储' : '配置'
+
   return (
     <div style={{ padding: 16 }}>
-      <Card size="small" title="存储与配置"
+      <Card size="small" title={pageTitle}
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
