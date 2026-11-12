@@ -1,0 +1,57 @@
+// Agent 网关内部 gRPC 契约（R2 拆网关阶段 1）
+// api-server 多副本后，agent 隧道连接表 _agents 迁到独立 agent-gateway 服务；
+// api-server 通过本服务远程下发隧道调用，不再进程内直调 agent_gateway 模块。
+syntax = "proto3";
+
+package agent_gateway_internal;
+
+// 内部网关服务：api-server 调用，agent-gateway 实现
+service AgentGatewayInternal {
+  // 单发调用：等价 agent_gateway.call(cluster_id, method, payload, timeout)
+  rpc TunnelCall(TunnelCallRequest) returns (TunnelCallResponse);
+  // 服务端流式：等价 agent_gateway.stream_call（ExecutePlan / BatchExecute 等逐条回传）
+  rpc TunnelStreamCall(TunnelCallRequest) returns (stream TunnelStreamChunk);
+  // 在线判断：该集群 agent 是否在线（在线=走反向隧道）
+  rpc IsConnected(IsConnectedRequest) returns (IsConnectedResponse);
+  // 签发 agent 客户端证书（CA 私钥只在网关侧，签发须经网关）
+  rpc IssueClientCert(IssueClientCertRequest) returns (IssueClientCertResponse);
+}
+
+message TunnelCallRequest {
+  int64 cluster_id = 1;
+  string method = 2;
+  bytes payload = 3;
+  double timeout = 4;   // 秒；0 = 默认 30
+}
+
+message TunnelCallResponse {
+  bool ok = 1;
+  bytes payload = 2;
+  string error = 3;
+}
+
+message TunnelStreamChunk {
+  bytes payload = 1;   // 一条流式响应
+  string error = 2;    // 非空表示流式调用失败（终止）
+}
+
+message IsConnectedRequest {
+  int64 cluster_id = 1;
+}
+
+message IsConnectedResponse {
+  bool connected = 1;
+}
+
+message IssueClientCertRequest {
+  int64 cluster_id = 1;
+  int32 days = 2;      // 证书有效期天数
+}
+
+message IssueClientCertResponse {
+  bool ok = 1;
+  string cert_pem = 2;
+  string key_pem = 3;
+  string ca_pem = 4;
+  string error = 5;
+}
