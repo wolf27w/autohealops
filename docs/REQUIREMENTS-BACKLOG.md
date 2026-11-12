@@ -2123,3 +2123,27 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
   就绪绿块依次闪烁。
 - **分阶段**：P0 骨架(2d) → P1 集群内重构(3~4d) → P2 首页(1~2d) → P3 大屏实时(2~3d) → P4 清理(0.5d)，合计 9~12 人日。
 - 状态：**待开发**（demo 已确认，正式代码未动）。
+
+---
+
+## R33 集群管理 UI/功能改造（2026-11-12 老板逐条确认，待开发）
+
+> 来源：2026-11-12 老板逐条讨论定稿。**以纯前端为主，仅第 2 条需小改后端（加 range）**。当前状态：已确认，待开发。
+
+| # | 需求 | 改法 | 落点 | 后端 |
+|---|---|---|---|---|
+| 1 | 容器组页 Pod 行「事件」入口去掉；事件统一到工作负载详情看，要**实时事件 + 历史事件**两个 | `PodsList.tsx` 删「事件」下拉项；`WorkloadDetail.tsx` 加「实时事件」Tab（调 `workload-events` 实时接口）+ 保留「历史事件」（`k8s_events` 表 24h） | `PodsList.tsx`、`WorkloadDetail.tsx` | 不用 |
+| 2 | 工作负载监控：① 图宽自适应（现写死 720px）② 补网络曲线（`net_rx/net_tx` 后端有数据、前端没画）③ 加 15m/30m 短范围 | `MonitorPanel.tsx` 自适应 + 渲染网络；后端 `monitoring.py` 的 `WORKLOAD_RANGE` 加 `15m`(900s/30s)、`30m`(1800s/60s)，顺带放开 5m/10m | `MonitorPanel.tsx` + `monitoring.py` | **要小改** |
+| 3 | 环境变量支持批量导入（粘贴 `KEY=VALUE` 行 / .env） | `WorkloadCreateModal.tsx` 的 KeyValueList 加「批量粘贴」入口 | `WorkloadCreateModal.tsx` | 不用 |
+| 4 | 配置字典/密钥**创建改表单**（不要 YAML），像 KubeSphere；「编辑数据」已是表单 | 创建从 `ConfigObjectYamlModal` 改走 `ConfigObjectDataModal` create 模式；「编辑 YAML」降为次要入口 | `StorageConfig.tsx`、`ConfigObjectDataModal.tsx` | 不用 |
+| 5 | 集群内「监控告警」页去掉（与平台仪表盘/大屏重复），**「巡检与诊断」保留** | 删菜单 + 删路由（`ClusterMonitoring.tsx` 下线） | `ClusterLayout.tsx`、`App.tsx`、`adapters.tsx` | 不用 |
+| 6 | 创建有状态/无状态、服务、路由、存储时**命名空间改下拉**（不要手输） | 4 个创建弹窗 namespace 改 Select（用 `getClusterNamespaces`） | `WorkloadCreateModal` / `ServiceSettingsModal` / `IngressSettingsModal` / `PvcCreateModal` | 不用 |
+| 7 | 工作负载详情去掉「资源状态」页签（与「变更副本」重复），副本数挪到概览 | `WorkloadDetail.tsx` 删 resource Tab，期望/就绪/可用副本放概览 Descriptions | `WorkloadDetail.tsx` | 不用 |
+
+**技术边界（已核实，别再纠）**
+- 网络监控只能到 **Pod 级**（`container_network_*` 无 container 标签，多容器 Pod 共享 netns 拆不开）；CPU/内存可按容器拆。
+- K8s 事件主体是 Pod/ReplicaSet，Deployment 自身事件极少 → 「Deployment 级事件」= 聚合该工作负载下所有 Pod 的事件。
+- Pod 行去掉「事件」后，裸 Pod（无 owner）看不到事件（平台场景以 Deployment/StatefulSet 为主，可接受）。
+- 后端 `WORKLOAD_RANGE` 现有：`5m/10m/1h/6h/24h/72h/168h`（**没有 15m/30m**，需加）。
+
+**建议并行拆法**：1+7 一组、2 一组、3+6 一组、4 一组、5 一组。
