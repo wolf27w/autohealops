@@ -3934,6 +3934,7 @@ type ServiceInfo struct {
 	ClusterIp     string                 `protobuf:"bytes,4,opt,name=cluster_ip,json=clusterIp,proto3" json:"cluster_ip,omitempty"`
 	Ports         string                 `protobuf:"bytes,5,opt,name=ports,proto3" json:"ports,omitempty"` // 端口串，如 "80:8080/TCP"
 	ExternalIp    string                 `protobuf:"bytes,6,opt,name=external_ip,json=externalIp,proto3" json:"external_ip,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339（创建时间）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4010,13 +4011,21 @@ func (x *ServiceInfo) GetExternalIp() string {
 	return ""
 }
 
+func (x *ServiceInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
 type IngressInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Hosts         string                 `protobuf:"bytes,3,opt,name=hosts,proto3" json:"hosts,omitempty"`     // 逗号分隔
-	Class         string                 `protobuf:"bytes,4,opt,name=class,proto3" json:"class,omitempty"`     // ingressClass
-	Address       string                 `protobuf:"bytes,5,opt,name=address,proto3" json:"address,omitempty"` // LB 地址
+	Hosts         string                 `protobuf:"bytes,3,opt,name=hosts,proto3" json:"hosts,omitempty"`                          // 逗号分隔
+	Class         string                 `protobuf:"bytes,4,opt,name=class,proto3" json:"class,omitempty"`                          // ingressClass
+	Address       string                 `protobuf:"bytes,5,opt,name=address,proto3" json:"address,omitempty"`                      // LB 地址
+	CreatedAt     string                 `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339（创建时间）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4086,11 +4095,19 @@ func (x *IngressInfo) GetAddress() string {
 	return ""
 }
 
+func (x *IngressInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
 type ConfigMapInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	DataCount     int32                  `protobuf:"varint,3,opt,name=data_count,json=dataCount,proto3" json:"data_count,omitempty"` // data 键数
+	CreatedAt     string                 `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`  // RFC3339（创建时间）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4146,12 +4163,20 @@ func (x *ConfigMapInfo) GetDataCount() int32 {
 	return 0
 }
 
+func (x *ConfigMapInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
 type SecretInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // Opaque/kubernetes.io/tls/...
 	DataCount     int32                  `protobuf:"varint,4,opt,name=data_count,json=dataCount,proto3" json:"data_count,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339（创建时间）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4214,6 +4239,13 @@ func (x *SecretInfo) GetDataCount() int32 {
 	return 0
 }
 
+func (x *SecretInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
 type PvcInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
@@ -4223,6 +4255,7 @@ type PvcInfo struct {
 	StorageClass  string                 `protobuf:"bytes,5,opt,name=storage_class,json=storageClass,proto3" json:"storage_class,omitempty"`
 	VolumeName    string                 `protobuf:"bytes,6,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"` // 绑定的 PV
 	AccessModes   string                 `protobuf:"bytes,7,opt,name=access_modes,json=accessModes,proto3" json:"access_modes,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339（创建时间）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4302,6 +4335,13 @@ func (x *PvcInfo) GetVolumeName() string {
 func (x *PvcInfo) GetAccessModes() string {
 	if x != nil {
 		return x.AccessModes
+	}
+	return ""
+}
+
+func (x *PvcInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
 	}
 	return ""
 }
@@ -4411,6 +4451,7 @@ type StorageClassInfo struct {
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Provisioner   string                 `protobuf:"bytes,2,opt,name=provisioner,proto3" json:"provisioner,omitempty"`
 	IsDefault     bool                   `protobuf:"varint,3,opt,name=is_default,json=isDefault,proto3" json:"is_default,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339（创建时间）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4464,6 +4505,13 @@ func (x *StorageClassInfo) GetIsDefault() bool {
 		return x.IsDefault
 	}
 	return false
+}
+
+func (x *StorageClassInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------
@@ -6985,7 +7033,7 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\x18ListMiscResourcesRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
-	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xa9\x01\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xc8\x01\n" +
 	"\vServiceInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -6994,25 +7042,33 @@ const file_proto_executor_proto_rawDesc = "" +
 	"cluster_ip\x18\x04 \x01(\tR\tclusterIp\x12\x14\n" +
 	"\x05ports\x18\x05 \x01(\tR\x05ports\x12\x1f\n" +
 	"\vexternal_ip\x18\x06 \x01(\tR\n" +
-	"externalIp\"\x85\x01\n" +
+	"externalIp\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\a \x01(\tR\tcreatedAt\"\xa4\x01\n" +
 	"\vIngressInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05hosts\x18\x03 \x01(\tR\x05hosts\x12\x14\n" +
 	"\x05class\x18\x04 \x01(\tR\x05class\x12\x18\n" +
-	"\aaddress\x18\x05 \x01(\tR\aaddress\"`\n" +
+	"\aaddress\x18\x05 \x01(\tR\aaddress\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\tR\tcreatedAt\"\x7f\n" +
 	"\rConfigMapInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"data_count\x18\x03 \x01(\x05R\tdataCount\"q\n" +
+	"data_count\x18\x03 \x01(\x05R\tdataCount\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x04 \x01(\tR\tcreatedAt\"\x90\x01\n" +
 	"\n" +
 	"SecretInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
-	"data_count\x18\x04 \x01(\x05R\tdataCount\"\xd8\x01\n" +
+	"data_count\x18\x04 \x01(\x05R\tdataCount\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\tR\tcreatedAt\"\xf7\x01\n" +
 	"\aPvcInfo\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
@@ -7021,7 +7077,9 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\rstorage_class\x18\x05 \x01(\tR\fstorageClass\x12\x1f\n" +
 	"\vvolume_name\x18\x06 \x01(\tR\n" +
 	"volumeName\x12!\n" +
-	"\faccess_modes\x18\a \x01(\tR\vaccessModes\"\x88\x03\n" +
+	"\faccess_modes\x18\a \x01(\tR\vaccessModes\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\b \x01(\tR\tcreatedAt\"\x88\x03\n" +
 	"\x19ListMiscResourcesResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x121\n" +
 	"\bservices\x18\x02 \x03(\v2\x15.executor.ServiceInfoR\bservices\x123\n" +
@@ -7032,12 +7090,14 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\asecrets\x18\x05 \x03(\v2\x14.executor.SecretInfoR\asecrets\x12%\n" +
 	"\x04pvcs\x18\x06 \x03(\v2\x11.executor.PvcInfoR\x04pvcs\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x12C\n" +
-	"\x0fstorage_classes\x18\b \x03(\v2\x1a.executor.StorageClassInfoR\x0estorageClasses\"g\n" +
+	"\x0fstorage_classes\x18\b \x03(\v2\x1a.executor.StorageClassInfoR\x0estorageClasses\"\x86\x01\n" +
 	"\x10StorageClassInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vprovisioner\x18\x02 \x01(\tR\vprovisioner\x12\x1d\n" +
 	"\n" +
-	"is_default\x18\x03 \x01(\bR\tisDefault\"m\n" +
+	"is_default\x18\x03 \x01(\bR\tisDefault\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x04 \x01(\tR\tcreatedAt\"m\n" +
 	"\x13GetPodEventsRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +

@@ -60,6 +60,7 @@ type nodeJSON struct {
 	HasMetrics    bool                `json:"has_metrics"`
 	KubeletVer    string              `json:"kubelet_version"`
 	InternalIP    string              `json:"internal_ip"`   // 诊断用：Prometheus instance 常是节点 IP
+	CreatedAt     string              `json:"created_at"`    // RFC3339（节点创建时间）
 	Conditions    []nodeConditionJSON `json:"conditions"`    // 节点诊断用（2026-10-21）
 	Taints        []string            `json:"taints"`        // key=value:effect（兼容旧字段）
 	Labels        map[string]string   `json:"labels"`        // 节点标签（编辑用，2026-11-04）
@@ -157,7 +158,7 @@ func (e *Executor) nodesJSON(ctx context.Context) (string, error) {
 			Name: n.Name, Ready: nodeReady(n), Unschedulable: n.Spec.Unschedulable, Roles: nodeRoles(n),
 			Allocatable: qtyMap(n.Status.Allocatable), Capacity: qtyMap(n.Status.Capacity),
 			PodCount: podCount[n.Name], CPUUsageMilli: u[0], MemUsageBytes: u[1], HasMetrics: hasMetrics,
-			KubeletVer: n.Status.NodeInfo.KubeletVersion, InternalIP: ip, Conditions: conds, Taints: taints,
+			KubeletVer: n.Status.NodeInfo.KubeletVersion, InternalIP: ip, CreatedAt: n.CreationTimestamp.Format(time.RFC3339), Conditions: conds, Taints: taints,
 			Labels: n.Labels, TaintsDetail: taintsDetail,
 		})
 	}

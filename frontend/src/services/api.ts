@@ -863,6 +863,7 @@ export interface K8sNode {
   kubelet_version?: string; cpu_allocatable?: string; mem_allocatable?: string; pods_allocatable?: string
   pods_count?: number; has_metrics?: boolean; cpu_usage_milli?: number; mem_usage_bytes?: number
   cpu_pct?: number | null; mem_pct?: number | null
+  internal_ip?: string; created_at?: string
   labels?: Record<string, string>
   taints?: string[]
   taints_detail?: NodeTaint[]

@@ -529,22 +529,22 @@ func (s *Server) ListMiscResources(ctx context.Context, req *pb.ListMiscResource
 	}
 	resp := &pb.ListMiscResourcesResponse{Success: true}
 	for _, v := range r.Services {
-		resp.Services = append(resp.Services, &pb.ServiceInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, ClusterIp: v.ClusterIP, Ports: v.Ports, ExternalIp: v.ExternalIP})
+		resp.Services = append(resp.Services, &pb.ServiceInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, ClusterIp: v.ClusterIP, Ports: v.Ports, ExternalIp: v.ExternalIP, CreatedAt: v.CreatedAt})
 	}
 	for _, v := range r.Ingresses {
-		resp.Ingresses = append(resp.Ingresses, &pb.IngressInfo{Namespace: v.Namespace, Name: v.Name, Hosts: v.Hosts, Class: v.Class, Address: v.Address})
+		resp.Ingresses = append(resp.Ingresses, &pb.IngressInfo{Namespace: v.Namespace, Name: v.Name, Hosts: v.Hosts, Class: v.Class, Address: v.Address, CreatedAt: v.CreatedAt})
 	}
 	for _, v := range r.ConfigMaps {
-		resp.Configmaps = append(resp.Configmaps, &pb.ConfigMapInfo{Namespace: v.Namespace, Name: v.Name, DataCount: v.DataCount})
+		resp.Configmaps = append(resp.Configmaps, &pb.ConfigMapInfo{Namespace: v.Namespace, Name: v.Name, DataCount: v.DataCount, CreatedAt: v.CreatedAt})
 	}
 	for _, v := range r.Secrets {
-		resp.Secrets = append(resp.Secrets, &pb.SecretInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, DataCount: v.DataCount})
+		resp.Secrets = append(resp.Secrets, &pb.SecretInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, DataCount: v.DataCount, CreatedAt: v.CreatedAt})
 	}
 	for _, v := range r.PVCs {
-		resp.Pvcs = append(resp.Pvcs, &pb.PvcInfo{Namespace: v.Namespace, Name: v.Name, Status: v.Status, Capacity: v.Capacity, StorageClass: v.StorageClass, VolumeName: v.VolumeName, AccessModes: v.AccessModes})
+		resp.Pvcs = append(resp.Pvcs, &pb.PvcInfo{Namespace: v.Namespace, Name: v.Name, Status: v.Status, Capacity: v.Capacity, StorageClass: v.StorageClass, VolumeName: v.VolumeName, AccessModes: v.AccessModes, CreatedAt: v.CreatedAt})
 	}
 	for _, v := range r.StorageClasses {
-		resp.StorageClasses = append(resp.StorageClasses, &pb.StorageClassInfo{Name: v.Name, Provisioner: v.Provisioner, IsDefault: v.IsDefault})
+		resp.StorageClasses = append(resp.StorageClasses, &pb.StorageClassInfo{Name: v.Name, Provisioner: v.Provisioner, IsDefault: v.IsDefault, CreatedAt: v.CreatedAt})
 	}
 	return resp, nil
 }

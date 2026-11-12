@@ -25,6 +25,8 @@ interface MiscData {
 
 const EMPTY: MiscData = { configmaps: [], secrets: [], pvcs: [], storage_classes: [] }
 
+const fmtTs = (v?: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
+
 export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clusterId: number; initialTab?: 'pvcs' | 'configmaps' | 'secrets' }) {
   const [misc, setMisc] = useState<MiscData>(EMPTY)
   const [loading, setLoading] = useState(false)
@@ -101,7 +103,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag color={v === 'Bound' ? 'green' : v === 'Pending' ? 'orange' : 'red'}>{v || '-'}</Tag> },
     { title: '容量', dataIndex: 'capacity', width: 110, render: (v: string) => v || '-' },
     { title: 'StorageClass', dataIndex: 'storage_class', width: 150, render: (v: string) => v || '-' },
-    { title: '创建时间', width: 120, render: () => '-' },
+    { title: '创建时间', dataIndex: 'created_at', width: 160, render: fmtTs },
     { title: '操作', width: 70, render: makeActions('pvc', false) },
   ]
 
@@ -109,7 +111,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     { title: '名称', dataIndex: 'name' },
     { title: '命名空间', dataIndex: 'namespace', width: 200 },
     { title: '数据项数', dataIndex: 'data_count', width: 110, render: (v: number) => (v === undefined ? '-' : `${v} 项`) },
-    { title: '创建时间', width: 120, render: () => '-' },
+    { title: '创建时间', dataIndex: 'created_at', width: 160, render: fmtTs },
     { title: '操作', width: 70, render: makeActions('configmap', true) },
   ]
 
@@ -118,7 +120,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     { title: '命名空间', dataIndex: 'namespace', width: 200 },
     { title: '类型', dataIndex: 'type', width: 220, render: (v: string) => v || '-' },
     { title: '数据项数', dataIndex: 'data_count', width: 110, render: (v: number) => (v === undefined ? '-' : `${v} 项`) },
-    { title: '创建时间', width: 120, render: () => '-' },
+    { title: '创建时间', dataIndex: 'created_at', width: 160, render: fmtTs },
     { title: '操作', width: 70, render: makeActions('secret', true) },
   ]
 

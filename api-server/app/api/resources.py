@@ -2025,6 +2025,9 @@ def _node_from_json(n: dict) -> dict:
         "cpu_usage_milli": cpu_u, "mem_usage_bytes": mem_u,
         "cpu_pct": round(cpu_u / cpu_alloc * 100, 1) if cpu_alloc else None,
         "mem_pct": round(mem_u / mem_alloc * 100, 1) if mem_alloc else None,
+        # 节点 IP / 创建时间（2026-11-12，节点列表页 IP/创建时间列）
+        "internal_ip": n.get("internal_ip") or "",
+        "created_at": n.get("created_at") or "",
         # 节点标签/污点（2026-11-04，供节点管理页展示与编辑）
         "labels": n.get("labels") or {},
         "taints": n.get("taints") or [],

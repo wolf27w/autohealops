@@ -483,6 +483,7 @@ message ServiceInfo {
   string cluster_ip = 4;
   string ports = 5;         // 端口串，如 "80:8080/TCP"
   string external_ip = 6;
+  string created_at = 7;    // RFC3339（创建时间）
 }
 message IngressInfo {
   string namespace = 1;
@@ -490,17 +491,20 @@ message IngressInfo {
   string hosts = 3;         // 逗号分隔
   string class = 4;         // ingressClass
   string address = 5;       // LB 地址
+  string created_at = 6;    // RFC3339（创建时间）
 }
 message ConfigMapInfo {
   string namespace = 1;
   string name = 2;
   int32 data_count = 3;     // data 键数
+  string created_at = 4;    // RFC3339（创建时间）
 }
 message SecretInfo {
   string namespace = 1;
   string name = 2;
   string type = 3;          // Opaque/kubernetes.io/tls/...
   int32 data_count = 4;
+  string created_at = 5;    // RFC3339（创建时间）
 }
 message PvcInfo {
   string namespace = 1;
@@ -510,6 +514,7 @@ message PvcInfo {
   string storage_class = 5;
   string volume_name = 6;   // 绑定的 PV
   string access_modes = 7;
+  string created_at = 8;    // RFC3339（创建时间）
 }
 message ListMiscResourcesResponse {
   bool success = 1;
@@ -525,6 +530,7 @@ message StorageClassInfo {
   string name = 1;
   string provisioner = 2;
   bool is_default = 3;
+  string created_at = 4;    // RFC3339（创建时间）
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------

@@ -298,8 +298,8 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
             { title: 'CPU', width: 130, render: (_, r) => pctCell(r.cpu_pct) },
             { title: '内存', width: 130, render: (_, r) => pctCell(r.mem_pct) },
             { title: 'Pod 数', width: 110, render: (_, r) => `${r.pods_count ?? '-'} / ${r.pods_allocatable || '-'}` },
-            { title: 'IP', width: 140, render: () => '-' },
-            { title: '创建时间', width: 130, render: () => '-' },
+            { title: 'IP', dataIndex: 'internal_ip', width: 140, render: (v: string) => v || '-' },
+            { title: '创建时间', dataIndex: 'created_at', width: 130, render: (v: string) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-') },
             { title: '操作', width: 70, fixed: 'right', render: (_, r) => menuFor(r) },
           ]}
           locale={{ emptyText: '无节点（或 executor 不可达）' }}

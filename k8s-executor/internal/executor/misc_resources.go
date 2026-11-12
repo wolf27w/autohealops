@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -18,6 +19,7 @@ type ServiceInfo struct {
 	ClusterIP  string
 	Ports      string
 	ExternalIP string
+	CreatedAt  string
 }
 
 // IngressInfo 路由简况
@@ -27,6 +29,7 @@ type IngressInfo struct {
 	Hosts     string
 	Class     string
 	Address   string
+	CreatedAt string
 }
 
 // ConfigMapInfo ConfigMap 简况（不取内容）
@@ -34,6 +37,7 @@ type ConfigMapInfo struct {
 	Namespace string
 	Name      string
 	DataCount int32
+	CreatedAt string
 }
 
 // SecretInfo Secret 简况（不取内容）
@@ -42,6 +46,7 @@ type SecretInfo struct {
 	Name      string
 	Type      string
 	DataCount int32
+	CreatedAt string
 }
 
 // PvcInfo 存储(PVC)简况
@@ -53,6 +58,7 @@ type PvcInfo struct {
 	StorageClass string
 	VolumeName   string
 	AccessModes  string
+	CreatedAt    string
 }
 
 // StorageClassInfo 存储类简况（cluster-scoped）
@@ -60,6 +66,7 @@ type StorageClassInfo struct {
 	Name        string
 	Provisioner string
 	IsDefault   bool
+	CreatedAt   string
 }
 
 // MiscResources 集群管理其它资源聚合
@@ -112,6 +119,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 		out.Services = append(out.Services, ServiceInfo{
 			Namespace: s.Namespace, Name: s.Name, Type: string(s.Spec.Type),
 			ClusterIP: s.Spec.ClusterIP, Ports: strings.Join(ports, ", "), ExternalIP: extIP,
+			CreatedAt: s.CreationTimestamp.Format(time.RFC3339),
 		})
 	}
 	sort.Slice(out.Services, func(i, j int) bool {
@@ -153,6 +161,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 		out.Ingresses = append(out.Ingresses, IngressInfo{
 			Namespace: ing.Namespace, Name: ing.Name, Hosts: strings.Join(hosts, ", "),
 			Class: class, Address: addr,
+			CreatedAt: ing.CreationTimestamp.Format(time.RFC3339),
 		})
 	}
 	sort.Slice(out.Ingresses, func(i, j int) bool {
@@ -169,7 +178,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 	}
 	for i := range cms.Items {
 		cm := &cms.Items[i]
-		out.ConfigMaps = append(out.ConfigMaps, ConfigMapInfo{Namespace: cm.Namespace, Name: cm.Name, DataCount: int32(len(cm.Data) + len(cm.BinaryData))})
+		out.ConfigMaps = append(out.ConfigMaps, ConfigMapInfo{Namespace: cm.Namespace, Name: cm.Name, DataCount: int32(len(cm.Data) + len(cm.BinaryData)), CreatedAt: cm.CreationTimestamp.Format(time.RFC3339)})
 	}
 	sort.Slice(out.ConfigMaps, func(i, j int) bool {
 		if out.ConfigMaps[i].Namespace != out.ConfigMaps[j].Namespace {
@@ -185,7 +194,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 	}
 	for i := range secs.Items {
 		sc := &secs.Items[i]
-		out.Secrets = append(out.Secrets, SecretInfo{Namespace: sc.Namespace, Name: sc.Name, Type: string(sc.Type), DataCount: int32(len(sc.Data))})
+		out.Secrets = append(out.Secrets, SecretInfo{Namespace: sc.Namespace, Name: sc.Name, Type: string(sc.Type), DataCount: int32(len(sc.Data)), CreatedAt: sc.CreationTimestamp.Format(time.RFC3339)})
 	}
 	sort.Slice(out.Secrets, func(i, j int) bool {
 		if out.Secrets[i].Namespace != out.Secrets[j].Namespace {
@@ -217,6 +226,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 			Namespace: p.Namespace, Name: p.Name, Status: string(p.Status.Phase),
 			Capacity: capacity, StorageClass: sc, VolumeName: p.Spec.VolumeName,
 			AccessModes: strings.Join(modes, ","),
+			CreatedAt:   p.CreationTimestamp.Format(time.RFC3339),
 		})
 	}
 	sort.Slice(out.PVCs, func(i, j int) bool {
@@ -239,7 +249,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 				isDefault = true
 			}
 		}
-		out.StorageClasses = append(out.StorageClasses, StorageClassInfo{Name: sc.Name, Provisioner: sc.Provisioner, IsDefault: isDefault})
+		out.StorageClasses = append(out.StorageClasses, StorageClassInfo{Name: sc.Name, Provisioner: sc.Provisioner, IsDefault: isDefault, CreatedAt: sc.CreationTimestamp.Format(time.RFC3339)})
 	}
 	sort.Slice(out.StorageClasses, func(i, j int) bool { return out.StorageClasses[i].Name < out.StorageClasses[j].Name })
 
