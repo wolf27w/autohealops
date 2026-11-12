@@ -167,3 +167,20 @@ P0、P2、P3 前端、R31 代码（迁移不执行）、小项2 —— 详见 `d
 - **R32-P4 清理**（ClusterDetail 残留/废弃路由/权限矩阵）—— 老板定「功能做完最后整理」
 - **R2 实际 k8s 部署**（build 镜像 + push + apply）—— 老板定「后面再搬迁」
 - **待拍板/销项**：R17 库同步、老 R7 大屏重做、R2.3 JVM 指标、B2 准入 webhook、R1 资源治理+准入、R2 JVM 参数管控、僵尸服务 nginx 改造
+
+### 2026-11-12 第二轮：KubeDoor 短板补齐（R7/R2/R1，R17 待细化）
+
+**已完成（全部提交，工作区干净）**
+- **R7 统一监控大屏增强**（`c0a9a56`）：多集群切换 + 计数卡 + 风险节点徽章 + TopN + Top10 异常 Pod + 告警趋势（保留 SSE 实时/三栏/绿块闪烁）。注：PV 计数卡无数据源（后端 dashboard 无 PV 口径）、部分指标全局口径。
+- **R2 JVM 深度诊断**（`51216ad` executor + `0e9dabb` api + `f0b5a23` 前端）：jstack/jfr/heapdump/jcmd + JVM 参数采集；产物本地下载（未落对象存储）；Deployment/Pod 页 JvmDiagModal（诊断 Tab + 参数 Tab）。
+- **R1 资源治理+准入**（`01cd6f8` 采集 + `e7b973a` 管控表 + `10b2c86` 准入 webhook + `1bf4006` 前端）：高峰 P80/P95 采集、管控表 CRUD + 批量扩缩容/重启（迁移 `bfe08be41a5b` 已执行）、MutatingWebhook **fail-closed**（JSONPatch 改写副本/requests/limits + kubedoor-ignore + 4 单测）、前端双 Tab 管控台。
+
+**R1 收尾项（未做，等上线时）**
+1. 准入 webhook 未接入 executor `main.go`、未部署 MutatingWebhookConfiguration，fail-closed 上生产前须在测试集群验证
+2. 高峰用量前端展示未做（`GetPeakUsage` 只在 executor gRPC，api-server 未暴露 HTTP 端点）
+3. 管控表字段口径待确认：「需求值=request、限制值=limit」4 字段，还是要 8 字段（request/limit 各分需求/限制）
+
+**R17 同步（先做 CDC）待老板细化 3 点**
+1. 同步哪些库（MySQL→MySQL？MySQL→PG？）
+2. 技术选型（自研 go-mysql binlog 订阅？还是接 canal/Debezium？）
+3. 目标库同名冲突策略（覆盖/跳过/报错）
