@@ -104,6 +104,13 @@
   .modebadge{font-size:11px;padding:3px 12px;border-radius:10px;backdrop-filter:blur(6px)}
   .modebadge.demo{background:rgba(243,156,18,.16);color:var(--yellow);border:1px solid rgba(243,156,18,.4)}
   .modebadge.ok{background:rgba(46,204,113,.16);color:var(--green);border:1px solid rgba(46,204,113,.4)}
+  /* SSE 实时推送状态点 + 事件到达时对应区块绿块闪烁 */
+  @keyframes flashGreen{0%,100%{box-shadow:0 0 0 0 rgba(18,185,129,0);background-color:transparent}50%{box-shadow:0 0 0 4px rgba(18,185,129,.55);background-color:rgba(18,185,129,.18)}}
+  .flash-green{animation:flashGreen .7s ease-in-out 2;border-radius:8px}
+  #live{display:inline-flex;align-items:center;gap:6px}
+  #live .pdot{width:8px;height:8px;border-radius:50%;background:var(--text-3)}
+  #live.ok .pdot{background:var(--green);box-shadow:0 0 6px var(--green)}
+  #live.err .pdot{background:var(--yellow)}
 </style>
 </head>
 <body>
@@ -113,6 +120,7 @@
 <div id="topbar">
   <div id="clock" class="clockbadge"></div>
   <div id="mode" class="modebadge demo">数据：演示</div>
+  <div id="live" class="updbadge"><span class="pdot"></span>推送：--</div>
   <div id="updated" class="updbadge">更新于 --:--:--</div>
 </div>
 
@@ -359,7 +367,7 @@ function renderOverview(){
   patchHTML($('#app'), `
   <!-- 第一行：核心汇总 -->
   <div class="row" style="margin-bottom:16px">
-    <div class="col panel">
+    <div class="col panel" data-sec="alert-kpi">
       <div class="kpi-label"><span>活跃故障告警</span><span class="${k.activeAlerts.delta>0?'up':'down'}">${k.activeAlerts.delta>0?'▲':'▼'} ${Math.abs(k.activeAlerts.delta)}</span></div>
       <div class="big up">${k.activeAlerts.v}</div>
       <div class="kpi-sub">${k.activeAlerts.deltaLabel}</div>
@@ -369,7 +377,7 @@ function renderOverview(){
       <div class="big warn">${k.healing.v}</div>
       <div class="kpi-sub">自愈计划处理中（关联告警仍活跃）</div>
     </div>
-    <div class="col panel">
+    <div class="col panel" data-sec="approval-kpi">
       <div class="kpi-label"><span>待审批</span>${k.approvalPending.v>0?'<span class="tag yellow">待处理</span>':''}</div>
       <div class="big warn">${k.approvalPending.v}</div>
       <div class="kpi-sub">高风险操作等待人工放行</div>
@@ -448,7 +456,7 @@ function renderOverview(){
 
   <!-- 第四行 -->
   <div class="row" style="margin-bottom:16px">
-    <div class="col panel">
+    <div class="col panel" data-sec="heal">
       <h3>自愈效果 <span class="sub">最近 24 小时 · 成功率 = 成功 /（成功 + 失败）</span></h3>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
         <div class="cnt-box"><div class="n down">${OVERVIEW.heal.success}</div><div class="l">成功</div></div>
@@ -479,7 +487,7 @@ function renderOverview(){
 
   <!-- 第五行 -->
   <div class="row">
-    <div class="col panel">
+    <div class="col panel" data-sec="alert-list">
       <h3>实时故障告警</h3>
       ${(OVERVIEW.alerts||[]).length ? OVERVIEW.alerts.map((a,idx)=>{
         const healTag = {pending:['待处理','gray'],healing:['自愈中','yellow'],healed:['已自愈','green'],failed:['自愈失败','red']}[a.heal];
@@ -495,7 +503,7 @@ function renderOverview(){
         </div>`;
       }).join('') : '<div class="dim xs" style="padding:6px 0">当前无活跃故障告警 ✅</div>'}
     </div>
-    <div class="col panel">
+    <div class="col panel" data-sec="events">
       <h3>自愈事件流 <span class="sub">失败置顶</span></h3>
       ${[...OVERVIEW.events].sort((a,b)=>(a.s==='fail'?-1:1)).slice(0,8).map(e=>`
         <div class="list-row">
@@ -1082,6 +1090,77 @@ async function loadOverviewReal(){
   loadContainerTop().catch(()=>{});
 }
 
+/* 总览刷新：拉取真实数据 + 增量渲染（patchHTML 不重建 DOM，图表走 setOption）。
+   被轮询（慢速兜底）与 SSE 事件（即时）共同复用。 */
+async function refreshOverview(){
+  try{
+    await loadOverviewReal();
+    setMode('real');
+    if(VIEW.page!=='cluster'){ renderOverview(); markUpdated(); }
+    _lastAt = Date.now();
+  }catch(e){ /* 失败保留上次可用数据，不清屏 */ }
+}
+
+/* ---------- SSE 实时推送（事件驱动：告警/工单/自愈变更即时刷新 + 绿块闪烁） ----------
+   端点 GET /api/v1/stats/screen/stream?token=<JWT>
+   事件帧：event: <type> + data: {"event_type","payload","ts"}
+   类型：alert_created / alert_merged / selfheal_done / ticket_created / ticket_closed
+   心跳 `: keep-alive`（15s）/ 首帧 `: connected` 均为注释帧，EventSource 原生忽略。
+   断线：EventSource 原生自动重连；同时保留轮询兜底（SSE 失效时指标/趋势仍会更新）。
+   事件到达：防抖局部刷新总览（不整页刷）+ 对应区块绿块依次闪烁。 */
+let _es = null;                       // EventSource 实例
+let _sseRefreshTimer = null;          // 事件触发的防抖刷新计时器
+let _ssePendingFlash = [];            // 防抖窗口内累积的事件类型（统一刷新后依次闪烁）
+const SSE_EVENTS = ['alert_created','alert_merged','selfheal_done','ticket_created','ticket_closed'];
+const SSE_FLASH = {                   // 事件类型 → 总览中需绿块闪烁的区块选择器
+  alert_created:  ['[data-sec="alert-kpi"]','[data-sec="alert-list"]'],
+  alert_merged:   ['[data-sec="alert-kpi"]','[data-sec="alert-list"]'],
+  selfheal_done:  ['[data-sec="heal"] .cnt-box .n.down','[data-sec="alert-list"] .tag.green','[data-sec="events"]'],
+  ticket_created: ['[data-sec="approval-kpi"]'],
+  ticket_closed:  ['[data-sec="approval-kpi"]'],
+};
+function setLive(state){
+  const el=document.getElementById('live'); if(!el) return;
+  el.className='updbadge'+(state==='ok'?' ok':(state==='err'?' err':''));
+  el.innerHTML='<span class="pdot"></span>推送：'+(state==='ok'?'实时':(state==='err'?'重连中':'轮询'));
+}
+function flashBlocks(selectors){
+  if(VIEW.page==='cluster') return;            // 集群视图不闪烁，回总览自然更新
+  const els=[];
+  (selectors||[]).forEach(s=>{ try{ document.querySelectorAll(s).forEach(e=>{ if(!els.includes(e)) els.push(e); }); }catch(e){} });
+  els.forEach((el,i)=>setTimeout(()=>{          // 依次闪烁（120ms 错峰）
+    el.classList.remove('flash-green'); void el.offsetWidth; el.classList.add('flash-green');
+    setTimeout(()=>el.classList.remove('flash-green'), 1500);
+  }, i*120));
+}
+function handleScreenEvent(type){
+  setLive('ok');
+  if(!_ssePendingFlash.includes(type)) _ssePendingFlash.push(type);
+  if(_sseRefreshTimer) clearTimeout(_sseRefreshTimer);
+  _sseRefreshTimer = setTimeout(async ()=>{     // 防抖：同一波事件只刷一次总览
+    _sseRefreshTimer = null;
+    const types = _ssePendingFlash.slice(); _ssePendingFlash.length = 0;
+    await refreshOverview();
+    const sels = [...new Set(types.flatMap(t=>SSE_FLASH[t]||[]))];
+    flashBlocks(sels);
+    scheduleRefresh();                            // 重置轮询计时，避免紧接着又全量轮询
+  }, 400);
+}
+function startSSE(){
+  if(_es){ try{ _es.close(); }catch(e){} _es=null; }
+  const token = TOK();
+  if(!token){ setLive('err'); return; }           // 无 token → 不建 SSE，纯轮询兜底
+  try{
+    const es = new EventSource(API+'/stats/screen/stream?token='+encodeURIComponent(token));
+    _es = es;
+    es.onopen = ()=>{ setLive('ok'); };
+    es.onerror = ()=>{ setLive('err'); /* EventSource 原生自动重连；轮询兜底继续 */ };
+    SSE_EVENTS.forEach(t=>es.addEventListener(t, ()=>handleScreenEvent(t)));
+  }catch(e){ setLive('err'); }
+}
+/* SSE 看门狗：EventSource 意外进入 CLOSED（罕见）时手动重建；常态断线由原生重连覆盖 */
+setInterval(()=>{ if(_es && _es.readyState===EventSource.CLOSED && TOK()) startSSE(); }, 30000);
+
 let _lastAt = 0;           // 最近一次成功刷新时间（陈旧检测 / 前台恢复节流）
 function tickClock(){ const el=document.getElementById('clock'); if(!el) return; const d=new Date(), p=n=>String(n).padStart(2,'0');
   const stale = _lastAt && (Date.now()-_lastAt > 60000) ? ' · <span style="color:#ff7a45">数据停更 '+(Math.floor((Date.now()-_lastAt)/1000))+'s</span>' : '';
@@ -1113,9 +1192,9 @@ async function refreshView(){
       if(CV.tab==='node'){ await renderNodeDetail(); }
       else { await renderServiceBody(); }
       if(Date.now()-(CV.wlAt||0) > 30000){ CV.wlAt=Date.now(); await openCluster(); }
-    } else { await loadOverviewReal(); setMode('real'); renderOverview(); }
-    markUpdated();
-    _lastAt = Date.now();
+      markUpdated();
+      _lastAt = Date.now();
+    } else { await refreshOverview(); }
   }catch(e){ /* 失败保留上次的「最后可用」数据，不清屏 */ }
   finally{
     _refreshing = false;
@@ -1141,6 +1220,7 @@ setInterval(()=>{ if(!_timer && !_refreshing) scheduleRefresh(); }, 15000);
   markUpdated();
   _lastAt = Date.now();
   scheduleRefresh();
+  startSSE();
 })();
 
 /* N12 自检：?selftest=1（总览）/ ?selftest=cluster（集群+容器视图）
