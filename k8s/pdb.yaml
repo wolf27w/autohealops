@@ -1,15 +1,13 @@
 # Pod 中断预算
 #
-# api-server 目前单副本（agent 网关单写者），PDB 用 maxUnavailable 才有意义；
-# minAvailable 会让节点维护永远排不空。
-# 等网关拆分、api-server 恢复多副本后再把 minAvailable 加回来（如 minAvailable: 2）。
+# api-server 多副本（R2 拆网关后）：用 minAvailable 保证至少 2 副本可用。
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: api-server-pdb
   namespace: autohealops
 spec:
-  maxUnavailable: 1
+  minAvailable: 2
   selector:
     matchLabels:
       app: api-server

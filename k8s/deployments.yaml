@@ -13,14 +13,15 @@ metadata:
   name: api-server
   namespace: autohealops
 spec:
-  # ⚠️ 必须单副本：agent 反向隧道网关的连接注册表在进程内（agent_gateway._agents），
-  #    多副本时 agent 只挂在其中一个 Pod 上，其余副本转发不到 → 调用失败。
-  #    要做 api-server 多副本 HA，需先把网关拆成独立 Deployment（尚未实施）。
-  replicas: 1
+  # R2 拆网关后：隧道网关已拆到独立 agent-gateway Deployment，api-server 可多副本
+  replicas: 2
   revisionHistoryLimit: 5
   progressDeadlineSeconds: 600
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: api-server
@@ -34,16 +35,11 @@ spec:
           image: autohealops/api-server:latest
           ports:
             - containerPort: 8080
-            - containerPort: 9095
-              name: agent-gateway
           envFrom:
             - configMapRef:
                 name: api-server-config
             - secretRef:
                 name: autohealops-secrets
-          volumeMounts:
-            - name: agent-ca
-              mountPath: /var/lib/autohealops/agent-ca
           livenessProbe:
             httpGet:
               path: /health
@@ -58,6 +54,62 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+---
+# Agent 反向隧道网关（R2 拆网关：从 api-server 拆出，单副本 + Recreate，独占 CA PVC）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-gateway
+  namespace: autohealops
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: agent-gateway
+  template:
+    metadata:
+      labels:
+        app: agent-gateway
+    spec:
+      containers:
+        - name: agent-gateway
+          image: autohealops/api-server:latest
+          command: ["python", "-m", "app.agent_gateway_main"]
+          ports:
+            - containerPort: 9095
+              name: agent-gateway
+            - containerPort: 9096
+              name: internal
+          envFrom:
+            - configMapRef:
+                name: api-server-config
+            - secretRef:
+                name: autohealops-secrets
+          volumeMounts:
+            - name: agent-ca
+              mountPath: /var/lib/autohealops/agent-ca
+          livenessProbe:
+            tcpSocket:
+              port: 9096
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 9096
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m
