@@ -5,7 +5,7 @@ import { Modal, Form, Input, InputNumber, Switch, Select, Steps, Divider, Button
 import { PlusOutlined } from '@ant-design/icons'
 import { applyWorkload } from '../services/api'
 import { KeyValueList, type KvItem } from './KeyValueEditor'
-import { buildYaml, type WorkloadValues, type VolumeType } from './workloadYaml'
+import { buildYaml, mergeWorkloadYaml, type WorkloadValues, type VolumeType } from './workloadYaml'
 
 export interface WorkloadCreateTarget {
   clusterId: number
@@ -14,6 +14,7 @@ export interface WorkloadCreateTarget {
   name?: string       // 编辑模式：已存在的工作负载名
   create?: boolean    // 默认 true（创建）；false = 编辑
   initialValues?: Partial<WorkloadValues>
+  existingYaml?: string // 编辑模式：现有完整 YAML（用于字段级 merge，避免丢弃高级字段）
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -119,7 +120,7 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
         kind: target.kind,
         namespace: (v.namespace || '').trim(),
         name: isCreate ? '' : (target.name || ''),
-        yaml: buildYaml(target.kind, v),
+        yaml: isCreate ? buildYaml(target.kind, v) : mergeWorkloadYaml(target.existingYaml || '', v, target.kind),
       })
       message.success(isCreate ? '已创建' : '已保存（正在滚动更新 Pod）')
       onSaved?.()

@@ -13,7 +13,7 @@ import TerminalModal from '../../components/TerminalModal'
 import PodEventsModal from '../../components/PodEventsModal'
 import WorkloadMountsPanel from '../../components/WorkloadMountsPanel'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
-import type { WorkloadValues, VolumeMountValue, VolumeType } from '../../components/workloadYaml'
+import { parseYaml, asMap, asArr, asStr, type YamlNode, type WorkloadValues, type VolumeMountValue, type VolumeType } from '../../components/workloadYaml'
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
@@ -26,171 +26,6 @@ import { podStatusColor, podReadyText } from '../../utils/podStatus'
 const KIND_SHORT: Record<string, string> = {
   deployment: '部署', statefulset: '有状态', daemonset: '守护集', cronjob: '定时任务',
 }
-
-// ============ 极简 YAML 子集解析（无第三方库，仅解析 k8s 工作负载 YAML 需要的字段） ============
-type YamlNode = string | number | boolean | null | YamlNode[] | { [k: string]: YamlNode }
-
-interface L { indent: number; text: string }
-
-function stripTrailingComment(s: string): string {
-  let inS = false, inD = false
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]
-    if (c === "'" && !inD) inS = !inS
-    else if (c === '"' && !inS) inD = !inD
-    else if (c === '#' && !inS && !inD) {
-      if (i === 0 || s[i - 1] === ' ' || s[i - 1] === '\t') return s.slice(0, i).trimEnd()
-    }
-  }
-  return s
-}
-
-function preprocess(src: string): L[] {
-  const out: L[] = []
-  for (const raw of src.split('\n')) {
-    if (raw.trim() === '') continue
-    const m = raw.match(/^(\s*)/)
-    const indent = m ? m[1].length : 0
-    let text = raw.slice(indent)
-    if (text.startsWith('#')) continue
-    if (text === '---' || text === '...') continue
-    text = stripTrailingComment(text)
-    out.push({ indent, text })
-  }
-  return out
-}
-
-// 键冒号位置（冒号后是空格或行尾才算键分隔；忽略引号内与值里的冒号如 http://）
-function keyColonIndex(s: string): number {
-  let inS = false, inD = false
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]
-    if (c === "'" && !inD) inS = !inS
-    else if (c === '"' && !inS) inD = !inD
-    else if (c === ':' && !inS && !inD) {
-      const after = s[i + 1]
-      if (after === undefined || after === ' ' || after === '\t') return i
-    }
-  }
-  return -1
-}
-
-function parseScalar(s: string): YamlNode {
-  const t = s.trim()
-  if (t === '' || t === 'null' || t === 'Null' || t === 'NULL' || t === '~') return null
-  if (t === 'true' || t === 'True') return true
-  if (t === 'false' || t === 'False') return false
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) return t.slice(1, -1)
-  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t)
-  return t
-}
-
-function isDash(t: string) { return t === '-' || t.startsWith('- ') }
-
-function parseNode(lines: L[], i: number): { val: YamlNode; next: number } {
-  if (i >= lines.length) return { val: null, next: i }
-  if (isDash(lines[i].text)) return parseList(lines, i, lines[i].indent)
-  return parseMap(lines, i, lines[i].indent)
-}
-
-// 键后面的值在下一行：可能是缩进的 map / 同级 compact 列表 / 空
-function parseValueAfterKey(lines: L[], i: number, indent: number): { val: YamlNode; next: number } {
-  if (i >= lines.length) return { val: null, next: i }
-  const nxt = lines[i]
-  if (isDash(nxt.text)) return parseList(lines, i, nxt.indent)
-  if (nxt.indent > indent) return parseMap(lines, i, nxt.indent)
-  return { val: null, next: i }
-}
-
-function parseMap(lines: L[], i: number, indent: number): { val: YamlNode; next: number } {
-  const obj: Record<string, YamlNode> = {}
-  while (i < lines.length) {
-    const line = lines[i]
-    if (line.indent < indent) break
-    if (line.indent > indent) break
-    if (isDash(line.text)) break
-    const idx = keyColonIndex(line.text)
-    if (idx < 0) { i++; continue }
-    const key = line.text.slice(0, idx).trim()
-    const rest = line.text.slice(idx + 1).trim()
-    if (rest === '') {
-      const sub = parseValueAfterKey(lines, i + 1, indent)
-      obj[key] = sub.val
-      i = sub.next
-    } else if (/^[|>]/.test(rest)) {
-      // 块标量（如 last-applied-configuration 的多行 JSON）：吞掉更深缩进的行
-      let j = i + 1
-      const chunks: string[] = []
-      while (j < lines.length && lines[j].indent > indent) { chunks.push(lines[j].text); j++ }
-      obj[key] = chunks.join('\n') || null
-      i = j
-    } else {
-      obj[key] = parseScalar(rest)
-      i++
-    }
-  }
-  return { val: obj, next: i }
-}
-
-function parseList(lines: L[], i: number, indent: number): { val: YamlNode; next: number } {
-  const arr: YamlNode[] = []
-  while (i < lines.length) {
-    const line = lines[i]
-    if (line.indent < indent) break
-    if (line.indent > indent) break
-    if (!isDash(line.text)) break
-    const afterDash = line.text === '-' ? '' : line.text.slice(2).trim()
-    if (afterDash === '') {
-      if (i + 1 < lines.length && lines[i + 1].indent > indent) {
-        const sub = parseNode(lines, i + 1)
-        arr.push(sub.val)
-        i = sub.next
-      } else {
-        arr.push(null)
-        i++
-      }
-    } else if (keyColonIndex(afterDash) >= 0) {
-      // 内联 map 项：`- key: value` + 后续更深缩进的续行
-      const itemObj: Record<string, YamlNode> = {}
-      const idx = keyColonIndex(afterDash)
-      const key = afterDash.slice(0, idx).trim()
-      const rest = afterDash.slice(idx + 1).trim()
-      let j = i + 1
-      if (rest === '') {
-        if (j < lines.length && (lines[j].indent > indent || isDash(lines[j].text))) {
-          const sub = parseValueAfterKey(lines, j, indent)
-          itemObj[key] = sub.val
-          j = sub.next
-        } else {
-          itemObj[key] = null
-        }
-      } else {
-        itemObj[key] = parseScalar(rest)
-      }
-      while (j < lines.length && lines[j].indent > indent && !isDash(lines[j].text)) {
-        const sub = parseMap(lines, j, lines[j].indent)
-        Object.assign(itemObj, sub.val as Record<string, YamlNode>)
-        j = sub.next
-      }
-      arr.push(itemObj)
-      i = j
-    } else {
-      arr.push(parseScalar(afterDash))
-      i++
-    }
-  }
-  return { val: arr, next: i }
-}
-
-function parseYaml(src: string): YamlNode {
-  const lines = preprocess(src || '')
-  if (lines.length === 0) return null
-  return parseNode(lines, 0).val
-}
-
-const asMap = (n: YamlNode): Record<string, YamlNode> => (n && typeof n === 'object' && !Array.isArray(n) ? n as Record<string, YamlNode> : {})
-const asArr = (n: YamlNode): YamlNode[] => (Array.isArray(n) ? n : [])
-const asStr = (n: YamlNode): string => (n == null ? '' : String(n))
 
 interface WorkloadMeta {
   labels: Record<string, string>
@@ -541,7 +376,7 @@ export default function WorkloadDetail() {
             <span style={{ fontSize: 12, color: '#999' }}>{clusterName ? `${clusterName} / ` : ''}{namespace}</span>
           </Space>
           <Space>
-            <Button onClick={() => setWlEdit({ clusterId, kind, namespace, name, create: false, initialValues: editValues })}>编辑设置</Button>
+            <Button onClick={() => setWlEdit({ clusterId, kind, namespace, name, create: false, initialValues: editValues, existingYaml: yaml })}>编辑设置</Button>
             <Dropdown menu={{
               items: [
                 { key: 'yaml', label: '编辑 YAML' },
