@@ -38,6 +38,7 @@ from app.models.pod_metric import PodMetric
 from app.models.prompt import PromptTemplate, PromptVersion, PromptSuggestion
 from app.models.repair_plan import RepairPlan
 from app.models.resource import QuotaSnapshot, ResourceSnapshot
+from app.models.resource_governance import ResourceGovernance
 from app.models.report_schedule import ReportSchedule
 from app.models.release import JenkinsInstance, ReleaseBuild, ReleaseMapping, UserJenkinsToken
 from app.models.self_heal_rule import SelfHealRule
@@ -91,6 +92,7 @@ __all__ = [
     "CustomTaskLog",
     "ResourceSnapshot",
     "QuotaSnapshot",
+    "ResourceGovernance",
     "ReportSchedule",
     "JenkinsInstance",
     "ReleaseMapping",
