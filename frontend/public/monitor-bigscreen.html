@@ -288,7 +288,7 @@ function nodeDetail(cluster, node){
 }
 
 /* ---------- 状态 ---------- */
-let VIEW = { page:'overview' };
+let VIEW = { page:'overview', clusterFilter:null };
 
 /* ---------- 增量渲染（N12）：不重建 DOM，避免每次刷新闪一下 ----------
    思路：把「模板字符串」解析后与现有 DOM 逐节点比对，只改差异（文本/属性/增删子节点）。
@@ -358,13 +358,59 @@ function lineOpt(x, seriesArr, colors, yName){
 }
 
 /* ---------- 渲染：全局总览 ---------- */
+/* 计数卡 + 视图范围切换（多集群 ↔ 单集群） */
+function countCard(label, value, sub, color){
+  const c = color||'var(--green)';
+  return `<div class="col panel" style="text-align:center;padding:14px 12px">
+    <div class="n" style="font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;color:${c}">${value}</div>
+    <div class="l" style="font-size:12px;color:var(--text-2);margin-top:2px">${label}</div>
+    <div class="xs dim" style="margin-top:5px">${sub}</div>
+  </div>`;
+}
+function selectedClusters(){
+  return VIEW.clusterFilter==null ? CLUSTERS : CLUSTERS.filter(c=>String(c.id)===String(VIEW.clusterFilter));
+}
+function setClusterFilter(id){
+  VIEW.clusterFilter = (id===null||id===undefined||id==='')?null:id;
+  renderOverview();      // 立即切换高亮 + 计数卡（CLUSTERS 全量常驻内存）
+  refreshOverview();     // 拉取该 scope 的 trend/topN/异常Pod/告警
+}
 function renderOverview(){
   VIEW.page='overview';
   clearCharts();
   clearPanes();
   const k = OVERVIEW.kpi;
   const maxType = Math.max(...OVERVIEW.alertTypes.map(t=>t.count),1);
+  const sel = selectedClusters();
+  const scopeName = VIEW.clusterFilter==null ? '全部集群' : ((CLUSTERS.find(x=>String(x.id)===String(VIEW.clusterFilter))||{}).name||('#'+VIEW.clusterFilter));
+  const cnt = {
+    clusters: sel.length,
+    nodes: sel.reduce((s,c)=>s+(c.nodes||0),0),
+    nodeReady: sel.reduce((s,c)=>s+(c.nodeReady||0),0),
+    riskNodes: sel.reduce((s,c)=>s+(c.riskNodes||0),0),
+    workloads: sel.reduce((s,c)=>s+(c.workloads||0),0),
+    pods: sel.reduce((s,c)=>s+(c.pods||0),0),
+    riskClusters: sel.filter(c=>c.rawStatus!=='healthy').length,
+    pv: OVERVIEW.pv, pvc: OVERVIEW.pvc,
+  };
   patchHTML($('#app'), `
+  <!-- 视图范围切换：全部集群 ↔ 单集群 -->
+  <div class="panel" style="margin-bottom:16px;padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span class="xs dim">视图范围</span>
+    <span class="chip ${VIEW.clusterFilter==null?'sel':''}" onclick="setClusterFilter(null)">全部集群<span class="cnt">${CLUSTERS.length}</span></span>
+    ${CLUSTERS.map(c=>`<span class="chip ${String(VIEW.clusterFilter)===String(c.id)?'sel':''} ${(c.riskNodes||0)>0?'bad':''}" onclick='setClusterFilter(${JSON.stringify(c.id)})'>${c.name}<span class="cnt">${(c.alerts||0)>0?c.alerts:''}</span></span>`).join('')}
+    <span class="xs dim" style="margin-left:auto">${scopeName} · 汇总</span>
+  </div>
+
+  <!-- 资源计数卡：集群 / 节点 / 工作负载 / Pod / 存储卷 -->
+  <div class="row" style="margin-bottom:16px">
+    ${countCard('集群', cnt.clusters, cnt.riskClusters>0?('异常 '+cnt.riskClusters+' 个'):'全部健康', cnt.riskClusters>0?'var(--red)':'var(--green)')}
+    ${countCard('节点', cnt.nodes, '就绪 '+cnt.nodeReady+' · 风险 '+cnt.riskNodes, cnt.riskNodes>0?'var(--red)':'var(--green)')}
+    ${countCard('工作负载', cnt.workloads, 'Deployment / STS / DS / CronJob', 'var(--green)')}
+    ${countCard('Pod', cnt.pods, 'kubectl get pods -A 口径', 'var(--green)')}
+    ${countCard('存储卷(PV)', cnt.pv==null?'—':cnt.pv, cnt.pv==null?'暂无数据源':(cnt.pvc!=null?'PVC '+cnt.pvc:'持久卷总数'), 'var(--green)')}
+  </div>
+
   <!-- 第一行：核心汇总 -->
   <div class="row" style="margin-bottom:16px">
     <div class="col panel" data-sec="alert-kpi">
@@ -396,7 +442,7 @@ function renderOverview(){
 
   <!-- 趋势：近24h 告警（新增/已解决/自愈）——与仪表盘同源 -->
   <div class="panel" style="margin-bottom:20px">
-    <h3>近 24 小时 告警趋势 <span class="sub">新增 / 已解决 / 自愈（每 5 分钟，随刷新实时推进）</span></h3>
+    <h3>近 24 小时 告警趋势 <span class="sub">新增 / 已解决 / 自愈 · ${scopeName}（每 5 分钟，随刷新实时推进）</span></h3>
     <div id="ch-ov-trend" class="chart" style="height:200px"></div>
   </div>
 
@@ -414,6 +460,7 @@ function renderOverview(){
           <div class="xs dim">${c.env}</div>
         </div>
         <span class="tag ${color}">${label}</span>
+        ${(c.riskNodes||0)>0?`<span class="tag red">风险节点 ${c.riskNodes}</span>`:''}
         <div class="xs dim" style="width:190px;min-width:150px">节点 ${c.nodes} · Pod ${c.pods} · 告警 <b style="color:${c.alerts>5?'var(--red)':'var(--text)'}">${c.alerts}</b></div>
         <div style="flex:1;display:flex;gap:16px;min-width:260px">
           ${[['CPU',c.cpu],['内存',c.mem],['磁盘',c.disk]].map(([l,v])=>`
@@ -437,6 +484,36 @@ function renderOverview(){
             ${bar(t.count/maxType*100, true)}
           </div>`).join('')}
       </div>
+    </div>
+  </div>
+
+  <!-- TopN 资源使用率 + Top10 异常 Pod -->
+  <div class="row" style="margin-bottom:16px;align-items:flex-start">
+    <div class="col panel">
+      <h3>集群资源使用率 TopN <span class="sub">按 CPU 水位降序 · ${scopeName}</span></h3>
+      ${(OVERVIEW.resTop||[]).length ? OVERVIEW.resTop.map((r,i)=>`
+        <div class="list-row" style="padding:9px 4px">
+          <span class="mid dim" style="width:20px">${i+1}</span>
+          <div class="grow">
+            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px"><span class="sm">${r.name}</span><span class="xs dim">Pod ${r.pods} · 告警 ${r.alerts}</span></div>
+            <div style="display:flex;gap:12px">
+              <div style="flex:1"><div class="xs dim" style="margin-bottom:2px">CPU <b style="color:${barColor(r.cpu)}">${r.cpu}%</b></div>${bar(r.cpu,true)}</div>
+              <div style="flex:1"><div class="xs dim" style="margin-bottom:2px">内存 <b style="color:${barColor(r.mem)}">${r.mem}%</b></div>${bar(r.mem,true)}</div>
+            </div>
+          </div>
+        </div>`).join('') : '<div class="dim xs" style="padding:6px 0">暂无资源使用率数据（需集群配额快照）</div>'}
+    </div>
+    <div class="col panel">
+      <h3>异常 Pod Top 10 <span class="sub">按历史告警次数降序</span></h3>
+      ${(OVERVIEW.abnormalPods||[]).length ? OVERVIEW.abnormalPods.map((p,i)=>`
+        <div class="list-row" style="padding:9px 4px">
+          <span class="mid dim" style="width:20px">${i+1}</span>
+          <div class="grow">
+            <div class="sm ell">${p.ns?p.ns+'/':''}${p.pod}</div>
+            <div class="xs dim">${p.cluster} · ${p.cnt} 次告警${p.faults?' · '+p.faults:''}</div>
+          </div>
+          <span class="tag ${p.cnt>=5?'red':(p.cnt>=2?'yellow':'gray')}">${p.cnt}</span>
+        </div>`).join('') : '<div class="dim xs" style="padding:6px 0">暂无异常 Pod 记录 ✅</div>'}
     </div>
   </div>
 
@@ -603,7 +680,7 @@ function openContainerHistory(cn){ switchTrend(cn||'', '3d'); }
 const CTOP = { cpu:[], mem:[], at:0 };
 async function loadContainerTop(){
   if(Date.now()-CTOP.at < REFRESH_MS_TREND) return;
-  const ids=CLUSTERS.map(c=>c.id).filter(v=>v!=null);
+  const ids=(VIEW.clusterFilter!=null?[VIEW.clusterFilter]:CLUSTERS.map(c=>c.id)).filter(v=>v!=null);
   if(!ids.length) return;
   const envOf=id=>{ const c=CLUSTERS.find(x=>String(x.id)===String(id))||{}; return envName(c.env||''); };
   const res=await Promise.all(ids.map(async id=>{
@@ -1023,16 +1100,21 @@ const sevDot = s => (s==='critical'||s==='high')?'red':(s==='medium'?'yellow':'g
 const HEAL_MAP = {pending:'pending',awaiting_approval:'healing',ticketed:'healing',resolved:'healed',self_healed:'healed',closed:'healed'};
 
 async function loadOverviewReal(){
+  const cid = VIEW.clusterFilter;
+  const dq = '/stats/dashboard?range=24h&ai_range=24h' + (cid!=null?('&cluster_id='+encodeURIComponent(cid)):'');
+  const aq = '/alerts?group=true&page=1&page_size=10' + (cid!=null?('&cluster_id='+encodeURIComponent(cid)):'');
   const [dash, clusters, alerts, recs] = await Promise.all([
-    apiGet('/stats/dashboard?range=24h&ai_range=24h'),
+    apiGet(dq),
     apiGet('/clusters'),
-    apiGet('/alerts?group=true&page=1&size=10').catch(()=>[]),
+    apiGet(aq).catch(()=>[]),
     apiGet('/repair-records?page=1&size=50').catch(()=>[]),
   ]);
-  const core = dash.core||{}, cd = dash.cluster_details||[], cById = {}; clusters.forEach(c=>cById[c.id]=c);
+  const core = dash.core||{}, kpi2 = dash.kpi||{}, cd = dash.cluster_details||[], cById = {}; clusters.forEach(c=>cById[c.id]=c);
+  const scoped = VIEW.clusterFilter!=null;
   const byCpu = cd.slice().sort((a,b)=>(b.cpu_pct||0)-(a.cpu_pct||0));
   const byMem = cd.slice().sort((a,b)=>(b.mem_pct||0)-(a.mem_pct||0));
-  OVERVIEW.kpi.activeAlerts = {v: core.alert_pending??0, delta:0, deltaLabel:'待处理告警'};
+  // 活跃告警 / 异常集群：单集群视图用 server 侧 cluster_id 过滤后的口径（kpi.*），全集群用 core.*
+  OVERVIEW.kpi.activeAlerts = {v: scoped ? (kpi2.alert_pending??0) : (core.alert_pending??0), delta:0, deltaLabel:'待处理告警'};
   // 处理中 = 自愈计划在跑(pending/executing)且关联告警仍活跃；与仪表盘同源同口径（2026-10-28 修正）
   // 旧实现 plan_total-plan_completed 把 cancelled/failed 也算"未完成"，叠加历史僵尸计划 →
   // 出现「活跃告警 0 却 处理中 477」的自相矛盾。
@@ -1041,7 +1123,7 @@ async function loadOverviewReal(){
   OVERVIEW.kpi.failed = {v: core.manual_pending??0, abnormalClusters: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0))};
   OVERVIEW.kpi.approvalPending = {v: core.approval_pending??0};
   OVERVIEW.kpi.mttr = {v: core.mttr_minutes??0};
-  OVERVIEW.kpi.abnormal = {v: Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0)), total: core.cluster_total||0};
+  OVERVIEW.kpi.abnormal = {v: scoped ? (cd.filter(c=>String(c.id)===String(cid)&&c.status!=='healthy').length) : Math.max(0,(core.cluster_total||0)-(core.cluster_healthy||0)), total: scoped ? 1 : (core.cluster_total||0)};
   // 成功率必须与上方两个数字同口径（2026-10-21 修正）：
   // 旧实现用 core.heal_rate（= 24h 内产生告警的已解决占比），跟展示的「成功/失败」不是同一个分母，
   // 会出现「成功 3 / 失败 1 / 成功率 100%」。现改为 成功/(成功+失败)。
@@ -1063,10 +1145,22 @@ async function loadOverviewReal(){
   OVERVIEW.trend = (dash.alert_trend||[]).map(t=>({b:String(t.bucket||''), n:t.new||0, r:t.resolved||0, s:t.self_healed||0}));
   if(!OVERVIEW.trend.length) OVERVIEW.trend = (dash.trend_24h||[]).map(t=>({b:String(t.hour||''), n:t.alerts||0, r:0, s:t.healed||0}));
   CLUSTERS.length=0;
-  cd.forEach(c=>{ CLUSTERS.push({id:c.id, name:c.name, env:envName((cById[c.id]||{}).env_tag||''),
+  cd.forEach(c=>{ const nt=c.node_total||0, nr=c.node_ready||0;
+    CLUSTERS.push({id:c.id, name:c.name, env:envName((cById[c.id]||{}).env_tag||''),
+    rawStatus:c.status||'unknown',
     status: c.status==='healthy'?'ok':((c.alert_pending||0)>0?'warn':'ok'),
-    nodes:c.node_total||0, pods:c.pods||0, alerts:c.alert_pending||0,
+    nodes:nt, nodeReady:nr, riskNodes: Math.max(0, nt-nr),
+    workloads:c.workloads||0, namespaces:c.namespaces||0,
+    pods:c.pods||0, alerts:c.alert_pending||0,
     cpu:Math.round(c.cpu_pct||0), mem:Math.round(c.mem_pct||0), disk:0}); });
+  // TopN 资源使用率（server 侧按 cluster_id 过滤后的 cluster_waterline，已按 CPU 降序）
+  OVERVIEW.resTop = (dash.cluster_waterline||[]).slice(0,8).map(w=>({name:w.cluster_name||('#'+w.cluster_id), cpu:Math.round(w.cpu_pct||0), mem:Math.round(w.mem_pct||0), pods:w.pods||0, alerts:w.alert_pending||0}));
+  // 异常 Pod Top10（server 侧按 cluster_id 过滤后的 abnormal_pods，已按告警次数降序）
+  OVERVIEW.abnormalPods = (dash.abnormal_pods||[]).slice(0,10).map(p=>({pod:p.pod_name, ns:p.namespace, cluster:p.cluster_name||'', cnt:p.alert_count||0, faults:p.faults||''}));
+  // PV/PVC 计数（dashboard.resources 目前无该口径 → 预留，有数据源自动展示）
+  const res2 = dash.resources||{};
+  OVERVIEW.pv = (res2.pv!=null?res2.pv:(res2.persistentvolume!=null?res2.persistentvolume:null));
+  OVERVIEW.pvc = (res2.pvc!=null?res2.pvc:(res2.persistentvolumeclaim!=null?res2.persistentvolumeclaim:null));
   /* ---- 真实告警 + 自愈处理记录 ---- */
   const al = (Array.isArray(alerts)?alerts:(alerts.items||alerts.data||[]));
   const rl = (Array.isArray(recs)?recs:(recs.items||recs.data||[]));
