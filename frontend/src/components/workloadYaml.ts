@@ -1,18 +1,32 @@
 // 工作负载创建：结构化表单值 → YAML（纯函数，无 React 依赖，便于单测）
 export interface KvItem { key: string; value?: string }
 
+export type VolumeType = 'configMap' | 'secret' | 'pvc' | 'emptyDir'
+
+// 存储挂载：一个 item = 一个卷 + 挂载到容器的路径（volumes + volumeMounts 由同一 name 关联）
+export interface VolumeMountValue {
+  name: string
+  type: VolumeType
+  source?: string        // configMap/secret/pvc 的名称；emptyDir 留空
+  mountPath: string
+  subPath?: string
+  readOnly?: boolean
+}
+
 export interface WorkloadValues {
   name: string
   namespace: string
   replicas?: number
   image: string
   containerPort?: number
+  imagePullPolicy?: string
   cpuRequest?: string
   cpuLimit?: string
   memoryRequest?: string
   memoryLimit?: string
   env?: KvItem[]
   labels?: KvItem[]
+  volumes?: VolumeMountValue[]
   schedule?: string
   command?: string
   livenessEnabled?: boolean
@@ -39,13 +53,33 @@ function labelsBlock(indent: string, v: WorkloadValues): string {
   return lines.join('\n')
 }
 
+// 归一化卷列表：过滤空项、自动生成卷名（volumeMounts 与 volumes 用同一 name 关联）
+function normVolumes(v: WorkloadValues): VolumeMountValue[] {
+  return (v.volumes || [])
+    .filter((x) => x && x.type && (x.type === 'emptyDir' || x.source))
+    .map((x, i) => ({ ...x, name: x.name || `vol-${i + 1}` }))
+}
+
 function containerSpec(v: WorkloadValues): string {
   const lines: string[] = []
   lines.push(`        - name: ${v.name}`)
   lines.push(`          image: ${v.image}`)
+  if (v.imagePullPolicy && v.imagePullPolicy !== 'IfNotPresent') {
+    lines.push(`          imagePullPolicy: ${v.imagePullPolicy}`)
+  }
   if (v.containerPort) {
     lines.push(`          ports:`)
     lines.push(`            - containerPort: ${v.containerPort}`)
+  }
+  const vols = normVolumes(v)
+  if (vols.length) {
+    lines.push(`          volumeMounts:`)
+    for (const m of vols) {
+      lines.push(`            - name: ${m.name}`)
+      lines.push(`              mountPath: ${m.mountPath}`)
+      if (m.subPath) lines.push(`              subPath: ${m.subPath}`)
+      if (m.readOnly) lines.push(`              readOnly: true`)
+    }
   }
   const req: string[] = []
   const lim: string[] = []
@@ -79,6 +113,28 @@ function containerSpec(v: WorkloadValues): string {
   return lines.join('\n')
 }
 
+function volumesBlock(v: WorkloadValues): string {
+  const vols = normVolumes(v)
+  if (!vols.length) return ''
+  const lines = [`      volumes:`]
+  for (const m of vols) {
+    lines.push(`        - name: ${m.name}`)
+    if (m.type === 'configMap') {
+      lines.push(`          configMap:`)
+      lines.push(`            name: ${m.source}`)
+    } else if (m.type === 'secret') {
+      lines.push(`          secret:`)
+      lines.push(`            secretName: ${m.source}`)
+    } else if (m.type === 'pvc') {
+      lines.push(`          persistentVolumeClaim:`)
+      lines.push(`            claimName: ${m.source}`)
+    } else {
+      lines.push(`          emptyDir: {}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 export function buildYaml(kind: string, v: WorkloadValues): string {
   const ns = v.namespace || 'default'
   const nm = v.name
@@ -104,6 +160,7 @@ ${labelsBlock('        ', v)}
     spec:
       containers:
 ${containerSpec(v)}
+${volumesBlock(v)}
 `
   }
   if (kind === 'daemonset') {
@@ -125,6 +182,7 @@ ${labelsBlock('        ', v)}
     spec:
       containers:
 ${containerSpec(v)}
+${volumesBlock(v)}
 `
   }
   if (kind === 'cronjob') {
@@ -165,5 +223,6 @@ ${labelsBlock('        ', v)}
     spec:
       containers:
 ${containerSpec(v)}
+${volumesBlock(v)}
 `
 }

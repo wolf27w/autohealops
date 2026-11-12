@@ -12,6 +12,8 @@ import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
 import PodEventsModal from '../../components/PodEventsModal'
 import WorkloadMountsPanel from '../../components/WorkloadMountsPanel'
+import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
+import type { WorkloadValues, VolumeMountValue, VolumeType } from '../../components/workloadYaml'
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
@@ -209,6 +211,84 @@ function strMap(n: YamlNode): Record<string, string> {
   return out
 }
 
+// 解析出的 YAML → 向导表单值（编辑设置回填；仅覆盖向导支持的字段）
+function yamlToValues(root: YamlNode, kind: string): Partial<WorkloadValues> {
+  const spec = asMap(asMap(root).spec)
+  const tplSpec = asMap(asMap(spec.template).spec)
+  const containers = asArr(tplSpec.containers)
+  const c0 = asMap(containers[0])
+  const meta = asMap(asMap(root).metadata)
+
+  const resources = asMap(c0.resources)
+  const requests = asMap(resources.requests)
+  const limits = asMap(resources.limits)
+
+  const env = asArr(c0.env)
+    .map((e) => asMap(e))
+    .filter((e) => e.value != null)
+    .map((e) => ({ key: asStr(e.name), value: asStr(e.value) }))
+
+  const labels = strMap(meta.labels)
+  delete labels.app
+
+  const volumes: VolumeMountValue[] = []
+  const volList = asArr(tplSpec.volumes).map((x) => asMap(x))
+  const mounts = asArr(c0.volumeMounts).map((x) => asMap(x))
+  for (const m of mounts) {
+    const vn = asStr(m.name)
+    const vol = volList.find((x) => asStr(x.name) === vn) || {}
+    let type: VolumeType = 'emptyDir'
+    let source: string | undefined
+    if (vol.configMap != null) { type = 'configMap'; source = asStr(asMap(vol.configMap).name) }
+    else if (vol.secret != null) { type = 'secret'; source = asStr(asMap(vol.secret).secretName) }
+    else if (vol.persistentVolumeClaim != null) { type = 'pvc'; source = asStr(asMap(vol.persistentVolumeClaim).claimName) }
+    else if (vol.emptyDir != null) { type = 'emptyDir' }
+    volumes.push({
+      name: vn, type, source, mountPath: asStr(m.mountPath),
+      subPath: m.subPath != null ? asStr(m.subPath) : undefined,
+      readOnly: m.readOnly === true,
+    })
+  }
+
+  const live = asMap(c0.livenessProbe)
+  const liveGet = asMap(live.httpGet)
+  const ready = asMap(c0.readinessProbe)
+  const readyGet = asMap(ready.httpGet)
+
+  const out: Partial<WorkloadValues> = {
+    name: asStr(meta.name),
+    namespace: asStr(meta.namespace),
+    image: asStr(c0.image),
+    imagePullPolicy: asStr(c0.imagePullPolicy) || 'IfNotPresent',
+    replicas: spec.replicas != null ? Number(spec.replicas) : undefined,
+    cpuRequest: asStr(requests.cpu) || undefined,
+    cpuLimit: asStr(limits.cpu) || undefined,
+    memoryRequest: asStr(requests.memory) || undefined,
+    memoryLimit: asStr(limits.memory) || undefined,
+    env,
+    labels: Object.entries(labels).map(([key, value]) => ({ key, value })),
+    volumes,
+    livenessEnabled: live.httpGet != null,
+    livenessPath: asStr(liveGet.path) || '/healthz',
+    livenessPort: liveGet.port != null ? Number(liveGet.port) : undefined,
+    readinessEnabled: ready.httpGet != null,
+    readinessPath: asStr(readyGet.path) || '/healthz',
+    readinessPort: readyGet.port != null ? Number(readyGet.port) : undefined,
+  }
+
+  const ports = asArr(c0.ports).map((x) => asMap(x))
+  const cp = ports.find((p) => p.containerPort != null)
+  if (cp) out.containerPort = Number(cp.containerPort)
+
+  if (kind === 'cronjob') {
+    out.schedule = asStr(spec.schedule)
+    const cmd = asArr(c0.command)
+    out.command = cmd.length >= 3 ? asStr(cmd[2]) : (cmd.length ? asStr(cmd[cmd.length - 1]) : '')
+  }
+
+  return out
+}
+
 export default function WorkloadDetail() {
   const { id, kind = 'deployment', namespace = '', name = '' } = useParams()
   const navigate = useNavigate()
@@ -225,7 +305,7 @@ export default function WorkloadDetail() {
 
   // 弹窗 / 抽屉
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [wlEdit, setWlEdit] = useState<WorkloadCreateTarget | null>(null)
   const [scaleOpen, setScaleOpen] = useState(false)
   const [scaleVal, setScaleVal] = useState<number>(1)
   const [metricsOpen, setMetricsOpen] = useState(false)
@@ -255,6 +335,11 @@ export default function WorkloadDetail() {
       images,
     }
   }, [yaml])
+
+  const editValues = useMemo<Partial<WorkloadValues> | undefined>(() => {
+    if (!yaml) return undefined
+    return yamlToValues(parseYaml(yaml), kind)
+  }, [yaml, kind])
 
   const load = () => {
     getWorkloads(clusterId, namespace).then((d) => {
@@ -456,7 +541,7 @@ export default function WorkloadDetail() {
             <span style={{ fontSize: 12, color: '#999' }}>{clusterName ? `${clusterName} / ` : ''}{namespace}</span>
           </Space>
           <Space>
-            <Button onClick={() => setSettingsOpen(true)}>编辑设置</Button>
+            <Button onClick={() => setWlEdit({ clusterId, kind, namespace, name, create: false, initialValues: editValues })}>编辑设置</Button>
             <Dropdown menu={{
               items: [
                 { key: 'yaml', label: '编辑 YAML' },
@@ -504,9 +589,7 @@ export default function WorkloadDetail() {
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
 
-      <Modal title="编辑设置（存储与环境变量）" open={settingsOpen} footer={null} width={960} onCancel={() => setSettingsOpen(false)} destroyOnClose>
-        <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} />
-      </Modal>
+      <WorkloadCreateModal target={wlEdit} onClose={() => setWlEdit(null)} onSaved={load} />
 
       <Modal title={`变更副本：${name}`} open={scaleOpen} onCancel={() => setScaleOpen(false)}
         onOk={handleScale} okText="确定" width={360}>
