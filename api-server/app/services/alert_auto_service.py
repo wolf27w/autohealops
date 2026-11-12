@@ -19,6 +19,7 @@ from app.core.redis_client import acquire_lock, redis_pool, release_lock
 from app.core.security import generate_trace_id
 from app.models import AIDiagnosisResult, Alert, Approval, Cluster, SelfHealRule
 from app.services import audit_service, knowledge_service
+from app.services.screen_bus import screen_bus
 
 logger = get_logger("api-server.alert_auto")
 
@@ -550,6 +551,7 @@ async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
                     a.message = (a.message or "") + REBUILD_TRIED_MARK + "，重建后仍未恢复，转 AI 诊断"
                 await session.commit()
         if repaired:
+            screen_bus.publish("selfheal_done", {"alert_id": alert.id, "cluster_id": getattr(alert, "cluster_id", None), "resource_name": getattr(alert, "resource_name", "")})
             await _set_plan_status(plan_id, "completed")
             logger.info("告警 %d CrashLoop 首次重建自愈成功", alert.id)
             return True

@@ -25,6 +25,7 @@ from app.models.cluster import Cluster
 from app.models.ticket import Ticket, TicketComment
 from app.models.user import User
 from app.services import notification_service
+from app.services.screen_bus import screen_bus
 
 logger = get_logger("api-server.ticket")
 
@@ -313,6 +314,7 @@ async def create_ticket(payload: dict, user) -> dict:
     async with async_session() as session:
         t = await session.get(Ticket, ticket_id)
     await _notify_ticket(t, "创建工单", getattr(user, "username", ""))
+    screen_bus.publish("ticket_created", {"ticket_id": ticket_id, "ticket_no": ticket_no, "cluster_id": cluster_id, "source": "manual"})
     return {"ok": True, "id": ticket_id, "ticket": t}
 
 
@@ -403,6 +405,7 @@ async def _create_from_payload(payload: dict, user, source: str, alert_id: int |
     async with async_session() as session:
         t = await session.get(Ticket, ticket_id)
     await _notify_ticket(t, action_text, getattr(user, "username", ""))
+    screen_bus.publish("ticket_created", {"ticket_id": ticket_id, "ticket_no": ticket_no, "cluster_id": payload.get("cluster_id"), "source": source})
     return {"ok": True, "id": ticket_id, "ticket": t}
 
 
@@ -656,6 +659,8 @@ async def _transition_status(session, ticket: Ticket, new_status: str, user, not
         if not ticket.resolved_at:
             ticket.resolved_at = _now()
     closed_ids: list[int] = []
+    if new_status in ("resolved", "closed"):
+        screen_bus.publish("ticket_closed", {"ticket_id": ticket.id, "ticket_no": ticket.ticket_no, "cluster_id": getattr(ticket, "cluster_id", None), "status": new_status})
     # 工单闭环（resolved/closed）→ 关闭同故障同服务全部在途告警（closed 之前完全没回写，此处补上）
     if new_status in ("resolved", "closed") and ticket.alert_id:
         try:
