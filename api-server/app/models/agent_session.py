@@ -31,6 +31,10 @@ class DiagnosisSession(Base):
     alert_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # active=进行中 / closed=已闭环（处理完成，落盘知识库）
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    # 会话共享（2026-11-12）：shared=True 表示共享到本 namespace（有该 namespace 权限的同事可见）
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    shared_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # 共享时间（取消共享时置空）
+    shared_by: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 操作共享的用户 id（取消共享时置空）
     # 定时采集（针对该会话目标容器周期采集信息，追加到会话）
     collect_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     collect_interval_min: Mapped[int] = mapped_column(Integer, default=5)

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import delete, select
@@ -66,6 +67,46 @@ def derive_service(pod_name: str) -> str:
         return ""
     m = _POD_HASH_RE.match(p)
     return m.group(1) if m else p
+
+
+def can_view_session(user_id: int, is_admin: bool, sess_user_id: int,
+                     sess_source: str = "agent", sess_shared: bool = False,
+                     has_cluster_perm: bool = False) -> bool:
+    """会话列表可见性判定（纯函数，可单测）。
+
+    满足其一即可见：
+    1. 自己发起的会话（sess_user_id == user_id）
+    2. admin 查看平台巡检会话（source=proactive）
+    3. 已共享（sess_shared=True）且调用者对 (cluster, namespace) 有权限
+
+    注：admin 对所有集群/namespace 都有权限，调用方会把 has_cluster_perm 置 True，
+    因此 admin 天然能看到所有共享会话。
+    """
+    if sess_user_id == user_id:
+        return True
+    if is_admin and (sess_source or "agent") == "proactive":
+        return True
+    if sess_shared and has_cluster_perm:
+        return True
+    return False
+
+
+def can_read_session(user_id: int, is_admin: bool, sess_user_id: int,
+                     sess_shared: bool = False, has_cluster_perm: bool = False) -> bool:
+    """会话消息读取权限判定（纯函数，可单测）。
+
+    满足其一即可读：
+    1. 会话所有者（sess_user_id == user_id）
+    2. admin（任意会话）
+    3. 已共享（sess_shared=True）且调用者对 (cluster, namespace) 有权限
+    """
+    if sess_user_id == user_id:
+        return True
+    if is_admin:
+        return True
+    if sess_shared and has_cluster_perm:
+        return True
+    return False
 
 
 @router.post("/sessions")
@@ -330,6 +371,33 @@ async def set_session_collect(session_id: int, payload: dict, user=Depends(requi
     return {"code": 200, "message": "success", "data": data}
 
 
+@router.post("/sessions/{session_id}/share")
+async def share_session(session_id: int, payload: dict, user=Depends(require_any_user)):
+    """共享诊断会话到本 namespace（owner 或 admin）。
+
+    body: {"shared": bool}；true=共享、false=取消共享。
+    """
+    shared = bool(payload.get("shared", False))
+    async with async_session() as s:
+        sess = await s.get(DiagnosisSession, session_id)
+        if not sess:
+            return {"code": 404, "message": "会话不存在", "data": None}
+        if sess.user_id != user.id and getattr(user, "role", "") != "admin":
+            return {"code": 403, "message": "无该会话权限", "data": None}
+        sess.shared = shared
+        sess.shared_at = datetime.now() if shared else None
+        sess.shared_by = user.id if shared else None
+        await s.commit()
+        await s.refresh(sess)
+        data = {
+            "id": sess.id,
+            "shared": sess.shared,
+            "shared_at": str(sess.shared_at) if sess.shared_at else None,
+            "shared_by": sess.shared_by,
+        }
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.get("/sessions")
 async def list_sessions(cluster_id: int = 0, category: str = "", source: str = "",
                         user=Depends(require_any_user)):
@@ -340,11 +408,17 @@ async def list_sessions(cluster_id: int = 0, category: str = "", source: str = "
     """
     is_admin = getattr(user, "role", "") == "admin"
     async with async_session() as s:
-        from sqlalchemy import and_
-        cond = DiagnosisSession.user_id == user.id
+        from sqlalchemy import and_, or_
+        cond = or_(
+            DiagnosisSession.user_id == user.id,
+            DiagnosisSession.shared.is_(True),
+        )
         if is_admin:
-            from sqlalchemy import or_
-            cond = or_(DiagnosisSession.user_id == user.id, DiagnosisSession.source == "proactive")
+            cond = or_(
+                DiagnosisSession.user_id == user.id,
+                DiagnosisSession.shared.is_(True),
+                DiagnosisSession.source == "proactive",
+            )
         filters = [cond]
         if cluster_id:
             filters.append(DiagnosisSession.cluster_id == cluster_id)
@@ -354,9 +428,29 @@ async def list_sessions(cluster_id: int = 0, category: str = "", source: str = "
             filters.append(DiagnosisSession.source == source)
         result = await s.execute(
             select(DiagnosisSession).where(and_(*filters))
-            .order_by(DiagnosisSession.id.desc()).limit(500)
+            .order_by(DiagnosisSession.id.desc()).limit(1000)
         )
         sessions = list(result.scalars())
+
+    # R31：共享会话按 (cluster, namespace) 权限二次过滤（admin 的 check_cluster_permission 天然全量通过）
+    perm_cache: dict[tuple[int, str], bool] = {}
+    visible: list = []
+    for x in sessions:
+        shared = bool(getattr(x, "shared", False))
+        has_perm = False
+        if shared:
+            key = (x.cluster_id, x.namespace or "")
+            if key not in perm_cache:
+                perm_cache[key] = await user_permission_service.check_cluster_permission(
+                    user, x.cluster_id, x.namespace or "")
+            has_perm = perm_cache[key]
+        if can_view_session(
+            user_id=user.id, is_admin=is_admin, sess_user_id=x.user_id,
+            sess_source=getattr(x, "source", "agent") or "agent",
+            sess_shared=shared, has_cluster_perm=has_perm,
+        ):
+            visible.append(x)
+    sessions = visible
     # N5：巡检会话合并——同 (cluster,namespace,pod) 只保留最新一条，其余计入 merged_count
     merged: list = []
     counts: dict[tuple, int] = {}
@@ -386,6 +480,9 @@ async def list_sessions(cluster_id: int = 0, category: str = "", source: str = "
          "source": getattr(x, "source", "agent") or "agent",
          "category": getattr(x, "category", "") or "app",
          "alert_id": getattr(x, "alert_id", None),
+         "shared": bool(getattr(x, "shared", False)),
+         "shared_at": str(x.shared_at) if getattr(x, "shared_at", None) else None,
+         "shared_by": getattr(x, "shared_by", None),
          "merged_count": counts.get((x.cluster_id, x.namespace, x.pod_name), 0)
                           if (getattr(x, "source", "agent") or "agent") == "proactive" else 0,
          "created_at": str(x.created_at), "updated_at": str(x.updated_at),
@@ -428,12 +525,25 @@ async def proactive_scan(payload: dict | None = None, user=Depends(require_opera
 
 @router.get("/sessions/{session_id}/messages")
 async def list_messages(session_id: int, user=Depends(require_any_user)):
-    """会话消息列表（校验归属；admin 可查看巡检等平台会话）。"""
+    """会话消息列表（owner / 共享且有权限 / admin 可读，否则 403）。"""
     from app.services import agent_session_store as store
     async with async_session() as s:
         sess = await s.get(DiagnosisSession, session_id)
-        if not sess or (sess.user_id != user.id and getattr(user, "role", "") != "admin"):
-            return {"code": 403, "message": "无该会话权限", "data": None}
+        if not sess:
+            return {"code": 404, "message": "会话不存在", "data": None}
+        sess_user_id = sess.user_id
+        sess_shared = bool(getattr(sess, "shared", False))
+        sess_cluster_id = sess.cluster_id
+        sess_namespace = sess.namespace or ""
+    has_perm = False
+    if sess_shared:
+        has_perm = await user_permission_service.check_cluster_permission(
+            user, sess_cluster_id, sess_namespace)
+    if not can_read_session(
+        user_id=user.id, is_admin=getattr(user, "role", "") == "admin",
+        sess_user_id=sess_user_id, sess_shared=sess_shared, has_cluster_perm=has_perm,
+    ):
+        return {"code": 403, "message": "无该会话权限", "data": None}
     # 历史正文已落文件（2026-11-11）；文件不存在的老会话回退数据库读取
     file_msgs = store.read_messages(session_id)
     if file_msgs is not None:

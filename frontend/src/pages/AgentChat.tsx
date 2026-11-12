@@ -13,13 +13,14 @@ import {
   getClusters, getClusterNamespaces, getNamespacePods, getPodContainers, getAgentSessions, getAgentMessages,
   createAgentSession, sendAgentMessage, closeAgentSession, deleteAgentSession, updateSessionCollect,
 } from '../services/api'
+import api from '../services/api'
 import type { Cluster } from '../types'
 import { buildTheme } from '../utils/theme'
 
 const { Sider, Content } = Layout
 const { Text, Paragraph } = Typography
 
-interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; category?: string; alert_id?: number | null; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string; collect_enabled?: boolean; collect_interval_min?: number; collect_items?: string; collect_last_at?: string | null }
+interface Session { id: number; cluster_id: number; namespace: string; pod_name: string; title: string; status: string; source?: string; category?: string; alert_id?: number | null; merged_count?: number; service?: string; container?: string; created_at?: string; updated_at: string; cluster_name?: string; env_tag?: string; collect_enabled?: boolean; collect_interval_min?: number; collect_items?: string; collect_last_at?: string | null; shared?: boolean; shared_at?: string | null; shared_by?: number | null }
 interface Msg { id: number; role: string; content: string; tool_name: string; tool_args: string; tool_output: string; created_at: string }
 interface PodOption { label: string; value: string }
 
@@ -282,6 +283,15 @@ export default function AgentChat() {
     } catch { /* 拦截器已提示 */ }
   }
 
+  const handleShareToggle = async (v: boolean) => {
+    if (!activeId) return
+    try {
+      await api.post(`/agent/sessions/${activeId}/share`, { shared: v })
+      message.success(v ? '已共享到本 namespace' : '已取消共享')
+      loadSessions()
+    } catch { /* 拦截器已提示 */ }
+  }
+
   const handleCollectInterval = async (v: number) => {
     if (!activeId) return
     try {
@@ -392,6 +402,9 @@ export default function AgentChat() {
                         {CATEGORY_LABEL[s.category] || s.category}
                       </Tag>
                     )}
+                    {s.shared && (
+                      <Tag color="green" style={{ marginInlineEnd: 0 }}>共享</Tag>
+                    )}
                     <Text ellipsis style={{ fontSize: 14.5, flex: 1, color: '#1f1f1f' }} title={sessionName(s)}>{sessionName(s)}</Text>
                     <Popconfirm title="删除该会话？" onConfirm={(e) => { e?.stopPropagation(); handleDeleteSession(s.id) }} onCancel={(e) => e?.stopPropagation()}>
                       <DeleteOutlined style={{ color: '#ccc', fontSize: 12 }} onClick={(e) => e.stopPropagation()} />
@@ -418,6 +431,12 @@ export default function AgentChat() {
                 ) : null}
               </Space>
               <Space>
+                <Tooltip title="共享后，本 namespace 有权限的同事也能查看该会话">
+                  <Space size={4}>
+                    <Text type="secondary" style={{ fontSize: 13 }}>共享到本 namespace</Text>
+                    <Switch size="small" checked={!!activeSession.shared} onChange={handleShareToggle} />
+                  </Space>
+                </Tooltip>
                 <Tooltip title="针对该容器定时采集 JVM 等信息，自动追加到会话（默认关）">
                   <Space size={4}>
                     <Text type="secondary" style={{ fontSize: 13 }}>定时采集</Text>
