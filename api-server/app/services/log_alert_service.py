@@ -159,6 +159,8 @@ async def scan_log_alerts() -> int:
                 rule.last_triggered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 await session.commit()
                 await session.refresh(alert)
+                from app.services.screen_bus import screen_bus
+                screen_bus.publish("alert_created", {"alert_id": alert.id, "cluster_id": getattr(alert, "cluster_id", None), "fault_type": alert.fault_type, "resource_name": alert.resource_name, "severity": alert.severity})
             # 通知：与集群/DB/Pod 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
             try:
                 await notification_service.notify_alert(alert, override_config_id=rule.notify_config_id)

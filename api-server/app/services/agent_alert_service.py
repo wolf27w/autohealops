@@ -161,6 +161,8 @@ async def _merge_or_insert(ev: dict) -> int:
         session.add(alert)
         await session.commit()
         await session.refresh(alert)
+        from app.services.screen_bus import screen_bus
+        screen_bus.publish("alert_created", {"alert_id": alert.id, "cluster_id": alert.cluster_id, "fault_type": alert.fault_type, "resource_name": alert.resource_name, "severity": alert.severity})
         return alert.id
 
 

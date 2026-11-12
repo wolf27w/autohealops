@@ -192,6 +192,8 @@ async def _create_or_keep_alert(rule: ResourceAlertRule, item: dict, usage_pct: 
                 await session.rollback()
                 return False
             await session.refresh(alert)
+            from app.services.screen_bus import screen_bus
+            screen_bus.publish("alert_created", {"alert_id": alert.id, "cluster_id": alert.cluster_id, "fault_type": alert.fault_type, "resource_name": alert.resource_name, "severity": alert.severity})
             alert_id = alert.id
     # 通知（统一入口：分级/静默/渠道/模板/限频都在 notify_alert 内）
     try:

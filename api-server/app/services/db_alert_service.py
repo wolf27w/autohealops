@@ -198,6 +198,8 @@ async def _upsert_db_alert(c: DBConnection, fault_type: str, err: str) -> int:
         await session.commit()
         await session.refresh(alert)
         alert_id = alert.id
+        from app.services.screen_bus import screen_bus
+        screen_bus.publish("alert_created", {"alert_id": alert.id, "cluster_id": getattr(alert, "cluster_id", None), "fault_type": alert.fault_type, "resource_name": alert.resource_name, "severity": alert.severity})
 
     # 通知：与集群/资源告警同一入口（统一策略：分级/静默/渠道/模板/限频）
     try:

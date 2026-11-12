@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_, case, or_, select
 
 from app.models import Alert
+from app.services.screen_bus import screen_bus
 
 DEFAULT_WINDOW_MINUTES = 30
 RESOLVED_STATUSES = ("resolved", "self_healed")
@@ -112,4 +113,9 @@ def apply_merge(row: Alert, *, message: str = "", resource_name: str = "",
         row.resolved_by = ""
         row.manual_required = False
         row.manual_reason = ""
+    screen_bus.publish("alert_merged", {
+        "alert_id": row.id, "cluster_id": getattr(row, "cluster_id", None),
+        "fault_type": getattr(row, "fault_type", ""), "resource_name": getattr(row, "resource_name", ""),
+        "event_count": row.event_count,
+    })
     return row
