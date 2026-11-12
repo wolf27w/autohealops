@@ -749,6 +749,51 @@ export const applyNsLimit = (data: Payload) =>
 export const deleteNsLimit = (data: Payload) =>
   http.post<Payload>('/resource-governance/ns-limit/delete', data)
 
+// ============ 工作负载管控表（R1）============
+export interface ResourceGovernanceEntry {
+  id: number
+  cluster_id: number
+  namespace: string
+  workload_kind: string
+  workload_name: string
+  demand_replicas: number
+  limit_replicas: number
+  cpu_request: string
+  cpu_limit: string
+  memory_request: string
+  memory_limit: string
+  jvm_xms: string
+  jvm_xmx: string
+  new_service_exempt: boolean
+  exempt_start: string | null
+  exempt_end: string | null
+  remark: string
+  created_at: string
+  updated_at: string
+}
+export interface CtlBatchResultItem {
+  id: number
+  cluster_id?: number
+  namespace: string
+  kind?: string
+  name: string
+  target_replicas?: number
+  success: boolean
+  message: string
+}
+export const getResourceGovernanceEntries = (params?: { cluster_id?: number; namespace?: string; workload_kind?: string; workload_name?: string }) =>
+  http.get<ResourceGovernanceEntry[]>('/resource-governance/ctl', { params })
+export const createResourceGovernanceEntry = (data: Payload) =>
+  http.post<ResourceGovernanceEntry>('/resource-governance/ctl', data)
+export const updateResourceGovernanceEntry = (id: number, data: Payload) =>
+  http.put<ResourceGovernanceEntry>(`/resource-governance/ctl/${id}`, data)
+export const deleteResourceGovernanceEntry = (id: number) =>
+  http.delete(`/resource-governance/ctl/${id}`)
+export const batchScaleResourceGovernance = (data: { cluster_id?: number; namespace?: string; workload_ids?: number[]; force?: boolean }) =>
+  http.post<CtlBatchResultItem[]>('/resource-governance/ctl/batch-scale', data)
+export const batchRestartResourceGovernance = (data: { cluster_id?: number; namespace?: string; workload_ids?: number[] }) =>
+  http.post<CtlBatchResultItem[]>('/resource-governance/ctl/batch-restart', data)
+
 export const updateWorkloadImage = (clusterId: number, kind: string, namespace: string, name: string, data: Payload) =>
   http.post<{ container: string; old_image: string; new_image: string }>(`/resources/clusters/${clusterId}/workloads/${kind}/${namespace}/${name}/image`, data)
 
