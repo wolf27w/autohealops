@@ -695,16 +695,20 @@ export const getTicketComments = (id: number) => http.get<TicketComment[]>(`/tic
 // ============ JVM 诊断（P0-R2） ============
 export interface JvmAction { action: string; label: string; desc: string; file: boolean }
 export interface JvmProcess { pid: number; target: string; is_jcmd: boolean }
+// R2：JVM 诊断结果（jstack/jcmd 返回 output 文本；jfr/heapdump 返回 file_path 产物路径）
 export interface JvmDiagResult {
-  action: string; command: string; pid: string | null; output: string
-  file: boolean; file_path?: string; hint?: string; backend?: string
+  success: boolean; output: string; file_path: string; error: string
 }
 
 export const getJvmActions = () => http.get<JvmAction[]>('/jvm/actions')
 export const getJvmProcesses = (clusterId: number, ns: string, pod: string, container = '') =>
   http.get<{ raw: string; processes: JvmProcess[]; backend?: string; hint?: string }>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/processes`, { params: { container } })
 export const jvmDiagnose = (clusterId: number, ns: string, pod: string, payload: Payload) =>
-  http.post<JvmDiagResult>(`/jvm/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/diagnose`, payload, { timeout: 180000 })
+  http.post<JvmDiagResult>(`/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/jvm/diagnose`, payload, { timeout: 180000 })
+// R2：采集 JVM 启动参数（java_version + -Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize）
+export interface JvmParamsResult { success: boolean; params: string; error: string }
+export const jvmParams = (clusterId: number, ns: string, pod: string, container = '') =>
+  http.get<JvmParamsResult>(`/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/jvm/params`, { params: { container } })
 // JVM 综合诊断（把已采集的 JVM 证据发 AI 做应用健康诊断）
 export interface JvmAiAnalysis { root_cause?: string; suggestions?: string[]; risk_level?: string; confidence?: number; model_used?: string }
 export const jvmAiAnalyze = (clusterId: number, ns: string, pod: string, payload: { evidence: string; container?: string; severity?: string }) =>
