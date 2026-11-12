@@ -115,6 +115,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.QueryPrometheusRequest.SerializeToString,
                 response_deserializer=executor__pb2.QueryPrometheusResponse.FromString,
                 _registered_method=True)
+        self.GetPeakUsage = channel.unary_unary(
+                '/executor.ExecutorService/GetPeakUsage',
+                request_serializer=executor__pb2.GetPeakUsageRequest.SerializeToString,
+                response_deserializer=executor__pb2.GetPeakUsageResponse.FromString,
+                _registered_method=True)
         self.GetPodLogs = channel.unary_unary(
                 '/executor.ExecutorService/GetPodLogs',
                 request_serializer=executor__pb2.GetPodLogsRequest.SerializeToString,
@@ -348,6 +353,13 @@ class ExecutorServiceServicer(object):
 
     def QueryPrometheus(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPeakUsage(self, request, context):
+        """高峰期资源采集（R1：工作负载 P80/P95 CPU/内存用量，Prometheus 聚合）
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -597,6 +609,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.QueryPrometheus,
                     request_deserializer=executor__pb2.QueryPrometheusRequest.FromString,
                     response_serializer=executor__pb2.QueryPrometheusResponse.SerializeToString,
+            ),
+            'GetPeakUsage': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPeakUsage,
+                    request_deserializer=executor__pb2.GetPeakUsageRequest.FromString,
+                    response_serializer=executor__pb2.GetPeakUsageResponse.SerializeToString,
             ),
             'GetPodLogs': grpc.unary_unary_rpc_method_handler(
                     servicer.GetPodLogs,
@@ -1152,6 +1169,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/QueryPrometheus',
             executor__pb2.QueryPrometheusRequest.SerializeToString,
             executor__pb2.QueryPrometheusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPeakUsage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetPeakUsage',
+            executor__pb2.GetPeakUsageRequest.SerializeToString,
+            executor__pb2.GetPeakUsageResponse.FromString,
             options,
             channel_credentials,
             insecure,

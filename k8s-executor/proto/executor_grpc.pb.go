@@ -37,6 +37,7 @@ const (
 	ExecutorService_ListDeploymentPods_FullMethodName    = "/executor.ExecutorService/ListDeploymentPods"
 	ExecutorService_ListPodRestartInfo_FullMethodName    = "/executor.ExecutorService/ListPodRestartInfo"
 	ExecutorService_QueryPrometheus_FullMethodName       = "/executor.ExecutorService/QueryPrometheus"
+	ExecutorService_GetPeakUsage_FullMethodName          = "/executor.ExecutorService/GetPeakUsage"
 	ExecutorService_GetPodLogs_FullMethodName            = "/executor.ExecutorService/GetPodLogs"
 	ExecutorService_GetPodYaml_FullMethodName            = "/executor.ExecutorService/GetPodYaml"
 	ExecutorService_ApplyPodYaml_FullMethodName          = "/executor.ExecutorService/ApplyPodYaml"
@@ -100,6 +101,8 @@ type ExecutorServiceClient interface {
 	// 列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断的检测数据源）
 	ListPodRestartInfo(ctx context.Context, in *ListPodRestartInfoRequest, opts ...grpc.CallOption) (*ListPodRestartInfoResponse, error)
 	QueryPrometheus(ctx context.Context, in *QueryPrometheusRequest, opts ...grpc.CallOption) (*QueryPrometheusResponse, error)
+	// 高峰期资源采集（R1：工作负载 P80/P95 CPU/内存用量，Prometheus 聚合）
+	GetPeakUsage(ctx context.Context, in *GetPeakUsageRequest, opts ...grpc.CallOption) (*GetPeakUsageResponse, error)
 	// 查看 Pod 容器日志（logs）
 	GetPodLogs(ctx context.Context, in *GetPodLogsRequest, opts ...grpc.CallOption) (*GetPodLogsResponse, error)
 	// 获取 Pod YAML（只读）
@@ -325,6 +328,16 @@ func (c *executorServiceClient) QueryPrometheus(ctx context.Context, in *QueryPr
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(QueryPrometheusResponse)
 	err := c.cc.Invoke(ctx, ExecutorService_QueryPrometheus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) GetPeakUsage(ctx context.Context, in *GetPeakUsageRequest, opts ...grpc.CallOption) (*GetPeakUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPeakUsageResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_GetPeakUsage_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -611,6 +624,8 @@ type ExecutorServiceServer interface {
 	// 列出集群全部 Pod 的重启信息（N5：重启原因 AI 诊断的检测数据源）
 	ListPodRestartInfo(context.Context, *ListPodRestartInfoRequest) (*ListPodRestartInfoResponse, error)
 	QueryPrometheus(context.Context, *QueryPrometheusRequest) (*QueryPrometheusResponse, error)
+	// 高峰期资源采集（R1：工作负载 P80/P95 CPU/内存用量，Prometheus 聚合）
+	GetPeakUsage(context.Context, *GetPeakUsageRequest) (*GetPeakUsageResponse, error)
 	// 查看 Pod 容器日志（logs）
 	GetPodLogs(context.Context, *GetPodLogsRequest) (*GetPodLogsResponse, error)
 	// 获取 Pod YAML（只读）
@@ -711,6 +726,9 @@ func (UnimplementedExecutorServiceServer) ListPodRestartInfo(context.Context, *L
 }
 func (UnimplementedExecutorServiceServer) QueryPrometheus(context.Context, *QueryPrometheusRequest) (*QueryPrometheusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryPrometheus not implemented")
+}
+func (UnimplementedExecutorServiceServer) GetPeakUsage(context.Context, *GetPeakUsageRequest) (*GetPeakUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPeakUsage not implemented")
 }
 func (UnimplementedExecutorServiceServer) GetPodLogs(context.Context, *GetPodLogsRequest) (*GetPodLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPodLogs not implemented")
@@ -1075,6 +1093,24 @@ func _ExecutorService_QueryPrometheus_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ExecutorServiceServer).QueryPrometheus(ctx, req.(*QueryPrometheusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_GetPeakUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPeakUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).GetPeakUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_GetPeakUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).GetPeakUsage(ctx, req.(*GetPeakUsageRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1562,6 +1598,10 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryPrometheus",
 			Handler:    _ExecutorService_QueryPrometheus_Handler,
+		},
+		{
+			MethodName: "GetPeakUsage",
+			Handler:    _ExecutorService_GetPeakUsage_Handler,
 		},
 		{
 			MethodName: "GetPodLogs",

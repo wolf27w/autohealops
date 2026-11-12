@@ -93,6 +93,23 @@ func (s *Server) QueryPrometheus(ctx context.Context, req *pb.QueryPrometheusReq
 	return &pb.QueryPrometheusResponse{Success: true, Data: string(data)}, nil
 }
 
+// GetPeakUsage 高峰期资源采集（R1：工作负载 P80/P95 CPU/内存用量）
+func (s *Server) GetPeakUsage(ctx context.Context, req *pb.GetPeakUsageRequest) (*pb.GetPeakUsageResponse, error) {
+	if req == nil {
+		return &pb.GetPeakUsageResponse{Success: false, Error: "请求为空"}, nil
+	}
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetPeakUsageResponse{Success: false, Error: err.Error()}, nil
+	}
+	res, err := ex.GetPeakUsage(ctx, req.Namespace, req.WorkloadKind, req.WorkloadName, req.Metric, int(req.WindowHours))
+	if err != nil {
+		s.logger.Warn("高峰期用量采集失败", zap.Int64("cluster", req.ClusterId), zap.String("workload", req.WorkloadName), zap.String("metric", req.Metric), zap.Error(err))
+		return &pb.GetPeakUsageResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.GetPeakUsageResponse{Success: true, P80: res.P80, P95: res.P95}, nil
+}
+
 // StartWatch 启动集群监听
 func (s *Server) StartWatch(ctx context.Context, req *pb.StartWatchRequest) (*pb.StartWatchResponse, error) {
 	if err := s.watchManager.StartClusterWatch(ctx, uint(req.ClusterId)); err != nil {

@@ -40,6 +40,9 @@ service ExecutorService {
 
   rpc QueryPrometheus(QueryPrometheusRequest) returns (QueryPrometheusResponse);
 
+  // 高峰期资源采集（R1：工作负载 P80/P95 CPU/内存用量，Prometheus 聚合）
+  rpc GetPeakUsage(GetPeakUsageRequest) returns (GetPeakUsageResponse);
+
   // 查看 Pod 容器日志（logs）
   rpc GetPodLogs(GetPodLogsRequest) returns (GetPodLogsResponse);
   // 获取 Pod YAML（只读）
@@ -320,6 +323,22 @@ message QueryPrometheusResponse {
   bool success = 1;
   string data = 2;         // Prometheus /api/v1/query 返回 JSON（含 result 数组）
   string error = 3;
+}
+
+// ---------- GetPeakUsage（R1 高峰期资源采集） ----------
+message GetPeakUsageRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string workload_kind = 3;   // deployment/statefulset/daemonset
+  string workload_name = 4;
+  string metric = 5;          // cpu/memory
+  int32 window_hours = 6;     // 高峰时段窗口（小时，默认 24）
+}
+message GetPeakUsageResponse {
+  bool success = 1;
+  double p80 = 2;   // P80 用量（cpu=核数，memory=字节）
+  double p95 = 3;   // P95 用量
+  string error = 4;
 }
 
 // ---------- GetPodLogs ----------
