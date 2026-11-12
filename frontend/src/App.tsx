@@ -13,7 +13,6 @@ const ClusterDetail = lazy(() => import('./pages/ClusterDetail'))
 const ServiceDetail = lazy(() => import('./pages/ServiceDetail'))
 // R32-P1：集群内布局与子页面
 const ClusterLayout = lazy(() => import('./pages/cluster/ClusterLayout'))
-const ComingSoon = lazy(() => import('./pages/cluster/ComingSoon'))
 const ClusterOverviewRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ClusterOverviewRoute })))
 const NodesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.NodesRoute })))
 const WorkloadsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.WorkloadsRoute })))
@@ -22,6 +21,8 @@ const PodsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ def
 const ServicesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ServicesRoute })))
 const StorageRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.StorageRoute })))
 const ConfigsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigsRoute })))
+const InspectionRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.InspectionRoute })))
+const MonitoringRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.MonitoringRoute })))
 const AlertList = lazy(() => import('./pages/AlertList'))
 const ApprovalList = lazy(() => import('./pages/ApprovalList'))
 const ProcessingRecords = lazy(() => import('./pages/ProcessingRecords'))
@@ -163,8 +164,8 @@ export default function App() {
         <Route path="services" element={<ServicesRoute />} />
         <Route path="storage" element={<StorageRoute />} />
         <Route path="configs" element={<ConfigsRoute />} />
-        <Route path="monitoring" element={<ComingSoon title="监控告警" note="集群维度的监控聚合在下一阶段接入；当前可在大屏或仪表盘查看" />} />
-        <Route path="inspection" element={<ComingSoon title="巡检与诊断" note="集群巡检报告入口在下一阶段迁移到集群内" />} />
+        <Route path="monitoring" element={<MonitoringRoute />} />
+        <Route path="inspection" element={<InspectionRoute />} />
       </Route>
     </Routes>
     </Suspense>

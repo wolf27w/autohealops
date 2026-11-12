@@ -7,6 +7,8 @@ import WorkloadsList from './WorkloadsList'
 import PodsList from './PodsList'
 import ServicesList from './ServicesList'
 import StorageConfig from './StorageConfig'
+import ClusterInspection from './ClusterInspection'
+import ClusterMonitoring from './ClusterMonitoring'
 
 type WlKind = 'deployment' | 'statefulset' | 'daemonset' | 'cronjob'
 const KINDS: WlKind[] = ['deployment', 'statefulset', 'daemonset', 'cronjob']
@@ -44,4 +46,12 @@ export function StorageRoute() {
 
 export function ConfigsRoute() {
   return <StorageConfig clusterId={useClusterId()} initialTab="configmaps" />
+}
+
+export function InspectionRoute() {
+  return <ClusterInspection clusterId={useClusterId()} />
+}
+
+export function MonitoringRoute() {
+  return <ClusterMonitoring clusterId={useClusterId()} />
 }
