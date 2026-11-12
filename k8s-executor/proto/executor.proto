@@ -82,6 +82,11 @@ service ExecutorService {
 
   // 交互式终端（TTY）：双向流（stdin/stdout/resize）
   rpc ExecPodStream(stream ExecPodStreamFrame) returns (stream ExecPodStreamFrame);
+
+  // JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
+  rpc JvmDiagnose(JvmDiagnoseRequest) returns (JvmDiagnoseResponse);
+  // 采集 JVM 启动参数（-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version），R2
+  rpc JvmParams(JvmParamsRequest) returns (JvmParamsResponse);
 }
 
 // ---------- StartWatch ----------
@@ -753,4 +758,34 @@ message CleanupEvictedResponse {
   int32 deleted = 2;        // 实际删除数量
   string message = 3;
   string error = 4;
+}
+
+// ---------- JvmDiagnose（R2 JVM 深度诊断） ----------
+message JvmDiagnoseRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod = 3;
+  string container = 4;   // 空=第一个容器
+  string action = 5;      // jstack/jfr/heapdump/jcmd
+  string args = 6;        // pid 或 "pid subcommand args"（jcmd 透传）
+}
+message JvmDiagnoseResponse {
+  bool success = 1;
+  string output = 2;      // 文本输出（jstack/jcmd 直接返回）
+  string file_path = 3;   // jfr/heapdump 产物落盘路径（executor 本地，供 api-server 下载）
+  string error = 4;
+}
+
+// ---------- JvmParams（R2 JVM 启动参数采集） ----------
+message JvmParamsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod = 3;
+  string container = 4;   // 空=第一个容器
+  string args = 5;        // pid（空=自动探测 Java 进程）
+}
+message JvmParamsResponse {
+  bool success = 1;
+  string params = 2;      // 采集结果（java_version + -Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize）
+  string error = 3;
 }

@@ -6694,6 +6694,296 @@ func (x *CleanupEvictedResponse) GetError() string {
 	return ""
 }
 
+// ---------- JvmDiagnose（R2 JVM 深度诊断） ----------
+type JvmDiagnoseRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Pod           string                 `protobuf:"bytes,3,opt,name=pod,proto3" json:"pod,omitempty"`
+	Container     string                 `protobuf:"bytes,4,opt,name=container,proto3" json:"container,omitempty"` // 空=第一个容器
+	Action        string                 `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`       // jstack/jfr/heapdump/jcmd
+	Args          string                 `protobuf:"bytes,6,opt,name=args,proto3" json:"args,omitempty"`           // pid 或 "pid subcommand args"（jcmd 透传）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JvmDiagnoseRequest) Reset() {
+	*x = JvmDiagnoseRequest{}
+	mi := &file_proto_executor_proto_msgTypes[94]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JvmDiagnoseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JvmDiagnoseRequest) ProtoMessage() {}
+
+func (x *JvmDiagnoseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[94]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JvmDiagnoseRequest.ProtoReflect.Descriptor instead.
+func (*JvmDiagnoseRequest) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{94}
+}
+
+func (x *JvmDiagnoseRequest) GetClusterId() int64 {
+	if x != nil {
+		return x.ClusterId
+	}
+	return 0
+}
+
+func (x *JvmDiagnoseRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *JvmDiagnoseRequest) GetPod() string {
+	if x != nil {
+		return x.Pod
+	}
+	return ""
+}
+
+func (x *JvmDiagnoseRequest) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *JvmDiagnoseRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *JvmDiagnoseRequest) GetArgs() string {
+	if x != nil {
+		return x.Args
+	}
+	return ""
+}
+
+type JvmDiagnoseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Output        string                 `protobuf:"bytes,2,opt,name=output,proto3" json:"output,omitempty"`                     // 文本输出（jstack/jcmd 直接返回）
+	FilePath      string                 `protobuf:"bytes,3,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"` // jfr/heapdump 产物落盘路径（executor 本地，供 api-server 下载）
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JvmDiagnoseResponse) Reset() {
+	*x = JvmDiagnoseResponse{}
+	mi := &file_proto_executor_proto_msgTypes[95]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JvmDiagnoseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JvmDiagnoseResponse) ProtoMessage() {}
+
+func (x *JvmDiagnoseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[95]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JvmDiagnoseResponse.ProtoReflect.Descriptor instead.
+func (*JvmDiagnoseResponse) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{95}
+}
+
+func (x *JvmDiagnoseResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *JvmDiagnoseResponse) GetOutput() string {
+	if x != nil {
+		return x.Output
+	}
+	return ""
+}
+
+func (x *JvmDiagnoseResponse) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
+	}
+	return ""
+}
+
+func (x *JvmDiagnoseResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// ---------- JvmParams（R2 JVM 启动参数采集） ----------
+type JvmParamsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Pod           string                 `protobuf:"bytes,3,opt,name=pod,proto3" json:"pod,omitempty"`
+	Container     string                 `protobuf:"bytes,4,opt,name=container,proto3" json:"container,omitempty"` // 空=第一个容器
+	Args          string                 `protobuf:"bytes,5,opt,name=args,proto3" json:"args,omitempty"`           // pid（空=自动探测 Java 进程）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JvmParamsRequest) Reset() {
+	*x = JvmParamsRequest{}
+	mi := &file_proto_executor_proto_msgTypes[96]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JvmParamsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JvmParamsRequest) ProtoMessage() {}
+
+func (x *JvmParamsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[96]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JvmParamsRequest.ProtoReflect.Descriptor instead.
+func (*JvmParamsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{96}
+}
+
+func (x *JvmParamsRequest) GetClusterId() int64 {
+	if x != nil {
+		return x.ClusterId
+	}
+	return 0
+}
+
+func (x *JvmParamsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *JvmParamsRequest) GetPod() string {
+	if x != nil {
+		return x.Pod
+	}
+	return ""
+}
+
+func (x *JvmParamsRequest) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *JvmParamsRequest) GetArgs() string {
+	if x != nil {
+		return x.Args
+	}
+	return ""
+}
+
+type JvmParamsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Params        string                 `protobuf:"bytes,2,opt,name=params,proto3" json:"params,omitempty"` // 采集结果（java_version + -Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize）
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JvmParamsResponse) Reset() {
+	*x = JvmParamsResponse{}
+	mi := &file_proto_executor_proto_msgTypes[97]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JvmParamsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JvmParamsResponse) ProtoMessage() {}
+
+func (x *JvmParamsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[97]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JvmParamsResponse.ProtoReflect.Descriptor instead.
+func (*JvmParamsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{97}
+}
+
+func (x *JvmParamsResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *JvmParamsResponse) GetParams() string {
+	if x != nil {
+		return x.Params
+	}
+	return ""
+}
+
+func (x *JvmParamsResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_proto_executor_proto protoreflect.FileDescriptor
 
 const file_proto_executor_proto_rawDesc = "" +
@@ -7282,7 +7572,31 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\adeleted\x18\x02 \x01(\x05R\adeleted\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error2\xdb\x18\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xad\x01\n" +
+	"\x12JvmDiagnoseRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03pod\x18\x03 \x01(\tR\x03pod\x12\x1c\n" +
+	"\tcontainer\x18\x04 \x01(\tR\tcontainer\x12\x16\n" +
+	"\x06action\x18\x05 \x01(\tR\x06action\x12\x12\n" +
+	"\x04args\x18\x06 \x01(\tR\x04args\"z\n" +
+	"\x13JvmDiagnoseResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x16\n" +
+	"\x06output\x18\x02 \x01(\tR\x06output\x12\x1b\n" +
+	"\tfile_path\x18\x03 \x01(\tR\bfilePath\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x93\x01\n" +
+	"\x10JvmParamsRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03pod\x18\x03 \x01(\tR\x03pod\x12\x1c\n" +
+	"\tcontainer\x18\x04 \x01(\tR\tcontainer\x12\x12\n" +
+	"\x04args\x18\x05 \x01(\tR\x04args\"[\n" +
+	"\x11JvmParamsResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x16\n" +
+	"\x06params\x18\x02 \x01(\tR\x06params\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error2\xed\x19\n" +
 	"\x0fExecutorService\x12G\n" +
 	"\n" +
 	"StartWatch\x12\x1b.executor.StartWatchRequest\x1a\x1c.executor.StartWatchResponse\x12D\n" +
@@ -7324,7 +7638,9 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\x0eRolloutHistory\x12\x1f.executor.RolloutHistoryRequest\x1a .executor.RolloutHistoryResponse\x12J\n" +
 	"\vUpdateProbe\x12\x1c.executor.UpdateProbeRequest\x1a\x1d.executor.UpdateProbeResponse\x12Y\n" +
 	"\x10RecreateWorkload\x12!.executor.RecreateWorkloadRequest\x1a\".executor.RecreateWorkloadResponse\x12O\n" +
-	"\rExecPodStream\x12\x1c.executor.ExecPodStreamFrame\x1a\x1c.executor.ExecPodStreamFrame(\x010\x01B4Z2github.com/autohealops/k8s-executor/proto;executorb\x06proto3"
+	"\rExecPodStream\x12\x1c.executor.ExecPodStreamFrame\x1a\x1c.executor.ExecPodStreamFrame(\x010\x01\x12J\n" +
+	"\vJvmDiagnose\x12\x1c.executor.JvmDiagnoseRequest\x1a\x1d.executor.JvmDiagnoseResponse\x12D\n" +
+	"\tJvmParams\x12\x1a.executor.JvmParamsRequest\x1a\x1b.executor.JvmParamsResponseB4Z2github.com/autohealops/k8s-executor/proto;executorb\x06proto3"
 
 var (
 	file_proto_executor_proto_rawDescOnce sync.Once
@@ -7338,7 +7654,7 @@ func file_proto_executor_proto_rawDescGZIP() []byte {
 	return file_proto_executor_proto_rawDescData
 }
 
-var file_proto_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 94)
+var file_proto_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 98)
 var file_proto_executor_proto_goTypes = []any{
 	(*StartWatchRequest)(nil),             // 0: executor.StartWatchRequest
 	(*StartWatchResponse)(nil),            // 1: executor.StartWatchResponse
@@ -7434,6 +7750,10 @@ var file_proto_executor_proto_goTypes = []any{
 	(*ExecPodStreamFrame)(nil),            // 91: executor.ExecPodStreamFrame
 	(*CleanupEvictedRequest)(nil),         // 92: executor.CleanupEvictedRequest
 	(*CleanupEvictedResponse)(nil),        // 93: executor.CleanupEvictedResponse
+	(*JvmDiagnoseRequest)(nil),            // 94: executor.JvmDiagnoseRequest
+	(*JvmDiagnoseResponse)(nil),           // 95: executor.JvmDiagnoseResponse
+	(*JvmParamsRequest)(nil),              // 96: executor.JvmParamsRequest
+	(*JvmParamsResponse)(nil),             // 97: executor.JvmParamsResponse
 }
 var file_proto_executor_proto_depIdxs = []int32{
 	19, // 0: executor.GetPodStatusResponse.container_statuses:type_name -> executor.ContainerStatusInfo
@@ -7497,46 +7817,50 @@ var file_proto_executor_proto_depIdxs = []int32{
 	87, // 58: executor.ExecutorService.UpdateProbe:input_type -> executor.UpdateProbeRequest
 	89, // 59: executor.ExecutorService.RecreateWorkload:input_type -> executor.RecreateWorkloadRequest
 	91, // 60: executor.ExecutorService.ExecPodStream:input_type -> executor.ExecPodStreamFrame
-	1,  // 61: executor.ExecutorService.StartWatch:output_type -> executor.StartWatchResponse
-	3,  // 62: executor.ExecutorService.StopWatch:output_type -> executor.StopWatchResponse
-	5,  // 63: executor.ExecutorService.ExecuteCommand:output_type -> executor.ExecuteCommandResponse
-	7,  // 64: executor.ExecutorService.ExecutePlan:output_type -> executor.ExecutePlanResponse
-	9,  // 65: executor.ExecutorService.RollbackPlan:output_type -> executor.RollbackPlanResponse
-	11, // 66: executor.ExecutorService.HealthCheck:output_type -> executor.HealthCheckResponse
-	13, // 67: executor.ExecutorService.CollectQuota:output_type -> executor.CollectQuotaResponse
-	15, // 68: executor.ExecutorService.RunScript:output_type -> executor.RunScriptResponse
-	17, // 69: executor.ExecutorService.BatchExecute:output_type -> executor.BatchExecuteResponse
-	20, // 70: executor.ExecutorService.GetPodStatus:output_type -> executor.GetPodStatusResponse
-	22, // 71: executor.ExecutorService.RepairImagePull:output_type -> executor.RepairImagePullResponse
-	24, // 72: executor.ExecutorService.GetDeploymentStatus:output_type -> executor.GetDeploymentStatusResponse
-	26, // 73: executor.ExecutorService.ExecInPod:output_type -> executor.ExecInPodResponse
-	29, // 74: executor.ExecutorService.ListDeploymentPods:output_type -> executor.ListDeploymentPodsResponse
-	33, // 75: executor.ExecutorService.ListPodRestartInfo:output_type -> executor.ListPodRestartInfoResponse
-	35, // 76: executor.ExecutorService.QueryPrometheus:output_type -> executor.QueryPrometheusResponse
-	37, // 77: executor.ExecutorService.GetPodLogs:output_type -> executor.GetPodLogsResponse
-	39, // 78: executor.ExecutorService.GetPodYaml:output_type -> executor.GetPodYamlResponse
-	41, // 79: executor.ExecutorService.ApplyPodYaml:output_type -> executor.ApplyPodYamlResponse
-	44, // 80: executor.ExecutorService.ListPods:output_type -> executor.ListPodsResponse
-	53, // 81: executor.ExecutorService.GetPodDetail:output_type -> executor.GetPodDetailResponse
-	55, // 82: executor.ExecutorService.GetWorkloadMounts:output_type -> executor.GetWorkloadMountsResponse
-	62, // 83: executor.ExecutorService.ListMiscResources:output_type -> executor.ListMiscResourcesResponse
-	66, // 84: executor.ExecutorService.GetPodEvents:output_type -> executor.GetPodEventsResponse
-	68, // 85: executor.ExecutorService.GetWorkloadYaml:output_type -> executor.GetWorkloadYamlResponse
-	70, // 86: executor.ExecutorService.ApplyWorkloadYaml:output_type -> executor.ApplyWorkloadYamlResponse
-	72, // 87: executor.ExecutorService.DeleteResource:output_type -> executor.DeleteResourceResponse
-	93, // 88: executor.ExecutorService.CleanupEvicted:output_type -> executor.CleanupEvictedResponse
-	47, // 89: executor.ExecutorService.ListNamespaces:output_type -> executor.ListNamespacesResponse
-	74, // 90: executor.ExecutorService.SetupRBAC:output_type -> executor.SetupRBACResponse
-	77, // 91: executor.ExecutorService.ReconcileRoleBindings:output_type -> executor.ReconcileRoleBindingsResponse
-	80, // 92: executor.ExecutorService.ListWorkloads:output_type -> executor.ListWorkloadsResponse
-	82, // 93: executor.ExecutorService.ScaleWorkload:output_type -> executor.ScaleWorkloadResponse
-	84, // 94: executor.ExecutorService.RolloutWorkload:output_type -> executor.RolloutWorkloadResponse
-	86, // 95: executor.ExecutorService.RolloutHistory:output_type -> executor.RolloutHistoryResponse
-	88, // 96: executor.ExecutorService.UpdateProbe:output_type -> executor.UpdateProbeResponse
-	90, // 97: executor.ExecutorService.RecreateWorkload:output_type -> executor.RecreateWorkloadResponse
-	91, // 98: executor.ExecutorService.ExecPodStream:output_type -> executor.ExecPodStreamFrame
-	61, // [61:99] is the sub-list for method output_type
-	23, // [23:61] is the sub-list for method input_type
+	94, // 61: executor.ExecutorService.JvmDiagnose:input_type -> executor.JvmDiagnoseRequest
+	96, // 62: executor.ExecutorService.JvmParams:input_type -> executor.JvmParamsRequest
+	1,  // 63: executor.ExecutorService.StartWatch:output_type -> executor.StartWatchResponse
+	3,  // 64: executor.ExecutorService.StopWatch:output_type -> executor.StopWatchResponse
+	5,  // 65: executor.ExecutorService.ExecuteCommand:output_type -> executor.ExecuteCommandResponse
+	7,  // 66: executor.ExecutorService.ExecutePlan:output_type -> executor.ExecutePlanResponse
+	9,  // 67: executor.ExecutorService.RollbackPlan:output_type -> executor.RollbackPlanResponse
+	11, // 68: executor.ExecutorService.HealthCheck:output_type -> executor.HealthCheckResponse
+	13, // 69: executor.ExecutorService.CollectQuota:output_type -> executor.CollectQuotaResponse
+	15, // 70: executor.ExecutorService.RunScript:output_type -> executor.RunScriptResponse
+	17, // 71: executor.ExecutorService.BatchExecute:output_type -> executor.BatchExecuteResponse
+	20, // 72: executor.ExecutorService.GetPodStatus:output_type -> executor.GetPodStatusResponse
+	22, // 73: executor.ExecutorService.RepairImagePull:output_type -> executor.RepairImagePullResponse
+	24, // 74: executor.ExecutorService.GetDeploymentStatus:output_type -> executor.GetDeploymentStatusResponse
+	26, // 75: executor.ExecutorService.ExecInPod:output_type -> executor.ExecInPodResponse
+	29, // 76: executor.ExecutorService.ListDeploymentPods:output_type -> executor.ListDeploymentPodsResponse
+	33, // 77: executor.ExecutorService.ListPodRestartInfo:output_type -> executor.ListPodRestartInfoResponse
+	35, // 78: executor.ExecutorService.QueryPrometheus:output_type -> executor.QueryPrometheusResponse
+	37, // 79: executor.ExecutorService.GetPodLogs:output_type -> executor.GetPodLogsResponse
+	39, // 80: executor.ExecutorService.GetPodYaml:output_type -> executor.GetPodYamlResponse
+	41, // 81: executor.ExecutorService.ApplyPodYaml:output_type -> executor.ApplyPodYamlResponse
+	44, // 82: executor.ExecutorService.ListPods:output_type -> executor.ListPodsResponse
+	53, // 83: executor.ExecutorService.GetPodDetail:output_type -> executor.GetPodDetailResponse
+	55, // 84: executor.ExecutorService.GetWorkloadMounts:output_type -> executor.GetWorkloadMountsResponse
+	62, // 85: executor.ExecutorService.ListMiscResources:output_type -> executor.ListMiscResourcesResponse
+	66, // 86: executor.ExecutorService.GetPodEvents:output_type -> executor.GetPodEventsResponse
+	68, // 87: executor.ExecutorService.GetWorkloadYaml:output_type -> executor.GetWorkloadYamlResponse
+	70, // 88: executor.ExecutorService.ApplyWorkloadYaml:output_type -> executor.ApplyWorkloadYamlResponse
+	72, // 89: executor.ExecutorService.DeleteResource:output_type -> executor.DeleteResourceResponse
+	93, // 90: executor.ExecutorService.CleanupEvicted:output_type -> executor.CleanupEvictedResponse
+	47, // 91: executor.ExecutorService.ListNamespaces:output_type -> executor.ListNamespacesResponse
+	74, // 92: executor.ExecutorService.SetupRBAC:output_type -> executor.SetupRBACResponse
+	77, // 93: executor.ExecutorService.ReconcileRoleBindings:output_type -> executor.ReconcileRoleBindingsResponse
+	80, // 94: executor.ExecutorService.ListWorkloads:output_type -> executor.ListWorkloadsResponse
+	82, // 95: executor.ExecutorService.ScaleWorkload:output_type -> executor.ScaleWorkloadResponse
+	84, // 96: executor.ExecutorService.RolloutWorkload:output_type -> executor.RolloutWorkloadResponse
+	86, // 97: executor.ExecutorService.RolloutHistory:output_type -> executor.RolloutHistoryResponse
+	88, // 98: executor.ExecutorService.UpdateProbe:output_type -> executor.UpdateProbeResponse
+	90, // 99: executor.ExecutorService.RecreateWorkload:output_type -> executor.RecreateWorkloadResponse
+	91, // 100: executor.ExecutorService.ExecPodStream:output_type -> executor.ExecPodStreamFrame
+	95, // 101: executor.ExecutorService.JvmDiagnose:output_type -> executor.JvmDiagnoseResponse
+	97, // 102: executor.ExecutorService.JvmParams:output_type -> executor.JvmParamsResponse
+	63, // [63:103] is the sub-list for method output_type
+	23, // [23:63] is the sub-list for method input_type
 	23, // [23:23] is the sub-list for extension type_name
 	23, // [23:23] is the sub-list for extension extendee
 	0,  // [0:23] is the sub-list for field type_name
@@ -7553,7 +7877,7 @@ func file_proto_executor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_executor_proto_rawDesc), len(file_proto_executor_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   94,
+			NumMessages:   98,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

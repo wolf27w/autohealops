@@ -10,6 +10,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/config"
 	"github.com/autohealops/k8s-executor/internal/executor"
 	"github.com/autohealops/k8s-executor/internal/health"
+	"github.com/autohealops/k8s-executor/internal/jvm"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
 	"github.com/autohealops/k8s-executor/internal/prometheus"
 	"github.com/autohealops/k8s-executor/internal/quota"
@@ -274,6 +275,34 @@ func (s *Server) ExecInPod(ctx context.Context, req *pb.ExecInPodRequest) (*pb.E
 		return &pb.ExecInPodResponse{Success: false, Output: output, Error: err.Error()}, nil
 	}
 	return &pb.ExecInPodResponse{Success: true, Output: output}, nil
+}
+
+// JvmDiagnose JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
+func (s *Server) JvmDiagnose(ctx context.Context, req *pb.JvmDiagnoseRequest) (*pb.JvmDiagnoseResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return nil, err
+	}
+	output, filePath, err := jvm.New(ex).Diagnose(ctx, req.Namespace, req.Pod, req.Container, req.Action, req.Args)
+	if err != nil {
+		s.logger.Warn("JVM 诊断失败", zap.Int64("cluster", req.ClusterId), zap.String("pod", req.Pod), zap.String("action", req.Action), zap.Error(err))
+		return &pb.JvmDiagnoseResponse{Success: false, Output: output, FilePath: filePath, Error: err.Error()}, nil
+	}
+	return &pb.JvmDiagnoseResponse{Success: true, Output: output, FilePath: filePath}, nil
+}
+
+// JvmParams 采集 JVM 启动参数（-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version），R2
+func (s *Server) JvmParams(ctx context.Context, req *pb.JvmParamsRequest) (*pb.JvmParamsResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return nil, err
+	}
+	params, err := jvm.New(ex).Params(ctx, req.Namespace, req.Pod, req.Container, req.Args)
+	if err != nil {
+		s.logger.Warn("JVM 参数采集失败", zap.Int64("cluster", req.ClusterId), zap.String("pod", req.Pod), zap.Error(err))
+		return &pb.JvmParamsResponse{Success: false, Params: params, Error: err.Error()}, nil
+	}
+	return &pb.JvmParamsResponse{Success: true, Params: params}, nil
 }
 
 // ListDeploymentPods 列出 Deployment 所有 Pod 状态（验证修复是否真正恢复）

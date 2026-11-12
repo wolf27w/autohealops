@@ -59,6 +59,8 @@ const (
 	ExecutorService_UpdateProbe_FullMethodName           = "/executor.ExecutorService/UpdateProbe"
 	ExecutorService_RecreateWorkload_FullMethodName      = "/executor.ExecutorService/RecreateWorkload"
 	ExecutorService_ExecPodStream_FullMethodName         = "/executor.ExecutorService/ExecPodStream"
+	ExecutorService_JvmDiagnose_FullMethodName           = "/executor.ExecutorService/JvmDiagnose"
+	ExecutorService_JvmParams_FullMethodName             = "/executor.ExecutorService/JvmParams"
 )
 
 // ExecutorServiceClient is the client API for ExecutorService service.
@@ -137,6 +139,10 @@ type ExecutorServiceClient interface {
 	RecreateWorkload(ctx context.Context, in *RecreateWorkloadRequest, opts ...grpc.CallOption) (*RecreateWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
 	ExecPodStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecPodStreamFrame, ExecPodStreamFrame], error)
+	// JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
+	JvmDiagnose(ctx context.Context, in *JvmDiagnoseRequest, opts ...grpc.CallOption) (*JvmDiagnoseResponse, error)
+	// 采集 JVM 启动参数（-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version），R2
+	JvmParams(ctx context.Context, in *JvmParamsRequest, opts ...grpc.CallOption) (*JvmParamsResponse, error)
 }
 
 type executorServiceClient struct {
@@ -548,6 +554,26 @@ func (c *executorServiceClient) ExecPodStream(ctx context.Context, opts ...grpc.
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ExecutorService_ExecPodStreamClient = grpc.BidiStreamingClient[ExecPodStreamFrame, ExecPodStreamFrame]
 
+func (c *executorServiceClient) JvmDiagnose(ctx context.Context, in *JvmDiagnoseRequest, opts ...grpc.CallOption) (*JvmDiagnoseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(JvmDiagnoseResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_JvmDiagnose_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) JvmParams(ctx context.Context, in *JvmParamsRequest, opts ...grpc.CallOption) (*JvmParamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(JvmParamsResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_JvmParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ExecutorServiceServer is the server API for ExecutorService service.
 // All implementations must embed UnimplementedExecutorServiceServer
 // for forward compatibility.
@@ -624,6 +650,10 @@ type ExecutorServiceServer interface {
 	RecreateWorkload(context.Context, *RecreateWorkloadRequest) (*RecreateWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
 	ExecPodStream(grpc.BidiStreamingServer[ExecPodStreamFrame, ExecPodStreamFrame]) error
+	// JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
+	JvmDiagnose(context.Context, *JvmDiagnoseRequest) (*JvmDiagnoseResponse, error)
+	// 采集 JVM 启动参数（-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version），R2
+	JvmParams(context.Context, *JvmParamsRequest) (*JvmParamsResponse, error)
 	mustEmbedUnimplementedExecutorServiceServer()
 }
 
@@ -747,6 +777,12 @@ func (UnimplementedExecutorServiceServer) RecreateWorkload(context.Context, *Rec
 }
 func (UnimplementedExecutorServiceServer) ExecPodStream(grpc.BidiStreamingServer[ExecPodStreamFrame, ExecPodStreamFrame]) error {
 	return status.Error(codes.Unimplemented, "method ExecPodStream not implemented")
+}
+func (UnimplementedExecutorServiceServer) JvmDiagnose(context.Context, *JvmDiagnoseRequest) (*JvmDiagnoseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method JvmDiagnose not implemented")
+}
+func (UnimplementedExecutorServiceServer) JvmParams(context.Context, *JvmParamsRequest) (*JvmParamsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method JvmParams not implemented")
 }
 func (UnimplementedExecutorServiceServer) mustEmbedUnimplementedExecutorServiceServer() {}
 func (UnimplementedExecutorServiceServer) testEmbeddedByValue()                         {}
@@ -1428,6 +1464,42 @@ func _ExecutorService_ExecPodStream_Handler(srv interface{}, stream grpc.ServerS
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ExecutorService_ExecPodStreamServer = grpc.BidiStreamingServer[ExecPodStreamFrame, ExecPodStreamFrame]
 
+func _ExecutorService_JvmDiagnose_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JvmDiagnoseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).JvmDiagnose(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_JvmDiagnose_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).JvmDiagnose(ctx, req.(*JvmDiagnoseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_JvmParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JvmParamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).JvmParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_JvmParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).JvmParams(ctx, req.(*JvmParamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ExecutorService_ServiceDesc is the grpc.ServiceDesc for ExecutorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1574,6 +1646,14 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecreateWorkload",
 			Handler:    _ExecutorService_RecreateWorkload_Handler,
+		},
+		{
+			MethodName: "JvmDiagnose",
+			Handler:    _ExecutorService_JvmDiagnose_Handler,
+		},
+		{
+			MethodName: "JvmParams",
+			Handler:    _ExecutorService_JvmParams_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

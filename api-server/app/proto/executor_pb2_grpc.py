@@ -225,6 +225,16 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.ExecPodStreamFrame.SerializeToString,
                 response_deserializer=executor__pb2.ExecPodStreamFrame.FromString,
                 _registered_method=True)
+        self.JvmDiagnose = channel.unary_unary(
+                '/executor.ExecutorService/JvmDiagnose',
+                request_serializer=executor__pb2.JvmDiagnoseRequest.SerializeToString,
+                response_deserializer=executor__pb2.JvmDiagnoseResponse.FromString,
+                _registered_method=True)
+        self.JvmParams = channel.unary_unary(
+                '/executor.ExecutorService/JvmParams',
+                request_serializer=executor__pb2.JvmParamsRequest.SerializeToString,
+                response_deserializer=executor__pb2.JvmParamsResponse.FromString,
+                _registered_method=True)
 
 
 class ExecutorServiceServicer(object):
@@ -491,6 +501,20 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def JvmDiagnose(self, request, context):
+        """JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def JvmParams(self, request, context):
+        """采集 JVM 启动参数（-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version），R2
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ExecutorServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -683,6 +707,16 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.ExecPodStream,
                     request_deserializer=executor__pb2.ExecPodStreamFrame.FromString,
                     response_serializer=executor__pb2.ExecPodStreamFrame.SerializeToString,
+            ),
+            'JvmDiagnose': grpc.unary_unary_rpc_method_handler(
+                    servicer.JvmDiagnose,
+                    request_deserializer=executor__pb2.JvmDiagnoseRequest.FromString,
+                    response_serializer=executor__pb2.JvmDiagnoseResponse.SerializeToString,
+            ),
+            'JvmParams': grpc.unary_unary_rpc_method_handler(
+                    servicer.JvmParams,
+                    request_deserializer=executor__pb2.JvmParamsRequest.FromString,
+                    response_serializer=executor__pb2.JvmParamsResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1712,6 +1746,60 @@ class ExecutorService(object):
             '/executor.ExecutorService/ExecPodStream',
             executor__pb2.ExecPodStreamFrame.SerializeToString,
             executor__pb2.ExecPodStreamFrame.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def JvmDiagnose(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/JvmDiagnose',
+            executor__pb2.JvmDiagnoseRequest.SerializeToString,
+            executor__pb2.JvmDiagnoseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def JvmParams(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/JvmParams',
+            executor__pb2.JvmParamsRequest.SerializeToString,
+            executor__pb2.JvmParamsResponse.FromString,
             options,
             channel_credentials,
             insecure,
