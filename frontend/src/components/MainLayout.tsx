@@ -1,7 +1,7 @@
 // 主布局：Sider 菜单 + Header + Content（全屏 + 现代配色）
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs, theme } from 'antd'
+import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs, theme, AutoComplete, Input } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   DashboardOutlined, ClusterOutlined, AlertOutlined, WarningOutlined,
@@ -12,11 +12,13 @@ import {
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
   ThunderboltOutlined, ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined, CalendarOutlined,
+  SearchOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
 import { getCurrentUser, isAdmin } from '../utils/auth'
 import { useThemeMode } from '../utils/theme'
+import { useGlobalRefresh } from './GlobalRefreshContext'
 
 const { Sider, Header, Content } = Layout
 
@@ -58,14 +60,7 @@ const menuItems: NavItem[] = [
   {
     key: 'g-diag', label: '智能诊断', icon: <MedicineBoxOutlined />,
     children: [
-      {
-        key: 'g-diag-fault', label: '故障诊断', icon: <ApartmentOutlined />,
-        children: [
-          { key: '/fault-diagnosis/cluster', label: '集群故障' },
-          { key: '/fault-diagnosis/app', label: '应用故障' },
-          { key: '/diagnostic', label: '数据库故障' },
-        ],
-      },
+      { key: '/fault-diagnosis', icon: <ApartmentOutlined />, label: '故障诊断' },
       { key: '/agent', icon: <MessageOutlined />, label: '应用诊断助手' },
     ],
   },
@@ -99,6 +94,19 @@ const menuItems: NavItem[] = [
   },
 ]
 
+// 拍平菜单为可搜索的叶子项（全局搜索用）
+function flattenMenu(items: NavItem[]): { key: string; label: string }[] {
+  const out: { key: string; label: string }[] = []
+  const walk = (nodes: NavItem[]) => {
+    for (const n of nodes || []) {
+      if (n.children && n.children.length) walk(n.children)
+      else if (n.key && n.key.startsWith('/')) out.push({ key: n.key, label: n.label || n.key })
+    }
+  }
+  walk(items)
+  return out
+}
+
 // admin 专属菜单项（viewer/operator 不可见；App.tsx 路由同样有 RequireRole 守卫）
 const ADMIN_ONLY_KEYS = new Set([
   '/strategy', '/notify-center', '/user-permission', '/log-sources',
@@ -126,6 +134,7 @@ function filterMenuItems(items: NavItem[], admin: boolean): MenuProps['items'] {
 export default function MainLayout() {
   const { token } = theme.useToken()
   const { mode, toggle } = useThemeMode()
+  const { refresh } = useGlobalRefresh()
   // 版本标记：方便确认浏览器加载的是哪一版
   document.title = `AutoHealOps 自愈平台 · build ${__BUILD_TS__.slice(5, 16).replace('T', ' ')}`
   // eslint-disable-next-line no-console
@@ -147,7 +156,7 @@ export default function MainLayout() {
   // 顶级分组 key（手风琴互斥单位）
   const TOP_KEYS = menuItems.map((g) => g.key)
   // 每个顶级分组下、需要与顶级一起展开的二级子菜单 key
-  const SUB_KEYS: Record<string, string[]> = { 'g-diag': ['g-diag-fault'] }
+  const SUB_KEYS: Record<string, string[]> = {}
   // 按当前路由计算应展开的 submenu keys（顶级分组 + 祖先二级），支持三级
   const openKeysForPath = (p: string): string[] => {
     for (const g of menuItems) {
@@ -263,6 +272,10 @@ export default function MainLayout() {
   }
 
   const [fullscreen, setFullscreen] = useState(false)
+  // 全局搜索（拍平菜单叶子项）
+  const searchOptions = flattenMenu(menuItems).map((m) => ({ value: m.key, label: m.label }))
+  const [searchVal, setSearchVal] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   useEffect(() => {
     const onFs = () => setFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', onFs)
@@ -316,9 +329,23 @@ export default function MainLayout() {
             <Button type="text" onClick={() => handleCollapse(!collapsed)}
               icon={collapsed ? <MenuUnfoldOutlined style={{ color: token.colorText, fontSize: 16 }} /> : <MenuFoldOutlined style={{ color: token.colorText, fontSize: 16 }} />} />
             <div style={{ fontSize: 16, fontWeight: 700, color: token.colorText }}>AutoHealOps 自愈平台</div>
-            <span style={{ fontSize: 11, color: token.colorTextSecondary }} title="前端构建/启动时间戳">build {__BUILD_TS__.slice(5, 16).replace('T', ' ')}</span>
+            <AutoComplete
+              value={searchVal}
+              options={searchOptions}
+              onChange={(v) => setSearchVal(v)}
+              onSearch={(v) => { setSearchVal(v); setSearchOpen(true) }}
+              onSelect={(k: string) => { setSearchVal(''); navigate(k) }}
+              open={searchOpen && !!searchVal}
+              onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+              style={{ width: 240 }}
+              placeholder="全局搜索…"
+              filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            >
+              <Input prefix={<SearchOutlined style={{ color: token.colorTextSecondary }} />} allowClear />
+            </AutoComplete>
           </Space>
           <Space size={16}>
+            <Button type="text" icon={<ReloadOutlined />} onClick={refresh} title="刷新当前页数据" />
             <Button type="text" icon={<BarChartOutlined />} onClick={() => window.open('/screen', '_blank')}>大屏</Button>
             <Button
               type="text"

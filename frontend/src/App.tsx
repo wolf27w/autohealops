@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Spin } from 'antd'
 import MainLayout from './components/MainLayout'
+import { GlobalRefreshProvider } from './components/GlobalRefreshContext'
 
 // 页面按路由懒加载（M5 打包优化）：首屏只加载壳 + 当前页，其余按需加载
 const Login = lazy(() => import('./pages/Login'))
@@ -35,8 +36,7 @@ const ExecutionDetail = lazy(() => import('./pages/ExecutionDetail'))
 const BatchOperation = lazy(() => import('./pages/BatchOperation'))
 const CustomTasks = lazy(() => import('./pages/CustomTasks'))
 const AgentChat = lazy(() => import('./pages/AgentChat'))
-const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))
-const FaultDiagnosis = lazy(() => import('./pages/FaultDiagnosis'))
+const FaultDiagnosisHub = lazy(() => import('./pages/FaultDiagnosisHub'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const AuditTrace = lazy(() => import('./pages/AuditTrace'))
 const Reports = lazy(() => import('./pages/Reports'))
@@ -92,7 +92,9 @@ export default function App() {
         path="/"
         element={
           <RequireAuth>
-            <MainLayout />
+            <GlobalRefreshProvider>
+              <MainLayout />
+            </GlobalRefreshProvider>
           </RequireAuth>
         }
       >
@@ -127,10 +129,10 @@ export default function App() {
         <Route path="prompt-suggestions" element={<RequireRole role="admin"><PromptSuggestions /></RequireRole>} />
         <Route path="zombie-services" element={<ZombieServices />} />
         <Route path="agent" element={<AgentChat />} />
-        <Route path="diagnostic" element={<DiagnosticCenter />} />
-        <Route path="fault-diagnosis" element={<Navigate to="/fault-diagnosis/app" replace />} />
-        <Route path="fault-diagnosis/cluster" element={<FaultDiagnosis category="cluster" />} />
-        <Route path="fault-diagnosis/app" element={<FaultDiagnosis category="app" />} />
+        <Route path="diagnostic" element={<Navigate to="/fault-diagnosis?tab=db" replace />} />
+        <Route path="fault-diagnosis" element={<FaultDiagnosisHub />} />
+        <Route path="fault-diagnosis/cluster" element={<Navigate to="/fault-diagnosis?tab=cluster" replace />} />
+        <Route path="fault-diagnosis/app" element={<Navigate to="/fault-diagnosis?tab=app" replace />} />
         <Route path="permissions" element={<Navigate to="/user-permission" replace />} />
         <Route path="knowledge" element={<KnowledgeBase />} />
         <Route path="audit" element={<AuditTrace />} />
