@@ -486,21 +486,26 @@ async def lifespan(app: FastAPI):
     # 数据库表结构由 alembic 管理（部署时执行 alembic upgrade head），启动时只做初始化
     await startup_tasks()
     # R12：启动 Agent 反向隧道网关（agent 主动外连接入）
-    try:
-        from app import agent_gateway
-        agent_gateway.start_server(getattr(settings, "AGENT_GATEWAY_ADDR", "0.0.0.0:9095"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Agent 网关启动失败: %s", e)
+    # R2 拆网关：AGENT_GATEWAY_MODE=remote 时网关由独立 agent-gateway 服务承载，本进程不启动
+    if getattr(settings, "AGENT_GATEWAY_MODE", "inproc") == "inproc":
+        try:
+            from app import agent_gateway
+            agent_gateway.start_server(getattr(settings, "AGENT_GATEWAY_ADDR", "0.0.0.0:9095"))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Agent 网关启动失败: %s", e)
+    else:
+        logger.info("Agent 网关由独立 agent-gateway 服务承载（AGENT_GATEWAY_MODE=remote），本进程不启动")
     logger.info("AutoHealOps 平台启动完成")
     yield
     # 关闭共享 HTTP 连接池
     from app.core.http_client import close_http_clients
     await close_http_clients()
-    try:
-        from app import agent_gateway
-        agent_gateway.stop_server()
-    except Exception:  # noqa: BLE001
-        pass
+    if getattr(settings, "AGENT_GATEWAY_MODE", "inproc") == "inproc":
+        try:
+            from app import agent_gateway
+            agent_gateway.stop_server()
+        except Exception:  # noqa: BLE001
+            pass
     logger.info("AutoHealOps 平台已停止")
 
 

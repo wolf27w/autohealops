@@ -316,8 +316,20 @@ async def agent_install_yaml(cluster_id: int, token: str = "", image: str = "", 
         import base64
 
         from app.services import agent_pki
-        cert_pem, key_pem = agent_pki.issue_client_cert(cluster_id)
-        ca_pem = agent_pki.ca_cert_pem()
+        if getattr(settings, "AGENT_GATEWAY_MODE", "inproc") == "remote":
+            # R2 拆网关：CA 私钥在 agent-gateway 侧，签发走内部 gRPC
+            import grpc as _grpc
+            from app.proto import agent_gateway_internal_pb2 as _ag_pb2
+            from app.proto import agent_gateway_internal_pb2_grpc as _ag_grpc
+            _addr = getattr(settings, "AGENT_GATEWAY_INTERNAL_ADDR", "127.0.0.1:9096")
+            _stub = _ag_grpc.AgentGatewayInternalStub(_grpc.insecure_channel(_addr))
+            _resp = _stub.IssueClientCert(_ag_pb2.IssueClientCertRequest(cluster_id=cluster_id, days=1825))
+            if not _resp.ok:
+                raise RuntimeError(_resp.error or "签发 agent 证书失败")
+            cert_pem, key_pem, ca_pem = _resp.cert_pem, _resp.key_pem, _resp.ca_pem
+        else:
+            cert_pem, key_pem = agent_pki.issue_client_cert(cluster_id)
+            ca_pem = agent_pki.ca_cert_pem()
 
         def _b64(v: str) -> str:
             return base64.b64encode(v.encode()).decode()

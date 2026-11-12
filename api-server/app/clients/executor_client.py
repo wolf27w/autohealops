@@ -10,6 +10,7 @@ import grpc
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.proto import executor_pb2, executor_pb2_grpc
+from app.proto import agent_gateway_internal_pb2, agent_gateway_internal_pb2_grpc
 
 logger = get_logger("api-server.executor_client")
 
@@ -52,6 +53,105 @@ def _get_stub():
     return _stub
 
 
+# ==================== R2 拆网关阶段 1：AGENT_GATEWAY_MODE 开关 ====================
+# 网关接入分两种模式：
+#   inproc（默认）：进程内直调 app.agent_gateway 模块（现有行为，api-server 单副本部署）。
+#   remote：agent 隧道连接表迁到独立 agent-gateway 服务后，经内部 gRPC（AgentGatewayInternal）
+#           远程下发隧道调用，api-server 可多副本。
+# remote 客户端懒初始化（同 _channel 惰性建 stub），仅 remote 模式且首次调用时建连。
+_GW_CHANNEL = None
+_GW_STUB = None
+
+
+def _gw_mode() -> str:
+    """当前网关模式：inproc / remote"""
+    return getattr(settings, "AGENT_GATEWAY_MODE", "inproc")
+
+
+def _get_gw_stub():
+    """懒初始化内部网关 gRPC stub（仅 remote 模式使用）"""
+    global _GW_CHANNEL, _GW_STUB
+    if _GW_STUB is None:
+        addr = getattr(settings, "AGENT_GATEWAY_INTERNAL_ADDR", "127.0.0.1:9096")
+        _GW_CHANNEL = grpc.insecure_channel(addr)
+        _GW_STUB = agent_gateway_internal_pb2_grpc.AgentGatewayInternalStub(_GW_CHANNEL)
+    return _GW_STUB
+
+
+def _remote_is_connected(cluster_id: int) -> bool:
+    """remote 模式在线判断：走内部网关 IsConnected"""
+    try:
+        resp = _get_gw_stub().IsConnected(
+            agent_gateway_internal_pb2.IsConnectedRequest(cluster_id=int(cluster_id)),
+            timeout=5.0,
+        )
+        return bool(resp.connected)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("remote 网关 IsConnected 失败（cluster=%s）: %s", cluster_id, e)
+        return False
+
+
+def _remote_call(cluster_id: int, method: str, payload: bytes, timeout: float = 30.0) -> bytes:
+    """remote 模式单发调用：走内部网关 TunnelCall，返回响应 payload 字节"""
+    t = float(timeout or 30.0)
+    resp = _get_gw_stub().TunnelCall(
+        agent_gateway_internal_pb2.TunnelCallRequest(
+            cluster_id=int(cluster_id), method=method, payload=payload, timeout=t,
+        ),
+        timeout=t + 5.0,
+    )
+    if not resp.ok:
+        raise RuntimeError(resp.error or "remote 网关 TunnelCall 失败")
+    return resp.payload
+
+
+def _remote_stream_call(cluster_id: int, method: str, payload: bytes, timeout: float | None = 300.0):
+    """remote 模式服务端流式：走内部网关 TunnelStreamCall，逐条 yield payload 字节"""
+    t = float(timeout or 300.0)
+    for chunk in _get_gw_stub().TunnelStreamCall(
+        agent_gateway_internal_pb2.TunnelCallRequest(
+            cluster_id=int(cluster_id), method=method, payload=payload, timeout=t,
+        ),
+        timeout=t + 5.0,
+    ):
+        if chunk.error:
+            raise RuntimeError(chunk.error)
+        yield chunk.payload
+
+
+# ---- 模式感知的网关接入层：_TunnelAwareStub / _agent_call 统一走这里，不再直调 agent_gateway ----
+
+def _gateway_is_connected(cluster_id: int) -> bool:
+    if _gw_mode() == "remote":
+        return _remote_is_connected(cluster_id)
+    from app import agent_gateway
+    return agent_gateway.is_connected(cluster_id)
+
+
+def _gateway_call(cluster_id: int, method: str, payload: bytes, timeout: float = 30.0) -> bytes:
+    if _gw_mode() == "remote":
+        return _remote_call(cluster_id, method, payload, timeout)
+    from app import agent_gateway
+    return agent_gateway.call(cluster_id, method, payload, timeout=timeout)
+
+
+def _gateway_stream_call(cluster_id: int, method: str, payload: bytes, timeout: float | None = 300.0):
+    if _gw_mode() == "remote":
+        yield from _remote_stream_call(cluster_id, method, payload, timeout)
+        return
+    from app import agent_gateway
+    yield from agent_gateway.stream_call(cluster_id, method, payload, timeout=timeout)
+
+
+def _gateway_bidi_call(cluster_id: int, method: str, request_iterator, timeout: float | None = None):
+    if _gw_mode() == "remote":
+        raise RuntimeError(
+            f"AGENT_GATEWAY_MODE=remote 暂不支持双向流（{method} 交互终端），R2 阶段 1 未实现"
+        )
+    from app import agent_gateway
+    yield from agent_gateway.bidi_call(cluster_id, method, request_iterator, timeout=timeout)
+
+
 # ==================== P1：全方法反向代理（agent 隧道） ====================
 # 原先只有 ExecuteCommand / GetPodLogs 显式走 _agent_call，其余 30+ 个方法一律直连平台侧 executor，
 # agent 接入的集群「连得上但用不了」。这里在 stub 层做一次代理：
@@ -87,9 +187,8 @@ class _TunnelAwareStub:
         def _call(req, timeout=None, metadata=None, **kwargs):
             cid = int(getattr(req, "cluster_id", 0) or 0)
             if cid:
-                from app import agent_gateway
-                if agent_gateway.is_connected(cid):
-                    data = agent_gateway.call(
+                if _gateway_is_connected(cid):
+                    data = _gateway_call(
                         cid, name, req.SerializeToString(),
                         timeout=timeout or ExecutorClient.TIMEOUT,
                     )
@@ -109,13 +208,12 @@ class _TunnelAwareStub:
         cid = int(getattr(req, "cluster_id", 0) or 0)
         if not cid:
             return False, None
-        from app import agent_gateway
-        if not agent_gateway.is_connected(cid):
+        if not _gateway_is_connected(cid):
             return False, None
         payload = req.SerializeToString()
 
         def gen():
-            for data in agent_gateway.stream_call(cid, method, payload, timeout):
+            for data in _gateway_stream_call(cid, method, payload, timeout):
                 yield resp_cls.FromString(data)
 
         return True, gen()
@@ -135,8 +233,7 @@ class _TunnelAwareStub:
         ids = list(getattr(req, "cluster_ids", []) or [])
         if not ids:
             return self._real.BatchExecute(req, timeout=timeout, metadata=metadata, **kwargs)
-        from app import agent_gateway
-        agent_ids = {i for i in ids if agent_gateway.is_connected(i)}
+        agent_ids = {i for i in ids if _gateway_is_connected(i)}
         if not agent_ids:
             return self._real.BatchExecute(req, timeout=timeout, metadata=metadata, **kwargs)
 
@@ -146,7 +243,7 @@ class _TunnelAwareStub:
                     cluster_ids=[cid], namespace=req.namespace, command=req.command, trace_id=req.trace_id,
                 )
                 if cid in agent_ids:
-                    for data in agent_gateway.stream_call(cid, "BatchExecute", sub.SerializeToString(), timeout):
+                    for data in _gateway_stream_call(cid, "BatchExecute", sub.SerializeToString(), timeout):
                         yield executor_pb2.BatchExecuteResponse.FromString(data)
                 else:
                     for resp in self._real.BatchExecute(sub, timeout=timeout, metadata=metadata):
@@ -168,10 +265,9 @@ class _TunnelAwareStub:
 
         cid = int(getattr(first, "cluster_id", 0) or 0)
         if cid:
-            from app import agent_gateway
-            if agent_gateway.is_connected(cid):
+            if _gateway_is_connected(cid):
                 def gen():
-                    for data in agent_gateway.bidi_call(cid, "ExecPodStream", chain(), timeout):
+                    for data in _gateway_bidi_call(cid, "ExecPodStream", chain(), timeout):
                         yield executor_pb2.ExecPodStreamFrame.FromString(data)
                 return gen()
             pull_gen = _pull_bidi(cid, "ExecPodStream", chain(), executor_pb2.ExecPodStreamFrame, timeout)
@@ -274,10 +370,9 @@ def _pull_bidi(cluster_id: int, method: str, frames, resp_cls, timeout: float):
 
 def _agent_call(cluster_id: int, method: str, req, resp_cls, timeout: float):
     """R12：若该集群有在线 agent，则经反向隧道下发并反序列化响应；否则返回 None（走直连）。"""
-    from app import agent_gateway
-    if not agent_gateway.is_connected(cluster_id):
+    if not _gateway_is_connected(cluster_id):
         return None
-    data = agent_gateway.call(cluster_id, method, req.SerializeToString(), timeout=timeout)
+    data = _gateway_call(cluster_id, method, req.SerializeToString(), timeout=timeout)
     return resp_cls.FromString(data)
 
 
