@@ -138,3 +138,30 @@ P0 2d → P1 3~4d → P2 1~2d → P3 2~3d → P4 0.5d ≈ **9~12 人日**。
 
 ### 离线可做（老板回家期间）
 P0、P2、P3 前端、R31 代码（迁移不执行）、小项2 —— 详见 `docs/OFFLINE-DEV-2026-11-11.md`。
+
+---
+
+## 2026-11-12 进度更新（本轮并行开发完成）
+
+### ✅ 已完成并提交（4 笔）
+- **R32-P0 平台外壳**（`a558019`）：顶栏重构（全局搜索 AutoComplete + 全局刷新按钮）、菜单三级→两级（故障诊断合一为页内三 Tab）、新增 `GlobalRefreshContext.tsx` + `FaultDiagnosisHub.tsx`。
+- **R32-P2 首页重写**（`7527b8d`）：`Dashboard.tsx` 重写为决策优先+概览卡合并版（健康分→5 KPI→趋势/构成→待办队列→集群水位/DB 健康），仅用现有接口、保留 5s 轮询。
+- **R32-P3 大屏 SSE 后端**（`1e59bb8`）：`screen_bus.py`(发布订阅+去重) + `screens.py`(SSE 端点) + 单测；父会话接线 `main.py` 路由 + 工单建单/关单、自愈完成 publish 挂点。
+- **R31 诊断会话共享**（`e315a2d`）：模型加 `shared/shared_at/shared_by` + 迁移 `a9b8c7d6e5f4`（**待 upgrade**）+ sessions 可见性/messages 权限/share 接口 + `AgentChat.tsx` 共享开关。
+- **小项2 Pod 级监控**：复核后发现已在 `99c3523` 完成（`PodMetricsDrawer` 用 `getPodMetrics`），冗余，无需改动。
+
+### 验证
+- 后端：`py_compile` 全过；单测 **23 个全绿**（screen_bus 11 + session_share 12）。
+- 前端：`npx tsc -b` **exit 0**（无类型错误）。
+
+### ⏳ 剩余未开发
+| 事项 | 状态 | 依赖 |
+|---|---|---|
+| R32-P3 大屏**前端**换 SSE 消费（monitor-bigscreen.html 局部刷新+绿块闪烁） | 待做 | 后端契约已就绪，可离线 |
+| R32-P4 清理（ClusterDetail 残留 / 权限矩阵复核 / 废弃路由） | 待做 | 需老板确认删除范围 |
+| 小项1 后端字段缺口（节点/CM/Secret/PVC/工作负载创建时间映射） | 待做 | 需集群验证 |
+| 小项3 集群内「监控告警/巡检诊断」占位页接真实内容 | 待做 | 部分需 P2/P3 |
+| R31 迁移 `a9b8c7d6e5f4` 升级 | 待执行 | 需 MySQL |
+| 大屏 SSE 端到端联调（≤1s 上屏） | 待联调 | 需后端+DB 起服务 |
+| 告警创建/合并 publish 挂点 | 待确认 | 告警源在 Go watcher 侧，api-server 无创建路径 |
+| P2-2 R2 平台多副本拆网关 | 待开发 | 需集群，方案见 `docs/R2-MULTI-REPLICA.md` |
