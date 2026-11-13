@@ -28,7 +28,9 @@ const HostManagement = lazy(() => import('./pages/HostManagement'))
 const WebTerminal = lazy(() => import('./pages/WebTerminal'))
 const HostSessionReplay = lazy(() => import('./pages/HostSessionReplay'))
 const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
-const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))  // TODO(P1)：换成本地数据库资源列表
+const DbResourceList = lazy(() => import('./pages/DbResourceList'))
+const DbDetail = lazy(() => import('./pages/DbDetail'))
+const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))
 // 告警监控
 const AlertHandling = lazy(() => import('./pages/AlertHandling'))
 const Tickets = lazy(() => import('./pages/Tickets'))
@@ -118,7 +120,8 @@ export default function App() {
         {/* ===== 资源中心 ===== */}
         <Route path="clusters" element={<ClusterList />} />
         <Route path="resources/hosts" element={guard('/resources/hosts', <HostManagement />)} />
-        <Route path="resources/databases" element={<DiagnosticCenter />} />
+        <Route path="resources/databases" element={<DbResourceList />} />
+        <Route path="resources/databases/:id" element={<DbDetail />} />
         <Route path="resources/terminal" element={<WebTerminal />} />
         <Route path="resources/terminal/:hostId" element={<WebTerminal />} />
         <Route path="resources/governance" element={guard('/resources/governance', <ResourceGovernance />)} />
