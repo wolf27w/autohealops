@@ -50,7 +50,7 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
     setToAgent(alertId)
     try {
       const d = await createAgentSessionFromAlert({ alert_id: alertId, deep: true })
-      navigate(`/agent?session=${d.id}`)
+      navigate(`/diagnose/agent?session=${d.id}`)
     } catch { /* 拦截器已提示 */ } finally { setToAgent(null) }
   }
 

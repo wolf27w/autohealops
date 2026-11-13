@@ -808,8 +808,8 @@ export default function ClusterDetail() {
           }}>
           <Button size="small" danger>清理 Evicted</Button>
         </Popconfirm>
-        <Button size="small" onClick={() => navigate(`/node-management?cluster=${id}`)}>集群节点</Button>
-        <Button size="small" onClick={() => navigate(`/resource-governance?cluster=${id}`)}>资源治理</Button>
+        <Button size="small" onClick={() => navigate(`/clusters/${id}/nodes`)}>集群节点</Button>
+        <Button size="small" onClick={() => navigate(`/resources/governance?cluster=${id}`)}>资源治理</Button>
         <Button size="small" onClick={() => setClusterHistoryOpen(true)}>发布历史</Button>
         <Button size="small" onClick={() => { setAiResult(null); setAiNs(activeNs && activeNs !== '_all_' ? activeNs : ''); setAiKinds([]); setAppInspectOpen(true) }}>应用巡检</Button>
         <Button size="small" type="primary" onClick={() => setInspectOpen(true)}>集群巡检</Button>

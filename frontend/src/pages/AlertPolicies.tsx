@@ -209,7 +209,7 @@ export default function AlertPolicies() {
         style={{ marginBottom: 12 }}
         message="审核人值班已独立成页"
         description="排班规则、值班日历、换班/代班与节假日统一在「告警与工单 → 值班排班」维护；审核时当天值班人优先，无值班人时由管理员兜底。"
-        action={<Button size="small" type="primary" ghost onClick={() => navigate('/on-duty')}>去值班排班</Button>}
+        action={<Button size="small" type="primary" ghost onClick={() => navigate('/alerts/on-duty')}>去值班排班</Button>}
       />
       <Tabs items={[
         { key: 'policy', label: '故障分类策略', children: <PolicyTab /> },

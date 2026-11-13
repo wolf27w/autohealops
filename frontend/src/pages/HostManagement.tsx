@@ -207,7 +207,7 @@ export default function HostManagement() {
     { title: '操作', width: 170, render: (_: unknown, r: HostItem) => (
       <Space size="small">
         {r.can.operate && r.source === 'agent' && <Button size="small" type="link" onClick={() => setCheckResult({ online: r.last_metrics?.online ?? false, error: '', paths: r.last_metrics?.paths || [] })}>指标</Button>}
-        {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" onClick={() => navigate(`/web-terminal/${r.id}`)}>终端</Button>}
+        {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" onClick={() => navigate(`/resources/terminal/${r.id}`)}>终端</Button>}
         {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" loading={checking === r.id} icon={<SyncOutlined />} onClick={() => doCheck(r.id)}>检测</Button>}
         {r.can.operate && <Button size="small" type="link" onClick={() => openEdit(r)}>编辑</Button>}
         {r.can.delete && <Popconfirm title="删除该主机？" onConfirm={() => del(r.id)}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>}

@@ -1,16 +1,16 @@
-// 路由配置
-import { lazy, Suspense } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+// 路由配置（R34-P0：URL 前缀归位 · 资源/告警/诊断/平台）
+// 菜单树、角色门槛、旧地址重定向统一在 src/constants/nav.ts
+import { Fragment, lazy, Suspense } from 'react'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Spin } from 'antd'
 import MainLayout from './components/MainLayout'
 import { GlobalRefreshProvider } from './components/GlobalRefreshContext'
+import { LEGACY_REDIRECTS, minRoleForPath } from './constants/nav'
 
 // 页面按路由懒加载（M5 打包优化）：首屏只加载壳 + 当前页，其余按需加载
 const Login = lazy(() => import('./pages/Login'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const ClusterList = lazy(() => import('./pages/ClusterList'))
-const ClusterDetail = lazy(() => import('./pages/ClusterDetail'))
-const ServiceDetail = lazy(() => import('./pages/ServiceDetail'))
 // R32-P1：集群内布局与子页面
 const ClusterLayout = lazy(() => import('./pages/cluster/ClusterLayout'))
 const ClusterOverviewRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ClusterOverviewRoute })))
@@ -23,37 +23,34 @@ const StorageRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ 
 const ConfigsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigsRoute })))
 const InspectionRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.InspectionRoute })))
 const MonitoringRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.MonitoringRoute })))
-const AlertList = lazy(() => import('./pages/AlertList'))
-const ApprovalList = lazy(() => import('./pages/ApprovalList'))
-const ProcessingRecords = lazy(() => import('./pages/ProcessingRecords'))
-const AlertHandling = lazy(() => import('./pages/AlertHandling'))
-const StrategyConfig = lazy(() => import('./pages/StrategyConfig'))
-const NotificationCenter = lazy(() => import('./pages/NotificationCenter'))
-const UserPermission = lazy(() => import('./pages/UserPermission'))
-const AIConfig = lazy(() => import('./pages/AIConfig'))
-const AlertPolicies = lazy(() => import('./pages/AlertPolicies'))
-const SelfHealRules = lazy(() => import('./pages/SelfHealRules'))
-const ExecutionDetail = lazy(() => import('./pages/ExecutionDetail'))
-const BatchOperation = lazy(() => import('./pages/BatchOperation'))
-const CustomTasks = lazy(() => import('./pages/CustomTasks'))
-const AgentChat = lazy(() => import('./pages/AgentChat'))
-const FaultDiagnosisHub = lazy(() => import('./pages/FaultDiagnosisHub'))
-const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
-const AuditTrace = lazy(() => import('./pages/AuditTrace'))
-const Reports = lazy(() => import('./pages/Reports'))
-const PlatformSettings = lazy(() => import('./pages/PlatformSettings'))
-const ReleaseHistory = lazy(() => import('./pages/ReleaseHistory'))
-const LogSources = lazy(() => import('./pages/LogSources'))
-const Tickets = lazy(() => import('./pages/Tickets'))
-const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
-const AlertSilences = lazy(() => import('./pages/AlertSilences'))
-const NodeManagement = lazy(() => import('./pages/NodeManagement'))
+// 资源中心
 const HostManagement = lazy(() => import('./pages/HostManagement'))
 const WebTerminal = lazy(() => import('./pages/WebTerminal'))
 const HostSessionReplay = lazy(() => import('./pages/HostSessionReplay'))
-const PromptSuggestions = lazy(() => import('./pages/PromptSuggestions'))
-const ZombieServices = lazy(() => import('./pages/ZombieServices'))
+const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
+const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))  // TODO(P1)：换成本地数据库资源列表
+// 告警监控
+const AlertHandling = lazy(() => import('./pages/AlertHandling'))
+const Tickets = lazy(() => import('./pages/Tickets'))
+const AlertPolicies = lazy(() => import('./pages/AlertPolicies'))
+const AlertSilences = lazy(() => import('./pages/AlertSilences'))
+const NotificationCenter = lazy(() => import('./pages/NotificationCenter'))
 const OnDuty = lazy(() => import('./pages/OnDuty'))
+const LogSources = lazy(() => import('./pages/LogSources'))
+// 诊断与自愈
+const FaultDiagnosisHub = lazy(() => import('./pages/FaultDiagnosisHub'))
+const AgentChat = lazy(() => import('./pages/AgentChat'))
+const DiagnoseStrategy = lazy(() => import('./pages/DiagnoseStrategy'))
+const CustomTasks = lazy(() => import('./pages/CustomTasks'))
+const ReleaseHistory = lazy(() => import('./pages/ReleaseHistory'))
+const ApprovalList = lazy(() => import('./pages/ApprovalList'))          // TODO(P2)：换成执行记录列表
+const ExecutionDetail = lazy(() => import('./pages/ExecutionDetail'))
+// 平台
+const UserPermission = lazy(() => import('./pages/UserPermission'))
+const PlatformAI = lazy(() => import('./pages/PlatformAI'))
+const AuditTrace = lazy(() => import('./pages/AuditTrace'))
+const Reports = lazy(() => import('./pages/Reports'))
+const PlatformSettings = lazy(() => import('./pages/PlatformSettings'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('token')
@@ -73,6 +70,22 @@ function RequireRole({ role, children }: { role: string; children: JSX.Element }
   if (user.role !== role) return <Navigate to="/dashboard" replace />
   return children
 }
+
+// 页面级守卫：最低角色统一从 nav.ts 查（不再手写每一条）
+function guard(path: string, el: JSX.Element) {
+  return minRoleForPath(path) === 'admin' ? <RequireRole role="admin">{el}</RequireRole> : el
+}
+
+// 旧地址重定向：替换前缀、保留尾部路径与 query（如 /web-terminal/7 → /resources/terminal/7）
+function LegacyRedirect({ from, to }: { from: string; to: string }) {
+  const loc = useLocation()
+  const rest = loc.pathname.slice(from.length)
+  const [path, query] = to.split('?')
+  return <Navigate to={`${path}${rest}${query ? `?${query}` : loc.search}`} replace />
+}
+
+// 需要保留尾部路径（带参数）的旧前缀；其余旧地址只做精确匹配，避免吞掉未知路径
+const LEGACY_PARAM_PREFIXES = new Set(['/web-terminal', '/executions'])
 
 export default function App() {
   return (
@@ -101,50 +114,53 @@ export default function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
+
+        {/* ===== 资源中心 ===== */}
         <Route path="clusters" element={<ClusterList />} />
-        <Route path="alerts" element={<Navigate to="/alert-handling" replace />} />
-        <Route path="tickets" element={<Tickets />} />
-        <Route path="approvals" element={<Navigate to="/alert-handling" replace />} />
-        <Route path="records" element={<Navigate to="/alert-handling" replace />} />
-        <Route path="alert-handling" element={<AlertHandling />} />
-        <Route path="strategy" element={<RequireRole role="admin"><StrategyConfig /></RequireRole>} />
-        <Route path="notify-center" element={<RequireRole role="admin"><NotificationCenter /></RequireRole>} />
-        <Route path="user-permission" element={<RequireRole role="admin"><UserPermission /></RequireRole>} />
-        <Route path="notifications" element={<Navigate to="/notify-center" replace />} />
-        <Route path="ai-models" element={<RequireRole role="admin"><AIConfig /></RequireRole>} />
-        <Route path="prompts" element={<Navigate to="/ai-models" replace />} />
-        <Route path="alert-policies" element={<Navigate to="/strategy" replace />} />
-        <Route path="log-sources" element={<RequireRole role="admin"><LogSources /></RequireRole>} />
-        <Route path="self-heal-rules" element={<Navigate to="/strategy" replace />} />
-        <Route path="executions/:planId" element={<ExecutionDetail />} />
-        <Route path="batch" element={<Navigate to="/alert-handling" replace />} />
-        <Route path="custom-tasks" element={<RequireRole role="admin"><CustomTasks /></RequireRole>} />
-        <Route path="resource-governance" element={<RequireRole role="admin"><ResourceGovernance /></RequireRole>} />
-        <Route path="alert-silences" element={<RequireRole role="admin"><AlertSilences /></RequireRole>} />
-        <Route path="on-duty" element={<OnDuty />} />
-        <Route path="node-management" element={<RequireRole role="admin"><NodeManagement /></RequireRole>} />
-        <Route path="host-management" element={<HostManagement />} />
-        <Route path="web-terminal" element={<WebTerminal />} />
-        <Route path="web-terminal/:hostId" element={<WebTerminal />} />
+        <Route path="resources/hosts" element={guard('/resources/hosts', <HostManagement />)} />
+        <Route path="resources/databases" element={<DiagnosticCenter />} />
+        <Route path="resources/terminal" element={<WebTerminal />} />
+        <Route path="resources/terminal/:hostId" element={<WebTerminal />} />
+        <Route path="resources/governance" element={guard('/resources/governance', <ResourceGovernance />)} />
         <Route path="host-sessions/:id/replay" element={<HostSessionReplay />} />
-        <Route path="prompt-suggestions" element={<RequireRole role="admin"><PromptSuggestions /></RequireRole>} />
-        <Route path="zombie-services" element={<ZombieServices />} />
-        <Route path="agent" element={<AgentChat />} />
-        <Route path="diagnostic" element={<Navigate to="/fault-diagnosis?tab=db" replace />} />
-        <Route path="fault-diagnosis" element={<FaultDiagnosisHub />} />
-        <Route path="fault-diagnosis/cluster" element={<Navigate to="/fault-diagnosis?tab=cluster" replace />} />
-        <Route path="fault-diagnosis/app" element={<Navigate to="/fault-diagnosis?tab=app" replace />} />
-        <Route path="permissions" element={<Navigate to="/user-permission" replace />} />
-        <Route path="knowledge" element={<KnowledgeBase />} />
-        <Route path="audit" element={<AuditTrace />} />
-        <Route path="reports" element={<Reports />} />
-        <Route path="stats" element={<Navigate to="/reports" replace />} />
-        <Route path="users" element={<Navigate to="/user-permission" replace />} />
-        <Route path="projects" element={<Navigate to="/user-permission" replace />} />
-        <Route path="approval-flows" element={<Navigate to="/strategy" replace />} />
-        <Route path="im-groups" element={<Navigate to="/notify-center" replace />} />
-        <Route path="settings" element={<RequireRole role="admin"><PlatformSettings /></RequireRole>} />
-        <Route path="release-history" element={<ReleaseHistory />} />
+
+        {/* ===== 告警监控 ===== */}
+        <Route path="alerts/handling" element={<AlertHandling />} />
+        <Route path="alerts/tickets" element={<Tickets />} />
+        <Route path="alerts/policies" element={guard('/alerts/policies', <AlertPolicies />)} />
+        <Route path="alerts/silences" element={guard('/alerts/silences', <AlertSilences />)} />
+        <Route path="alerts/notifications" element={guard('/alerts/notifications', <NotificationCenter />)} />
+        <Route path="alerts/on-duty" element={<OnDuty />} />
+        <Route path="alerts/sources" element={guard('/alerts/sources', <LogSources />)} />
+
+        {/* ===== 诊断与自愈 ===== */}
+        <Route path="diagnose/fault" element={<FaultDiagnosisHub />} />
+        <Route path="diagnose/agent" element={<AgentChat />} />
+        <Route path="diagnose/strategy" element={guard('/diagnose/strategy', <DiagnoseStrategy />)} />
+        <Route path="diagnose/tasks" element={guard('/diagnose/tasks', <CustomTasks />)} />
+        <Route path="diagnose/release" element={<ReleaseHistory />} />
+        <Route path="diagnose/executions" element={<ApprovalList />} />
+        <Route path="diagnose/executions/:planId" element={<ExecutionDetail />} />
+
+        {/* ===== 平台 ===== */}
+        <Route path="platform/users" element={guard('/platform/users', <UserPermission />)} />
+        <Route path="platform/ai" element={guard('/platform/ai', <PlatformAI />)} />
+        <Route path="platform/audit" element={<AuditTrace />} />
+        <Route path="platform/reports" element={<Reports />} />
+        <Route path="platform/settings" element={guard('/platform/settings', <PlatformSettings />)} />
+
+        {/* ===== 旧地址兼容（一条规则覆盖全部，见 constants/nav.ts） ===== */}
+        {LEGACY_REDIRECTS.map(([from, to]) => {
+          const base = from.replace(/^\//, '')
+          return (
+            <Fragment key={from}>
+              <Route path={base} element={<LegacyRedirect from={from} to={to} />} />
+              {LEGACY_PARAM_PREFIXES.has(from) && (
+                <Route path={`${base}/*`} element={<LegacyRedirect from={from} to={to} />} />
+              )}
+            </Fragment>
+          )
+        })}
       </Route>
 
       {/* R32-P1：点进集群 = 独立整页（不套平台 MainLayout），自带顶部返回条 + 集群左导航 */}

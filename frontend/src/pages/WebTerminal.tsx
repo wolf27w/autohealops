@@ -264,7 +264,7 @@ export default function WebTerminal() {
     const key = `h-${h.id}`
     setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, { key, hostId: h.id, hostName: h.name, connected: false }]))
     setActiveKey(key)
-    navigate(`/web-terminal/${h.id}`, { replace: true })
+    navigate(`/resources/terminal/${h.id}`, { replace: true })
   }, [navigate])
 
   // 直达 /web-terminal/:hostId

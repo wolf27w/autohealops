@@ -339,10 +339,10 @@ export default function Dashboard() {
         size="small"
         extra={
           <Space size={16}>
-            <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/tickets')}>
+            <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alerts/tickets')}>
               待办工单 {kpi?.manual_pending ?? 0} ›
             </span>
-            <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alert-handling')}>
+            <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alerts/handling')}>
               待审核 {kpi?.approval_pending ?? 0} ›
             </span>
           </Space>
@@ -353,7 +353,7 @@ export default function Dashboard() {
           dataSource={todoAlerts}
           scroll={{ y: 260 }}
           locale={{ emptyText: <Empty description="当前无待处理告警" /> }}
-          onRow={() => ({ onClick: () => navigate('/alert-handling'), style: { cursor: 'pointer' } })}
+          onRow={() => ({ onClick: () => navigate('/alerts/handling'), style: { cursor: 'pointer' } })}
           columns={[
             { title: '优先级', dataIndex: 'severity', width: 80, render: (s: string) => <SeverityTag severity={s} /> },
             { title: '告警', dataIndex: 'resource_name', ellipsis: true, render: (v: string, r: RealtimeAlert) => (
