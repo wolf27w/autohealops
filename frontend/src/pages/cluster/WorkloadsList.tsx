@@ -331,11 +331,10 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
           <Dropdown
             trigger={['click']}
             menu={{
+              // 去重口径（2026-11-13 老板定）：YAML 编辑 / 扩缩容 / 滚动重启 统一放「详情页 → 更多」，
+              // 列表只保留 进入编辑设置 + 发布历史（详情页没有该入口）+ 删除
               items: [
                 { key: 'edit', label: '编辑设置' },
-                { key: 'yaml', label: '编辑 YAML（高级）' },
-                ...(scaleable ? [{ key: 'scale', label: '伸缩副本' }] : []),
-                ...(!isCronjob ? [{ key: 'rollout', label: '滚动重启' }] : []),
                 ...(kind === 'deployment' ? [{ key: 'history', label: '发布历史' }] : []),
                 { type: 'divider' as const },
                 { key: 'delete', label: '删除', danger: true },

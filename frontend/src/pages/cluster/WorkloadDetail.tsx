@@ -6,6 +6,7 @@ import {
 } from 'antd'
 import { ReloadOutlined, MoreOutlined, DownOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
+import WorkloadYamlModal, { type WorkloadTarget } from '../../components/WorkloadYamlModal'
 import WorkloadMetricsDrawer from '../../components/WorkloadMetricsDrawer'
 import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
@@ -17,12 +18,18 @@ import { parseYaml, asMap, asArr, asStr, yamlToValues, type YamlNode, type Workl
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
-  getWorkloadYaml, getWorkloadEvents, getWorkloadEventHistory, deleteWorkload,
+  getWorkloadYaml, getWorkloadEvents, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
   getPodYaml, applyPodYaml, isolatePod, unisolatePod, getIsolatedPods,
 } from '../../services/api'
 import type { ClusterPod, WorkloadEventRow } from '../../services/api'
 import type { PodTarget, Workload } from '../../types'
 import { podStatusColor, podReadyText } from '../../utils/podStatus'
+
+// 卷类型 → Tag 颜色（元数据 Tab 的「挂载的卷 / 挂载的配置」用）
+const VOL_TYPE_COLOR: Record<string, string> = {
+  configMap: 'blue', secret: 'purple', pvc: 'green', emptyDir: 'default',
+  hostPath: 'orange', nfs: 'cyan', projected: 'geekblue', csi: 'magenta', other: 'default',
+}
 
 const KIND_SHORT: Record<string, string> = {
   deployment: '部署', statefulset: '有状态', daemonset: '守护集', cronjob: '定时任务',
@@ -96,7 +103,10 @@ export default function WorkloadDetail() {
   const [historyHours, setHistoryHours] = useState(24)
 
   // 弹窗 / 抽屉
+  const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [wlEdit, setWlEdit] = useState<WorkloadCreateTarget | null>(null)
+  const [scaleOpen, setScaleOpen] = useState(false)
+  const [scaleVal, setScaleVal] = useState<number>(1)
   const [metricsOpen, setMetricsOpen] = useState(false)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
@@ -105,6 +115,8 @@ export default function WorkloadDetail() {
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
   const [isolated, setIsolated] = useState<Set<string>>(new Set())
 
+  const scalable = kind === 'deployment' || kind === 'statefulset'
+  const restartable = kind === 'deployment' || kind === 'statefulset' || kind === 'daemonset'
 
   const meta: WorkloadMeta = useMemo(() => {
     const root = asMap(parseYaml(yaml))
@@ -211,6 +223,26 @@ export default function WorkloadDetail() {
 
   const fmtTime = (v?: string) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
 
+  const handleScale = async () => {
+    await scaleWorkload(clusterId, { kind, namespace, name, replicas: scaleVal })
+    setScaleOpen(false)
+    load()
+  }
+
+  const handleRollout = async () => {
+    await rolloutWorkload(clusterId, { kind, namespace, name, action: 'restart' })
+    load()
+  }
+
+  const handleDelete = () => {
+    Modal.confirm({
+      title: `删除 ${KIND_SHORT[kind] || kind} ${namespace}/${name}？`,
+      content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
+      okButtonProps: { danger: true },
+      onOk: async () => { await deleteWorkload(clusterId, kind, namespace, name); navigate(`/clusters/${id}`) },
+    })
+  }
+
   // —— Pod 行操作（与容器组页 PodsList 对齐）——
   const confirmDeletePod = (r: ClusterPod) => {
     Modal.confirm({
@@ -312,6 +344,48 @@ export default function WorkloadDetail() {
     </div>
   )
 
+  // 卷与挂载：从 YAML 解析（只读展示，编辑在「存储挂载」Tab）
+  const storageInfo = useMemo(() => {
+    const root = asMap(parseYaml(yaml))
+    const spec = asMap(asMap(root).spec)
+    const tplSpec = asMap(asMap(spec.template).spec)
+    const vols: { name: string; type: string; source: string; mounts: string[] }[] = []
+    for (const v of asArr(tplSpec.volumes)) {
+      const vm = asMap(v)
+      const name = asStr(vm.name)
+      let type = 'other', source = ''
+      if (vm.configMap) { type = 'configMap'; source = asStr(asMap(vm.configMap).name) }
+      else if (vm.secret) { type = 'secret'; source = asStr(asMap(vm.secret).secretName) }
+      else if (vm.persistentVolumeClaim) { type = 'pvc'; source = asStr(asMap(vm.persistentVolumeClaim).claimName) }
+      else if (vm.emptyDir !== undefined) { type = 'emptyDir'; source = '临时目录' }
+      else if (vm.hostPath) { type = 'hostPath'; source = asStr(asMap(vm.hostPath).path) }
+      else if (vm.nfs) { type = 'nfs'; source = `${asStr(asMap(vm.nfs).server)}:${asStr(asMap(vm.nfs).path)}` }
+      else if (vm.projected) { type = 'projected'; source = 'projected' }
+      else if (vm.csi) { type = 'csi'; source = asStr(asMap(vm.csi).driver) }
+      vols.push({ name, type, source, mounts: [] })
+    }
+    const refs = new Map<string, { type: string; name: string; containers: string[] }>()
+    const allContainers = [...asArr(tplSpec.containers), ...asArr(tplSpec.initContainers)]
+    for (const c of allContainers) {
+      const cm = asMap(c)
+      const cname = asStr(cm.name)
+      for (const m of asArr(cm.volumeMounts)) {
+        const mm = asMap(m)
+        const vname = asStr(mm.name)
+        const vol = vols.find((v) => v.name === vname)
+        const path = asStr(mm.mountPath) + (asStr(mm.subPath) ? ` (${asStr(mm.subPath)})` : '') + (asStr(mm.readOnly) === 'true' ? ' [只读]' : '')
+        if (vol) vol.mounts.push(`${cname} → ${path}`)
+        if (vol && ['configMap', 'secret', 'pvc'].includes(vol.type) && vol.source) {
+          const key = `${vol.type}-${vol.source}`
+          const cur = refs.get(key) || { type: vol.type, name: vol.source, containers: [] }
+          if (!cur.containers.includes(cname)) cur.containers.push(cname)
+          refs.set(key, cur)
+        }
+      }
+    }
+    return { volumes: vols, refs: Array.from(refs.values()) }
+  }, [yaml])
+
   const metadataTab = (
     <div>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Labels</div>
@@ -329,6 +403,25 @@ export default function WorkloadDetail() {
           { title: 'Value', dataIndex: 'v', render: (v: string) => <span style={{ wordBreak: 'break-all' }}>{v}</span> },
         ]}
         locale={{ emptyText: '无 Annotations' }} />
+
+      <div style={{ fontWeight: 600, margin: '20px 0 8px' }}>挂载的卷（Volumes）</div>
+      <Table rowKey="name" size="small" pagination={false} dataSource={storageInfo.volumes}
+        columns={[
+          { title: '卷名', dataIndex: 'name', width: 220, render: (v: string) => <code>{v}</code> },
+          { title: '类型', dataIndex: 'type', width: 140, render: (v: string) => <Tag color={VOL_TYPE_COLOR[v] || 'default'}>{v}</Tag> },
+          { title: '来源', dataIndex: 'source', ellipsis: true, render: (v: string) => v || '-' },
+          { title: '挂载点', dataIndex: 'mounts', render: (v: string[]) => (v.length ? v.map((x) => <div key={x} style={{ fontFamily: 'monospace', fontSize: 12 }}>{x}</div>) : <span style={{ color: '#bbb' }}>未挂载</span>) },
+        ]}
+        locale={{ emptyText: '该工作负载未声明卷' }} style={{ marginBottom: 8 }} />
+
+      <div style={{ fontWeight: 600, margin: '20px 0 8px' }}>挂载的配置（ConfigMap / Secret / PVC）</div>
+      <Table rowKey={(r) => `${r.type}-${r.name}`} size="small" pagination={false} dataSource={storageInfo.refs}
+        columns={[
+          { title: '类型', dataIndex: 'type', width: 140, render: (v: string) => <Tag color={VOL_TYPE_COLOR[v] || 'default'}>{v}</Tag> },
+          { title: '名称', dataIndex: 'name', width: 260, render: (v: string) => <code>{v}</code> },
+          { title: '被哪些容器挂载', dataIndex: 'containers', render: (v: string[]) => (v.length ? v.join('、') : '-') },
+        ]}
+        locale={{ emptyText: '没有引用配置字典 / 密钥 / PVC' }} />
     </div>
   )
 
@@ -401,8 +494,25 @@ export default function WorkloadDetail() {
             <span style={{ fontSize: 12, color: '#999' }}>{clusterName ? `${clusterName} / ` : ''}{namespace}</span>
           </Space>
           <Space>
-            {/* 去重口径：YAML 编辑 / 扩缩容 / 滚动重启 / 删除 统一在「工作负载」列表行操作里，详情页只保留编辑设置 */}
             <Button onClick={() => setWlEdit({ clusterId, kind, namespace, name, create: false, initialValues: editValues, existingYaml: yaml })}>编辑设置</Button>
+            <Dropdown trigger={['click']} menu={{
+              items: [
+                { key: 'yaml', label: '编辑 YAML（高级）' },
+                ...(scalable ? [{ key: 'scale', label: '变更副本' }] : []),
+                ...(restartable ? [{ key: 'restart', label: '滚动重启' }] : []),
+                { type: 'divider' as const },
+                { key: 'delete', label: '删除', danger: true },
+              ],
+              onClick: ({ key: k }) => {
+                if (k === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
+                else if (k === 'scale') { setScaleVal(desired); setScaleOpen(true) }
+                else if (k === 'restart') {
+                  Modal.confirm({ title: '触发滚动重启？', onOk: handleRollout })
+                } else if (k === 'delete') handleDelete()
+              },
+            }}>
+              <Button>更多 <DownOutlined /></Button>
+            </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
           </Space>
         </div>
@@ -412,6 +522,9 @@ export default function WorkloadDetail() {
         <Tabs defaultActiveKey="overview" onChange={(key) => { if (key === 'events-realtime') loadRealtimeEvents() }} items={[
           { key: 'overview', label: '概览', children: overviewTab },
           { key: 'metadata', label: '元数据', children: metadataTab },
+          { key: 'storage', label: '存储挂载', children: (
+            <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="storage" />
+          ) },
           { key: 'env', label: '环境变量', children: (
             <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="env" />
           ) },
@@ -423,6 +536,7 @@ export default function WorkloadDetail() {
         ]} />
       </Card>
 
+      <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <WorkloadMetricsDrawer
         target={metricsOpen ? { clusterId, kind, namespace, name } : null}
         onClose={() => setMetricsOpen(false)}
@@ -434,6 +548,12 @@ export default function WorkloadDetail() {
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
 
       <WorkloadCreateModal target={wlEdit} onClose={() => setWlEdit(null)} onSaved={load} />
+
+      <Modal title={`变更副本：${name}`} open={scaleOpen} onCancel={() => setScaleOpen(false)}
+        onOk={handleScale} okText="确定" width={360}>
+        <div style={{ marginBottom: 8, color: '#8c8c8c', fontSize: 13 }}>调整为指定副本数（0 = 停止）。</div>
+        <InputNumber min={0} value={scaleVal} onChange={(v) => setScaleVal(v ?? 0)} style={{ width: '100%' }} />
+      </Modal>
     </div>
   )
 }
