@@ -75,6 +75,7 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
   const [draining, setDraining] = useState(false)
   // 标签 / 污点
   const [metaOpen, setMetaOpen] = useState(false)
+  const [metaMode, setMetaMode] = useState<'labels' | 'taints'>('labels')
   const [metaNode, setMetaNode] = useState('')
   const [labelRows, setLabelRows] = useState<LabelRow[]>([])
   const [taintRows, setTaintRows] = useState<TaintRow[]>([])
@@ -299,7 +300,8 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
     const isolated = isNodeIsolated(r)
     const items: { key: string; label: string; danger?: boolean }[] = [
       { key: 'diag', label: '节点诊断' },
-      { key: 'meta', label: '标签/污点' },
+      { key: 'labels', label: '编辑标签' },
+      { key: 'taints', label: '编辑污点' },
       isolated ? { key: 'unisolate', label: '解除隔离' } : { key: 'isolate', label: '隔离' },
       r.schedulable ? { key: 'cordon', label: '封锁' } : { key: 'uncordon', label: '解封' },
       { key: 'drain', label: '驱逐', danger: true },
@@ -311,7 +313,8 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
           items,
           onClick: ({ key }) => {
             if (key === 'diag') openDiagnose(r.name)
-            else if (key === 'meta') openMeta(r.name)
+            else if (key === 'labels') { setMetaMode('labels'); openMeta(r.name) }
+            else if (key === 'taints') { setMetaMode('taints'); openMeta(r.name) }
             else if (key === 'isolate') { setIsoNode(r.name); setIsoReason(''); setIsoTaint(true); setIsoOpen(true) }
             else if (key === 'unisolate') doUnisolate(r.name)
             else if (key === 'cordon') doCordon(r.name, 'cordon')
@@ -463,8 +466,9 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
       </Modal>
 
       {/* 标签 / 污点 */}
-      <Modal open={metaOpen} title={`编辑节点标签 / 污点 · ${metaNode}`} width={860}
+      <Modal open={metaOpen} title={`${metaMode === 'labels' ? '编辑节点标签' : '编辑节点污点'} · ${metaNode}`} width={860}
         onCancel={() => setMetaOpen(false)} onOk={saveMeta} okText="保存" confirmLoading={metaSaving} destroyOnClose>
+        {metaMode === 'labels' && <>
         <Space style={{ marginBottom: 8 }} wrap>
           <b>标签（{labelRows.length}）</b>
           <Button size="small" onClick={() => setLabelRows([...labelRows, { key: '', value: '' }])}>+ 添加标签</Button>
@@ -478,7 +482,8 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
             { title: '', width: 60, render: (_, __, i) => <a style={{ color: '#cf1322' }} onClick={() => setLabelRows(labelRows.filter((_, j) => j !== i))}>删除</a> },
           ]}
         />
-        <Divider style={{ margin: '16px 0 12px' }} />
+        </>}
+        {metaMode === 'taints' && <>
         <Space style={{ marginBottom: 8 }}>
           <b>污点（{taintRows.length}）</b>
           <Button size="small" onClick={() => setTaintRows([...taintRows, { key: '', value: '', effect: 'NoSchedule' }])}>+ 添加污点</Button>
@@ -493,6 +498,7 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
             { title: '', width: 60, render: (_, __, i) => <a style={{ color: '#cf1322' }} onClick={() => setTaintRows(taintRows.filter((_, j) => j !== i))}>删除</a> },
           ]}
         />
+        </>}
       </Modal>
 
       {/* 隔离节点 */}
