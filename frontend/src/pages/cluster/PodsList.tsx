@@ -5,11 +5,12 @@ import { Card, Table, Tag, Button, Space, Select, Input, Dropdown, Modal, messag
 import { MoreOutlined, SearchOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import {
-  getClusterPods, getClusterNamespaces, getPodMetrics, getPodYaml, applyPodYaml,
+  getClusterPods, getPodMetrics, getPodYaml, applyPodYaml,
   deleteWorkload, isolatePod, unisolatePod, getIsolatedPods,
 } from '../../services/api'
 import type { ClusterPod } from '../../services/api'
 import type { PodTarget, MetricPoint } from '../../types'
+import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import PodDetailDrawer from '../../components/PodDetailDrawer'
 import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
@@ -26,8 +27,7 @@ const FIXED_STATUSES = [
 ]
 
 export default function PodsList({ clusterId }: { clusterId: number }) {
-  const [namespaces, setNamespaces] = useState<string[]>([])
-  const [activeNs, setActiveNs] = useState<string>('_all_')
+  const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
   const [pods, setPods] = useState<ClusterPod[]>([])
   const [searchText, setSearchText] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
@@ -43,36 +43,31 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
 
   const load = () => {
-    getClusterPods(clusterId, activeNs === '_all_' ? '' : activeNs)
+    getClusterPods(clusterId, nsParam(ns))
       .then((d) => setPods((d as { pods?: ClusterPod[] }).pods || []))
       .catch(() => setPods([]))
   }
 
-  // 命名空间列表（一次拉取）
-  useEffect(() => {
-    getClusterNamespaces(clusterId).then(setNamespaces).catch(() => setNamespaces([]))
-  }, [clusterId])
-
   // 首次 + 切换命名空间立即加载
-  useEffect(() => { load() }, [clusterId, activeNs]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [clusterId, ns]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 5s 轮询
   useEffect(() => {
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clusterId, activeNs])
+  }, [clusterId, ns])
 
-  // 具体命名空间时加载「已隔离 Pod」集合（_all_ 无法按 ns 查，清空兜底）
+  // 具体命名空间时加载「已隔离 Pod」集合（「全部」无法按 ns 查，清空兜底）
   useEffect(() => {
-    if (activeNs === '_all_') { setIsolated(new Set()); return }
-    getIsolatedPods(clusterId, activeNs)
-      .then((d) => setIsolated(new Set(((d as { pods?: string[] }).pods || []).map((n) => `${activeNs}-${n}`))))
+    if (ns === NS_ALL) { setIsolated(new Set()); return }
+    getIsolatedPods(clusterId, ns)
+      .then((d) => setIsolated(new Set(((d as { pods?: string[] }).pods || []).map((n) => `${ns}-${n}`))))
       .catch(() => setIsolated(new Set()))
-  }, [clusterId, activeNs])
+  }, [clusterId, ns])
 
   // 命名空间/状态变化时清空勾选
-  useEffect(() => { setSelected([]) }, [activeNs, statusFilter])
+  useEffect(() => { setSelected([]) }, [ns, statusFilter])
 
   const statusOptions = useMemo(() => {
     const dyn = pods.map((p) => podStatus(p))
@@ -217,13 +212,14 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
           <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
           <Select
             size="small"
-            style={{ width: 190 }}
-            value={activeNs}
-            onChange={(v) => setActiveNs((v as string) || '_all_')}
+            style={{ width: 200 }}
+            value={ns}
+            onChange={(v) => setNs(v as string)}
             showSearch
             optionFilterProp="label"
+            loading={nsLoading}
             options={[
-              { value: '_all_', label: '全部命名空间' },
+              { value: NS_ALL, label: '全部命名空间' },
               ...namespaces.map((n) => ({ value: n, label: n })),
             ]}
           />

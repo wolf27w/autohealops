@@ -6,6 +6,7 @@ import { Layout, Menu, Tag, Typography, Spin, Button, Space } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams, Outlet } from 'react-router-dom'
 import { getCluster } from '../../services/api'
+import { ClusterNamespaceProvider } from './NamespaceContext'
 
 // 集群返回里带 version（后端有，公共类型未声明）
 interface ClusterInfo { id?: number; name?: string; env_tag?: string; version?: string }
@@ -42,7 +43,6 @@ export default function ClusterLayout() {
     if (p.includes('/pods')) return 'pods'
     if (p.includes('/storage')) return 'storage'
     if (p.includes('/configs')) return 'configs'
-    if (p.includes('/monitoring')) return 'monitoring'
     if (p.includes('/inspection')) return 'inspection'
     return 'overview'
   }, [location.pathname])
@@ -62,7 +62,7 @@ export default function ClusterLayout() {
     },
     { key: 'storage', label: '存储', onClick: () => navigate(`${base}/storage`) },
     { key: 'configs', label: '配置', onClick: () => navigate(`${base}/configs`) },
-    { key: 'monitoring', label: '监控告警', onClick: () => navigate(`${base}/monitoring`) },
+    // R33-5：集群内「监控告警」页已下线（与平台仪表盘/大屏重复），保留「巡检与诊断」
     { key: 'inspection', label: '巡检与诊断', onClick: () => navigate(`${base}/inspection`) },
   ]
 
@@ -99,7 +99,10 @@ export default function ClusterLayout() {
         />
       </Sider>
       <Content style={{ padding: 16, overflow: 'auto', background: '#fff' }}>
-        <Outlet />
+        {/* 命名空间选择跨页联动：默认 default，切一次全站跟着切 */}
+        <ClusterNamespaceProvider clusterId={clusterId}>
+          <Outlet />
+        </ClusterNamespaceProvider>
       </Content>
       </Layout>
     </Layout>

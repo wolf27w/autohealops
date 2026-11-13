@@ -1,8 +1,9 @@
 // 服务/路由列表页：两个子 Tab（服务 / 应用路由），操作收进 ⋯（编辑 YAML / 编辑设置 / 删除）
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag, Button, Dropdown, Modal, message, Tabs } from 'antd'
+import { Card, Table, Tag, Button, Dropdown, Modal, message, Tabs, Select, Space } from 'antd'
 import { MoreOutlined } from '@ant-design/icons'
 import { getMiscResources, deleteObject } from '../../services/api'
+import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../../components/ConfigObjectYamlModal'
 import ServiceSettingsModal from '../../components/ServiceSettingsModal'
 import IngressSettingsModal from '../../components/IngressSettingsModal'
@@ -20,6 +21,7 @@ const fmt = (v?: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-'
 const SERVICE_TYPE_COLOR: Record<string, string> = { LoadBalancer: 'blue', NodePort: 'green', ClusterIP: 'default', ExternalName: 'purple' }
 
 export default function ServicesList({ clusterId }: { clusterId: number }) {
+  const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
   const [tab, setTab] = useState<string>('services')
   const [misc, setMisc] = useState<MiscData>({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] })
   const [loading, setLoading] = useState(false)
@@ -29,12 +31,12 @@ export default function ServicesList({ clusterId }: { clusterId: number }) {
 
   const load = () => {
     setLoading(true)
-    getMiscResources(clusterId)
+    getMiscResources(clusterId, nsParam(ns))
       .then((d) => setMisc(d as unknown as MiscData))
       .catch(() => setMisc({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] }))
       .finally(() => setLoading(false))
   }
-  useEffect(() => { load() }, [clusterId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [clusterId, ns]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDelete = (kind: string, ns: string, name: string) => {
     const label = kind === 'service' ? '服务' : '路由'
@@ -126,6 +128,22 @@ export default function ServicesList({ clusterId }: { clusterId: number }) {
   return (
     <div>
       <Card size="small">
+        <Space size={8} style={{ marginBottom: 12 }}>
+          <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
+          <Select
+            size="small"
+            style={{ width: 200 }}
+            value={ns}
+            onChange={(v) => setNs(v as string)}
+            showSearch
+            optionFilterProp="label"
+            loading={nsLoading}
+            options={[
+              { value: NS_ALL, label: '全部命名空间' },
+              ...namespaces.map((n) => ({ value: n, label: n })),
+            ]}
+          />
+        </Space>
         <Tabs
           activeKey={tab}
           onChange={setTab}
@@ -133,12 +151,12 @@ export default function ServicesList({ clusterId }: { clusterId: number }) {
           tabBarExtraContent={
             tab === 'services' ? (
               <Button type="primary" size="small"
-                onClick={() => setSvcObj({ clusterId, kind: 'service', namespace: 'default', name: '', create: true })}>
+                onClick={() => setSvcObj({ clusterId, kind: 'service', namespace: ns === NS_ALL ? 'default' : ns, name: '', create: true })}>
                 创建服务
               </Button>
             ) : (
               <Button type="primary" size="small"
-                onClick={() => setIngObj({ clusterId, kind: 'ingress', namespace: 'default', name: '', create: true })}>
+                onClick={() => setIngObj({ clusterId, kind: 'ingress', namespace: ns === NS_ALL ? 'default' : ns, name: '', create: true })}>
                 创建路由
               </Button>
             )

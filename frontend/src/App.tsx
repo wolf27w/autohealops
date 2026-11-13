@@ -22,7 +22,6 @@ const ServicesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({
 const StorageRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.StorageRoute })))
 const ConfigsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigsRoute })))
 const InspectionRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.InspectionRoute })))
-const MonitoringRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.MonitoringRoute })))
 // 资源中心
 const HostManagement = lazy(() => import('./pages/HostManagement'))
 const WebTerminal = lazy(() => import('./pages/WebTerminal'))
@@ -183,7 +182,6 @@ export default function App() {
         <Route path="services" element={<ServicesRoute />} />
         <Route path="storage" element={<StorageRoute />} />
         <Route path="configs" element={<ConfigsRoute />} />
-        <Route path="monitoring" element={<MonitoringRoute />} />
         <Route path="inspection" element={<InspectionRoute />} />
       </Route>
     </Routes>

@@ -2,9 +2,10 @@
 // 数据源 getMiscResources(clusterId) → { configmaps, secrets, pvcs, storage_classes }
 // 操作复用现有弹窗组件；创建：PVC 走 PvcCreateModal，ConfigMap/Secret 走**表单**弹窗（YAML 仅作行内高级入口）
 import { useEffect, useState } from 'react'
-import { Card, Table, Tabs, Button, Space, Tag, message, Dropdown, Modal } from 'antd'
+import { Card, Table, Tabs, Button, Space, Tag, message, Dropdown, Modal, Select } from 'antd'
 import { MoreOutlined, ReloadOutlined, PlusOutlined } from '@ant-design/icons'
 import { getMiscResources, deleteObject } from '../../services/api'
+import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../../components/ConfigObjectYamlModal'
 import ConfigObjectInfoModal from '../../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../../components/ConfigObjectDataModal'
@@ -28,6 +29,7 @@ const EMPTY: MiscData = { configmaps: [], secrets: [], pvcs: [], storage_classes
 const fmtTs = (v?: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
 
 export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clusterId: number; initialTab?: 'pvcs' | 'configmaps' | 'secrets' }) {
+  const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
   const [misc, setMisc] = useState<MiscData>(EMPTY)
   const [loading, setLoading] = useState(false)
   const [activeKey, setActiveKey] = useState(initialTab)
@@ -39,15 +41,15 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
   const load = () => {
     setLoading(true)
-    getMiscResources(clusterId, '')
+    getMiscResources(clusterId, nsParam(ns))
       .then((d) => setMisc((d as unknown as MiscData) || EMPTY))
       .catch(() => setMisc(EMPTY))
       .finally(() => setLoading(false))
   }
-  useEffect(load, [clusterId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [clusterId, ns]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const reloadMisc = () => {
-    getMiscResources(clusterId, '')
+    getMiscResources(clusterId, nsParam(ns))
       .then((d) => setMisc((d as unknown as MiscData) || EMPTY))
       .catch(() => { /* ignore */ })
   }
@@ -126,9 +128,10 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
   // 创建统一走「表单」弹窗（KubeSphere 风格）：配置字典=键值对，密钥=按类型表单；YAML 只保留为行内高级入口
   const onCreate = () => {
-    if (activeKey === 'pvcs') setPvcObj({ clusterId, kind: 'pvc', namespace: 'default', name: '', create: true })
-    else if (activeKey === 'configmaps') setDataObj({ clusterId, kind: 'configmap', namespace: 'default', name: '', create: true })
-    else setDataObj({ clusterId, kind: 'secret', namespace: 'default', name: '', create: true })
+    const targetNs = ns === NS_ALL ? 'default' : ns
+    if (activeKey === 'pvcs') setPvcObj({ clusterId, kind: 'pvc', namespace: targetNs, name: '', create: true })
+    else if (activeKey === 'configmaps') setDataObj({ clusterId, kind: 'configmap', namespace: targetNs, name: '', create: true })
+    else setDataObj({ clusterId, kind: 'secret', namespace: targetNs, name: '', create: true })
   }
 
   const createLabel = activeKey === 'pvcs' ? '创建存储' : activeKey === 'configmaps' ? '创建配置字典' : '创建密钥'
@@ -190,6 +193,20 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
       <Card size="small" title={pageTitle}
         extra={
           <Space>
+            <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
+            <Select
+              size="small"
+              style={{ width: 200 }}
+              value={ns}
+              onChange={(v) => setNs(v as string)}
+              showSearch
+              optionFilterProp="label"
+              loading={nsLoading}
+              options={[
+                { value: NS_ALL, label: '全部命名空间' },
+                ...namespaces.map((n) => ({ value: n, label: n })),
+              ]}
+            />
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
           </Space>
         }>
