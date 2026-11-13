@@ -3,7 +3,8 @@
 > 依据：2026-11-13 老板拍板 —— 「数据库正式做成资源中心的第三个入口，还有菜单归位」。
 > 前置：`docs/LAYOUT-REFACTOR-2026-11-11.md`（R32，顶栏 + 两级菜单骨架已实现）。
 > 本期性质：**以信息架构重组为主，数据库模块是唯一的"新页面组"**（后端能力已齐，前端有存量可复用）。
-> 状态：**P0 骨架已开发完成（2026-11-13，commit eb5266f）**；P1 数据库资源模块 / P2 归位配套 / Pod 删除修复待开发。
+> 状态：**P0 骨架（eb5266f）、P1 数据库资源模块（d936647/d80df81）、Pod 删除修复 + 资源治理合并（f619632）已于 2026-11-13 完成**。
+> 剩余：P2-b（节点管理能力并入 NodesPage 后下线 NodeManagement）、P2 清理（删 StrategyConfig/NodeManagement/孤儿页面）。
 > **方案 A 已于 2026-11-13 11:21 老板确认**；同日追加「Pod 删除按钮缺失」修复需求（第六节）；12:04 确认主机/虚拟机权限口径（7.8）。
 
 ---
@@ -269,7 +270,8 @@ Tab 骨架（与 K8s 集群详情保持一致的"对象详情"范式）：
 |---|---|
 | `ResourceGovernance` | 进菜单（资源中心 → 资源治理，admin） |
 | `ReleaseHistory` | 进菜单（诊断与自愈 → 发布历史） |
-| `NodeManagement` | **下线**：先逐项比对 `/clusters/:id/nodes`（`NodesPage.tsx`）与它的能力差异，确认无独有能力后删页面 + 删路由；有差异则把差异能力补进 `NodesPage` |
+| `NodeManagement` | **比对已完成（2026-11-13）**：`NodeManagement.tsx`(422 行) 比 `NodesPage.tsx`(400 行) 独有三项 —— ① **均衡计划**（热点节点 + 可迁移 Pod + 候选排序）② **批量停止/启用调度** ③ Kubelet 版本 / 节点角色列。
+→ 处理：先把这三项并入 `NodesPage`（新任务 **P2-b**，0.5~1d），再删 `NodeManagement.tsx` + 删路由。当前 P0 已把 `/node-management` 重定向到 `/clusters`，能力不会丢（只是入口换到集群内节点页，差异能力待补） |
 
 ### 7.3 三处重复入口的收敛
 
@@ -404,3 +406,18 @@ Tab 骨架（与 K8s 集群详情保持一致的"对象详情"范式）：
 2. **节点管理**：`NodeManagement.tsx`（422 行）是否有 `/clusters/:id/nodes` 不具备的能力（如跨集群节点总览、批量打标/隔离）？若有，是保留跨集群视图还是并入集群内？
 2. **报表**放「平台」是否可接受（它更像业务产出）。若不可接受，可选做成顶栏独立入口。
 3. **`/dashboard` 是否一起迁到 `/overview`**（建议不迁，风险大于收益）。
+
+
+---
+
+## 十一、P1 实现结果（2026-11-13）
+
+| 项 | 结果 |
+|---|---|
+| 新增文件 | `pages/DbResourceList.tsx`(414 行)、`pages/DbDetail.tsx`、`components/db/{DbMonitorPanel,DbSlowSqlPanel,DbAnomalyPanel,DbConsolePanel,DbDiagnosisPanel}.tsx` |
+| 改动 | `App.tsx`(两个路由)、`DiagnosticCenter.tsx`(瘦身为跨库报告聚合 + 跳转提示)、`services/api.ts`(诊断报告支持 conn_id)、`DbWorkbench.tsx`(hideSidebar / autoConnect)、`ResourceGovernance.tsx`(僵尸服务 Tab)、`WorkloadDetail.tsx`(Pod 操作集) |
+| 验收 | tsc 0 错；`npm run build` 通过(3.89s)；CDP 实测 8 个页面全部 0 真错误：列表页 2 行数据、概览/监控(57 指标行+12 卡片)/慢SQL(10 行)/异常(2 行)/SQL工作台(自动连接+Schema 树)/诊断(1 报告)/资源治理僵尸服务 Tab |
+| Pod 删除 | 实测下拉为「监控/日志/进容器/JVM 诊断/事件/编辑 YAML/隔离/删除」，确认弹窗文案与容器组页一致（未真实删除，避免动测试集群） |
+| 期间修正 | ① 后端 `/db-diagnosis/reports` 本来就支持 `conn_id`，改为直接传参而非前端猜字段；② DbWorkbench 隐藏左栏后没有「连接」按钮 → 加 `autoConnect`；③ 详情页状态映射补 `connected/failed/removed`（后端真实取值） |
+
+**已知待办**：诊断中心还没有「跨库批量发起诊断」入口（当前只能在单个实例详情页发起）——列入 P2。
