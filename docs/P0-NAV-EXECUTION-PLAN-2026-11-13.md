@@ -1,7 +1,7 @@
-# P0 骨架执行清单（R34 · 待 review 后开工）
+# P0 骨架执行清单（R34 · ✅ 已实现，commit eb5266f）
 
 > 对应 `docs/RESOURCE-CENTER-LAYOUT-REQUIREMENTS-2026-11-13.md` 第九节 P0。
-> **本文只出清单，不动代码。** review 通过后再落地。
+> **✅ 2026-11-13 已完成开发与验收**（commit `eb5266f`），实际落地与本文一致，差异见文末「十一、实现结果」。
 > 目标：把所有页面的**入口和 URL** 一次性摆正；页面内部逻辑 P0 一律不改。
 
 ---
@@ -411,3 +411,22 @@ export default function DiagnoseStrategy() {
    - P0 落地形态：两项菜单 `minRole: 'admin'`（静态判定，行为与现在一致，不阻塞骨架）。
    - 「授权后 operator 可见」放 **P2** 实现（0.5d）：nav 加 `requiresGrant: 'host'` 运行时判定 + 登录后拉一次 `GET /host-groups`（后端 `/hosts`、终端、SFTP、回放的主机级鉴权**已全部实现**，只缺菜单入口）。详见需求文档 7.8。
 2. 其余按本文执行。
+
+
+---
+
+## 十一、实现结果（2026-11-13）
+
+| 项 | 结果 |
+|---|---|
+| 改动文件 | 新增 `constants/nav.ts`、`pages/PlatformAI.tsx`、`pages/DiagnoseStrategy.tsx`；改 `App.tsx`、`MainLayout.tsx`、`ClusterDetail`/`WebTerminal`/`Dashboard`/`FaultDiagnosis`/`HostManagement`/`AlertPolicies`（7 处旧路径 navigate） |
+| 编译 | `npx tsc -b` 0 错 |
+| 构建 | `npm run build`（tsc -b && vite build）通过，4.07s |
+| 菜单冒烟 | **24/24 页面通过**：每页菜单选中态正确、表格/卡片正常渲染、0 个真错误（仅 antd 既有 deprecated 警告） |
+| 旧地址 | **42/42 重定向通过**，含 `/web-terminal/7 → /resources/terminal/7` 参数保留、`/diagnostic → /diagnose/fault?tab=db` query 保留 |
+| 角色 | operator / viewer 均只见 **12 项**（admin 24 项）；直链 `/platform/settings`、`/resources/governance`、`/alerts/policies` 均弹回 `/dashboard` |
+| 交互 | 点「告警监控 → 工单」正确跳 `/alerts/tickets`；折叠 80px / 展开 236px 正常；搜索输入「工单」命中「告警监控 / 工单」 |
+
+**与本文的差异**：`LEGACY_PARAM_PREFIXES` 只对 `/web-terminal`、`/executions` 生成通配路由（其余旧地址仅精确匹配），避免 `/alerts/*` 之类前缀吞掉未知路径。其余按本文执行。
+
+**遗留（P1/P2）**：`/resources/databases` 暂挂 `DiagnosticCenter`、`/diagnose/executions` 暂挂 `ApprovalList`，代码内已用 `TODO(P1)` / `TODO(P2)` 标注。

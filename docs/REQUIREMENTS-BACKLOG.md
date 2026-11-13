@@ -2150,7 +2150,7 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 
 ---
 
-## R34 资源中心与菜单归位（2026-11-13 老板拍板，待开发）
+## R34 资源中心与菜单归位（2026-11-13 老板拍板；**P0 已完成** eb5266f，P1/P2 待开发）
 
 > 老板口径：「数据库正式做成资源中心的第三个入口，还有菜单归位」。**详细需求见 `docs/RESOURCE-CENTER-LAYOUT-REQUIREMENTS-2026-11-13.md`**。
 > 性质：以信息架构重组为主（纯前端），数据库模块是唯一"新页面组"，**后端不需要改动**（DB 相关 API 已齐）。
@@ -2178,6 +2178,8 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 6. **主机/虚拟机权限口径**（2026-11-13 12:04 老板定）：**admin 专属 + 可按用户单独授权**。后端授权链路已完整（`HostGroupMember.role`、`GET /hosts` 按 `visible_group_ids` 过滤、行级 `can{view,operate,manage,delete}`、Web 终端 `host_access(operate)`、SFTP/回放同套校验），**唯一缺口是前端菜单入口**（`/host-management` 写死在 ADMIN_ONLY_KEYS）。改法：nav 加 `requiresGrant:'host'`，登录后拉一次 `/host-groups` 判 `my_role`；同时把 HostManagement 里 `isAdmin &&` 硬判断的按钮改成按 `can` 权限位。0.5d。详见需求文档 7.8。
 
 **方案**：已于 2026-11-13 11:21 确认**方案 A**（撤销监控中心/自动化运维/知识配置三组）。
+
+**进度**：✅ P0 导航骨架已完成（commit `eb5266f`，tsc/build 通过，CDP 24 菜单页 + 42 条重定向 + 三角色全通）；⏳ P1 数据库资源模块、P2 归位配套、Pod 删除修复待开发。
 
 **分期**：P0 骨架 1d（`MainLayout` + `App.tsx` + `constants/nav.ts`）→ P1 数据库模块 2~3d ∥ P2 归位配套 1~2d → P3 清理验证 0.5d；另加 Pod 删除修复 0.5d（文件独占可并行）。合计 **4.5~6.5 人日**。
 
