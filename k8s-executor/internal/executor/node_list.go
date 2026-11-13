@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -100,7 +101,27 @@ func qtyMap(rl corev1.ResourceList) map[string]string {
 	return out
 }
 
+// 节点 JSON 短缓存（10s）：该调用除 list nodes 外还要 list 全集群 Pod（算每节点 Pod 数）
+// 和 metrics-server 数据，远端生产集群单次 5~9s；前端 10s 轮询 + React StrictMode 会重复触发。
+// 节点状态本身秒级容差，10s 缓存对业务无影响。
+const nodesJSONCacheTTL = 10 * time.Second
+
+var (
+	nodesJSONMu    sync.Mutex
+	nodesJSONCache = map[uint]struct {
+		at  time.Time
+		out string
+	}{}
+)
+
 func (e *Executor) nodesJSON(ctx context.Context) (string, error) {
+	nodesJSONMu.Lock()
+	if hit, ok := nodesJSONCache[e.clusterID]; ok && time.Since(hit.at) < nodesJSONCacheTTL {
+		nodesJSONMu.Unlock()
+		return hit.out, nil
+	}
+	nodesJSONMu.Unlock()
+
 	nodes, err := e.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", err
@@ -164,7 +185,14 @@ func (e *Executor) nodesJSON(ctx context.Context) (string, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	b, _ := json.Marshal(out)
-	return string(b), nil
+	s := string(b)
+	nodesJSONMu.Lock()
+	nodesJSONCache[e.clusterID] = struct {
+		at  time.Time
+		out string
+	}{at: time.Now(), out: s}
+	nodesJSONMu.Unlock()
+	return s, nil
 }
 
 type podJSON struct {
