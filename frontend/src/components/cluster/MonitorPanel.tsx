@@ -1,6 +1,7 @@
-// 工作负载详情页「监控」页签内容：用 getWorkloadMetrics 拉 1h/6h/24h 数据。
-// 不引图表库，用 SVG polyline 画简单折线（CPU / 内存，跨容器跨 Pod 求和）；无数据时显示空态。
-import { useEffect, useMemo, useState } from 'react'
+// 工作负载详情页「监控」页签内容：用 getWorkloadMetrics 拉 5m~168h 数据。
+// 不引图表库，用 SVG polyline 画简单折线（CPU / 内存 / 网络，跨容器跨 Pod 求和）；无数据时显示空态。
+// 图宽跟随容器自适应（ResizeObserver 实测宽度），网络曲线依赖后端返回 net_rx / net_tx。
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Segmented, Button, Empty, Spin, Space, Tag } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { getWorkloadMetrics } from '../../services/api'
@@ -15,6 +16,8 @@ interface MetricsPayload {
 }
 
 const RANGES = [
+  { value: '15m', label: '15分钟' },
+  { value: '30m', label: '30分钟' },
   { value: '1h', label: '1小时' },
   { value: '6h', label: '6小时' },
   { value: '24h', label: '24小时' },
@@ -37,14 +40,16 @@ const fmtT = (ts: number) => {
   return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
 }
 
-function SparkLine({ points, color, unit, height = 130 }: {
+function SparkLine({ points, color, unit, height = 130, width = 720 }: {
   points: { t: number; v: number }[]
   color: string
   unit: string
   height?: number
+  width?: number
 }) {
   if (!points || points.length === 0) return <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-  const W = 720, H = height, PAD = 10
+  // 宽度跟随容器：viewBox 用实测宽度，SVG 本身 width=100% + preserveAspectRatio=none 兜底自适应
+  const W = Math.max(200, width), H = height, PAD = 10
   const vals = points.map((p) => p.v)
   let min = Math.min(...vals), max = Math.max(...vals)
   if (min === max) { min -= 1; max += 1 }
@@ -92,6 +97,20 @@ export default function MonitorPanel({ clusterId, kind, namespace, name }: {
   const [err, setErr] = useState('')
   const [data, setData] = useState<MetricsPayload>({ cpu: [], memory: [], net_rx: [], net_tx: [], pod_container_count: {} })
 
+  // 图宽自适应：ResizeObserver 实测容器宽度，兜底 720
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [wrapWidth, setWrapWidth] = useState(720)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const measure = () => { if (el.clientWidth) setWrapWidth(el.clientWidth) }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const load = (r: string) => {
     setLoading(true)
     setErr('')
@@ -106,33 +125,45 @@ export default function MonitorPanel({ clusterId, kind, namespace, name }: {
 
   const cpu = useMemo(() => sumSeries(data.cpu), [data.cpu])
   const mem = useMemo(() => sumSeries(data.memory).map((p) => ({ ...p, v: p.v / 1024 / 1024 })), [data.memory])
+  // 网络指标是 Pod 级（容器共享 netns），跨 Pod 求和；单位 bytes/s → KB/s
+  const netRx = useMemo(() => sumSeries(data.net_rx).map((p) => ({ ...p, v: p.v / 1024 })), [data.net_rx])
+  const netTx = useMemo(() => sumSeries(data.net_tx).map((p) => ({ ...p, v: p.v / 1024 })), [data.net_tx])
 
   const containerCount = Math.max(1, data.cpu.length)
   const podCount = Object.keys(data.pod_container_count).length
+  const hasAny = cpu.length > 0 || mem.length > 0 || netRx.length > 0 || netTx.length > 0
 
   return (
-    <div>
+    <div ref={wrapRef}>
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={RANGES} />
         <Button size="small" icon={<ReloadOutlined />} onClick={() => load(range)} loading={loading}>刷新</Button>
         <Tag color="blue">{containerCount} 个容器</Tag>
         <Tag color="geekblue">{podCount} 个 Pod</Tag>
       </Space>
-      {loading && cpu.length === 0 && mem.length === 0 ? (
+      {loading && !hasAny ? (
         <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
-      ) : err && cpu.length === 0 && mem.length === 0 ? (
+      ) : err && !hasAny ? (
         <Empty description={err} />
-      ) : cpu.length === 0 && mem.length === 0 ? (
+      ) : !hasAny ? (
         <Empty description="暂无指标数据（检查集群 Prometheus 与数据保留期）" />
       ) : (
         <div>
           <div style={{ marginBottom: 16 }}>
             <b>CPU（core，跨容器求和）</b>
-            <SparkLine points={cpu} color="#1677ff" unit="core" />
+            <SparkLine points={cpu} color="#1677ff" unit="core" width={wrapWidth} />
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <b>内存（MB，跨容器求和）</b>
+            <SparkLine points={mem} color="#52c41a" unit="MB" width={wrapWidth} />
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <b>网络入站（KB/s，跨 Pod 求和）</b>
+            <SparkLine points={netRx} color="#722ed1" unit="KB/s" width={wrapWidth} />
           </div>
           <div style={{ marginBottom: 8 }}>
-            <b>内存（MB，跨容器求和）</b>
-            <SparkLine points={mem} color="#52c41a" unit="MB" />
+            <b>网络出站（KB/s，跨 Pod 求和）</b>
+            <SparkLine points={netTx} color="#fa8c16" unit="KB/s" width={wrapWidth} />
           </div>
           <div style={{ fontSize: 12, color: '#8c8c8c' }}>
             数据源：集群 Prometheus（保留 7 天）；采样间隔随范围自动调整；平台不存储这些指标。

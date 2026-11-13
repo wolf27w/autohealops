@@ -1,4 +1,4 @@
-// 工作负载详情页（整页）：概览 / 资源状态 / 元数据 / 环境变量 / 实时事件 / 历史事件 / 监控
+// 工作负载详情页（整页）：概览 / 元数据 / 环境变量 / 实时事件 / 历史事件 / 监控
 // 路由形态：/clusters/:id/workloads/:kind/:namespace/:name（路由由父会话接线，此处用 useParams）
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -14,7 +14,7 @@ import PodEventsModal from '../../components/PodEventsModal'
 import JvmDiagModal from '../../components/JvmDiagModal'
 import WorkloadMountsPanel from '../../components/WorkloadMountsPanel'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
-import { parseYaml, asMap, asArr, asStr, type YamlNode, type WorkloadValues, type VolumeMountValue, type VolumeType } from '../../components/workloadYaml'
+import { parseYaml, asMap, asArr, asStr, yamlToValues, type YamlNode, type WorkloadValues, type VolumeMountValue, type VolumeType } from '../../components/workloadYaml'
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
@@ -78,82 +78,6 @@ function strMap(n: YamlNode): Record<string, string> {
 }
 
 // 解析出的 YAML → 向导表单值（编辑设置回填；仅覆盖向导支持的字段）
-function yamlToValues(root: YamlNode, kind: string): Partial<WorkloadValues> {
-  const spec = asMap(asMap(root).spec)
-  const tplSpec = asMap(asMap(spec.template).spec)
-  const containers = asArr(tplSpec.containers)
-  const c0 = asMap(containers[0])
-  const meta = asMap(asMap(root).metadata)
-
-  const resources = asMap(c0.resources)
-  const requests = asMap(resources.requests)
-  const limits = asMap(resources.limits)
-
-  const env = asArr(c0.env)
-    .map((e) => asMap(e))
-    .filter((e) => e.value != null)
-    .map((e) => ({ key: asStr(e.name), value: asStr(e.value) }))
-
-  const labels = strMap(meta.labels)
-  delete labels.app
-
-  const volumes: VolumeMountValue[] = []
-  const volList = asArr(tplSpec.volumes).map((x) => asMap(x))
-  const mounts = asArr(c0.volumeMounts).map((x) => asMap(x))
-  for (const m of mounts) {
-    const vn = asStr(m.name)
-    const vol = volList.find((x) => asStr(x.name) === vn) || {}
-    let type: VolumeType = 'emptyDir'
-    let source: string | undefined
-    if (vol.configMap != null) { type = 'configMap'; source = asStr(asMap(vol.configMap).name) }
-    else if (vol.secret != null) { type = 'secret'; source = asStr(asMap(vol.secret).secretName) }
-    else if (vol.persistentVolumeClaim != null) { type = 'pvc'; source = asStr(asMap(vol.persistentVolumeClaim).claimName) }
-    else if (vol.emptyDir != null) { type = 'emptyDir' }
-    volumes.push({
-      name: vn, type, source, mountPath: asStr(m.mountPath),
-      subPath: m.subPath != null ? asStr(m.subPath) : undefined,
-      readOnly: m.readOnly === true,
-    })
-  }
-
-  const live = asMap(c0.livenessProbe)
-  const liveGet = asMap(live.httpGet)
-  const ready = asMap(c0.readinessProbe)
-  const readyGet = asMap(ready.httpGet)
-
-  const out: Partial<WorkloadValues> = {
-    name: asStr(meta.name),
-    namespace: asStr(meta.namespace),
-    image: asStr(c0.image),
-    imagePullPolicy: asStr(c0.imagePullPolicy) || 'IfNotPresent',
-    replicas: spec.replicas != null ? Number(spec.replicas) : undefined,
-    cpuRequest: asStr(requests.cpu) || undefined,
-    cpuLimit: asStr(limits.cpu) || undefined,
-    memoryRequest: asStr(requests.memory) || undefined,
-    memoryLimit: asStr(limits.memory) || undefined,
-    env,
-    labels: Object.entries(labels).map(([key, value]) => ({ key, value })),
-    volumes,
-    livenessEnabled: live.httpGet != null,
-    livenessPath: asStr(liveGet.path) || '/healthz',
-    livenessPort: liveGet.port != null ? Number(liveGet.port) : undefined,
-    readinessEnabled: ready.httpGet != null,
-    readinessPath: asStr(readyGet.path) || '/healthz',
-    readinessPort: readyGet.port != null ? Number(readyGet.port) : undefined,
-  }
-
-  const ports = asArr(c0.ports).map((x) => asMap(x))
-  const cp = ports.find((p) => p.containerPort != null)
-  if (cp) out.containerPort = Number(cp.containerPort)
-
-  if (kind === 'cronjob') {
-    out.schedule = asStr(spec.schedule)
-    const cmd = asArr(c0.command)
-    out.command = cmd.length >= 3 ? asStr(cmd[2]) : (cmd.length ? asStr(cmd[cmd.length - 1]) : '')
-  }
-
-  return out
-}
 
 export default function WorkloadDetail() {
   const { id, kind = 'deployment', namespace = '', name = '' } = useParams()
@@ -398,7 +322,7 @@ export default function WorkloadDetail() {
     <div>
       <Descriptions size="small" column={2} bordered style={{ marginBottom: 16 }}>
         <Descriptions.Item label="命名空间">{namespace}</Descriptions.Item>
-        <Descriptions.Item label="副本数">{desired}（就绪 {readyReplicas}）</Descriptions.Item>
+        <Descriptions.Item label="副本">期望 {desired} · 就绪 {readyReplicas} · 可用 {meta.available == null ? '-' : meta.available} · 已更新 {meta.updated == null ? '-' : meta.updated}</Descriptions.Item>
         <Descriptions.Item label="镜像" span={2}>
           {containers.length
             ? containers.map((c) => `${c.name}: ${c.image}`).join(' ｜ ') || (meta.images.join(' ｜ '))
@@ -412,15 +336,6 @@ export default function WorkloadDetail() {
       <Table rowKey="name" size="small" dataSource={pods} pagination={false} columns={podColumns}
         locale={{ emptyText: <Empty description="暂无 Pod（可能未采集或名称不匹配）" /> }} />
     </div>
-  )
-
-  const resourceTab = (
-    <Descriptions size="small" column={2} bordered>
-      <Descriptions.Item label="期望副本">{desired}</Descriptions.Item>
-      <Descriptions.Item label="已更新副本">{meta.updated == null ? '-' : meta.updated}</Descriptions.Item>
-      <Descriptions.Item label="就绪副本">{readyReplicas}</Descriptions.Item>
-      <Descriptions.Item label="可用副本">{meta.available == null ? '-' : meta.available}</Descriptions.Item>
-    </Descriptions>
   )
 
   const metadataTab = (
@@ -539,7 +454,6 @@ export default function WorkloadDetail() {
       <Card size="small">
         <Tabs defaultActiveKey="overview" onChange={(key) => { if (key === 'events-realtime') loadRealtimeEvents() }} items={[
           { key: 'overview', label: '概览', children: overviewTab },
-          { key: 'resource', label: '资源状态', children: resourceTab },
           { key: 'metadata', label: '元数据', children: metadataTab },
           { key: 'env', label: '环境变量', children: (
             <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="env" />
