@@ -4,7 +4,8 @@
 > 前置：`docs/LAYOUT-REFACTOR-2026-11-11.md`（R32，顶栏 + 两级菜单骨架已实现）。
 > 本期性质：**以信息架构重组为主，数据库模块是唯一的"新页面组"**（后端能力已齐，前端有存量可复用）。
 > 状态：**P0 骨架（eb5266f）、P1 数据库资源模块（d936647/d80df81）、Pod 删除修复 + 资源治理合并（f619632）已于 2026-11-13 完成**。
-> 剩余：P2-b（节点管理能力并入 NodesPage 后下线 NodeManagement）、P2 清理（删 StrategyConfig/NodeManagement/孤儿页面）。
+> **P2-b 与 P2 清理也已完成（b1c1fdc / 76091b3）**：节点能力并入 NodesPage、NodeManagement 下线、7 个死文件清理、决策策略页归位。
+> 剩余：诊断中心「跨库批量发起诊断」（可选增强）。
 > **方案 A 已于 2026-11-13 11:21 老板确认**；同日追加「Pod 删除按钮缺失」修复需求（第六节）；12:04 确认主机/虚拟机权限口径（7.8）。
 
 ---
@@ -421,3 +422,17 @@ Tab 骨架（与 K8s 集群详情保持一致的"对象详情"范式）：
 | 期间修正 | ① 后端 `/db-diagnosis/reports` 本来就支持 `conn_id`，改为直接传参而非前端猜字段；② DbWorkbench 隐藏左栏后没有「连接」按钮 → 加 `autoConnect`；③ 详情页状态映射补 `connected/failed/removed`（后端真实取值） |
 
 **已知待办**：诊断中心还没有「跨库批量发起诊断」入口（当前只能在单个实例详情页发起）——列入 P2。
+
+
+---
+
+## 十二、P2 实现结果（2026-11-13）
+
+| 项 | 结果 |
+|---|---|
+| 节点能力合并（P2-b） | `NodesPage` 新增：**Kubelet 版本列**、**行多选 + 批量停止/启用调度**（二次确认 + 成功/失败计数 + 刷清选）、**均衡计划只读弹窗**（阈值可调 + 热点节点表 + 候选 Pod 前 20） |
+| 下线 | 删除 `pages/NodeManagement.tsx`（422 行）；`/node-management` 仍由旧地址重定向到 `/clusters` |
+| 死代码清理 | 删 7 个文件：`DBMonitor`(388)、`AIConfig`、`StrategyConfig`、`ResourceQuota`、`TaskDetail`、`TaskList`、`cluster/ComingSoon`；`DiagnosticCenter` 内删掉废弃的 `DBConnections`（200+ 行） |
+| 决策策略归位 | `DiagnoseStrategy` 增加第三 Tab「决策策略」（DecisionPolicies 此前无任何入口，风险评分/时段规则根本配置不了），`?tab=decision` 可直达 |
+| 验收 | tsc 0 错；build 通过(3.96s)；CDP 实测节点页：列含 Kubelet、多选可用、两个批量按钮在位、均衡计划弹窗 4 行数据、0 真错误；决策策略 Tab 4 行数据、0 真错误 |
+| 页面文件数 | 59 → **52** |

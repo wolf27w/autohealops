@@ -2183,7 +2183,9 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 - ✅ P0 导航骨架（`eb5266f`）：CDP 24 菜单页 + 42 条重定向 + 三角色全通
 - ✅ P1 数据库资源模块（`d936647`/`d80df81`）：列表页 + 详情 6 Tab（监控/慢SQL/异常/工作台/诊断）+ 诊断中心瘦身
 - ✅ Pod 删除修复 + 资源治理合并僵尸服务 + DbWorkbench autoConnect（`f619632`）
-- ⏳ 剩余：P2-b 节点管理能力并入 NodesPage 后下线（均衡计划/批量调度/Kubelet 版本列）、P2 清理（删 StrategyConfig/NodeManagement/5 个孤儿页面）、诊断中心跨库批量发起
+- ✅ P2-b 节点能力并入 NodesPage + NodeManagement 下线（`b1c1fdc`）：Kubelet 版本列 / 批量调度 / 均衡计划只读弹窗
+- ✅ P2 清理 + 决策策略归位（`76091b3`）：删 7 个死文件（DBMonitor/AIConfig/StrategyConfig/ResourceQuota/TaskDetail/TaskList/ComingSoon），DiagnosticCenter 删 DBConnections；决策策略进 `/diagnose/strategy?tab=decision`
+- ⏳ 剩余（可选）：诊断中心「跨库批量发起诊断」
 
 **分期**：P0 骨架 1d（`MainLayout` + `App.tsx` + `constants/nav.ts`）→ P1 数据库模块 2~3d ∥ P2 归位配套 1~2d → P3 清理验证 0.5d；另加 Pod 删除修复 0.5d（文件独占可并行）。合计 **4.5~6.5 人日**。
 
