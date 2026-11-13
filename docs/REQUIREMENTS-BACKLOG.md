@@ -2152,7 +2152,26 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 - ✅ 第 1 条（事件归位）：容器组页去掉「事件」入口；工作负载详情拆「实时事件」（`workload-events`，进 Tab 加载一次+手动刷新）与「历史事件」（`k8s_events`，6h/24h/72h/168h）。commit `e17da57`
 - ✅ 第 4 条（配置字典/密钥创建改表单）：创建走 `ConfigObjectDataModal`（KubeSphere 风格，密钥按类型分表单），YAML 降为行内「编辑 YAML（高级）」。commit `e425857`
 - ✅ 第 6 条（命名空间改下拉）：服务/路由/PVC/工作负载/配置字典/密钥 6 处创建弹窗均自动拉 `namespace-list`。commit `e425857`
-- ⏳ 剩余：第 2 条（监控图自适应 + 网络曲线 + 15m/30m）、第 3 条（环境变量批量粘贴）、第 5 条（集群内监控告警页下线）、第 7 条（去掉资源状态 Tab）
+- ✅ 第 2 条（监控）：图宽 ResizeObserver 自适应、新增 net_rx/net_tx 曲线、时间范围加 15m/30m（后端 `WORKLOAD_RANGE` 同步）。commit `25fd3a4`
+- ✅ 第 3 条（环境变量批量粘贴）：`KeyValueList` 支持粘贴 `KEY=VALUE` / `.env`，追加或替换。同上
+- ✅ 第 5 条（集群内「监控告警」页下线）：路由 + 集群导航一并移除。commit `9121776`
+- ✅ 第 7 条（去掉「资源状态」Tab）：副本四值（期望/就绪/可用/已更新）并入概览。commit `25fd3a4`
+- **R33 全部 7 条已完成。**
+
+### R34 追加：工作负载编辑对齐 KubeSphere（2026-11-13，commit `d467d86`）
+
+- 创建/编辑由**分步向导**改**页签**：基本信息 / 容器与资源 / 存储挂载 / 高级设置（一屏可见，不用点下一步）
+- 支持**多容器**（主容器 + 附加容器：名称/镜像/端口/资源/命令）
+- Deployment 更新策略（type / maxSurge / maxUnavailable）、StatefulSet（podManagementPolicy / updateStrategy）
+- `imagePullSecrets` 多选（自动列 dockerconfigjson 类型 secret）
+- YAML merge 保留 initContainers / annotations / securityContext / tolerations / valueFrom env，不丢高级字段
+- 工作负载**列表页**行操作补「编辑设置」（取 YAML → 回填表单），YAML 降为「编辑 YAML（高级）」
+
+### R34 追加：命名空间跨页联动（2026-11-13，commit `9121776`）
+
+- 新增 `pages/cluster/NamespaceContext.tsx`：按集群记忆（localStorage）、**默认 default**、失效自动回退
+- 容器组 / 工作负载 / 服务 / 路由 / 存储(PVC) / 配置(ConfigMap·Secret) 共用同一个选择器，切一处全跟着切
+- 创建弹窗的默认命名空间跟随当前选择；「全部命名空间」用哨兵 `__all__`，传后端时转空串
 
 ---
 
