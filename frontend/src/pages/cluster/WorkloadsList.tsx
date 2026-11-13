@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState, type Key } from 'react'
 import { Table, Tag, Button, Space, Select, Input, Dropdown, Modal, InputNumber, message, Empty, Card, Segmented } from 'antd'
 import { MoreOutlined, SearchOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { useClusterNamespace, NS_ALL } from './NamespaceContext'
 import {
   getClusterDetail,
+  getWorkloadYaml,
   scaleWorkload,
   rolloutWorkload,
   deleteWorkload,
@@ -14,6 +16,7 @@ import {
 } from '../../services/api'
 import WorkloadYamlModal, { type WorkloadTarget } from '../../components/WorkloadYamlModal'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
+import { parseYaml, yamlToValues } from '../../components/workloadYaml'
 import ReleaseHistoryModal from '../../components/ReleaseHistoryModal'
 import ReleaseModal from '../../components/ReleaseModal'
 
@@ -59,9 +62,9 @@ const STATUS_COLOR: Record<string, string> = { 运行中: 'green', 更新中: 'o
 
 export default function WorkloadsList({ clusterId, kind }: { clusterId: number; kind: 'deployment' | 'statefulset' | 'daemonset' | 'cronjob' }) {
   const navigate = useNavigate()
-  const [namespaces, setNamespaces] = useState<NamespaceDetail[]>([])
+  const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
+  const [details, setDetails] = useState<NamespaceDetail[]>([])
   const [loading, setLoading] = useState(false)
-  const [activeNs, setActiveNs] = useState<string>('_all_')
   const [searchText, setSearchText] = useState('')
   const [page, setPage] = useState(1)
 
@@ -70,6 +73,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const [releaseTarget, setReleaseTarget] = useState<WorkloadTarget | null>(null)
   const [releaseHistoryTarget, setReleaseHistoryTarget] = useState<WorkloadTarget | null>(null)
   const [wlCreate, setWlCreate] = useState<WorkloadCreateTarget | null>(null)
+  const [wlEdit, setWlEdit] = useState<WorkloadCreateTarget | null>(null)
   const [scaleTarget, setScaleTarget] = useState<WorkloadTarget | null>(null)
   const [scaleValue, setScaleValue] = useState<number>(1)
 
@@ -87,7 +91,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const load = () => {
     setLoading(true)
     getClusterDetail(clusterId)
-      .then((d) => setNamespaces(d as NamespaceDetail[]))
+      .then((d) => setDetails(d as NamespaceDetail[]))
       .finally(() => setLoading(false))
   }
 
@@ -100,14 +104,14 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   useEffect(() => {
     const t = setInterval(() => {
       getClusterDetail(clusterId)
-        .then((d) => setNamespaces(d as NamespaceDetail[]))
+        .then((d) => setDetails(d as NamespaceDetail[]))
         .catch(() => { /* 轮询失败不影响页面 */ })
     }, 5000)
     return () => clearInterval(t)
   }, [clusterId, kind])
 
   // 切换命名空间/状态/搜索时重置分页
-  useEffect(() => { setPage(1) }, [activeNs, searchText])
+  useEffect(() => { setPage(1) }, [ns, searchText])
 
   const paginationConfig = {
     current: page,
@@ -138,21 +142,20 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const rows = useMemo(() => {
     const q = searchText.trim().toLowerCase()
     const result: ResourceItem[] = []
-    for (const ns of namespaces) {
-      if (activeNs !== '_all_' && ns.namespace !== activeNs) continue
-      for (const item of (ns[arrKey] as ResourceItem[]) || []) {
-        if (q && !(item.name || '').toLowerCase().includes(q) && !ns.namespace.toLowerCase().includes(q)) continue
-        result.push({ ...item, namespace: ns.namespace })
+    for (const d of details) {
+      if (ns !== NS_ALL && d.namespace !== ns) continue
+      for (const item of (d[arrKey] as ResourceItem[]) || []) {
+        if (q && !(item.name || '').toLowerCase().includes(q) && !d.namespace.toLowerCase().includes(q)) continue
+        result.push({ ...item, namespace: d.namespace })
       }
     }
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [namespaces, activeNs, searchText, arrKey])
+  }, [details, ns, searchText, arrKey])
 
-  // 命名空间下拉选项（从数据聚合）
+  // 命名空间下拉选项（统一用 context 的命名空间列表）
   const nsOptions = useMemo(() => {
-    const set = Array.from(new Set(namespaces.map((n) => n.namespace)))
-    return [{ value: '_all_', label: '全部命名空间' }, ...set.map((n) => ({ value: n, label: n }))]
+    return [{ value: NS_ALL, label: '全部命名空间' }, ...namespaces.map((n) => ({ value: n, label: n }))]
   }, [namespaces])
 
   const tgt = (r: ResourceItem): WorkloadTarget => ({ clusterId, kind, namespace: r.namespace, name: r.name })
@@ -186,6 +189,18 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   }
 
   // 打开单个伸缩副本弹窗：默认当前副本；停止态回填上次副本
+  const openEdit = async (r: ResourceItem) => {
+    try {
+      const d = await getWorkloadYaml(clusterId, kind, r.namespace, r.name)
+      const yaml = (d as { yaml?: string })?.yaml || ''
+      setWlEdit({
+        clusterId, kind, namespace: r.namespace, name: r.name, create: false,
+        initialValues: yaml ? yamlToValues(parseYaml(yaml), kind) : undefined,
+        existingYaml: yaml,
+      })
+    } catch { message.error('读取工作负载配置失败') }
+  }
+
   const openScale = async (r: ResourceItem) => {
     const cur = Number(r.replicas ?? 0)
     let last = 0
@@ -212,7 +227,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   }
 
   // ===== 批量操作 =====
-  useEffect(() => { setWlSel([]) }, [activeNs, kind])
+  useEffect(() => { setWlSel([]) }, [ns, kind])
 
   const selItems = useMemo(() => {
     return rows.filter((r) => wlSel.includes(`${r.namespace}-${r.name}`))
@@ -317,7 +332,8 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
             trigger={['click']}
             menu={{
               items: [
-                { key: 'yaml', label: '编辑 YAML' },
+                { key: 'edit', label: '编辑设置' },
+                { key: 'yaml', label: '编辑 YAML（高级）' },
                 ...(scaleable ? [{ key: 'scale', label: '伸缩副本' }] : []),
                 ...(!isCronjob ? [{ key: 'rollout', label: '滚动重启' }] : []),
                 ...(kind === 'deployment' ? [{ key: 'history', label: '发布历史' }] : []),
@@ -325,7 +341,8 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
                 { key: 'delete', label: '删除', danger: true },
               ],
               onClick: ({ key: k }) => {
-                if (k === 'yaml') setWlYaml(tgt(r))
+                if (k === 'edit') openEdit(r)
+                else if (k === 'yaml') setWlYaml(tgt(r))
                 else if (k === 'scale') openScale(r)
                 else if (k === 'rollout') handleRollout(r)
                 else if (k === 'history') setReleaseHistoryTarget(tgt(r))
@@ -373,11 +390,12 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
           <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
           <Select
             size="small"
-            style={{ width: 190 }}
-            value={activeNs}
-            onChange={(v) => setActiveNs((v as string) || '_all_')}
+            style={{ width: 200 }}
+            value={ns}
+            onChange={(v) => setNs(v as string)}
             showSearch
             optionFilterProp="label"
+            loading={nsLoading}
             options={nsOptions}
           />
           <Input
@@ -390,7 +408,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
             onChange={(e) => setSearchText(e.target.value)}
           />
           <Button type="primary" size="small"
-            onClick={() => setWlCreate({ clusterId, kind, namespace: activeNs === '_all_' ? 'default' : activeNs })}>
+            onClick={() => setWlCreate({ clusterId, kind, namespace: ns === NS_ALL ? 'default' : ns })}>
             创建{kindLabel}
           </Button>
         </Space>
@@ -410,6 +428,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
       </Card>
 
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
+      <WorkloadCreateModal target={wlEdit} onClose={() => setWlEdit(null)} onSaved={load} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       {releaseTarget && (
         <ReleaseModal open clusterId={releaseTarget.clusterId} namespace={releaseTarget.namespace}

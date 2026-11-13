@@ -13,6 +13,18 @@ export interface VolumeMountValue {
   readOnly?: boolean
 }
 
+// 单个容器（多容器支持：主容器之外的附加普通容器，如 sidecar）
+export interface WorkloadContainerValue {
+  name: string
+  image: string
+  containerPort?: number
+  cpuRequest?: string
+  cpuLimit?: string
+  memoryRequest?: string
+  memoryLimit?: string
+  command?: string[]        // 启动命令（数组形式，覆盖镜像默认 entrypoint）
+}
+
 export interface WorkloadValues {
   name: string
   namespace: string
@@ -35,6 +47,18 @@ export interface WorkloadValues {
   readinessEnabled?: boolean
   readinessPath?: string
   readinessPort?: number
+  // ===== 更新策略（Deployment） =====
+  strategyType?: string         // RollingUpdate / Recreate
+  maxSurge?: string             // 如 25% 或绝对数值
+  maxUnavailable?: string       // 如 25% 或绝对数值
+  // ===== StatefulSet =====
+  podManagementPolicy?: string  // OrderedReady / Parallel
+  updateStrategyType?: string   // RollingUpdate / OnDelete
+  // ===== 镜像拉取密钥（dockerconfigjson Secret 名称） =====
+  imagePullSecrets?: string[]
+  // ===== 多容器 =====
+  containers?: WorkloadContainerValue[]  // 附加容器（不含主容器）；主容器 = 顶层 name/image/资源/探针/挂载字段
+  containerCommand?: string[]            // 主容器启动命令（非 Cron）
 }
 
 function fromKvList(list?: KvItem[]): Record<string, string> {
@@ -66,6 +90,9 @@ function containerSpec(v: WorkloadValues): string {
   lines.push(`          image: ${v.image}`)
   if (v.imagePullPolicy && v.imagePullPolicy !== 'IfNotPresent') {
     lines.push(`          imagePullPolicy: ${v.imagePullPolicy}`)
+  }
+  if (v.containerCommand && v.containerCommand.length) {
+    lines.push(...commandBlockLines(v.containerCommand))
   }
   if (v.containerPort) {
     lines.push(`          ports:`)
@@ -113,6 +140,57 @@ function containerSpec(v: WorkloadValues): string {
   return lines.join('\n')
 }
 
+// 启动命令（块式列表，避免 flow 风格 [..] 无法被极简解析器读回）
+function commandBlockLines(cmd: string[]): string[] {
+  if (!cmd || !cmd.length) return []
+  const out = [`          command:`]
+  for (const a of cmd) out.push(`            - ${yamlString(a)}`)
+  return out
+}
+
+// Deployment 更新策略（默认 RollingUpdate，与集群默认一致）
+function deploymentStrategyBlock(v: WorkloadValues): string {
+  if (v.strategyType === 'Recreate') return `  strategy:\n    type: Recreate`
+  return `  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: ${v.maxSurge || '25%'}\n      maxUnavailable: ${v.maxUnavailable || '25%'}`
+}
+
+// 附加容器（多容器：主容器之外）；主容器由 containerSpec 渲染
+function additionalContainerSpec(c: WorkloadContainerValue): string {
+  const lines: string[] = []
+  lines.push(`        - name: ${c.name}`)
+  lines.push(`          image: ${c.image}`)
+  if (c.containerPort) {
+    lines.push(`          ports:`)
+    lines.push(`            - containerPort: ${c.containerPort}`)
+  }
+  const req: string[] = []
+  const lim: string[] = []
+  if (c.cpuRequest) req.push(`              cpu: ${c.cpuRequest}`)
+  if (c.memoryRequest) req.push(`              memory: ${c.memoryRequest}`)
+  if (c.cpuLimit) lim.push(`              cpu: ${c.cpuLimit}`)
+  if (c.memoryLimit) lim.push(`              memory: ${c.memoryLimit}`)
+  if (req.length || lim.length) {
+    lines.push(`          resources:`)
+    if (req.length) { lines.push(`            requests:`); lines.push(...req) }
+    if (lim.length) { lines.push(`            limits:`); lines.push(...lim) }
+  }
+  if (c.command && c.command.length) lines.push(...commandBlockLines(c.command))
+  return lines.join('\n')
+}
+
+// 所有容器：主容器 + 附加容器
+function containersBlock(v: WorkloadValues): string {
+  const blocks = [containerSpec(v), ...(v.containers || []).filter((c) => c && c.image).map(additionalContainerSpec)]
+  return blocks.join('\n')
+}
+
+// 镜像拉取密钥（template.spec 级别）
+function imagePullSecretsBlock(v: WorkloadValues): string {
+  const names = (v.imagePullSecrets || []).filter(Boolean)
+  if (!names.length) return ''
+  return `      imagePullSecrets:\n` + names.map((n) => `        - name: ${n}`).join('\n')
+}
+
 function volumesBlock(v: WorkloadValues): string {
   const vols = normVolumes(v)
   if (!vols.length) return ''
@@ -150,6 +228,9 @@ ${labelsBlock('    ', v)}
 spec:
   serviceName: ${nm}
   replicas: ${v.replicas ?? 1}
+  podManagementPolicy: ${v.podManagementPolicy || 'OrderedReady'}
+  updateStrategy:
+    type: ${v.updateStrategyType || 'RollingUpdate'}
   selector:
     matchLabels:
       app: ${nm}
@@ -159,7 +240,8 @@ spec:
 ${labelsBlock('        ', v)}
     spec:
       containers:
-${containerSpec(v)}
+${containersBlock(v)}
+${imagePullSecretsBlock(v)}
 ${volumesBlock(v)}
 `
   }
@@ -181,7 +263,8 @@ spec:
 ${labelsBlock('        ', v)}
     spec:
       containers:
-${containerSpec(v)}
+${containersBlock(v)}
+${imagePullSecretsBlock(v)}
 ${volumesBlock(v)}
 `
   }
@@ -216,13 +299,15 @@ spec:
   selector:
     matchLabels:
       app: ${nm}
+${deploymentStrategyBlock(v)}
   template:
     metadata:
       labels:
 ${labelsBlock('        ', v)}
     spec:
       containers:
-${containerSpec(v)}
+${containersBlock(v)}
+${imagePullSecretsBlock(v)}
 ${volumesBlock(v)}
 `
 }
@@ -509,13 +594,15 @@ function labelsNode(v: WorkloadValues): Record<string, YamlNode> {
   return o
 }
 
-function resourcesNode(v: WorkloadValues): Record<string, YamlNode> | undefined {
+interface ResSpec { cpuRequest?: string; cpuLimit?: string; memoryRequest?: string; memoryLimit?: string }
+
+function resourcesNode(r: ResSpec): Record<string, YamlNode> | undefined {
   const req: Record<string, YamlNode> = {}
   const lim: Record<string, YamlNode> = {}
-  if (v.cpuRequest) req.cpu = v.cpuRequest
-  if (v.memoryRequest) req.memory = v.memoryRequest
-  if (v.cpuLimit) lim.cpu = v.cpuLimit
-  if (v.memoryLimit) lim.memory = v.memoryLimit
+  if (r.cpuRequest) req.cpu = r.cpuRequest
+  if (r.memoryRequest) req.memory = r.memoryRequest
+  if (r.cpuLimit) lim.cpu = r.cpuLimit
+  if (r.memoryLimit) lim.memory = r.memoryLimit
   const out: Record<string, YamlNode> = {}
   if (Object.keys(req).length) out.requests = req
   if (Object.keys(lim).length) out.limits = lim
@@ -562,6 +649,10 @@ function mergeEnv(c0: Record<string, YamlNode>, v: WorkloadValues): void {
 }
 
 // 合并现有 YAML 与向导值，返回可直接 apply 的 YAML 字符串（编辑模式用）
+// merge 策略：只覆盖向导涉及的字段；表单未覆盖的高级字段（annotations、initContainers、securityContext、tolerations、
+// valueFrom 环境变量、非向导卷等）一律保留。容器层面：主容器=现有第一个容器（保留其 name 与高级字段），
+// 附加容器（v.containers）按 name 匹配现有容器保留高级字段；多容器模式下未列出的普通容器会被移除（表单权威），
+// 单容器模式（v.containers 非数组）则保留现有全部 sidecar。initContainers 始终不动。
 export function mergeWorkloadYaml(existingYaml: string, v: WorkloadValues, kind: string): string {
   const root = asMap(parseYaml(existingYaml))
 
@@ -569,17 +660,42 @@ export function mergeWorkloadYaml(existingYaml: string, v: WorkloadValues, kind:
   delete root.status
   const meta = asMap(root.metadata)
   for (const k of ['generation', 'selfLink', 'managedFields', 'resourceVersion', 'uid', 'creationTimestamp']) delete meta[k]
-  // metadata.labels 覆盖（向导）
+  // metadata.labels 覆盖（向导）；annotations 保留
   meta.labels = labelsNode(v)
 
   const spec = asMap(root.spec)
   if (kind === 'deployment' || kind === 'statefulset') spec.replicas = v.replicas ?? 1
   if (kind === 'cronjob') spec.schedule = v.schedule || '*/5 * * * *'
 
+  // 更新策略：Deployment → strategy；StatefulSet → podManagementPolicy + updateStrategy
+  if (kind === 'deployment') {
+    if (v.strategyType === 'Recreate') {
+      spec.strategy = { type: 'Recreate' }
+    } else {
+      const strat = asMap(spec.strategy)
+      strat.type = 'RollingUpdate'
+      const ru = asMap(strat.rollingUpdate)
+      ru.maxSurge = v.maxSurge || '25%'
+      ru.maxUnavailable = v.maxUnavailable || '25%'
+      strat.rollingUpdate = ru
+      spec.strategy = strat
+    }
+  } else if (kind === 'statefulset') {
+    if (v.podManagementPolicy) spec.podManagementPolicy = v.podManagementPolicy
+    else delete spec.podManagementPolicy
+    spec.updateStrategy = { type: v.updateStrategyType || 'RollingUpdate' }
+  }
+
   // 容器所在 spec（cronjob 走 jobTemplate.spec.template.spec）
   const tplSpec: Record<string, YamlNode> = kind === 'cronjob'
     ? asMap(asMap(asMap(asMap(spec.jobTemplate).spec).template).spec)
     : asMap(asMap(spec.template).spec)
+
+  // 镜像拉取密钥：表单权威（下拉多选）；字段未在表单中（如 CronJob）时保持现有值不动
+  if (Array.isArray(v.imagePullSecrets)) {
+    if (v.imagePullSecrets.length) tplSpec.imagePullSecrets = v.imagePullSecrets.filter(Boolean).map((n) => ({ name: n }))
+    else delete tplSpec.imagePullSecrets
+  }
 
   const containers = asArr(tplSpec.containers)
   const c0 = asMap(containers[0])
@@ -597,6 +713,8 @@ export function mergeWorkloadYaml(existingYaml: string, v: WorkloadValues, kind:
     else delete c0.resources
     if (v.containerPort) c0.ports = [{ containerPort: v.containerPort }]
     else delete c0.ports
+    if (v.containerCommand && v.containerCommand.length) c0.command = v.containerCommand
+    else delete c0.command
     const lp = probeNode(v.livenessEnabled, v.livenessPath, v.livenessPort, v.containerPort)
     if (lp) c0.livenessProbe = lp
     else delete c0.livenessProbe
@@ -612,7 +730,147 @@ export function mergeWorkloadYaml(existingYaml: string, v: WorkloadValues, kind:
     const newVols = [...wizVols.map(volumeNode), ...preservedVols]
     if (newVols.length) tplSpec.volumes = newVols
     else delete tplSpec.volumes
+
+    // 多容器：v.containers 是数组时表单权威；否则保留现有 sidecar（向后兼容）
+    if (Array.isArray(v.containers)) {
+      const byName = new Map<string, Record<string, YamlNode>>()
+      for (const c of containers) { const m = asMap(c); if (asStr(m.name)) byName.set(asStr(m.name), m) }
+      const extras: YamlNode[] = []
+      for (const fc of v.containers) {
+        if (!fc || !fc.name || !fc.image) continue
+        const c: Record<string, YamlNode> = { ...(byName.get(fc.name) || {}), name: fc.name, image: fc.image }
+        if (fc.containerPort) c.ports = [{ containerPort: fc.containerPort }]
+        else delete c.ports
+        const er = resourcesNode(fc)
+        if (er) c.resources = er
+        else delete c.resources
+        if (fc.command && fc.command.length) c.command = fc.command
+        else delete c.command
+        extras.push(c)
+      }
+      tplSpec.containers = [c0, ...extras]
+    } else {
+      tplSpec.containers = [c0, ...containers.slice(1)]
+    }
   }
 
   return stringifyYaml(root)
+}
+
+// ============ YAML → 向导表单值（编辑设置回填；与 buildYaml / mergeWorkloadYaml 互逆） ============
+function strMapOf(n: YamlNode): Record<string, string> {
+  const m = asMap(n)
+  const out: Record<string, string> = {}
+  for (const k of Object.keys(m)) out[k] = asStr(m[k])
+  return out
+}
+
+function containerToValue(c: Record<string, YamlNode>): WorkloadContainerValue {
+  const res = asMap(c.resources)
+  const ports = asArr(c.ports).map((x) => asMap(x))
+  const cp = ports.find((p) => p.containerPort != null)
+  const cmd = asArr(c.command).map((x) => asStr(x))
+  return {
+    name: asStr(c.name),
+    image: asStr(c.image),
+    containerPort: cp ? Number(cp.containerPort) : undefined,
+    cpuRequest: asStr(asMap(res.requests).cpu) || undefined,
+    cpuLimit: asStr(asMap(res.limits).cpu) || undefined,
+    memoryRequest: asStr(asMap(res.requests).memory) || undefined,
+    memoryLimit: asStr(asMap(res.limits).memory) || undefined,
+    command: cmd.length ? cmd : undefined,
+  }
+}
+
+export function yamlToValues(root: YamlNode, kind: string): Partial<WorkloadValues> {
+  const spec = asMap(asMap(root).spec)
+  const meta = asMap(asMap(root).metadata)
+  const tplSpec = kind === 'cronjob'
+    ? asMap(asMap(asMap(asMap(spec.jobTemplate).spec).template).spec)
+    : asMap(asMap(spec.template).spec)
+  const containers = asArr(tplSpec.containers)
+  const c0 = asMap(containers[0])
+
+  const resources = asMap(c0.resources)
+  const requests = asMap(resources.requests)
+  const limits = asMap(resources.limits)
+
+  const env = asArr(c0.env).map((e) => asMap(e)).filter((e) => e.value != null)
+    .map((e) => ({ key: asStr(e.name), value: asStr(e.value) }))
+
+  const rawLabels = strMapOf(meta.labels)
+  delete rawLabels.app
+  const labels = Object.entries(rawLabels).map(([key, value]) => ({ key, value }))
+
+  const volumes: VolumeMountValue[] = []
+  const volList = asArr(tplSpec.volumes).map((x) => asMap(x))
+  const mounts = asArr(c0.volumeMounts).map((x) => asMap(x))
+  for (const m of mounts) {
+    const vn = asStr(m.name)
+    const vol = volList.find((x) => asStr(x.name) === vn) || {}
+    let type: VolumeType = 'emptyDir'
+    let source: string | undefined
+    if (vol.configMap != null) { type = 'configMap'; source = asStr(asMap(vol.configMap).name) }
+    else if (vol.secret != null) { type = 'secret'; source = asStr(asMap(vol.secret).secretName) }
+    else if (vol.persistentVolumeClaim != null) { type = 'pvc'; source = asStr(asMap(vol.persistentVolumeClaim).claimName) }
+    else if (vol.emptyDir != null) { type = 'emptyDir' }
+    volumes.push({ name: vn, type, source, mountPath: asStr(m.mountPath), subPath: m.subPath != null ? asStr(m.subPath) : undefined, readOnly: m.readOnly === true })
+  }
+
+  const live = asMap(c0.livenessProbe)
+  const liveGet = asMap(live.httpGet)
+  const ready = asMap(c0.readinessProbe)
+  const readyGet = asMap(ready.httpGet)
+
+  const ports = asArr(c0.ports).map((x) => asMap(x))
+  const cp = ports.find((p) => p.containerPort != null)
+
+  const out: Partial<WorkloadValues> = {
+    name: asStr(meta.name),
+    namespace: asStr(meta.namespace),
+    image: asStr(c0.image),
+    imagePullPolicy: asStr(c0.imagePullPolicy) || 'IfNotPresent',
+    replicas: spec.replicas != null ? Number(spec.replicas) : undefined,
+    cpuRequest: asStr(requests.cpu) || undefined,
+    cpuLimit: asStr(limits.cpu) || undefined,
+    memoryRequest: asStr(requests.memory) || undefined,
+    memoryLimit: asStr(limits.memory) || undefined,
+    env,
+    labels,
+    volumes,
+    livenessEnabled: live.httpGet != null,
+    livenessPath: asStr(liveGet.path) || '/healthz',
+    livenessPort: liveGet.port != null ? Number(liveGet.port) : undefined,
+    readinessEnabled: ready.httpGet != null,
+    readinessPath: asStr(readyGet.path) || '/healthz',
+    readinessPort: readyGet.port != null ? Number(readyGet.port) : undefined,
+    containers: containers.slice(1).map((x) => containerToValue(asMap(x))),
+  }
+  if (cp) out.containerPort = Number(cp.containerPort)
+
+  const cmd = asArr(c0.command).map((x) => asStr(x))
+  if (kind === 'cronjob') {
+    out.schedule = asStr(spec.schedule)
+    out.command = cmd.length >= 3 ? asStr(cmd[2]) : (cmd.length ? asStr(cmd[cmd.length - 1]) : '')
+  } else if (cmd.length) {
+    out.containerCommand = cmd
+  }
+
+  // 更新策略
+  if (kind === 'deployment') {
+    const strat = asMap(spec.strategy)
+    out.strategyType = asStr(strat.type) || 'RollingUpdate'
+    const ru = asMap(strat.rollingUpdate)
+    if (ru.maxSurge != null) out.maxSurge = asStr(ru.maxSurge)
+    if (ru.maxUnavailable != null) out.maxUnavailable = asStr(ru.maxUnavailable)
+  } else if (kind === 'statefulset') {
+    out.podManagementPolicy = asStr(spec.podManagementPolicy) || 'OrderedReady'
+    out.updateStrategyType = asStr(asMap(spec.updateStrategy).type) || 'RollingUpdate'
+  }
+
+  // 镜像拉取密钥
+  const ips = asArr(tplSpec.imagePullSecrets).map((x) => asStr(asMap(x).name)).filter(Boolean)
+  if (ips.length) out.imagePullSecrets = ips
+
+  return out
 }

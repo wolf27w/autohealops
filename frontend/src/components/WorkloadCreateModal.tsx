@@ -1,11 +1,12 @@
-// 创建工作负载（无状态/有状态/守护集/定时任务）：分步向导（Steps）→ 拼 YAML 创建/更新
+// 创建工作负载（无状态/有状态/守护集/定时任务）：**页签表单**（基本信息 / 容器与资源 / 存储挂载 / 高级设置）
+// 参考 KubeSphere：所有分区并列在同一个弹窗里，不用一步步点「下一步」；创建与编辑共用同一套表单。
 // 编辑模式：target.create=false + target.name + target.initialValues 回填现有值
 import { useEffect, useState } from 'react'
-import { Modal, Form, Input, InputNumber, Switch, Select, Steps, Divider, Button, Space, message, Alert } from 'antd'
+import { Modal, Form, Input, InputNumber, Switch, Select, Tabs, Divider, Button, Space, message, Alert } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { applyWorkload, getClusterNamespaces } from '../services/api'
+import { applyWorkload, getClusterNamespaces, getMiscResources } from '../services/api'
 import { KeyValueList, type KvItem } from './KeyValueEditor'
-import { buildYaml, mergeWorkloadYaml, type WorkloadValues, type VolumeType } from './workloadYaml'
+import { buildYaml, mergeWorkloadYaml, type WorkloadValues, type WorkloadContainerValue, type VolumeType } from './workloadYaml'
 
 export interface WorkloadCreateTarget {
   clusterId: number
@@ -46,25 +47,19 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
-  const [current, setCurrent] = useState(0)
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [nsLoading, setNsLoading] = useState(false)
+  const [pullSecretOptions, setPullSecretOptions] = useState<string[]>([])
   const kind = target?.kind || ''
   const isCron = kind === 'cronjob'
   const isCreate = target ? target.create !== false : false
   const livenessEnabled = Form.useWatch('livenessEnabled', form)
   const readinessEnabled = Form.useWatch('readinessEnabled', form)
+  const strategyType = Form.useWatch('strategyType', form)
 
-  const steps = [
-    { title: '基本信息' },
-    { title: '资源与健康检查' },
-    { title: '存储挂载' },
-    { title: '高级设置' },
-  ]
 
   useEffect(() => {
     if (!target) return
-    setCurrent(0)
     form.resetFields()
     const defaults = {
       name: target.name || '',
@@ -81,8 +76,22 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
       livenessPath: '/healthz',
       readinessEnabled: false,
       readinessPath: '/healthz',
+      // 更新策略（与集群默认一致）
+      strategyType: 'RollingUpdate',
+      maxSurge: '25%',
+      maxUnavailable: '25%',
+      podManagementPolicy: 'OrderedReady',
+      updateStrategyType: 'RollingUpdate',
+      imagePullSecrets: [] as string[],
+      containers: [] as WorkloadContainerValue[],
     }
-    form.setFieldsValue({ ...defaults, ...(isCreate ? {} : (target.initialValues || {})) })
+    const init = isCreate ? {} : (target.initialValues || {})
+    // 附加容器命令：yamlToValues 里是数组，表单里存逗号分隔字符串，回填时归一化
+    const formContainers = (init.containers || []).map((c) => ({
+      ...c,
+      command: Array.isArray(c.command) ? c.command.join(', ') : (c.command || ''),
+    }))
+    form.setFieldsValue({ ...defaults, ...init, containers: formContainers })
   }, [target, kind, form, isCreate])
 
   useEffect(() => {
@@ -95,21 +104,20 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
       .finally(() => setNsLoading(false))
   }, [target])
 
-  const stepFields: string[][] = [
-    isCron
-      ? ['name', 'namespace', 'schedule', 'image', 'command']
-      : ['name', 'namespace', 'replicas', 'image', 'containerPort'],
-    ['cpuRequest', 'cpuLimit', 'memoryRequest', 'memoryLimit'],
-    [],
-    ['imagePullPolicy'],
-  ]
-
-  const next = async () => {
-    try {
-      await form.validateFields(stepFields[current] as never[])
-      setCurrent((c) => Math.min(c + 1, steps.length - 1))
-    } catch { /* 校验未过，停留当前步 */ }
-  }
+  // 镜像拉取密钥选项：只列 dockerconfigjson 类型的 Secret（拿不到时留空即可）
+  useEffect(() => {
+    if (!target) return
+    const ns = target.namespace || 'default'
+    getMiscResources(target.clusterId, ns)
+      .then((d) => {
+        const secrets = ((d as { secrets?: { name?: string; type?: string }[] }).secrets || [])
+          .filter((s) => s.type === 'kubernetes.io/dockerconfigjson')
+          .map((s) => s.name || '')
+          .filter(Boolean)
+        setPullSecretOptions(secrets)
+      })
+      .catch(() => setPullSecretOptions([]))
+  }, [target])
 
   const submit = async () => {
     if (!target) return
@@ -126,13 +134,23 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
         return
       }
     }
+    // 附加容器：命令在表单里是逗号分隔字符串 → 转成数组
+    const containers: WorkloadContainerValue[] = (v.containers || [])
+      .filter((c: WorkloadContainerValue & { command?: string | string[] }) => c && c.name && c.image)
+      .map((c: WorkloadContainerValue & { command?: string | string[] }) => ({
+        ...c,
+        command: typeof c.command === 'string' && c.command.trim()
+          ? c.command.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : undefined,
+      }))
+    const finalV: WorkloadValues = { ...v, containers }
     setLoading(true)
     try {
       await applyWorkload(target.clusterId, {
         kind: target.kind,
         namespace: (v.namespace || '').trim(),
         name: isCreate ? '' : (target.name || ''),
-        yaml: isCreate ? buildYaml(target.kind, v) : mergeWorkloadYaml(target.existingYaml || '', v, target.kind),
+        yaml: isCreate ? buildYaml(target.kind, finalV) : mergeWorkloadYaml(target.existingYaml || '', finalV, target.kind),
       })
       message.success(isCreate ? '已创建' : '已保存（正在滚动更新 Pod）')
       onSaved?.()
@@ -208,6 +226,38 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
           <Form.Item name="readinessPort" label="端口" style={{ flex: 1 }}><InputNumber min={1} max={65535} placeholder="80" style={{ width: '100%' }} /></Form.Item>
         </div>
       )}
+      <Divider style={{ margin: '8px 0 12px' }} />
+      <div style={{ fontWeight: 500, marginBottom: 8 }}>多容器（附加容器）</div>
+      <Form.List name="containers">
+        {(fields, { add, remove }) => (
+          <>
+            {fields.map(({ key, name, ...rest }) => (
+              <div key={key} style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 12, marginBottom: 12, position: 'relative' }}>
+                <Button type="link" danger size="small" style={{ position: 'absolute', top: 2, right: 4 }} onClick={() => remove(name)}>移除</Button>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+                  <Form.Item {...rest} name={[name, 'name']} label="容器名称" rules={[{ required: true, message: '容器名称必填' }]}>
+                    <Input placeholder="如 sidecar" />
+                  </Form.Item>
+                  <Form.Item {...rest} name={[name, 'image']} label="镜像" rules={[{ required: true, message: '镜像必填' }]}>
+                    <Input placeholder="nginx:latest" />
+                  </Form.Item>
+                  <Form.Item {...rest} name={[name, 'containerPort']} label="端口">
+                    <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+                  </Form.Item>
+                  <Form.Item {...rest} name={[name, 'command']} label="启动命令（可选，逗号分隔）" tooltip="覆盖镜像默认启动命令，如：/bin/sh,-c,echo hi">
+                    <Input placeholder="/bin/sh,-c,echo hi" />
+                  </Form.Item>
+                  <Form.Item {...rest} name={[name, 'cpuRequest']} label="CPU 请求"><Input placeholder="100m" /></Form.Item>
+                  <Form.Item {...rest} name={[name, 'cpuLimit']} label="CPU 上限"><Input placeholder="500m" /></Form.Item>
+                  <Form.Item {...rest} name={[name, 'memoryRequest']} label="内存请求"><Input placeholder="256Mi" /></Form.Item>
+                  <Form.Item {...rest} name={[name, 'memoryLimit']} label="内存上限"><Input placeholder="512Mi" /></Form.Item>
+                </div>
+              </div>
+            ))}
+            <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({ name: '', image: '' })}>添加容器</Button>
+          </>
+        )}
+      </Form.List>
     </>
   )
 
@@ -251,6 +301,42 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
       <Form.Item name="imagePullPolicy" label="镜像拉取策略 imagePullPolicy">
         <Select options={IMAGE_PULL_POLICIES} style={{ width: 320 }} />
       </Form.Item>
+      {kind === 'deployment' && (
+        <>
+          <Divider style={{ margin: '8px 0 12px' }} />
+          <div style={{ fontWeight: 500, marginBottom: 8 }}>更新策略</div>
+          <Form.Item name="strategyType" label="更新策略类型">
+            <Select options={[{ value: 'RollingUpdate', label: '滚动更新 RollingUpdate' }, { value: 'Recreate', label: '重建 Recreate' }]} style={{ width: 320 }} />
+          </Form.Item>
+          {strategyType !== 'Recreate' && (
+            <div style={{ display: 'flex', gap: 12 }}>
+              <Form.Item name="maxSurge" label="最大超出副本数 maxSurge" style={{ flex: 1 }}><Input placeholder="25%" /></Form.Item>
+              <Form.Item name="maxUnavailable" label="最大不可用 maxUnavailable" style={{ flex: 1 }}><Input placeholder="25%" /></Form.Item>
+            </div>
+          )}
+        </>
+      )}
+      {kind === 'statefulset' && (
+        <>
+          <Divider style={{ margin: '8px 0 12px' }} />
+          <div style={{ fontWeight: 500, marginBottom: 8 }}>更新策略</div>
+          <Form.Item name="podManagementPolicy" label="Pod 管理策略">
+            <Select options={[{ value: 'OrderedReady', label: '顺序就绪 OrderedReady' }, { value: 'Parallel', label: '并行 Parallel' }]} style={{ width: 320 }} />
+          </Form.Item>
+          <Form.Item name="updateStrategyType" label="更新策略类型">
+            <Select options={[{ value: 'RollingUpdate', label: '滚动更新 RollingUpdate' }, { value: 'OnDelete', label: '删除后重建 OnDelete' }]} style={{ width: 320 }} />
+          </Form.Item>
+        </>
+      )}
+      {!isCron && (
+        <>
+          <Divider style={{ margin: '8px 0 12px' }} />
+          <Form.Item name="imagePullSecrets" label="镜像拉取密钥 imagePullSecrets" tooltip="仅列出 dockerconfigjson 类型的密钥；留空则不指定">
+            <Select mode="multiple" allowClear showSearch optionFilterProp="label" placeholder="选择镜像拉取密钥"
+              options={pullSecretOptions.map((n) => ({ value: n, label: n }))} style={{ width: 480 }} />
+          </Form.Item>
+        </>
+      )}
       <Divider style={{ margin: '8px 0 12px' }} />
       <Form.Item label="环境变量">
         <KeyValueList name="env" addLabel="添加环境变量" keyPlaceholder="变量名" valuePlaceholder="变量值" />
@@ -263,10 +349,14 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
 
   const body = (
     <Form form={form} layout="vertical">
-      {current === 0 && step1}
-      {current === 1 && step2}
-      {current === 2 && step3}
-      {current === 3 && step4}
+      <Tabs
+        items={[
+          { key: 'basic', label: '基本信息', children: step1 },
+          { key: 'container', label: '容器与资源', children: step2 },
+          { key: 'storage', label: '存储挂载', children: step3 },
+          { key: 'advanced', label: '高级设置', children: step4 },
+        ]}
+      />
     </Form>
   )
 
@@ -276,18 +366,14 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
       open={!!target}
       onCancel={onClose}
       footer={null}
-      width={720}
+      width={880}
       destroyOnClose
     >
-      <Steps current={current} size="small" items={steps} style={{ marginBottom: 20 }} />
       {body}
       <Divider style={{ margin: '8px 0 16px' }} />
       <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-        {current > 0 && <Button onClick={() => setCurrent((c) => c - 1)}>上一步</Button>}
-        {current < steps.length - 1 && <Button type="primary" onClick={next}>下一步</Button>}
-        {current === steps.length - 1 && (
-          <Button type="primary" loading={loading} onClick={submit}>{isCreate ? '创建' : '保存'}</Button>
-        )}
+        <Button onClick={onClose}>取消</Button>
+        <Button type="primary" loading={loading} onClick={submit}>{isCreate ? '创建' : '保存'}</Button>
       </Space>
     </Modal>
   )
