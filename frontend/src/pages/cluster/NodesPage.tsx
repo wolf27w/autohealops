@@ -2,13 +2,14 @@
 // 操作收 ⋯：诊断 / 隔离·解除隔离 / 封锁·解封 / 驱逐（先预览再确认）/ 标签·污点
 // 名称可点击展开该节点上的 Pod 列表（getClusterPods 按 node_name 过滤）
 import { useEffect, useState, type Key } from 'react'
-import { Card, Table, Button, Space, Tag, message, Modal, Input, Progress, Dropdown, Select, Checkbox, Alert, Divider } from 'antd'
-import { ReloadOutlined, MoreOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Space, Tag, message, Modal, Input, Progress, Dropdown, Select, Checkbox, Alert, Divider, InputNumber, Empty } from 'antd'
+import { ReloadOutlined, MoreOutlined, ApartmentOutlined } from '@ant-design/icons'
 import {
   getNodes, cordonNode, uncordonNode, drainPreview, drainNode, diagnoseNode,
   setNodeLabels, setNodeTaints, isolateNode, unisolateNode, getClusterPods,
+  batchNodes, getNodeBalancePlan,
 } from '../../services/api'
-import type { K8sNode, NodeDiagnosis, NodeTaint, ClusterPod } from '../../services/api'
+import type { K8sNode, NodeDiagnosis, NodeTaint, ClusterPod, BalancePlan } from '../../services/api'
 
 const pctColor = (v?: number | null) => (!v && v !== 0) ? '#999' : v >= 85 ? '#ff4d4f' : v >= 70 ? '#faad14' : '#52c41a'
 
@@ -63,6 +64,14 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
   const [isoNode, setIsoNode] = useState('')
   const [isoReason, setIsoReason] = useState('')
   const [isoTaint, setIsoTaint] = useState(true)
+  // 批量调度
+  const [selected, setSelected] = useState<Key[]>([])
+  const [busy, setBusy] = useState(false)
+  // 均衡计划（只读建议）
+  const [planOpen, setPlanOpen] = useState(false)
+  const [plan, setPlan] = useState<BalancePlan | null>(null)
+  const [threshold, setThreshold] = useState(80)
+  const [planLoading, setPlanLoading] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -215,6 +224,49 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
     })
   }
 
+  // ---- 批量调度（cordon / uncordon） ----
+  const doBatch = (op: 'cordon' | 'uncordon') => {
+    const names = selected.map(String)
+    if (!names.length) { message.warning('请先选择节点'); return }
+    const label = op === 'cordon' ? '批量停止调度' : '批量启用调度'
+    Modal.confirm({
+      title: `${label} ${names.length} 个节点？`,
+      content: op === 'cordon' ? '禁止新 Pod 调度到选中节点（不驱逐已有 Pod）。' : '允许新 Pod 调度到选中节点。',
+      okText: op === 'cordon' ? '停止调度' : '启用调度',
+      onOk: async () => {
+        setBusy(true)
+        try {
+          const d = await batchNodes(clusterId, op, names)
+          const okN = (d.results || []).filter((r) => r.success).length
+          message.success(`批量${op === 'cordon' ? '停止' : '启用'}调度完成：成功 ${okN}/${names.length}`)
+          setSelected([])
+          load()
+        } catch (e) {
+          message.error(String((e as Error)?.message || e))
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+  }
+
+  // ---- 均衡计划（只读建议） ----
+  const runPlan = () => {
+    setPlanOpen(true); setPlanLoading(true); setPlan(null)
+    getNodeBalancePlan(clusterId, threshold)
+      .then(setPlan)
+      .catch(() => message.error('获取均衡计划失败'))
+      .finally(() => setPlanLoading(false))
+  }
+  // 候选 Pod：跨热点节点汇总，按 CPU 请求降序取前 20
+  const planCandidates = (() => {
+    const pods: { ns: string; name: string; owner: string; cpu: number; node: string }[] = []
+    for (const b of plan?.batches || []) {
+      for (const p of b.candidate_pods || []) pods.push({ ns: p.namespace, name: p.name, owner: p.owner, cpu: p.cpu_request_milli, node: b.node })
+    }
+    return pods.sort((a, b) => b.cpu - a.cpu).slice(0, 20)
+  })()
+
   const pctCell = (v?: number | null) => (
     <div style={{ minWidth: 96 }}>
       <Progress percent={v ?? 0} size="small" strokeColor={pctColor(v)} format={() => (v === null || v === undefined ? '-' : `${v}%`)} />
@@ -254,14 +306,26 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
   return (
     <div style={{ padding: 16 }}>
       <Card size="small" title="集群节点（K8s）"
-        extra={<Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>}>
+        extra={
+          <Space>
+            <Button icon={<ApartmentOutlined />} onClick={runPlan}>均衡计划</Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+          </Space>
+        }>
+        <Space style={{ marginBottom: 8, width: '100%' }} wrap>
+          <span style={{ color: selected.length ? undefined : '#999' }}>已选 {selected.length} 个节点</span>
+          <Button size="small" type="primary" danger disabled={!selected.length} loading={busy} onClick={() => doBatch('cordon')}>批量停止调度</Button>
+          <Button size="small" disabled={!selected.length} loading={busy} onClick={() => doBatch('uncordon')}>批量启用调度</Button>
+          <Button size="small" type="link" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</Button>
+        </Space>
         <Table
           rowKey="name"
           size="small"
           loading={loading}
           dataSource={nodes}
           pagination={{ pageSize: 20 }}
-          scroll={{ x: 1200 }}
+          rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
+          scroll={{ x: 1400 }}
           expandable={{
             expandedRowKeys: expandedKeys,
             onExpand: (_expanded, record) => togglePods(record.name),
@@ -295,6 +359,7 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
             },
             { title: '状态', dataIndex: 'ready', width: 90, render: (v: string) => <Tag color={v === 'Ready' ? 'green' : 'red'}>{v === 'Ready' ? 'Ready' : 'NotReady'}</Tag> },
             { title: '角色', width: 110, render: (_, r) => <Tag color={roleOf(r) === 'worker' ? 'default' : 'blue'}>{roleOf(r)}</Tag> },
+            { title: 'Kubelet', dataIndex: 'kubelet_version', width: 110, ellipsis: true, render: (v?: string) => v || '-' },
             { title: 'CPU', width: 130, render: (_, r) => pctCell(r.cpu_pct) },
             { title: '内存', width: 130, render: (_, r) => pctCell(r.mem_pct) },
             { title: 'Pod 数', width: 110, render: (_, r) => `${r.pods_count ?? '-'} / ${r.pods_allocatable || '-'}` },
@@ -385,6 +450,46 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
       </Modal>
 
       {/* 隔离节点 */}
+      {/* 均衡计划（只读建议） */}
+      <Modal open={planOpen} title="节点均衡计划（只读建议，不执行任何变更）" footer={null} width={920}
+        onCancel={() => setPlanOpen(false)} destroyOnClose>
+        <Space style={{ marginBottom: 12 }}>
+          <span>CPU/内存阈值：</span>
+          <InputNumber min={1} max={100} value={threshold} onChange={(v) => setThreshold(Number(v) || 80)} addonAfter="%" />
+          <Button size="small" onClick={runPlan} loading={planLoading}>重新计算</Button>
+        </Space>
+        {plan?.suggestion && <Alert type="info" showIcon style={{ marginBottom: 12 }} message={plan.suggestion} />}
+        <div style={{ marginBottom: 8 }}>
+          <Tag color="orange">热点节点 {plan?.hot_nodes.length ?? 0}</Tag>
+          <Tag color="blue">冷门节点 {plan?.cold_nodes.length ?? 0}</Tag>
+        </div>
+        <div style={{ marginBottom: 8, fontWeight: 600 }}>热点节点</div>
+        <Table
+          rowKey="node" size="small" loading={planLoading} pagination={false}
+          dataSource={plan?.batches || []}
+          style={{ marginBottom: 16 }}
+          columns={[
+            { title: '节点名', dataIndex: 'node', width: 200, ellipsis: true },
+            { title: 'CPU%', dataIndex: 'cpu_pct', width: 100, render: (v: number | null) => <span style={{ color: pctColor(v), fontWeight: 600 }}>{v ?? '-'}{v != null ? '%' : ''}</span> },
+            { title: '内存%', dataIndex: 'mem_pct', width: 100, render: (v: number | null) => <span style={{ color: pctColor(v), fontWeight: 600 }}>{v ?? '-'}{v != null ? '%' : ''}</span> },
+            { title: '可迁移 Pod 数', dataIndex: 'total_candidates', width: 120 },
+          ]}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无热点节点（或 metrics-server 不可用）" /> }}
+        />
+        <div style={{ marginBottom: 8, fontWeight: 600 }}>候选 Pod（按 CPU 请求降序，前 20）</div>
+        <Table
+          rowKey={(r) => `${r.node}-${r.ns}-${r.name}`} size="small" pagination={false}
+          dataSource={planCandidates}
+          columns={[
+            { title: 'Pod', render: (_, r) => `${r.ns}/${r.name}`, ellipsis: true },
+            { title: '所属节点', dataIndex: 'node', width: 200, ellipsis: true },
+            { title: '控制器', dataIndex: 'owner', width: 160, ellipsis: true },
+            { title: 'CPU 请求', dataIndex: 'cpu', width: 120, render: (v: number) => `${v}m` },
+          ]}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无可迁移 Pod" /> }}
+        />
+      </Modal>
+
       <Modal open={isoOpen} title={`隔离节点 · ${isoNode}`} width={560}
         onCancel={() => setIsoOpen(false)} onOk={doIsolate} okText="确认隔离" okButtonProps={{ danger: true }}>
         <Alert type="warning" showIcon style={{ marginBottom: 12 }}
