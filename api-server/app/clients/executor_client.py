@@ -857,14 +857,18 @@ class ExecutorClient:
             )
             return {"success": resp.success, "error": resp.error,
                     "services": [{"namespace": x.namespace, "name": x.name, "type": x.type,
-                                   "cluster_ip": x.cluster_ip, "ports": x.ports, "external_ip": x.external_ip}
+                                   "cluster_ip": x.cluster_ip, "ports": x.ports, "external_ip": x.external_ip,
+                                   "created_at": getattr(x, "created_at", "")}
                                   for x in resp.services],
                     "ingresses": [{"namespace": x.namespace, "name": x.name, "hosts": x.hosts,
-                                    "class": getattr(x, "class", ""), "address": x.address} for x in resp.ingresses],
-                    "configmaps": [{"namespace": x.namespace, "name": x.name, "data_count": x.data_count}
+                                    "class": getattr(x, "class", ""), "address": x.address,
+                                    "created_at": getattr(x, "created_at", "")} for x in resp.ingresses],
+                    "configmaps": [{"namespace": x.namespace, "name": x.name, "data_count": x.data_count,
+                                     "created_at": getattr(x, "created_at", "")}
                                     for x in resp.configmaps],
                     "secrets": [{"namespace": x.namespace, "name": x.name, "type": x.type,
-                                  "data_count": x.data_count} for x in resp.secrets],
+                                  "data_count": x.data_count, "created_at": getattr(x, "created_at", "")}
+                                 for x in resp.secrets],
                     "pvcs": [{"namespace": x.namespace, "name": x.name, "status": x.status,
                                "capacity": x.capacity, "storage_class": x.storage_class,
                                "volume_name": x.volume_name, "access_modes": x.access_modes} for x in resp.pvcs],
