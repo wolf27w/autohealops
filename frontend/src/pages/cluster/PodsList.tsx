@@ -1,5 +1,5 @@
 // 容器组列表页：命名空间下拉 + 名称搜索 + 状态筛选 + 5s 轮询（无刷新按钮，全局顶栏有）
-// 行操作收进 ⋯：监控/日志/进容器/JVM 诊断/事件/编辑 YAML/隔离/删除；支持行选择批量删除
+// 行操作收进 ⋯：监控/日志/进容器/JVM 诊断/编辑 YAML/隔离/删除；支持行选择批量删除
 import { useEffect, useMemo, useState, type Key } from 'react'
 import { Card, Table, Tag, Button, Space, Select, Input, Dropdown, Modal, message, Drawer, Empty, Segmented } from 'antd'
 import { MoreOutlined, SearchOutlined } from '@ant-design/icons'
@@ -14,7 +14,6 @@ import PodDetailDrawer from '../../components/PodDetailDrawer'
 import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
 import JvmDiagModal from '../../components/JvmDiagModal'
-import PodEventsModal from '../../components/PodEventsModal'
 import { podStatusColor, podReadyText } from '../../utils/podStatus'
 
 const fmt = (v?: string) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
@@ -41,7 +40,6 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execPod, setExecPod] = useState<PodTarget | null>(null)
   const [jvmPod, setJvmPod] = useState<PodTarget | null>(null)
-  const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
 
   const load = () => {
@@ -162,7 +160,6 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
     else if (key === 'logs') setLogPod(tgt)
     else if (key === 'exec') setExecPod(tgt)
     else if (key === 'jvm') setJvmPod(tgt)
-    else if (key === 'events') setEventsPod(tgt)
     else if (key === 'yaml') setYamlPod(tgt)
     else if (key === 'isolate') handleIsolate(p)
     else if (key === 'unisolate') handleUnisolate(p)
@@ -200,7 +197,6 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
             { key: 'logs', label: '日志' },
             { key: 'exec', label: '进容器' },
             { key: 'jvm', label: 'JVM 诊断' },
-            { key: 'events', label: '事件' },
             { key: 'yaml', label: '编辑 YAML' },
             isolated.has(key) ? { key: 'unisolate', label: '取消隔离' } : { key: 'isolate', label: '隔离' },
             { type: 'divider' as const },
@@ -283,7 +279,6 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
       <PodLogStreamModal pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execPod} onClose={() => setExecPod(null)} />
       <JvmDiagModal pod={jvmPod} onClose={() => setJvmPod(null)} />
-      <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
     </div>
   )

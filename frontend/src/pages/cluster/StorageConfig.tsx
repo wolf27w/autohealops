@@ -1,6 +1,6 @@
 // 存储与配置页：持久卷声明（PVC）/ 配置字典（ConfigMap）/ 密钥（Secret）三个子 Tab
 // 数据源 getMiscResources(clusterId) → { configmaps, secrets, pvcs, storage_classes }
-// 操作复用现有弹窗组件；创建：PVC 走 PvcCreateModal，ConfigMap/Secret 走 YAML 创建弹窗
+// 操作复用现有弹窗组件；创建：PVC 走 PvcCreateModal，ConfigMap/Secret 走**表单**弹窗（YAML 仅作行内高级入口）
 import { useEffect, useState } from 'react'
 import { Card, Table, Tabs, Button, Space, Tag, message, Dropdown, Modal } from 'antd'
 import { MoreOutlined, ReloadOutlined, PlusOutlined } from '@ant-design/icons'
@@ -76,7 +76,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
       const items: { key: string; label: string; danger?: boolean }[] = [
         { key: 'info', label: '查看信息' },
         ...(withData ? [{ key: 'data', label: '查看数据' }] : []),
-        { key: 'yaml', label: '编辑 YAML' },
+        { key: 'yaml', label: '编辑 YAML（高级）' },
         { key: 'delete', label: '删除', danger: true },
       ]
       return (
@@ -124,10 +124,11 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     { title: '操作', width: 70, render: makeActions('secret', true) },
   ]
 
+  // 创建统一走「表单」弹窗（KubeSphere 风格）：配置字典=键值对，密钥=按类型表单；YAML 只保留为行内高级入口
   const onCreate = () => {
     if (activeKey === 'pvcs') setPvcObj({ clusterId, kind: 'pvc', namespace: 'default', name: '', create: true })
-    else if (activeKey === 'configmaps') setYamlObj({ clusterId, kind: 'configmap', namespace: 'default', name: '', create: true })
-    else setYamlObj({ clusterId, kind: 'secret', namespace: 'default', name: '', create: true })
+    else if (activeKey === 'configmaps') setDataObj({ clusterId, kind: 'configmap', namespace: 'default', name: '', create: true })
+    else setDataObj({ clusterId, kind: 'secret', namespace: 'default', name: '', create: true })
   }
 
   const createLabel = activeKey === 'pvcs' ? '创建存储' : activeKey === 'configmaps' ? '创建配置字典' : '创建密钥'

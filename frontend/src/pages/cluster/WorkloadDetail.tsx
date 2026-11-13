@@ -1,8 +1,8 @@
-// 工作负载详情页（整页）：概览 / 资源状态 / 元数据 / 环境变量 / 事件 / 监控
+// 工作负载详情页（整页）：概览 / 资源状态 / 元数据 / 环境变量 / 实时事件 / 历史事件 / 监控
 // 路由形态：/clusters/:id/workloads/:kind/:namespace/:name（路由由父会话接线，此处用 useParams）
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Breadcrumb, Card, Descriptions, Button, Space, Table, Tag, Modal, InputNumber, Input, Empty, Dropdown, Tabs, message,
+  Breadcrumb, Card, Descriptions, Button, Space, Table, Tag, Modal, InputNumber, Input, Empty, Dropdown, Tabs, Select, message,
 } from 'antd'
 import { ReloadOutlined, MoreOutlined, DownOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -18,7 +18,7 @@ import { parseYaml, asMap, asArr, asStr, type YamlNode, type WorkloadValues, typ
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
-  getWorkloadYaml, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
+  getWorkloadYaml, getWorkloadEvents, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
   getPodYaml, applyPodYaml, isolatePod, unisolatePod, getIsolatedPods,
 } from '../../services/api'
 import type { ClusterPod, WorkloadEventRow } from '../../services/api'
@@ -39,6 +39,35 @@ interface WorkloadMeta {
   ready: number | null
   available: number | null
   images: string[]
+}
+
+// 实时事件行（由 describe pod 的 Events 段解析而来）
+interface RealtimeEventRow {
+  pod: string
+  type: string
+  reason: string
+  age: string
+  message: string
+}
+
+// describe pod 的 Events 段 → 结构化行（Type/Reason/Age/From/Message）
+function parseDescribeEvents(pod: string, raw: string): RealtimeEventRow[] {
+  if (!raw) return []
+  const rows: RealtimeEventRow[] = []
+  let started = false
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (!started) {
+      if (/^Type\s+Reason/i.test(t)) started = true
+      continue
+    }
+    if (!t) continue
+    if (/^-+(\s+-+)+$/.test(t)) continue // 表头分隔线
+    const m = t.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/)
+    if (!m) continue
+    rows.push({ pod, type: m[1], reason: m[2], age: m[3], message: m[5] })
+  }
+  return rows
 }
 
 function strMap(n: YamlNode): Record<string, string> {
@@ -139,6 +168,9 @@ export default function WorkloadDetail() {
   const [yaml, setYaml] = useState('')
   const [events, setEvents] = useState<WorkloadEventRow[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
+  const [realtimeEvents, setRealtimeEvents] = useState<RealtimeEventRow[]>([])
+  const [realtimeLoading, setRealtimeLoading] = useState(false)
+  const [historyHours, setHistoryHours] = useState(24)
 
   // 弹窗 / 抽屉
   const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
@@ -234,12 +266,24 @@ export default function WorkloadDetail() {
       .catch(() => setIsolated(new Set()))
   }, [clusterId, namespace])
 
-  const loadEvents = () => {
+  const loadEvents = (hours = historyHours) => {
     setEventsLoading(true)
-    getWorkloadEventHistory(clusterId, kind, namespace, name, 24)
+    getWorkloadEventHistory(clusterId, kind, namespace, name, hours)
       .then((d) => setEvents(d?.events || []))
       .catch(() => setEvents([]))
       .finally(() => setEventsLoading(false))
+  }
+
+  // 实时事件：后端按 Pod 汇总 describe 里的 Events，进入 Tab 时自动加载一次，不做轮询
+  const loadRealtimeEvents = () => {
+    setRealtimeLoading(true)
+    getWorkloadEvents(clusterId, { namespace, name, kind })
+      .then((d) => {
+        const pods = (d as { pods?: { pod: string; events?: string }[] }).pods || []
+        setRealtimeEvents(pods.flatMap((p) => parseDescribeEvents(p.pod, p.events || '')))
+      })
+      .catch(() => setRealtimeEvents([]))
+      .finally(() => setRealtimeLoading(false))
   }
 
   const desired = meta.desired ?? workload?.replicas ?? 0
@@ -399,19 +443,50 @@ export default function WorkloadDetail() {
     </div>
   )
 
-  const eventsTab = (
+  const realtimeEventsTab = (
     <div>
-      <Space style={{ marginBottom: 8 }}>
-        <Button size="small" onClick={loadEvents} loading={eventsLoading}>刷新事件</Button>
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>最近 24 小时（平台自存 k8s_events，含该工作负载下所有 Pod）</span>
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Button size="small" icon={<ReloadOutlined />} onClick={loadRealtimeEvents} loading={realtimeLoading}>刷新</Button>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>实时拉取 describe 事件（按 Pod 汇总，进入本 Tab 时自动加载一次）</span>
+      </Space>
+      <Table rowKey={(_, i) => String(i)} size="small" dataSource={realtimeEvents} pagination={{ pageSize: 10, hideOnSinglePage: true }}
+        columns={[
+          { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => <Tag color={v === 'Warning' ? 'red' : 'default'}>{v}</Tag> },
+          { title: '原因', dataIndex: 'reason', width: 160 },
+          { title: '对象', dataIndex: 'pod', width: 220, ellipsis: true, render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span> },
+          { title: '消息', dataIndex: 'message', ellipsis: true },
+          { title: '最近时间', dataIndex: 'age', width: 100, render: (v: string) => (v ? `${v} 前` : '-') },
+        ]}
+        locale={{ emptyText: <Empty description="暂无实时事件" /> }} />
+    </div>
+  )
+
+  const historyEventsTab = (
+    <div>
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Button size="small" icon={<ReloadOutlined />} onClick={() => loadEvents()} loading={eventsLoading}>刷新</Button>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>时间范围</span>
+        <Select
+          size="small"
+          style={{ width: 110 }}
+          value={historyHours}
+          onChange={(v) => { setHistoryHours(v); loadEvents(v) }}
+          options={[
+            { value: 6, label: '6 小时' },
+            { value: 24, label: '24 小时' },
+            { value: 72, label: '72 小时' },
+            { value: 168, label: '7 天' },
+          ]}
+        />
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>平台自存 k8s_events，含该工作负载下所有 Pod</span>
       </Space>
       <Table rowKey={(_, i) => String(i)} size="small" dataSource={events} pagination={{ pageSize: 10, hideOnSinglePage: true }}
         columns={[
           { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => <Tag color={v === 'Warning' ? 'red' : 'blue'}>{v}</Tag> },
           { title: '原因', dataIndex: 'reason', width: 160 },
-          { title: '消息', dataIndex: 'message', render: (v: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{v}</span> },
+          { title: '消息', dataIndex: 'message', ellipsis: true },
           { title: '次数', dataIndex: 'count', width: 60 },
-          { title: '资源', dataIndex: 'resource_kind', width: 110, render: (v: string, r: WorkloadEventRow) => (v ? `${v}/${r.resource_name}` : r.resource_name || '-') },
+          { title: '资源', dataIndex: 'resource_kind', width: 130, render: (v: string, r: WorkloadEventRow) => (v ? `${v}/${r.resource_name}` : r.resource_name || '-') },
           { title: '首次', dataIndex: 'first_timestamp', width: 160, render: (v: string) => fmtTime(v) },
           { title: '最后', dataIndex: 'last_timestamp', width: 160, render: (v: string) => fmtTime(v) },
         ]}
@@ -462,14 +537,15 @@ export default function WorkloadDetail() {
       </Card>
 
       <Card size="small">
-        <Tabs defaultActiveKey="overview" items={[
+        <Tabs defaultActiveKey="overview" onChange={(key) => { if (key === 'events-realtime') loadRealtimeEvents() }} items={[
           { key: 'overview', label: '概览', children: overviewTab },
           { key: 'resource', label: '资源状态', children: resourceTab },
           { key: 'metadata', label: '元数据', children: metadataTab },
           { key: 'env', label: '环境变量', children: (
             <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="env" />
           ) },
-          { key: 'events', label: '事件', children: eventsTab },
+          { key: 'events-realtime', label: '实时事件', children: realtimeEventsTab },
+          { key: 'events-history', label: '历史事件', children: historyEventsTab },
           { key: 'monitor', label: '监控', children: (
             <MonitorPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} />
           ) },
