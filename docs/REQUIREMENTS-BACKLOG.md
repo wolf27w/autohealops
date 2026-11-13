@@ -2147,3 +2147,34 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 - 后端 `WORKLOAD_RANGE` 现有：`5m/10m/1h/6h/24h/72h/168h`（**没有 15m/30m**，需加）。
 
 **建议并行拆法**：1+7 一组、2 一组、3+6 一组、4 一组、5 一组。
+
+---
+
+## R34 资源中心与菜单归位（2026-11-13 老板拍板，待开发）
+
+> 老板口径：「数据库正式做成资源中心的第三个入口，还有菜单归位」。**详细需求见 `docs/RESOURCE-CENTER-LAYOUT-REQUIREMENTS-2026-11-13.md`**。
+> 性质：以信息架构重组为主（纯前端），数据库模块是唯一"新页面组"，**后端不需要改动**（DB 相关 API 已齐）。
+
+**核心问题**（体检证据）
+- 分类轴混了：K8s 在「监控中心」、主机/VM 在「自动化运维」、数据库**只存在于「故障诊断 → 数据库诊断」Tab 里**（`DiagnosticCenter.tsx` 一个页面同时做纳管 CRUD + 监控 + SQL 工作台 + 诊断）。
+- 有路由没菜单入口 3 个：`/node-management`、`/resource-governance`、`/release-history`。
+- 真孤儿页面 5 个：`ComingSoon` / `DecisionPolicies` / `ResourceQuota` / `TaskDetail` / `TaskList`（用 import 图校验，含动态 import）。
+
+**目标结构**：概览 + 3 业务模块 + 1 平台底座
+```
+概览 /dashboard
+资源中心   K8s集群 · 主机与虚拟机 · 数据库(新) · 堡垒机终端 · 资源治理
+告警监控   告警处理 · 工单 · 告警策略 · 告警屏蔽 · 通知配置 · 值班排班 · 采集与日志源
+诊断与自愈 故障诊断(三Tab) · 应用诊断助手 · 自愈规则与审批 · 定时与批量任务 · 发布历史 · 执行与审批记录
+平台      用户与权限 · AI配置与知识库 · 审计追溯 · 报表 · 系统设置
+```
+
+**关键动作**
+1. 数据库资源模块（新）：列表页 `/resources/databases` + 详情页 `/resources/databases/:id`（Tab：概览/监控/慢SQL/异常/SQL工作台/诊断），`DBMonitor` 与 `DbWorkbench` 只搬运不重写；`DiagnosticCenter` 瘦身为跨库聚合视图（资源详情=单个库干活，诊断中心=跨库看结果）。
+2. 菜单归位：撤销「监控中心 / 自动化运维 / 知识配置」三组；`StrategyConfig` 三合一拆成 `/alerts/policies` + `/diagnose/strategy`；`AlertHandling` 删重复的「故障诊断」Tab；`ZombieServices` 并入资源治理；`NodeManagement` 下线（并入 `/clusters/:id/nodes`）。
+3. URL 前缀归位 `/resources/* /alerts/* /diagnose/* /platform/*`，旧地址全部保留 `<Navigate>` 重定向；`/dashboard` 不动。
+4. 菜单与权限守卫同源（新建 `constants/nav.ts`），清死代码。
+
+**分期**：P0 骨架 1d（`MainLayout` + `App.tsx` + `constants/nav.ts`）→ P1 数据库模块 2~3d ∥ P2 归位配套 1~2d → P3 清理验证 0.5d，合计 **4~6 人日**。
+
+**待确认**：① 是否按方案 A 拆掉「自动化运维」组（推荐拆）；② `NodeManagement` 是否有跨集群独有能力；③ 报表放「平台」是否可接受；④ `/dashboard` 是否迁 `/overview`（建议不迁）。
