@@ -6,7 +6,6 @@ import {
 } from 'antd'
 import { ReloadOutlined, MoreOutlined, DownOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
-import WorkloadYamlModal, { type WorkloadTarget } from '../../components/WorkloadYamlModal'
 import WorkloadMetricsDrawer from '../../components/WorkloadMetricsDrawer'
 import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
@@ -18,7 +17,7 @@ import { parseYaml, asMap, asArr, asStr, yamlToValues, type YamlNode, type Workl
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
-  getWorkloadYaml, getWorkloadEvents, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
+  getWorkloadYaml, getWorkloadEvents, getWorkloadEventHistory, deleteWorkload,
   getPodYaml, applyPodYaml, isolatePod, unisolatePod, getIsolatedPods,
 } from '../../services/api'
 import type { ClusterPod, WorkloadEventRow } from '../../services/api'
@@ -97,10 +96,7 @@ export default function WorkloadDetail() {
   const [historyHours, setHistoryHours] = useState(24)
 
   // 弹窗 / 抽屉
-  const [wlYaml, setWlYaml] = useState<WorkloadTarget | null>(null)
   const [wlEdit, setWlEdit] = useState<WorkloadCreateTarget | null>(null)
-  const [scaleOpen, setScaleOpen] = useState(false)
-  const [scaleVal, setScaleVal] = useState<number>(1)
   const [metricsOpen, setMetricsOpen] = useState(false)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
@@ -109,8 +105,6 @@ export default function WorkloadDetail() {
   const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
   const [isolated, setIsolated] = useState<Set<string>>(new Set())
 
-  const scalable = kind === 'deployment' || kind === 'statefulset'
-  const restartable = kind === 'deployment' || kind === 'statefulset' || kind === 'daemonset'
 
   const meta: WorkloadMeta = useMemo(() => {
     const root = asMap(parseYaml(yaml))
@@ -216,26 +210,6 @@ export default function WorkloadDetail() {
   const statusColor = { 运行中: 'green', 更新中: 'orange', 已停止: 'default' }[status]
 
   const fmtTime = (v?: string) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
-
-  const handleScale = async () => {
-    await scaleWorkload(clusterId, { kind, namespace, name, replicas: scaleVal })
-    setScaleOpen(false)
-    load()
-  }
-
-  const handleRollout = async () => {
-    await rolloutWorkload(clusterId, { kind, namespace, name, action: 'restart' })
-    load()
-  }
-
-  const handleDelete = () => {
-    Modal.confirm({
-      title: `删除 ${KIND_SHORT[kind] || kind} ${namespace}/${name}？`,
-      content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
-      okButtonProps: { danger: true },
-      onOk: async () => { await deleteWorkload(clusterId, kind, namespace, name); navigate(`/clusters/${id}`) },
-    })
-  }
 
   // —— Pod 行操作（与容器组页 PodsList 对齐）——
   const confirmDeletePod = (r: ClusterPod) => {
@@ -427,25 +401,8 @@ export default function WorkloadDetail() {
             <span style={{ fontSize: 12, color: '#999' }}>{clusterName ? `${clusterName} / ` : ''}{namespace}</span>
           </Space>
           <Space>
+            {/* 去重口径：YAML 编辑 / 扩缩容 / 滚动重启 / 删除 统一在「工作负载」列表行操作里，详情页只保留编辑设置 */}
             <Button onClick={() => setWlEdit({ clusterId, kind, namespace, name, create: false, initialValues: editValues, existingYaml: yaml })}>编辑设置</Button>
-            <Dropdown menu={{
-              items: [
-                { key: 'yaml', label: '编辑 YAML' },
-                ...(scalable ? [{ key: 'scale', label: '变更副本' }] : []),
-                ...(restartable ? [{ key: 'restart', label: '滚动重启' }] : []),
-                { type: 'divider' as const },
-                { key: 'delete', label: '删除', danger: true },
-              ],
-              onClick: ({ key: k }) => {
-                if (k === 'yaml') setWlYaml({ clusterId, kind, namespace, name })
-                else if (k === 'scale') { setScaleVal(desired); setScaleOpen(true) }
-                else if (k === 'restart') {
-                  Modal.confirm({ title: '触发滚动重启？', onOk: handleRollout })
-                } else if (k === 'delete') handleDelete()
-              },
-            }}>
-              <Button>更多 <DownOutlined /></Button>
-            </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
           </Space>
         </div>
@@ -466,7 +423,6 @@ export default function WorkloadDetail() {
         ]} />
       </Card>
 
-      <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
       <WorkloadMetricsDrawer
         target={metricsOpen ? { clusterId, kind, namespace, name } : null}
         onClose={() => setMetricsOpen(false)}
@@ -478,12 +434,6 @@ export default function WorkloadDetail() {
       <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
 
       <WorkloadCreateModal target={wlEdit} onClose={() => setWlEdit(null)} onSaved={load} />
-
-      <Modal title={`变更副本：${name}`} open={scaleOpen} onCancel={() => setScaleOpen(false)}
-        onOk={handleScale} okText="确定" width={360}>
-        <div style={{ marginBottom: 8, color: '#8c8c8c', fontSize: 13 }}>调整为指定副本数（0 = 停止）。</div>
-        <InputNumber min={0} value={scaleVal} onChange={(v) => setScaleVal(v ?? 0)} style={{ width: '100%' }} />
-      </Modal>
     </div>
   )
 }
