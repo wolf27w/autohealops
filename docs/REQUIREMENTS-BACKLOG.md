@@ -2171,10 +2171,13 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 
 **关键动作**
 1. 数据库资源模块（新）：列表页 `/resources/databases` + 详情页 `/resources/databases/:id`（Tab：概览/监控/慢SQL/异常/SQL工作台/诊断），`DBMonitor` 与 `DbWorkbench` 只搬运不重写；`DiagnosticCenter` 瘦身为跨库聚合视图（资源详情=单个库干活，诊断中心=跨库看结果）。
-2. 菜单归位：撤销「监控中心 / 自动化运维 / 知识配置」三组；`StrategyConfig` 三合一拆成 `/alerts/policies` + `/diagnose/strategy`；`AlertHandling` 删重复的「故障诊断」Tab；`ZombieServices` 并入资源治理；`NodeManagement` 下线（并入 `/clusters/:id/nodes`）。
-3. URL 前缀归位 `/resources/* /alerts/* /diagnose/* /platform/*`，旧地址全部保留 `<Navigate>` 重定向；`/dashboard` 不动。
-4. 菜单与权限守卫同源（新建 `constants/nav.ts`），清死代码。
+2. **Pod 删除按钮缺失修复**（2026-11-13 11:21 追加）：工作负载详情页容器组列表的 Pod 行 `⋯` 只有 监控/日志/进容器/事件，**没有删除**（容器组页、集群详情、ServiceDetail 三处都有）→ 补删除 + 二次确认 + 局部刷新，并把两处 Pod 操作集对齐。落点仅 `pages/cluster/WorkloadDetail.tsx`，0.5d。
+3. 菜单归位：撤销「监控中心 / 自动化运维 / 知识配置」三组；`StrategyConfig` 三合一拆成 `/alerts/policies` + `/diagnose/strategy`；`AlertHandling` 删重复的「故障诊断」Tab；`ZombieServices` 并入资源治理；`NodeManagement` 下线（并入 `/clusters/:id/nodes`）。
+4. URL 前缀归位 `/resources/* /alerts/* /diagnose/* /platform/*`，旧地址全部保留 `<Navigate>` 重定向；`/dashboard` 不动。
+5. 菜单与权限守卫同源（新建 `constants/nav.ts`），清死代码。
 
-**分期**：P0 骨架 1d（`MainLayout` + `App.tsx` + `constants/nav.ts`）→ P1 数据库模块 2~3d ∥ P2 归位配套 1~2d → P3 清理验证 0.5d，合计 **4~6 人日**。
+**方案**：已于 2026-11-13 11:21 确认**方案 A**（撤销监控中心/自动化运维/知识配置三组）。
 
-**待确认**：① 是否按方案 A 拆掉「自动化运维」组（推荐拆）；② `NodeManagement` 是否有跨集群独有能力；③ 报表放「平台」是否可接受；④ `/dashboard` 是否迁 `/overview`（建议不迁）。
+**分期**：P0 骨架 1d（`MainLayout` + `App.tsx` + `constants/nav.ts`）→ P1 数据库模块 2~3d ∥ P2 归位配套 1~2d → P3 清理验证 0.5d；另加 Pod 删除修复 0.5d（文件独占可并行）。合计 **4.5~6.5 人日**。
+
+**已确认（2026-11-13 11:21）**：按方案 A 执行（拆掉「自动化运维」组）。剩余待确认：① `NodeManagement` 是否有跨集群独有能力（没有就下线）；② 报表放「平台」是否可接受；③ `/dashboard` 是否迁 `/overview`（建议不迁）。
