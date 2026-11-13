@@ -53,23 +53,33 @@ export default function ClusterOverview({ clusterId }: { clusterId: number }) {
   useEffect(() => {
     let alive = true
     setLoading(true)
+    // 只等 3 个快接口，页面立即渲染；节点列表通常 0.3s，生产集群可能 5~9s（要 list 全集群 Pod），
+    // 不能让它把整页卡住，所以单独异步补。
     Promise.allSettled([
       getCluster(clusterId),
-      getNodes(clusterId),
       getResourceOverview(clusterId),
       getClusterDetail(clusterId),
-      getMiscResources(clusterId),
-    ]).then(([c, n, o, d, m]) => {
+    ]).then(([c, o, d]) => {
       if (!alive) return
       if (c.status === 'fulfilled') setCluster(c.value as never)
-      if (n.status === 'fulfilled') setNodes((n.value || []) as K8sNode[])
       if (o.status === 'fulfilled') setOverview(o.value as never)
       if (d.status === 'fulfilled') setNamespaces((d.value || []) as NSRow[])
-      if (m.status === 'fulfilled') setMisc((m.value || {}) as never)
     }).finally(() => { if (alive) setLoading(false) })
 
+    // 节点（含用量 / Pod 数）：独立加载，慢也不挡首屏
+    getNodes(clusterId)
+      .then((v) => { if (alive) setNodes((v || []) as K8sNode[]) })
+      .catch(() => {})
+
+    // 杂项资源（服务/路由/CM/Secret/PVC 计数）单独异步：它要全命名空间 list，慢的时候会拖住整页
+    getMiscResources(clusterId)
+      .then((m) => { if (alive) setMisc((m || {}) as never) })
+      .catch(() => { /* 计数拿不到不影响主视图 */ })
+
     // 节点/快照 10s 刷新
+    // 页面不可见时跳过轮询（避免后台标签页持续打远端集群）
     const t = setInterval(() => {
+      if (document.hidden) return
       getNodes(clusterId).then((v) => setNodes((v || []) as K8sNode[])).catch(() => {})
     }, 10000)
     return () => { alive = false; clearInterval(t) }
