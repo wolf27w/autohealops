@@ -1,17 +1,18 @@
-// 编辑设置：ConfigMap→键值；Secret→按类型（镜像服务/证书/普通键值）
+// 编辑设置：只改数据（对齐 KubeSphere 3.4.1「编辑设置」入口）
+// ConfigMap → 数据键值对；Secret → 类型只读展示 + 数据键值对；创建统一走 ConfigObjectCreateModal
 import { useEffect, useState } from 'react'
-import { Modal, Form, Input, Select, Alert, message } from 'antd'
-import { getObjectDetail, updateObjectData, applyObject, getClusterNamespaces } from '../services/api'
+import { Modal, Form, Tag, message } from 'antd'
+import { getObjectDetail, updateObjectData } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
-const SECRET_TYPES = [
-  { value: 'Opaque', label: 'Opaque（普通键值）' },
-  { value: 'kubernetes.io/dockerconfigjson', label: '镜像服务（dockerconfigjson）' },
-  { value: 'kubernetes.io/tls', label: 'TLS（证书 + 私钥）' },
-  { value: 'kubernetes.io/basic-auth', label: '用户名密码（basic-auth）' },
-  { value: 'kubernetes.io/ssh-auth', label: 'SSH（ssh-auth）' },
-]
+const SECRET_TYPE_LABELS: Record<string, string> = {
+  Opaque: '默认',
+  'kubernetes.io/tls': 'TLS 信息',
+  'kubernetes.io/dockerconfigjson': '镜像服务信息',
+  'kubernetes.io/basic-auth': '用户名和密码',
+  'kubernetes.io/ssh-auth': 'SSH 认证',
+}
 
 interface Detail {
   data?: Record<string, string>
@@ -25,113 +26,35 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
 }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
-  const [secType, setSecType] = useState('Opaque')
-  const [namespaces, setNamespaces] = useState<string[]>([])
-  const [nsLoading, setNsLoading] = useState(false)
-  const isCreate = !!target?.create
-
-  // 创建时命名空间下拉（自动拉取，不再手输）
-  useEffect(() => {
-    if (!target?.create || !target.clusterId) return
-    setNsLoading(true)
-    getClusterNamespaces(target.clusterId)
-      .then((list) => setNamespaces((list || []) as string[]))
-      .catch(() => message.error('命名空间列表获取失败'))
-      .finally(() => setNsLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target?.create, target?.clusterId])
+  const [secType, setSecType] = useState('')
 
   useEffect(() => {
     if (!target) return
-    if (target.create) {
-      form.resetFields()
-      setSecType('Opaque')
-      form.setFieldsValue({ name: '', namespace: target.namespace || 'default', data: [{ key: '', value: '' }] })
-      return
-    }
     setLoading(true)
     getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
       .then((d) => {
         const t = d as Detail
-        setFormValues(t)
+        setSecType(t.type || 'Opaque')
+        form.setFieldsValue({ data: toKvList(t.data) })
       })
       .catch(() => message.error('加载失败'))
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target])
 
-  const setFormValues = (t: Detail) => {
-    if (target?.kind === 'configmap') {
-      form.setFieldsValue({ data: toKvList(t.data) })
-      return
-    }
-    const data = t.data || {}
-    const type = t.type || 'Opaque'
-    setSecType(type)
-    if (type === 'kubernetes.io/dockerconfigjson') {
-      let server = '', username = '', password = '', email = ''
-      try {
-        const j = JSON.parse(data['.dockerconfigjson'] || '{}')
-        const s = Object.keys(j.auths || {})[0] || ''
-        const a = (j.auths || {})[s] || {}
-        server = s; username = a.username || ''; password = a.password || ''; email = a.email || ''
-      } catch { /* ignore */ }
-      form.setFieldsValue({ server, username, password, email })
-    } else if (type === 'kubernetes.io/tls') {
-      form.setFieldsValue({ crt: data['tls.crt'] || '', key: data['tls.key'] || '' })
-    } else if (type === 'kubernetes.io/basic-auth') {
-      form.setFieldsValue({ username: data['username'] || '', password: data['password'] || '' })
-    } else if (type === 'kubernetes.io/ssh-auth') {
-      form.setFieldsValue({ 'ssh-privatekey': data['ssh-privatekey'] || '' })
-    } else {
-      form.setFieldsValue({ data: toKvList(data) })
-    }
-  }
-
-  const onTypeChange = (v: string) => {
-    setSecType(v)
-    form.resetFields()
-  }
-
-  const buildSecretData = (v: Record<string, any>): Record<string, string> => {
-    if (secType === 'kubernetes.io/dockerconfigjson') {
-      const cfg = { auths: { [v.server || '']: { username: v.username || '', password: v.password || '', email: v.email || '', auth: btoa(`${v.username || ''}:${v.password || ''}`) } } }
-      return { '.dockerconfigjson': JSON.stringify(cfg) }
-    }
-    if (secType === 'kubernetes.io/tls') {
-      return { 'tls.crt': v.crt || '', 'tls.key': v.key || '' }
-    }
-    if (secType === 'kubernetes.io/basic-auth') {
-      return { username: v.username || '', password: v.password || '' }
-    }
-    if (secType === 'kubernetes.io/ssh-auth') {
-      return { 'ssh-privatekey': v['ssh-privatekey'] || '' }
-    }
-    return fromKvList(v.data)
-  }
-
   const submit = async () => {
     if (!target) return
     const v = await form.validateFields()
     setLoading(true)
     try {
-      const data = target.kind === 'configmap' ? fromKvList(v.data) : buildSecretData(v)
-      if (isCreate) {
-        const metadata = { name: (v.name || '').trim(), namespace: (v.namespace || '').trim() || 'default' }
-        const object = target.kind === 'configmap'
-          ? { apiVersion: 'v1', kind: 'ConfigMap', metadata, data }
-          : { apiVersion: 'v1', kind: 'Secret', metadata, type: secType, stringData: data }
-        await applyObject(target.clusterId, target.kind, object)
-        message.success('已创建')
-      } else {
-        await updateObjectData(target.clusterId, target.kind, target.namespace, target.name, data,
-          target.kind === 'secret' ? secType : undefined)
-        message.success('已保存')
-      }
+      const data = fromKvList(v.data)
+      await updateObjectData(target.clusterId, target.kind, target.namespace, target.name, data,
+        target.kind === 'secret' ? secType : undefined)
+      message.success('已保存')
       onSaved?.()
       onClose()
     } catch {
-      message.error(isCreate ? '创建失败' : '保存失败')
+      message.error('保存失败')
     } finally {
       setLoading(false)
     }
@@ -140,75 +63,17 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
   const isSecret = target?.kind === 'secret'
   const label = isSecret ? '保密字典' : '配置字典'
   return (
-    <Modal title={`${isCreate ? '创建' : '编辑设置'}：${isCreate ? label : (target?.name || '')}${isCreate ? '' : `（${label}）`}`} open={!!target} onCancel={onClose}
-      onOk={submit} okText={isCreate ? '创建' : '保存'} confirmLoading={loading} width={760}>
+    <Modal title={`编辑设置：${target?.name || ''}（${label}）`} open={!!target} onCancel={onClose}
+      onOk={submit} okText="确定" confirmLoading={loading} width={760}>
       <Form form={form} layout="vertical">
-        {isCreate && (
-          <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
-          <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '请选择命名空间' }]}>
-            <Select
-              showSearch
-              loading={nsLoading}
-              placeholder="选择命名空间"
-              optionFilterProp="label"
-              options={(namespaces.length ? namespaces : [form.getFieldValue('namespace') || 'default'])
-                .filter(Boolean)
-                .map((n) => ({ value: n, label: n }))}
-            />
-          </Form.Item></>
-        )}
-        {!isSecret && (
-          <Form.Item label="数据（key → value）" style={{ marginBottom: 0 }}>
-            <KeyValueList name="data" addLabel="添加数据项" textarea />
-          </Form.Item>
-        )}
-
         {isSecret && (
-          <Form.Item label="类型">
-            <Select value={secType} onChange={onTypeChange} options={SECRET_TYPES} style={{ width: 360 }} />
+          <Form.Item label="类型" style={{ marginBottom: 16 }}>
+            <Tag>{SECRET_TYPE_LABELS[secType] ? `${SECRET_TYPE_LABELS[secType]}（${secType}）` : secType || '-'}</Tag>
           </Form.Item>
         )}
-
-        {isSecret && secType === 'kubernetes.io/dockerconfigjson' && (
-          <>
-            <Alert type="info" showIcon style={{ marginBottom: 8 }} message="镜像服务：填仓库地址 + 用户名/密码，自动生成 dockerconfigjson。" />
-            <Form.Item name="server" label="镜像仓库地址" rules={[{ required: true }]}><Input placeholder="https://harbor.example.cn/" /></Form.Item>
-            <Form.Item name="username" label="用户名" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password /></Form.Item>
-            <Form.Item name="email" label="邮箱（可选）"><Input /></Form.Item>
-          </>
-        )}
-
-        {isSecret && secType === 'kubernetes.io/tls' && (
-          <>
-            <Alert type="info" showIcon style={{ marginBottom: 8 }} message="TLS：粘贴证书与私钥（PEM 文本）。" />
-            <Form.Item name="crt" label="证书 tls.crt" rules={[{ required: true }]}>
-              <Input.TextArea rows={8} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder="-----BEGIN CERTIFICATE-----" />
-            </Form.Item>
-            <Form.Item name="key" label="私钥 tls.key" rules={[{ required: true }]} style={{ marginBottom: 0 }}>
-              <Input.TextArea rows={8} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder="-----BEGIN PRIVATE KEY-----" />
-            </Form.Item>
-          </>
-        )}
-
-        {isSecret && secType === 'kubernetes.io/basic-auth' && (
-          <>
-            <Form.Item name="username" label="用户名" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password /></Form.Item>
-          </>
-        )}
-
-        {isSecret && secType === 'kubernetes.io/ssh-auth' && (
-          <Form.Item name="ssh-privatekey" label="SSH 私钥" rules={[{ required: true }]} style={{ marginBottom: 0 }}>
-            <Input.TextArea rows={8} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-          </Form.Item>
-        )}
-
-        {isSecret && !['kubernetes.io/dockerconfigjson', 'kubernetes.io/tls', 'kubernetes.io/basic-auth', 'kubernetes.io/ssh-auth'].includes(secType) && (
-          <Form.Item label="数据（key → value）" style={{ marginBottom: 0 }}>
-            <KeyValueList name="data" addLabel="添加数据项" textarea />
-          </Form.Item>
-        )}
+        <Form.Item label="数据" required style={{ marginBottom: 0 }}>
+          <KeyValueList name="data" addLabel="添加数据" textarea />
+        </Form.Item>
       </Form>
     </Modal>
   )

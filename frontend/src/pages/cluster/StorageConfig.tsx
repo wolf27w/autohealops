@@ -1,6 +1,6 @@
 // 存储与配置页：持久卷声明（PVC）/ 配置字典（ConfigMap）/ 密钥（Secret）三个子 Tab
 // 数据源 getMiscResources(clusterId) → { configmaps, secrets, pvcs, storage_classes }
-// 操作复用现有弹窗组件；创建：PVC 走 PvcCreateModal，ConfigMap/Secret 走**表单**弹窗（YAML 仅作行内高级入口）
+// 操作复用现有弹窗组件；创建：PVC 走 PvcCreateModal，ConfigMap/Secret 走两步向导 ConfigObjectCreateModal（可在向导内切 YAML）
 import { useEffect, useState } from 'react'
 import { Card, Table, Tabs, Button, Space, Tag, message, Dropdown, Modal, Select } from 'antd'
 import { MoreOutlined, ReloadOutlined, PlusOutlined } from '@ant-design/icons'
@@ -9,6 +9,8 @@ import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../../components/ConfigObjectYamlModal'
 import ConfigObjectInfoModal from '../../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../../components/ConfigObjectDataModal'
+import ConfigObjectMetaModal from '../../components/ConfigObjectMetaModal'
+import ConfigObjectCreateModal from '../../components/ConfigObjectCreateModal'
 import PvcCreateModal from '../../components/PvcCreateModal'
 
 interface MiscRow {
@@ -34,9 +36,11 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
   const [loading, setLoading] = useState(false)
   const [activeKey, setActiveKey] = useState(initialTab)
   // 弹窗目标
-  const [yamlObj, setYamlObj] = useState<ConfigObjectTarget | null>(null)   // 编辑/创建 YAML（ConfigMap/Secret）
+  const [yamlObj, setYamlObj] = useState<ConfigObjectTarget | null>(null)    // 编辑/创建 YAML（ConfigMap/Secret）
   const [infoObj, setInfoObj] = useState<ConfigObjectTarget | null>(null)    // 查看信息（标签/注解）
-  const [dataObj, setDataObj] = useState<ConfigObjectTarget | null>(null)    // 查看/编辑数据（ConfigMap/Secret）
+  const [metaObj, setMetaObj] = useState<ConfigObjectTarget | null>(null)    // 编辑信息（别名/描述）
+  const [dataObj, setDataObj] = useState<ConfigObjectTarget | null>(null)    // 编辑设置（数据）
+  const [createObj, setCreateObj] = useState<ConfigObjectTarget | null>(null) // 创建向导（ConfigMap/Secret）
   const [pvcObj, setPvcObj] = useState<ConfigObjectTarget | null>(null)      // 创建 PVC
 
   const load = () => {
@@ -71,14 +75,15 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     })
   }
 
-  // 操作 ⋯：查看信息 / 查看数据（仅 ConfigMap·Secret）/ 编辑 YAML / 删除
+  // 操作 ⋯：编辑信息 / 编辑 YAML / 编辑设置（仅 ConfigMap·Secret）/ 查看信息 / 删除（置底）
   const makeActions = (kind: 'configmap' | 'secret' | 'pvc', withData: boolean) =>
     (r: MiscRow) => {
       const t: ConfigObjectTarget = { clusterId, kind, namespace: r.namespace, name: r.name }
       const items: { key: string; label: string; danger?: boolean }[] = [
+        { key: 'meta', label: '编辑信息' },
+        { key: 'yaml', label: '编辑 YAML' },
+        ...(withData ? [{ key: 'data', label: '编辑设置' }] : []),
         { key: 'info', label: '查看信息' },
-        ...(withData ? [{ key: 'data', label: '查看数据' }] : []),
-        { key: 'yaml', label: '编辑 YAML（高级）' },
         { key: 'delete', label: '删除', danger: true },
       ]
       return (
@@ -87,9 +92,10 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
           menu={{
             items,
             onClick: ({ key }) => {
-              if (key === 'info') setInfoObj(t)
-              else if (key === 'data') setDataObj(t)
+              if (key === 'meta') setMetaObj(t)
               else if (key === 'yaml') setYamlObj(t)
+              else if (key === 'data') setDataObj(t)
+              else if (key === 'info') setInfoObj(t)
               else if (key === 'delete') handleDelete(kind, r.namespace, r.name)
             },
           }}
@@ -112,7 +118,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
   const cmColumns = [
     { title: '名称', dataIndex: 'name' },
     { title: '命名空间', dataIndex: 'namespace', width: 200 },
-    { title: '数据项数', dataIndex: 'data_count', width: 110, render: (v: number) => (v === undefined ? '-' : `${v} 项`) },
+    { title: '字段', dataIndex: 'data_count', width: 110, render: (v: number) => (v === undefined ? '-' : `${v} 项`) },
     { title: '创建时间', dataIndex: 'created_at', width: 160, render: fmtTs },
     { title: '操作', width: 70, render: makeActions('configmap', true) },
   ]
@@ -121,17 +127,23 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
     { title: '名称', dataIndex: 'name' },
     { title: '命名空间', dataIndex: 'namespace', width: 200 },
     { title: '类型', dataIndex: 'type', width: 220, render: (v: string) => v || '-' },
-    { title: '数据项数', dataIndex: 'data_count', width: 110, render: (v: number) => (v === undefined ? '-' : `${v} 项`) },
+    { title: '字段数量', dataIndex: 'data_count', width: 110, render: (v: number) => (v === undefined ? '-' : `${v} 项`) },
     { title: '创建时间', dataIndex: 'created_at', width: 160, render: fmtTs },
     { title: '操作', width: 70, render: makeActions('secret', true) },
   ]
 
-  // 创建统一走「表单」弹窗（KubeSphere 风格）：配置字典=键值对，密钥=按类型表单；YAML 只保留为行内高级入口
+  // 创建：PVC 走 PvcCreateModal；配置字典/密钥走两步向导 ConfigObjectCreateModal
   const onCreate = () => {
     const targetNs = ns === NS_ALL ? 'default' : ns
     if (activeKey === 'pvcs') setPvcObj({ clusterId, kind: 'pvc', namespace: targetNs, name: '', create: true })
-    else if (activeKey === 'configmaps') setDataObj({ clusterId, kind: 'configmap', namespace: targetNs, name: '', create: true })
-    else setDataObj({ clusterId, kind: 'secret', namespace: targetNs, name: '', create: true })
+    else if (activeKey === 'configmaps') setCreateObj({ clusterId, kind: 'configmap', namespace: targetNs, name: '', create: true })
+    else setCreateObj({ clusterId, kind: 'secret', namespace: targetNs, name: '', create: true })
+  }
+
+  // 创建向导里点「编辑 YAML」→ 关向导、开 YAML 创建
+  const onCreateEditYaml = (namespace: string) => {
+    const kind = activeKey === 'configmaps' ? 'configmap' : 'secret'
+    setYamlObj({ clusterId, kind, namespace, name: '', create: true })
   }
 
   const createLabel = activeKey === 'pvcs' ? '创建存储' : activeKey === 'configmaps' ? '创建配置字典' : '创建密钥'
@@ -222,7 +234,9 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
       <ConfigObjectYamlModal target={yamlObj} onClose={() => setYamlObj(null)} onSaved={reloadMisc} />
       <ConfigObjectInfoModal target={infoObj} onClose={() => setInfoObj(null)} onSaved={reloadMisc} />
+      <ConfigObjectMetaModal target={metaObj} onClose={() => setMetaObj(null)} onSaved={reloadMisc} />
       <ConfigObjectDataModal target={dataObj} onClose={() => setDataObj(null)} onSaved={reloadMisc} />
+      <ConfigObjectCreateModal target={createObj} onClose={() => setCreateObj(null)} onSaved={reloadMisc} onEditYaml={onCreateEditYaml} />
       <PvcCreateModal target={pvcObj} onClose={() => setPvcObj(null)} onSaved={reloadMisc} />
     </div>
   )
