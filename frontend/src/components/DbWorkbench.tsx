@@ -33,6 +33,9 @@ interface Props {
   onToggleCollect: (c: ConsoleConn, v: boolean) => void
   onToggleInspect: (c: ConsoleConn, v: boolean) => void
   onReload?: () => void
+  hideSidebar?: boolean
+  /** 详情页单实例模式：进入即自动连接（左侧列表被隐藏时必需） */
+  autoConnect?: boolean
 }
 
 type Result = { columns?: string[]; rows?: unknown[][]; truncated?: boolean; affected_rows?: number }
@@ -70,7 +73,7 @@ const READ_HEADS = new Set(['select', 'show', 'desc', 'describe', 'explain', 'wi
 
 export default function DbWorkbench({
   conns, selectedId, onSelect, onAdd, onDiagnose, onTest, onCollect, onEdit, onDelete,
-  onToggleCollect, onToggleInspect, onReload,
+  onToggleCollect, onToggleInspect, onReload, hideSidebar, autoConnect,
 }: Props) {
   const [kw, setKw] = useState('')
   const [sql, setSql] = useState('')
@@ -358,6 +361,14 @@ export default function DbWorkbench({
     message.info(`已断开：${c.name}`)
   }
 
+  // 自动连接（详情页模式）：左侧实例列表被隐藏时，没有「连接」按钮可点，进页面即连上
+  useEffect(() => {
+    if (!autoConnect || !cur) return
+    if (connState[cur.id] === 'on' || connState[cur.id] === 'connecting') return
+    connect(cur)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConnect, cur?.id])
+
   // ---------- 对象 / 导入导出 ----------
   const openObject = async (kind: string, name: string) => {
     if (!cur) return
@@ -492,6 +503,7 @@ export default function DbWorkbench({
 
   return (
     <div style={{ display: 'flex', gap: 12, height: 'calc(100vh - 250px)', minHeight: 460 }}>
+      {!hideSidebar && (<>
       {/* 左：实例列表 */}
       <div style={{ width: 280, flex: '0 0 280px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #f0f0f0', paddingRight: 10 }}>
         <Button type="primary" icon={<PlusOutlined />} block style={{ marginBottom: 8 }} onClick={onAdd}>添加数据库连接</Button>
@@ -590,6 +602,7 @@ export default function DbWorkbench({
           )}
         </div>
       </div>
+      </>)}
 
       {/* 中：对象树（表/视图/函数/存储过程/事件） */}
       <div style={{ width: 210, flex: '0 0 210px', borderRight: '1px solid #f0f0f0', paddingRight: 8, overflow: 'auto' }}>

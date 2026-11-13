@@ -2,7 +2,7 @@
 // 路由形态：/clusters/:id/workloads/:kind/:namespace/:name（路由由父会话接线，此处用 useParams）
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Breadcrumb, Card, Descriptions, Button, Space, Table, Tag, Modal, InputNumber, Empty, Dropdown, Tabs,
+  Breadcrumb, Card, Descriptions, Button, Space, Table, Tag, Modal, InputNumber, Input, Empty, Dropdown, Tabs, message,
 } from 'antd'
 import { ReloadOutlined, MoreOutlined, DownOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -11,6 +11,7 @@ import WorkloadMetricsDrawer from '../../components/WorkloadMetricsDrawer'
 import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
 import PodEventsModal from '../../components/PodEventsModal'
+import JvmDiagModal from '../../components/JvmDiagModal'
 import WorkloadMountsPanel from '../../components/WorkloadMountsPanel'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
 import { parseYaml, asMap, asArr, asStr, type YamlNode, type WorkloadValues, type VolumeMountValue, type VolumeType } from '../../components/workloadYaml'
@@ -18,6 +19,7 @@ import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
   getWorkloadYaml, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
+  getPodYaml, applyPodYaml, isolatePod, unisolatePod, getIsolatedPods,
 } from '../../services/api'
 import type { ClusterPod, WorkloadEventRow } from '../../services/api'
 import type { PodTarget, Workload } from '../../types'
@@ -147,6 +149,9 @@ export default function WorkloadDetail() {
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
   const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
+  const [jvmPod, setJvmPod] = useState<PodTarget | null>(null)
+  const [yamlPod, setYamlPod] = useState<PodTarget | null>(null)
+  const [isolated, setIsolated] = useState<Set<string>>(new Set())
 
   const scalable = kind === 'deployment' || kind === 'statefulset'
   const restartable = kind === 'deployment' || kind === 'statefulset' || kind === 'daemonset'
@@ -222,6 +227,13 @@ export default function WorkloadDetail() {
   }
   useEffect(loadPods, [id, namespace, name])
 
+  // 加载当前命名空间下「已隔离 Pod」集合（与容器组页 PodsList 口径一致）
+  useEffect(() => {
+    getIsolatedPods(clusterId, namespace)
+      .then((d) => setIsolated(new Set(((d as { pods?: string[] }).pods || []).map((n) => `${namespace}-${n}`))))
+      .catch(() => setIsolated(new Set()))
+  }, [clusterId, namespace])
+
   const loadEvents = () => {
     setEventsLoading(true)
     getWorkloadEventHistory(clusterId, kind, namespace, name, 24)
@@ -257,6 +269,42 @@ export default function WorkloadDetail() {
     })
   }
 
+  // —— Pod 行操作（与容器组页 PodsList 对齐）——
+  const confirmDeletePod = (r: ClusterPod) => {
+    Modal.confirm({
+      title: `删除容器组 ${r.namespace}/${r.name}？`,
+      content: 'Pod 被控制器托管时会自动重建；裸 Pod 删除后不会恢复。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      onOk: () => deleteWorkload(clusterId, 'pod', r.namespace, r.name)
+        .then(() => { message.success('已删除'); loadPods() })
+        .catch(() => message.error('删除失败')),
+    })
+  }
+
+  const handleIsolate = (p: ClusterPod) => {
+    Modal.confirm({
+      title: `隔离容器组 ${p.namespace}/${p.name}？`,
+      content: '隔离后该 Pod 会从 Service 端点摘除（不再接收新流量），请确认。',
+      okText: '隔离',
+      onOk: async () => {
+        try {
+          await isolatePod(clusterId, p.namespace, p.name)
+          message.success('已隔离')
+          setIsolated((prev) => new Set(prev).add(`${p.namespace}-${p.name}`))
+        } catch { message.error('隔离失败') }
+      },
+    })
+  }
+
+  const handleUnisolate = async (p: ClusterPod) => {
+    try {
+      await unisolatePod(clusterId, p.namespace, p.name)
+      message.success('已取消隔离')
+      setIsolated((prev) => { const n = new Set(prev); n.delete(`${p.namespace}-${p.name}`); return n })
+    } catch { message.error('取消隔离失败') }
+  }
+
   const kvRows = (m: Record<string, string>) => Object.entries(m).map(([k, v]) => ({ k, v }))
 
   const podColumns = [
@@ -267,25 +315,38 @@ export default function WorkloadDetail() {
     { title: '节点', dataIndex: 'node_name', width: 160, render: (v: unknown) => (v ? String(v) : '-') },
     { title: '创建时间', dataIndex: 'created_at', width: 165, render: (v: unknown) => fmtTime(v as string) },
     {
-      title: '操作', width: 100, render: (_: unknown, r: ClusterPod) => (
+      title: '操作', width: 100, render: (_: unknown, r: ClusterPod) => {
+        const key = `${r.namespace}-${r.name}`
+        return (
         <Dropdown trigger={['click']} menu={{
           items: [
             { key: 'metrics', label: '监控' },
             { key: 'logs', label: '日志' },
             { key: 'exec', label: '进容器' },
+            { key: 'jvm', label: 'JVM 诊断' },
             { key: 'events', label: '事件' },
+            { key: 'yaml', label: '编辑 YAML' },
+            isolated.has(key) ? { key: 'unisolate', label: '取消隔离' } : { key: 'isolate', label: '隔离' },
+            { type: 'divider' as const },
+            { key: 'delete', label: '删除', danger: true },
           ],
           onClick: ({ key: k }) => {
             const t = { clusterId, namespace: r.namespace, name: r.name }
             if (k === 'metrics') setMetricsOpen(true)
             else if (k === 'logs') setLogPod(t)
             else if (k === 'exec') setExecTarget(t)
+            else if (k === 'jvm') setJvmPod(t)
             else if (k === 'events') setEventsPod(t)
+            else if (k === 'yaml') setYamlPod(t)
+            else if (k === 'isolate') handleIsolate(r)
+            else if (k === 'unisolate') handleUnisolate(r)
+            else if (k === 'delete') confirmDeletePod(r)
           },
         }}>
           <Button size="small" type="link"><MoreOutlined /></Button>
         </Dropdown>
-      ),
+        )
+      },
     },
   ]
 
@@ -423,6 +484,8 @@ export default function WorkloadDetail() {
       <PodLogStreamModal pod={logPod} onClose={() => setLogPod(null)} />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
+      <JvmDiagModal pod={jvmPod} onClose={() => setJvmPod(null)} />
+      <PodYamlModal pod={yamlPod} onClose={() => setYamlPod(null)} />
 
       <WorkloadCreateModal target={wlEdit} onClose={() => setWlEdit(null)} onSaved={load} />
 
@@ -432,5 +495,41 @@ export default function WorkloadDetail() {
         <InputNumber min={0} value={scaleVal} onChange={(v) => setScaleVal(v ?? 0)} style={{ width: '100%' }} />
       </Modal>
     </div>
+  )
+}
+
+// 编辑 Pod YAML 弹窗（与容器组页 PodsList / ClusterDetail 的局部实现一致；尚无共享组件，故此处复刻）
+function PodYamlModal({ pod, onClose }: { pod: PodTarget | null; onClose: () => void }) {
+  const [yaml, setYaml] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!pod) return
+    setLoading(true)
+    getPodYaml(pod.clusterId, pod.namespace, pod.name)
+      .then((d) => setYaml((d as { yaml?: string }).yaml || ''))
+      .catch(() => message.error('YAML 获取失败'))
+      .finally(() => setLoading(false))
+  }, [pod])
+
+  const apply = async () => {
+    if (!yaml.trim()) return
+    setLoading(true)
+    try {
+      await applyPodYaml(pod!.clusterId, pod!.namespace, pod!.name, yaml)
+      message.success('YAML 已应用')
+      onClose()
+    } catch {
+      message.error('YAML 应用失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!pod) return null
+  return (
+    <Modal title={`编辑 Pod YAML：${pod.name}`} open={!!pod} onCancel={onClose} onOk={apply} okText="应用" confirmLoading={loading} width={900}>
+      <Input.TextArea value={yaml} onChange={(e) => setYaml(e.target.value)} rows={22} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+    </Modal>
   )
 }

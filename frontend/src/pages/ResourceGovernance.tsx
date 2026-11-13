@@ -13,6 +13,7 @@ import {
 } from '../services/api'
 import type { NsLimitStatus, ResourceGovernanceEntry, CtlBatchResultItem } from '../services/api'
 import type { Cluster } from '../types'
+import ZombieServices from './ZombieServices'
 
 const WORKLOAD_KINDS = [
   { value: 'deployment', label: 'Deployment' },
@@ -366,8 +367,11 @@ function WorkloadGovernance({ clusters, clusterId }: {
   )
 }
 
+const TAB_KEYS = ['ns', 'workload', 'zombie'] as const
+type TabKey = (typeof TAB_KEYS)[number]
+
 export default function ResourceGovernance() {
-  const [sp] = useSearchParams()
+  const [sp, setSp] = useSearchParams()
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [clusterId, setClusterId] = useState<number | undefined>(() => {
     const c = sp.get('cluster')
@@ -376,15 +380,27 @@ export default function ResourceGovernance() {
 
   useEffect(() => { getClusters().then((d) => setClusters(d || [])).catch(() => {}) }, [])
 
+  // Tab 受控于 URL：/resources/governance?tab=zombie 直达「僵尸服务」
+  const tabParam = sp.get('tab')
+  const activeTab: TabKey = (TAB_KEYS as readonly string[]).includes(tabParam ?? '') ? (tabParam as TabKey) : 'ns'
+  const onTabChange = (key: string) => {
+    const next = new URLSearchParams(sp)
+    next.set('tab', key)
+    setSp(next, { replace: true })
+  }
+
   return (
     <Card size="small" title="资源治理" extra={
       <Space><Select style={{ width: 200 }} placeholder="选择集群" value={clusterId} onChange={setClusterId} allowClear
         options={clusters.map((c) => ({ value: c.id, label: c.name }))} /></Space>
     }>
       <Tabs
+        activeKey={activeTab}
+        onChange={onTabChange}
         items={[
           { key: 'ns', label: '命名空间级治理', children: <NsLevelGovernance clusters={clusters} clusterId={clusterId} /> },
           { key: 'workload', label: '工作负载管控', children: <WorkloadGovernance clusters={clusters} clusterId={clusterId} /> },
+          { key: 'zombie', label: '僵尸服务', children: <ZombieServices /> },
         ]}
       />
     </Card>
