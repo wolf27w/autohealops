@@ -53,6 +53,7 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
 }) {
   const [data, setData] = useState<WorkloadMounts | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadErr, setLoadErr] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [misc, setMisc] = useState<{ configmaps: MiscRow[]; secrets: MiscRow[]; pvcs: MiscRow[] }>({ configmaps: [], secrets: [], pvcs: [] })
 
@@ -65,9 +66,15 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
 
   const load = useCallback(() => {
     setLoading(true)
+    setLoadErr('')
     getWorkloadMounts(clusterId, kind, namespace, name)
       .then((d) => setData(d as WorkloadMounts))
-      .catch(() => setData(null))
+      .catch((e: unknown) => {
+        const msg = (e as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message
+          || (e as { message?: string })?.message || '配置获取失败'
+        setLoadErr(msg)
+        setData(null)
+      })
       .finally(() => setLoading(false))
   }, [clusterId, kind, namespace, name])
 
@@ -360,7 +367,10 @@ export default function WorkloadMountsPanel({ clusterId, kind, namespace, name, 
   const body = loading ? (
     <div style={{ textAlign: 'center', padding: '30px 0' }}><Spin /></div>
   ) : !data ? (
-    <Empty description="配置获取失败" />
+    <Empty description="配置获取失败" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+      {loadErr && <div style={{ color: '#cf1322', fontSize: 12, marginBottom: 8 }}>{loadErr}</div>}
+      <Button icon={<ReloadOutlined />} onClick={load}>重试</Button>
+    </Empty>
   ) : onlySection === 'storage' ? storagePane : onlySection === 'env' ? envPane : (
     <Tabs items={[{ key: 'storage', label: '存储', children: storagePane }, { key: 'env', label: '环境变量', children: envPane }]} />
   )

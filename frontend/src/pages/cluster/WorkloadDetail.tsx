@@ -515,6 +515,15 @@ export default function WorkloadDetail() {
                   { title: '类型', dataIndex: 'type', width: 140, render: (v: string) => <Tag color={VOL_TYPE_COLOR[v] || 'default'}>{v}</Tag> },
                   { title: '名称', dataIndex: 'name', width: 300, render: (v: string) => <code>{v}</code> },
                   { title: '被哪些容器挂载', dataIndex: 'containers', render: (v: string[]) => (v.length ? v.join('、') : '-') },
+                  {
+                    title: '操作', width: 140,
+                    render: (r: { type: string }) => (
+                      <Button size="small" type="link"
+                        onClick={() => navigate(`/clusters/${clusterId}/configs${r.type === 'pvc' ? '' : ''}`)}>
+                        {r.type === 'pvc' ? '去存储页' : '去配置页'}
+                      </Button>
+                    ),
+                  },
                 ]}
                 locale={{ emptyText: '没有引用配置字典 / 密钥 / PVC' }} />
             </div>
