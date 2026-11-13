@@ -1,10 +1,11 @@
 // 编辑路由规则 / 编辑注解（Ingress）：按 mode 切换
 // mode='rules'（默认，向后兼容）：ingressClassName + 规则（域名 host / 路径 path / 后端服务）
 // mode='annotations'：仅注解键值编辑（标签 labels 保留原值）
+// mode='tls'：仅 HTTPS/TLS 证书配置（我们追加的入口，KubeSphere 原版没有，保留功能不砍）
 import { useEffect, useState } from 'react'
-import { Modal, Form, Input, Select, Button, Space, Alert, message } from 'antd'
+import { Modal, Form, Input, Select, Button, Space, Alert, message, Checkbox } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec, updateObjectMetadata, applyObject, getClusterNamespaces } from '../services/api'
+import { getObjectDetail, updateObjectSpec, updateObjectMetadata, applyObject, getClusterNamespaces, getMiscResources } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
@@ -12,7 +13,7 @@ interface PathRow { host?: string; path?: string; pathType?: string; serviceName
 
 export default function IngressSettingsModal({ target, mode = 'rules', onClose, onSaved }: {
   target: ConfigObjectTarget | null
-  mode?: 'rules' | 'annotations'
+  mode?: 'rules' | 'annotations' | 'tls'
   onClose: () => void
   onSaved?: () => void
 }) {
@@ -21,6 +22,11 @@ export default function IngressSettingsModal({ target, mode = 'rules', onClose, 
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [nsLoading, setNsLoading] = useState(false)
   const [labels, setLabels] = useState<Record<string, string>>({})
+  // TLS（mode='tls'）：证书来自同命名空间下 type=kubernetes.io/tls 的密钥
+  const [tlsSecrets, setTlsSecrets] = useState<string[]>([])
+  const [tlsEnabled, setTlsEnabled] = useState(false)
+  const [tlsSecret, setTlsSecret] = useState('')
+  const [tlsHosts, setTlsHosts] = useState<string[]>([])
   const isCreate = !!target?.create
 
   useEffect(() => {
@@ -40,6 +46,14 @@ export default function IngressSettingsModal({ target, mode = 'rules', onClose, 
       form.setFieldsValue({ name: '', namespace: target.namespace || 'default', ingressClassName: '', rows: [{ pathType: 'Prefix', path: '/' }] })
       return
     }
+    if (mode === 'tls') {
+      getMiscResources(target.clusterId, target.namespace)
+        .then((d) => {
+          const secs = ((d as { secrets?: { name: string; type?: string }[] }).secrets || [])
+          setTlsSecrets(secs.filter((s) => (s.type || '').includes('tls')).map((s) => s.name))
+        })
+        .catch(() => setTlsSecrets([]))
+    }
     setLoading(true)
     getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
       .then((d) => {
@@ -49,6 +63,8 @@ export default function IngressSettingsModal({ target, mode = 'rules', onClose, 
           form.setFieldsValue({ annotations: toKvList(t.annotations) })
         } else {
           const spec = ((d as { spec?: Record<string, unknown> }).spec || {}) as Record<string, unknown>
+          const tl = (spec.tls as Array<Record<string, unknown>>) || []
+          if (tl.length) { setTlsEnabled(true); setTlsSecret((tl[0].secretName as string) || '') } else { setTlsEnabled(false); setTlsSecret('') }
           const rows: PathRow[] = []
           for (const r of ((spec.rules as Array<Record<string, unknown>>) || [])) {
             const host = (r.host as string) || ''
@@ -69,6 +85,24 @@ export default function IngressSettingsModal({ target, mode = 'rules', onClose, 
       .catch(() => message.error('加载失败'))
       .finally(() => setLoading(false))
   }, [target, form, mode])
+
+  const submitTls = async () => {
+    if (!target) return
+    setLoading(true)
+    try {
+      const tls = tlsEnabled
+        ? [{ hosts: tlsHosts.length ? tlsHosts : undefined, secretName: tlsSecret || undefined }]
+        : []
+      await updateObjectSpec(target.clusterId, target.kind, target.namespace, target.name, { tls })
+      message.success('已保存（TLS 配置已更新）')
+      onSaved?.()
+      onClose()
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const submit = async () => {
     if (!target) return
@@ -114,12 +148,32 @@ export default function IngressSettingsModal({ target, mode = 'rules', onClose, 
 
   const title = isCreate
     ? '创建路由'
-    : (mode === 'annotations' ? `编辑注解：${target?.name || ''}` : `编辑路由规则：${target?.name || ''}`)
+    : mode === 'annotations' ? `编辑注解：${target?.name || ''}`
+      : mode === 'tls' ? `编辑 TLS：${target?.name || ''}`
+        : `编辑路由规则：${target?.name || ''}`
 
   return (
     <Modal title={title} open={!!target} onCancel={onClose}
-      onOk={submit} okText={isCreate ? '创建' : '保存'} confirmLoading={loading} width={860}>
-      {mode === 'annotations' ? (
+      onOk={mode === 'tls' ? submitTls : submit} okText={isCreate ? '创建' : '保存'} confirmLoading={loading} width={860}>
+      {mode === 'tls' ? (
+        <div>
+          <Alert type="info" showIcon style={{ marginBottom: 12 }}
+            message="只更新 HTTPS/TLS 配置；路由规则、注解不受影响。证书需在同命名空间下，类型为 kubernetes.io/tls 的密钥。" />
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Checkbox checked={tlsEnabled} onChange={(e) => setTlsEnabled(e.target.checked)}>启用 HTTPS（配置 TLS 证书）</Checkbox>
+            <Select
+              style={{ width: 360 }}
+              placeholder="选择 TLS 密钥"
+              value={tlsSecret || undefined}
+              onChange={setTlsSecret}
+              disabled={!tlsEnabled}
+              options={tlsSecrets.map((n) => ({ value: n, label: n }))}
+              notFoundContent="该命名空间下没有 kubernetes.io/tls 类型的密钥"
+            />
+            {tlsHosts.length > 0 && <div style={{ color: '#8c8c8c', fontSize: 12 }}>证书域名将沿用当前规则里的 host：{tlsHosts.join('、')}</div>}
+          </Space>
+        </div>
+      ) : mode === 'annotations' ? (
         <Form form={form} layout="vertical">
           <Alert type="info" showIcon style={{ marginBottom: 8 }} message="只更新注解；标签(labels)保留原值。" />
           <Form.Item label="注解 Annotations" style={{ marginBottom: 0 }}>

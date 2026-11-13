@@ -1,5 +1,5 @@
 // 应用路由列表页（Ingress）：列对齐 KubeSphere 3.4.1（名称 / 网关地址 / 项目 / 创建时间）
-// 行操作：编辑信息 / 编辑 YAML / 编辑路由规则 / 编辑注解 / 删除（删除置底）
+// 行操作：编辑信息 / 编辑 YAML / 编辑路由规则 / 编辑注解 / 编辑 TLS（我们追加）/ 删除（置底）
 import { useEffect, useState } from 'react'
 import { Card, Table, Button, Dropdown, Modal, message, Select, Space, Form, Input } from 'antd'
 import { MoreOutlined } from '@ant-design/icons'
@@ -98,7 +98,7 @@ export default function IngressList({ clusterId }: { clusterId: number }) {
   const [yamlObj, setYamlObj] = useState<ConfigObjectTarget | null>(null)
   const [infoObj, setInfoObj] = useState<ConfigObjectTarget | null>(null)
   const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
-  const [ingMode, setIngMode] = useState<'rules' | 'annotations'>('rules')
+  const [ingMode, setIngMode] = useState<'rules' | 'annotations' | 'tls'>('rules')
 
   const load = () => {
     setLoading(true)
@@ -128,6 +128,7 @@ export default function IngressList({ clusterId }: { clusterId: number }) {
         { key: 'yaml', label: '编辑 YAML' },
         { key: 'rules', label: '编辑路由规则' },
         { key: 'annotations', label: '编辑注解' },
+        { key: 'tls', label: '编辑 TLS' },   // 我们追加的入口（KubeSphere 没有，功能不砍）
         { type: 'divider' as const },
         { key: 'delete', label: '删除', danger: true },
       ],
@@ -137,6 +138,7 @@ export default function IngressList({ clusterId }: { clusterId: number }) {
         else if (key === 'yaml') setYamlObj(t)
         else if (key === 'rules') { setIngMode('rules'); setIngObj(t) }
         else if (key === 'annotations') { setIngMode('annotations'); setIngObj(t) }
+        else if (key === 'tls') { setIngMode('tls'); setIngObj(t) }
         else if (key === 'delete') handleDelete(r.namespace, r.name)
       },
     }}>
