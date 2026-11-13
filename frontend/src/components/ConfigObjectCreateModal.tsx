@@ -254,7 +254,7 @@ export default function ConfigObjectCreateModal({ target, onClose, onSaved, onEd
 
         {step === 1 && !isSecret && (
           <Form.Item label="数据" required style={{ marginBottom: 0 }}>
-            <KeyValueList name="data" addLabel="添加数据" />
+            <KeyValueList name="data" addLabel="添加数据" textarea />
           </Form.Item>
         )}
 
@@ -266,7 +266,7 @@ export default function ConfigObjectCreateModal({ target, onClose, onSaved, onEd
 
             {secType === 'Opaque' && (
               <Form.Item label="数据" required extra="添加键值对数据。" style={{ marginBottom: 0 }}>
-                <KeyValueList name="data" addLabel="添加数据" />
+                <KeyValueList name="data" addLabel="添加数据" textarea />
               </Form.Item>
             )}
 

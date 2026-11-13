@@ -72,7 +72,7 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
           </Form.Item>
         )}
         <Form.Item label="数据" required style={{ marginBottom: 0 }}>
-          <KeyValueList name="data" addLabel="添加数据" />
+          <KeyValueList name="data" addLabel="添加数据" textarea />
         </Form.Item>
       </Form>
     </Modal>
