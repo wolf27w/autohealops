@@ -403,25 +403,6 @@ export default function WorkloadDetail() {
           { title: 'Value', dataIndex: 'v', render: (v: string) => <span style={{ wordBreak: 'break-all' }}>{v}</span> },
         ]}
         locale={{ emptyText: '无 Annotations' }} />
-
-      <div style={{ fontWeight: 600, margin: '20px 0 8px' }}>挂载的卷（Volumes）</div>
-      <Table rowKey="name" size="small" pagination={false} dataSource={storageInfo.volumes}
-        columns={[
-          { title: '卷名', dataIndex: 'name', width: 220, render: (v: string) => <code>{v}</code> },
-          { title: '类型', dataIndex: 'type', width: 140, render: (v: string) => <Tag color={VOL_TYPE_COLOR[v] || 'default'}>{v}</Tag> },
-          { title: '来源', dataIndex: 'source', ellipsis: true, render: (v: string) => v || '-' },
-          { title: '挂载点', dataIndex: 'mounts', render: (v: string[]) => (v.length ? v.map((x) => <div key={x} style={{ fontFamily: 'monospace', fontSize: 12 }}>{x}</div>) : <span style={{ color: '#bbb' }}>未挂载</span>) },
-        ]}
-        locale={{ emptyText: '该工作负载未声明卷' }} style={{ marginBottom: 8 }} />
-
-      <div style={{ fontWeight: 600, margin: '20px 0 8px' }}>挂载的配置（ConfigMap / Secret / PVC）</div>
-      <Table rowKey={(r) => `${r.type}-${r.name}`} size="small" pagination={false} dataSource={storageInfo.refs}
-        columns={[
-          { title: '类型', dataIndex: 'type', width: 140, render: (v: string) => <Tag color={VOL_TYPE_COLOR[v] || 'default'}>{v}</Tag> },
-          { title: '名称', dataIndex: 'name', width: 260, render: (v: string) => <code>{v}</code> },
-          { title: '被哪些容器挂载', dataIndex: 'containers', render: (v: string[]) => (v.length ? v.join('、') : '-') },
-        ]}
-        locale={{ emptyText: '没有引用配置字典 / 密钥 / PVC' }} />
     </div>
   )
 
@@ -522,8 +503,21 @@ export default function WorkloadDetail() {
         <Tabs defaultActiveKey="overview" onChange={(key) => { if (key === 'events-realtime') loadRealtimeEvents() }} items={[
           { key: 'overview', label: '概览', children: overviewTab },
           { key: 'metadata', label: '元数据', children: metadataTab },
-          { key: 'storage', label: '存储挂载', children: (
-            <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="storage" />
+          { key: 'storage', label: '存储与配置', children: (
+            <div>
+              <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="storage" />
+              <div style={{ fontWeight: 600, margin: '24px 0 8px' }}>挂载的配置（ConfigMap / Secret / PVC）</div>
+              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>
+                汇总本工作负载引用的配置字典 / 密钥 / 持久卷声明，以及各自被哪些容器挂载（配置内容本身在「配置」页查看）。
+              </div>
+              <Table rowKey={(r) => `${r.type}-${r.name}`} size="small" pagination={false} dataSource={storageInfo.refs}
+                columns={[
+                  { title: '类型', dataIndex: 'type', width: 140, render: (v: string) => <Tag color={VOL_TYPE_COLOR[v] || 'default'}>{v}</Tag> },
+                  { title: '名称', dataIndex: 'name', width: 300, render: (v: string) => <code>{v}</code> },
+                  { title: '被哪些容器挂载', dataIndex: 'containers', render: (v: string[]) => (v.length ? v.join('、') : '-') },
+                ]}
+                locale={{ emptyText: '没有引用配置字典 / 密钥 / PVC' }} />
+            </div>
           ) },
           { key: 'env', label: '环境变量', children: (
             <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="env" />
