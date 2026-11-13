@@ -2,8 +2,8 @@
 // 操作收 ⋯：诊断 / 隔离·解除隔离 / 封锁·解封 / 驱逐（先预览再确认）/ 标签·污点
 // 名称可点击展开该节点上的 Pod 列表（getClusterPods 按 node_name 过滤）
 import { useEffect, useState, type Key } from 'react'
-import { Card, Table, Button, Space, Tag, message, Modal, Input, Progress, Dropdown, Select, Checkbox, Alert, Divider, InputNumber, Empty } from 'antd'
-import { ReloadOutlined, MoreOutlined, ApartmentOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Space, Tag, message, Modal, Input, Progress, Dropdown, Select, Checkbox, Alert, Divider, InputNumber, Empty, Tooltip } from 'antd'
+import { ReloadOutlined, MoreOutlined, ApartmentOutlined, CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import {
   getNodes, cordonNode, uncordonNode, drainPreview, drainNode, diagnoseNode,
   setNodeLabels, setNodeTaints, isolateNode, unisolateNode, getClusterPods,
@@ -22,6 +22,27 @@ const canonTaints = (ts: { key: string; value: string; effect: string }[]) =>
 type LabelRow = { key: string; value: string }
 type TaintRow = { key: string; value: string; effect: string }
 
+
+// 节点状态（对齐 KubeSphere 的三态）：运行中 / 告警 / 无法调度 / 未就绪
+// 告警 = Ready 但有 MemoryPressure、DiskPressure、PIDPressure、NetworkUnavailable 等为 True
+const BAD_CONDITIONS = ['MemoryPressure', 'DiskPressure', 'PIDPressure', 'NetworkUnavailable']
+function nodeState(n: K8sNode): { label: string; color: string; tip: string; key: string } {
+  const conds = n.conditions || []
+  const bad = conds.filter((c) => (BAD_CONDITIONS.includes(c.type) || c.type === 'Ready') && c.status === 'True'
+    && c.type !== 'Ready')
+  if (n.ready !== 'Ready') {
+    const c = conds.find((x) => x.type === 'Ready')
+    return { key: 'notready', label: '未就绪', color: 'red', tip: c?.message || '节点未就绪（kubelet 上报 NotReady）' }
+  }
+  if (n.schedulable === false) {
+    return { key: 'unschedulable', label: '无法调度', color: 'orange', tip: '节点已封锁（unschedulable），不会调度新 Pod' }
+  }
+  if (bad.length) {
+    return { key: 'warning', label: '告警', color: 'gold', tip: bad.map((c) => `${c.type}${c.message ? `：${c.message}` : ''}`).join('；') }
+  }
+  return { key: 'running', label: '运行中', color: 'green', tip: '节点健康' }
+}
+
 // 角色：优先 node-role.kubernetes.io/* 标签；无则视为 worker
 const roleOf = (n: K8sNode): string => {
   const roles: string[] = []
@@ -36,6 +57,7 @@ const roleOf = (n: K8sNode): string => {
 
 export default function NodesPage({ clusterId }: { clusterId: number }) {
   const [nodes, setNodes] = useState<K8sNode[]>([])
+  const [stateFilter, setStateFilter] = useState<string>('all')
   const [loading, setLoading] = useState(false)
   // 展开节点 Pod 列表
   const [expandedKeys, setExpandedKeys] = useState<readonly Key[]>([])
@@ -317,12 +339,25 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
           <Button size="small" type="primary" danger disabled={!selected.length} loading={busy} onClick={() => doBatch('cordon')}>批量停止调度</Button>
           <Button size="small" disabled={!selected.length} loading={busy} onClick={() => doBatch('uncordon')}>批量启用调度</Button>
           <Button size="small" type="link" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</Button>
+          <Select
+            size="small"
+            style={{ width: 150, marginLeft: 'auto' }}
+            value={stateFilter}
+            onChange={setStateFilter}
+            options={[
+              { value: 'all', label: '全部状态' },
+              { value: 'running', label: '运行中' },
+              { value: 'warning', label: '告警' },
+              { value: 'unschedulable', label: '无法调度' },
+              { value: 'notready', label: '未就绪' },
+            ]}
+          />
         </Space>
         <Table
           rowKey="name"
           size="small"
           loading={loading}
-          dataSource={nodes}
+          dataSource={stateFilter === 'all' ? nodes : nodes.filter((n) => nodeState(n).key === stateFilter)}
           pagination={{ pageSize: 20 }}
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
           scroll={{ x: 1400 }}
@@ -357,7 +392,18 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
               title: '名称', dataIndex: 'name', width: 200, fixed: 'left',
               render: (v: string) => <a onClick={() => togglePods(v)}>{v}</a>,
             },
-            { title: '状态', dataIndex: 'ready', width: 90, render: (v: string) => <Tag color={v === 'Ready' ? 'green' : 'red'}>{v === 'Ready' ? 'Ready' : 'NotReady'}</Tag> },
+            {
+              title: '状态', width: 110,
+              render: (_: unknown, r) => {
+                const st = nodeState(r)
+                const icon = st.key === 'running' ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />
+                return (
+                  <Tooltip title={st.tip}>
+                    <Tag color={st.color} icon={icon} style={{ cursor: 'help' }}>{st.label}</Tag>
+                  </Tooltip>
+                )
+              },
+            },
             { title: '角色', width: 110, render: (_, r) => <Tag color={roleOf(r) === 'worker' ? 'default' : 'blue'}>{roleOf(r)}</Tag> },
             { title: 'Kubelet', dataIndex: 'kubelet_version', width: 110, ellipsis: true, render: (v?: string) => v || '-' },
             { title: 'CPU', width: 130, render: (_, r) => pctCell(r.cpu_pct) },

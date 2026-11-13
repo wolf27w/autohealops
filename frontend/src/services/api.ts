@@ -921,6 +921,8 @@ export interface K8sNode {
   labels?: Record<string, string>
   taints?: string[]
   taints_detail?: NodeTaint[]
+  // 节点 conditions（NotReady / MemoryPressure / DiskPressure / PIDPressure / NetworkUnavailable 等）
+  conditions?: { type: string; status: string; reason?: string; message?: string; since?: string }[]
 }
 export interface NodeTaint { key: string; value: string; effect: 'NoSchedule' | 'PreferNoSchedule' | 'NoExecute' | string; time_added?: string }
 export interface NodeChangeResult { changed: { op: string; key?: string; value?: string; effect?: string }[]; outputs?: string[] }

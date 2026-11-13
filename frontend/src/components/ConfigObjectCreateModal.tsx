@@ -254,7 +254,7 @@ export default function ConfigObjectCreateModal({ target, onClose, onSaved, onEd
 
         {step === 1 && !isSecret && (
           <Form.Item label="数据" required style={{ marginBottom: 0 }}>
-            <KeyValueList name="data" addLabel="添加数据" textarea />
+            <KeyValueList name="data" addLabel="添加数据" />
           </Form.Item>
         )}
 
@@ -266,7 +266,7 @@ export default function ConfigObjectCreateModal({ target, onClose, onSaved, onEd
 
             {secType === 'Opaque' && (
               <Form.Item label="数据" required extra="添加键值对数据。" style={{ marginBottom: 0 }}>
-                <KeyValueList name="data" addLabel="添加数据" textarea />
+                <KeyValueList name="data" addLabel="添加数据" />
               </Form.Item>
             )}
 
@@ -309,17 +309,7 @@ export default function ConfigObjectCreateModal({ target, onClose, onSaved, onEd
                   </Space.Compact>
                 </Form.Item>
 
-                <Form.Item label="设为默认镜像仓库" valuePropName="checked" style={{ marginBottom: 8 }}>
-                  <Switch />
-                </Form.Item>
-                <div style={{ color: '#8c8c8c', fontSize: 12, marginBottom: 16 }}>
-                  设置为默认镜像仓库后，如果没有特殊指定，系统将使用默认镜像仓库创建应用负载。一个项目中仅允许设置一个默认镜像仓库。
-                </div>
-                <div style={{ color: '#8c8c8c', fontSize: 12, marginBottom: 12 }}>创建镜像服务保密字典前，请先验证用户名和密码。</div>
-
-                <Form.Item label="数据" required style={{ marginBottom: 0 }}>
-                  <KeyValueList name="data" addLabel="添加数据" textarea />
-                </Form.Item>
+                <div style={{ color: '#8c8c8c', fontSize: 12, marginBottom: 0 }}>创建镜像服务保密字典前，请先验证用户名和密码。</div>
               </>
             )}
 
