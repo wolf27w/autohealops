@@ -1,7 +1,7 @@
 // 创建存储 PVC
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Alert, message } from 'antd'
-import { applyObject, getMiscResources } from '../services/api'
+import { applyObject, getMiscResources, getClusterNamespaces } from '../services/api'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
 export default function PvcCreateModal({ target, onClose, onSaved }: {
@@ -12,6 +12,8 @@ export default function PvcCreateModal({ target, onClose, onSaved }: {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [scs, setScs] = useState<Array<{ name: string; is_default?: boolean }>>([])
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [nsLoading, setNsLoading] = useState(false)
 
   useEffect(() => {
     if (!target) return
@@ -21,6 +23,16 @@ export default function PvcCreateModal({ target, onClose, onSaved }: {
       .then((d) => setScs(((d as { storage_classes?: Array<{ name: string; is_default?: boolean }> }).storage_classes) || []))
       .catch(() => setScs([]))
   }, [target, form])
+
+  useEffect(() => {
+    if (!target) return
+    const current = target.namespace || 'default'
+    setNsLoading(true)
+    getClusterNamespaces(target.clusterId)
+      .then((d) => setNamespaces(Array.from(new Set([...(d || []), current]))))
+      .catch(() => { setNamespaces([current]); message.error('命名空间列表获取失败') })
+      .finally(() => setNsLoading(false))
+  }, [target])
 
   const submit = async () => {
     if (!target) return
@@ -50,7 +62,10 @@ export default function PvcCreateModal({ target, onClose, onSaved }: {
     <Modal title="创建存储（PVC）" open={!!target} onCancel={onClose} onOk={submit} okText="创建" confirmLoading={loading} width={560}>
       <Form form={form} layout="vertical">
         <Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
-        <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item>
+        <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}>
+          <Select showSearch optionFilterProp="label" loading={nsLoading} placeholder="选择命名空间"
+            options={namespaces.map((n) => ({ value: n, label: n }))} style={{ width: 320 }} />
+        </Form.Item>
         <Form.Item name="storageClass" label="存储类型 StorageClass">
           <Select allowClear placeholder="（不选=默认 StorageClass）" style={{ width: 320 }}
             options={scs.map((s) => ({ value: s.name, label: s.is_default ? `${s.name}（默认）` : s.name }))} />

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, InputNumber, Switch, Select, Steps, Divider, Button, Space, message, Alert } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { applyWorkload } from '../services/api'
+import { applyWorkload, getClusterNamespaces } from '../services/api'
 import { KeyValueList, type KvItem } from './KeyValueEditor'
 import { buildYaml, mergeWorkloadYaml, type WorkloadValues, type VolumeType } from './workloadYaml'
 
@@ -47,6 +47,8 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [current, setCurrent] = useState(0)
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [nsLoading, setNsLoading] = useState(false)
   const kind = target?.kind || ''
   const isCron = kind === 'cronjob'
   const isCreate = target ? target.create !== false : false
@@ -82,6 +84,16 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
     }
     form.setFieldsValue({ ...defaults, ...(isCreate ? {} : (target.initialValues || {})) })
   }, [target, kind, form, isCreate])
+
+  useEffect(() => {
+    if (!target) return
+    const current = target.namespace || 'default'
+    setNsLoading(true)
+    getClusterNamespaces(target.clusterId)
+      .then((d) => setNamespaces(Array.from(new Set([...(d || []), current]))))
+      .catch(() => { setNamespaces([current]); message.error('命名空间列表获取失败') })
+      .finally(() => setNsLoading(false))
+  }, [target])
 
   const stepFields: string[][] = [
     isCron
@@ -144,7 +156,8 @@ export default function WorkloadCreateModal({ target, onClose, onSaved }: {
         <Input placeholder="如 nginx-demo" disabled={!isCreate} />
       </Form.Item>
       <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '命名空间必填' }]}>
-        <Input disabled={!isCreate} />
+        <Select showSearch optionFilterProp="label" loading={nsLoading} placeholder="选择命名空间" disabled={!isCreate}
+          options={namespaces.map((n) => ({ value: n, label: n }))} style={{ width: 320 }} />
       </Form.Item>
       {HAS_REPLICAS(kind) && (
         <Form.Item name="replicas" label="副本数" rules={[{ required: true }]}>

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Button, Space, Alert, message } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec, applyObject, getWorkloads, getWorkloadServiceInfo } from '../services/api'
+import { getObjectDetail, updateObjectSpec, applyObject, getWorkloads, getWorkloadServiceInfo, getClusterNamespaces } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
@@ -17,6 +17,8 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
   const [loading, setLoading] = useState(false)
   const [workloads, setWorkloads] = useState<Array<{ kind: string; name: string }>>([])
   const [wlKey, setWlKey] = useState<string>('')
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [nsLoading, setNsLoading] = useState(false)
   const isCreate = !!target?.create
 
   useEffect(() => {
@@ -25,6 +27,16 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
     getWorkloads(target.clusterId, target.namespace || 'default')
       .then((d) => setWorkloads(((d || []) as Array<{ kind: string; name: string }>).filter((w) => ['deployment', 'statefulset', 'daemonset'].includes(w.kind))))
       .catch(() => setWorkloads([]))
+  }, [target])
+
+  useEffect(() => {
+    if (!target) return
+    const current = target.namespace || 'default'
+    setNsLoading(true)
+    getClusterNamespaces(target.clusterId)
+      .then((d) => setNamespaces(Array.from(new Set([...(d || []), current]))))
+      .catch(() => { setNamespaces([current]); message.error('命名空间列表获取失败') })
+      .finally(() => setNsLoading(false))
   }, [target])
 
   const onPickWorkload = async (val?: string) => {
@@ -110,7 +122,10 @@ export default function ServiceSettingsModal({ target, onClose, onSaved }: {
       <Form form={form} layout="vertical">
         {isCreate && (
           <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
-          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item></>
+          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" loading={nsLoading} placeholder="选择命名空间"
+              options={namespaces.map((n) => ({ value: n, label: n }))} style={{ width: 320 }} />
+          </Form.Item></>
         )}
         <Form.Item name="type" label="类型" rules={[{ required: true }]}>
           <Select options={['ClusterIP', 'NodePort', 'LoadBalancer', 'ExternalName'].map((v) => ({ value: v, label: v }))} style={{ width: 220 }} />

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Button, Space, Alert, Checkbox, message } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
-import { getObjectDetail, updateObjectSpec, applyObject, getMiscResources } from '../services/api'
+import { getObjectDetail, updateObjectSpec, applyObject, getMiscResources, getClusterNamespaces } from '../services/api'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
 interface PathRow { host?: string; path?: string; pathType?: string; serviceName?: string; servicePort?: string }
@@ -17,6 +17,8 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
   const [tlsSecrets, setTlsSecrets] = useState<string[]>([])
   const [tlsEnabled, setTlsEnabled] = useState(false)
   const [tlsSecret, setTlsSecret] = useState<string>('')
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [nsLoading, setNsLoading] = useState(false)
   const isCreate = !!target?.create
 
   useEffect(() => {
@@ -25,6 +27,16 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
       .then((d) => setTlsSecrets((((d as { secrets?: Array<{ name: string; type?: string }> }).secrets) || [])
         .filter((s) => s.type === 'kubernetes.io/tls').map((s) => s.name)))
       .catch(() => setTlsSecrets([]))
+  }, [target])
+
+  useEffect(() => {
+    if (!target) return
+    const current = target.namespace || 'default'
+    setNsLoading(true)
+    getClusterNamespaces(target.clusterId)
+      .then((d) => setNamespaces(Array.from(new Set([...(d || []), current]))))
+      .catch(() => { setNamespaces([current]); message.error('命名空间列表获取失败') })
+      .finally(() => setNsLoading(false))
   }, [target])
 
   useEffect(() => {
@@ -107,7 +119,10 @@ export default function IngressSettingsModal({ target, onClose, onSaved }: {
       <Form form={form} layout="vertical">
         {isCreate && (
           <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
-          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item></>
+          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" loading={nsLoading} placeholder="选择命名空间"
+              options={namespaces.map((n) => ({ value: n, label: n }))} style={{ width: 320 }} />
+          </Form.Item></>
         )}
         <Form.Item name="ingressClassName" label="IngressClass">
           <Input placeholder="如 nginx" style={{ width: 260 }} />

@@ -1,7 +1,7 @@
 // 编辑设置：ConfigMap→键值；Secret→按类型（镜像服务/证书/普通键值）
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Alert, message } from 'antd'
-import { getObjectDetail, updateObjectData, applyObject } from '../services/api'
+import { getObjectDetail, updateObjectData, applyObject, getClusterNamespaces } from '../services/api'
 import { KeyValueList, toKvList, fromKvList } from './KeyValueEditor'
 import type { ConfigObjectTarget } from './ConfigObjectYamlModal'
 
@@ -26,7 +26,20 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [secType, setSecType] = useState('Opaque')
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [nsLoading, setNsLoading] = useState(false)
   const isCreate = !!target?.create
+
+  // 创建时命名空间下拉（自动拉取，不再手输）
+  useEffect(() => {
+    if (!target?.create || !target.clusterId) return
+    setNsLoading(true)
+    getClusterNamespaces(target.clusterId)
+      .then((list) => setNamespaces((list || []) as string[]))
+      .catch(() => message.error('命名空间列表获取失败'))
+      .finally(() => setNsLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target?.create, target?.clusterId])
 
   useEffect(() => {
     if (!target) return
@@ -132,7 +145,17 @@ export default function ConfigObjectDataModal({ target, onClose, onSaved }: {
       <Form form={form} layout="vertical">
         {isCreate && (
           <><Form.Item name="name" label="名称" rules={[{ required: true, message: '名称必填' }]}><Input /></Form.Item>
-          <Form.Item name="namespace" label="命名空间" rules={[{ required: true }]}><Input /></Form.Item></>
+          <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '请选择命名空间' }]}>
+            <Select
+              showSearch
+              loading={nsLoading}
+              placeholder="选择命名空间"
+              optionFilterProp="label"
+              options={(namespaces.length ? namespaces : [form.getFieldValue('namespace') || 'default'])
+                .filter(Boolean)
+                .map((n) => ({ value: n, label: n }))}
+            />
+          </Form.Item></>
         )}
         {!isSecret && (
           <Form.Item label="数据（key → value）" style={{ marginBottom: 0 }}>
