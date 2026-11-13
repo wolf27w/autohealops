@@ -296,6 +296,44 @@ Tab 骨架（与 K8s 集群详情保持一致的"对象详情"范式）：
 
 删除 `pages/ComingSoon.tsx`、`pages/ResourceQuota.tsx`、`pages/TaskDetail.tsx`、`pages/TaskList.tsx`；`pages/DecisionPolicies.tsx` 若确认要保留风险评分配置，则挂到 `/diagnose/strategy` 的 Tab，否则一并删除。
 
+### 7.8 主机/虚拟机与堡垒机终端的可见性口径（2026-11-13 12:04 老板定）
+
+**口径**：**admin 专属 + 可按用户单独授权**。默认只有 admin 看到入口；把某用户加进某主机组（`HostGroupMember.role`）后，该用户（operator / viewer）也能进入，可见与可操作范围由组权限决定。
+
+**已核实：后端授权链路已完整，不需要新造权限模型**
+
+| 能力 | 现状 |
+|---|---|
+| 分组角色 | `HostGroupMember.role` = `admin`(组管理) / `operator`(操作) / `viewer`(只读)，前端已有"分组管理 / 成员"UI |
+| 列表过滤 | `GET /hosts` 已按 `hgs.visible_group_ids` 过滤，未授权主机不返回；无授权时返回空数组，前端空态文案已是「请联系管理员为你分配主机组权限」 |
+| 单机权限位 | 每行下发 `can { view, operate, manage, delete }`（`hgs.host_can`），前端据此控制按钮 |
+| Web 终端 | `ws_host_terminal` 已校验 `host_access(user, host, 'operate')`，无权限 `close 4003` |
+| SFTP | 走 `_sftp_conn(host_id, user)`，同一套校验 |
+| 会话列表 / 回放 | `host_access(..., 'view')` |
+| 强制下线 | 仅平台管理员 |
+
+**唯一缺口 = 前端菜单入口**：`/host-management` 被写死在 `ADMIN_ONLY_KEYS` 里，被授权的 operator 只能手输 URL 进入，**看不到菜单**。
+
+**需求**：
+
+1. `NavLeaf` 增加 `requiresGrant?: 'host'`（预留 `'db'`，本期只实现 `'host'`）。
+2. 可见性规则：`role === 'admin'` → 可见；否则当 `requiresGrant === 'host'` 时，登录后拉一次 `GET /host-groups`，返回数组里存在 `my_role` 非空的分组 → 可见。
+3. 缓存：与登录态同生命周期（登录成功拉一次，TTL 5 分钟，登出清空）。**不允许每次路由切换都请求**。
+4. 适用范围：资源中心 →「主机与虚拟机」+「堡垒机终端」两项（条件相同）。
+5. **页面内按钮改用后端下发的 `can` 权限位**：现状多处是 `isAdmin &&` 硬判断，会导致被授权的 operator 看不到他本来能用的按钮 → 本次一并改为 `can.operate` / `can.manage` / `can.delete`。
+6. **不加前端越权守卫**：非授权用户直链进 `/resources/hosts` 由后端过滤成空列表 + 空态提示；`/resources/terminal` 无主机可选。前端再写一套规则只会和后端漂移。
+
+**工作量**：0.5d（nav 字段 + 一次授权请求 + 菜单可见性计算 + `HostManagement` 按钮权限位替换）。
+
+**验收**：
+
+| 角色 | 期望 |
+|---|---|
+| admin | 两项菜单可见，可进全部主机 |
+| 未授权 operator | 两项菜单**不可见**；直链进列表为空 + 显示分配提示 |
+| 已授权 operator（某组 operator） | 菜单可见、只看到该组主机、能开终端；不能删主机、不能管分组 |
+| 已授权 viewer | 菜单可见、只读；终端连接被后端拒绝（4003），前端提示「无该主机操作权限」 |
+
 ### 7.7 全局搜索
 
 `flattenMenu` 已从菜单树派生搜索项，菜单改完自动跟着变；**注意**：搜索项 key 变成新 URL 后，历史收藏/分享链接要靠 6.5 的重定向兜底。

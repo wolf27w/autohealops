@@ -2175,6 +2175,7 @@ digest 记录：两条 `SELECT alerts ...` 各 3.9 万 / 5.2 万次、服务端 
 3. 菜单归位：撤销「监控中心 / 自动化运维 / 知识配置」三组；`StrategyConfig` 三合一拆成 `/alerts/policies` + `/diagnose/strategy`；`AlertHandling` 删重复的「故障诊断」Tab；`ZombieServices` 并入资源治理；`NodeManagement` 下线（并入 `/clusters/:id/nodes`）。
 4. URL 前缀归位 `/resources/* /alerts/* /diagnose/* /platform/*`，旧地址全部保留 `<Navigate>` 重定向；`/dashboard` 不动。
 5. 菜单与权限守卫同源（新建 `constants/nav.ts`），清死代码。
+6. **主机/虚拟机权限口径**（2026-11-13 12:04 老板定）：**admin 专属 + 可按用户单独授权**。后端授权链路已完整（`HostGroupMember.role`、`GET /hosts` 按 `visible_group_ids` 过滤、行级 `can{view,operate,manage,delete}`、Web 终端 `host_access(operate)`、SFTP/回放同套校验），**唯一缺口是前端菜单入口**（`/host-management` 写死在 ADMIN_ONLY_KEYS）。改法：nav 加 `requiresGrant:'host'`，登录后拉一次 `/host-groups` 判 `my_role`；同时把 HostManagement 里 `isAdmin &&` 硬判断的按钮改成按 `can` 权限位。0.5d。详见需求文档 7.8。
 
 **方案**：已于 2026-11-13 11:21 确认**方案 A**（撤销监控中心/自动化运维/知识配置三组）。
 

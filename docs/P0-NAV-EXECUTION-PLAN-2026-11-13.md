@@ -54,6 +54,7 @@ export interface NavLeaf {
   label: string
   icon: string         // 图标名（MainLayout 里映射成组件，nav.ts 不依赖 antd）
   minRole?: Role        // 缺省 = 所有登录用户可见
+  requiresGrant?: 'host' // 授权可见：admin，或被授予主机组权限的用户（P2 实现；P0 只按 minRole 判定）
 }
 
 export interface NavGroup {
@@ -73,9 +74,9 @@ export const NAV: NavGroup[] = [
     key: 'g-resource', label: '资源中心', icon: 'ClusterOutlined',
     children: [
       { key: '/clusters', label: 'K8s 集群', icon: 'ClusterOutlined' },
-      { key: '/resources/hosts', label: '主机与虚拟机', icon: 'DesktopOutlined' },
+      { key: '/resources/hosts', label: '主机与虚拟机', icon: 'DesktopOutlined', minRole: 'admin', requiresGrant: 'host' },
       { key: '/resources/databases', label: '数据库', icon: 'DatabaseOutlined' },
-      { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined' },
+      { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined', minRole: 'admin', requiresGrant: 'host' },
       { key: '/resources/governance', label: '资源治理', icon: 'ControlOutlined', minRole: 'admin' },
     ],
   },
@@ -400,10 +401,13 @@ export default function DiagnoseStrategy() {
 | 验收（tsc/eslint/build + CDP 24 项 + 41 条重定向 + 三角色） | 0.3d |
 | **合计** | **约 1.3 人日** |
 
+> 不含「授权后可见」（P2，0.5d，见第十节）。
+
 ---
 
 ## 十、需要你拍板
 
-1. **`/resources/hosts`（主机/虚拟机）是否保持 admin 专属**？原代码是 admin-only，新菜单我默认放开给全员。**默认建议：保持 admin**（避免行为变化），要放开再说。
-2. 主机/虚拟机 → operator 是否需要"能看不能改"的中间态？（现在只有 admin / 非 admin 两档，加中间态要动按钮级权限，不在 P0 范围）
-3. 其余按本文执行。
+1. ~~`/resources/hosts` 是否保持 admin 专属~~ → **已确认（2026-11-13 12:04）：admin 专属 + 可按用户单独授权**。
+   - P0 落地形态：两项菜单 `minRole: 'admin'`（静态判定，行为与现在一致，不阻塞骨架）。
+   - 「授权后 operator 可见」放 **P2** 实现（0.5d）：nav 加 `requiresGrant: 'host'` 运行时判定 + 登录后拉一次 `GET /host-groups`（后端 `/hosts`、终端、SFTP、回放的主机级鉴权**已全部实现**，只缺菜单入口）。详见需求文档 7.8。
+2. 其余按本文执行。
