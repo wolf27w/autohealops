@@ -6,6 +6,7 @@ import NodesPage from './NodesPage'
 import WorkloadsList from './WorkloadsList'
 import PodsList from './PodsList'
 import ServicesList from './ServicesList'
+import IngressList from './IngressList'
 import StorageConfig from './StorageConfig'
 import ClusterInspection from './ClusterInspection'
 import ClusterMonitoring from './ClusterMonitoring'
@@ -38,6 +39,10 @@ export function PodsRoute() {
 
 export function ServicesRoute() {
   return <ServicesList clusterId={useClusterId()} />
+}
+
+export function IngressListRoute() {
+  return <IngressList clusterId={useClusterId()} />
 }
 
 export function StorageRoute() {

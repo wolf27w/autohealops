@@ -40,6 +40,7 @@ export default function ClusterLayout() {
     if (p.includes('/nodes')) return 'nodes'
     if (p.includes('/workloads')) return 'workloads'
     if (p.includes('/services')) return 'services'
+    if (p.includes('/ingresses')) return 'ingresses'
     if (p.includes('/pods')) return 'pods'
     if (p.includes('/storage')) return 'storage'
     if (p.includes('/configs')) return 'configs'
@@ -57,6 +58,7 @@ export default function ClusterLayout() {
       children: [
         { key: 'workloads', label: '工作负载', onClick: () => navigate(`${base}/workloads/${wlKind}`) },
         { key: 'services', label: '服务', onClick: () => navigate(`${base}/services`) },
+        { key: 'ingresses', label: '应用路由', onClick: () => navigate(`${base}/ingresses`) },
         { key: 'pods', label: '容器组', onClick: () => navigate(`${base}/pods`) },
       ],
     },

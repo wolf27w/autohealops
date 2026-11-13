@@ -19,6 +19,7 @@ const WorkloadsRoute = lazy(() => import('./pages/cluster/adapters').then(m => (
 const WorkloadDetail = lazy(() => import('./pages/cluster/WorkloadDetail'))
 const PodsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.PodsRoute })))
 const ServicesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ServicesRoute })))
+const IngressListRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.IngressListRoute })))
 const StorageRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.StorageRoute })))
 const ConfigsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigsRoute })))
 const InspectionRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.InspectionRoute })))
@@ -180,6 +181,7 @@ export default function App() {
         <Route path="workloads/:kind/:namespace/:name" element={<WorkloadDetail />} />
         <Route path="pods" element={<PodsRoute />} />
         <Route path="services" element={<ServicesRoute />} />
+        <Route path="ingresses" element={<IngressListRoute />} />
         <Route path="storage" element={<StorageRoute />} />
         <Route path="configs" element={<ConfigsRoute />} />
         <Route path="inspection" element={<InspectionRoute />} />

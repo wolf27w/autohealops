@@ -1,12 +1,15 @@
-// 服务/路由列表页：两个子 Tab（服务 / 应用路由），操作收进 ⋯（编辑 YAML / 编辑设置 / 删除）
+// 服务列表页：列对齐 KubeSphere 3.4.1（名称 / 项目 / 内部访问 / 外部访问 / 创建时间）
+// 行操作：编辑信息 / 编辑 YAML / 编辑服务 / 编辑外部访问 / 删除（删除置底）
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag, Button, Dropdown, Modal, message, Tabs, Select, Space } from 'antd'
+import { Card, Table, Button, Dropdown, Modal, message, Select, Space, Form, Input } from 'antd'
 import { MoreOutlined } from '@ant-design/icons'
-import { getMiscResources, deleteObject } from '../../services/api'
+import { getMiscResources, deleteObject, getObjectDetail, updateObjectMetadata } from '../../services/api'
 import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../../components/ConfigObjectYamlModal'
 import ServiceSettingsModal from '../../components/ServiceSettingsModal'
-import IngressSettingsModal from '../../components/IngressSettingsModal'
+
+const ALIAS_KEY = 'kubesphere.io/alias-name'
+const DESC_KEY = 'kubesphere.io/description'
 
 interface MiscRow { namespace: string; name: string; [key: string]: unknown }
 interface MiscData {
@@ -18,16 +21,92 @@ interface MiscData {
 }
 
 const fmt = (v?: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
-const SERVICE_TYPE_COLOR: Record<string, string> = { LoadBalancer: 'blue', NodePort: 'green', ClusterIP: 'default', ExternalName: 'purple' }
+
+// ports 字段形如 "80:30080/TCP, 443:30443/TCP" → 内部访问取 "port/protocol"
+const portForInternal = (ports?: unknown): string =>
+  ((ports as string) || '').split(',').map((p) => {
+    const t = p.trim()
+    const m = t.match(/^(\d+):\d+\/(.+)$/)
+    return m ? `${m[1]}/${m[2]}` : t
+  }).filter(Boolean).join(', ')
+
+// 编辑信息：名称只读 + 别名/描述（对齐 KubeSphere「编辑信息」入口）
+function EditInfoModal({ target, kindLabel, onClose, onSaved }: {
+  target: ConfigObjectTarget | null
+  kindLabel: string
+  onClose: () => void
+  onSaved?: () => void
+}) {
+  const [form] = Form.useForm()
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!target) return
+    setLoading(true)
+    getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
+      .then((d) => {
+        const ann = ((d as { annotations?: Record<string, string> }).annotations) || {}
+        form.setFieldsValue({ name: target.name, alias: ann[ALIAS_KEY] || '', description: ann[DESC_KEY] || '' })
+      })
+      .catch(() => message.error('加载失败'))
+      .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target])
+
+  const submit = async () => {
+    if (!target) return
+    const v = await form.validateFields()
+    setSaving(true)
+    try {
+      const d = (await getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)) as
+        { labels?: Record<string, string>; annotations?: Record<string, string> }
+      const ann = { ...(d.annotations || {}) }
+      ann[ALIAS_KEY] = (v.alias || '').trim()
+      ann[DESC_KEY] = (v.description || '').trim()
+      await updateObjectMetadata(target.clusterId, target.kind, target.namespace, target.name, d.labels || {}, ann)
+      message.success('已保存')
+      onSaved?.()
+      onClose()
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={`编辑信息：${target?.name || ''}（${kindLabel}）`} open={!!target} onCancel={onClose}
+      onOk={submit} okText="保存" confirmLoading={saving} width={640}>
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="名称"><Input disabled /></Form.Item>
+        <Form.Item name="alias" label="别名" rules={[{
+          validator: (_: unknown, val: string) => {
+            if (!val || !val.trim()) return Promise.resolve()
+            const t = val.trim()
+            return /^[\u4e00-\u9fa5A-Za-z0-9]([\u4e00-\u9fa5A-Za-z0-9-]*[\u4e00-\u9fa5A-Za-z0-9])?$/.test(t) && t.length <= 63
+              ? Promise.resolve()
+              : Promise.reject(new Error('别名只能包含中文、字母、数字和连字符（-），最长 63 个字符'))
+          },
+        }]}>
+          <Input placeholder="请输入别名" />
+        </Form.Item>
+        <Form.Item name="description" label="描述" rules={[{ max: 256, message: '描述最长 256 个字符' }]}>
+          <Input.TextArea rows={3} placeholder="请输入描述" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  )
+}
 
 export default function ServicesList({ clusterId }: { clusterId: number }) {
   const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
-  const [tab, setTab] = useState<string>('services')
   const [misc, setMisc] = useState<MiscData>({ services: [], ingresses: [], configmaps: [], secrets: [], pvcs: [] })
   const [loading, setLoading] = useState(false)
   const [yamlObj, setYamlObj] = useState<ConfigObjectTarget | null>(null)
+  const [infoObj, setInfoObj] = useState<ConfigObjectTarget | null>(null)
   const [svcObj, setSvcObj] = useState<ConfigObjectTarget | null>(null)
-  const [ingObj, setIngObj] = useState<ConfigObjectTarget | null>(null)
+  const [svcMode, setSvcMode] = useState<'service' | 'external'>('service')
 
   const load = () => {
     setLoading(true)
@@ -38,135 +117,94 @@ export default function ServicesList({ clusterId }: { clusterId: number }) {
   }
   useEffect(() => { load() }, [clusterId, ns]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleDelete = (kind: string, ns: string, name: string) => {
-    const label = kind === 'service' ? '服务' : '路由'
+  const handleDelete = (nsName: string, name: string) => {
     Modal.confirm({
-      title: `删除${label} ${name}？`,
-      content: kind === 'service'
-        ? '删除服务会解除其负载均衡/端点，不影响后端 Pod。'
-        : '删除路由后，对应域名/路径的入口将失效。',
+      title: `删除服务 ${name}？`,
+      content: '删除服务会解除其负载均衡/端点，不影响后端 Pod。',
       okText: '确认删除',
       okButtonProps: { danger: true },
-      onOk: () => deleteObject(clusterId, kind, ns, name)
+      onOk: () => deleteObject(clusterId, 'service', nsName, name)
         .then(() => { message.success('已删除'); load() })
         .catch(() => message.error('删除失败')),
     })
   }
 
-  const dropdown = (kind: string, r: MiscRow) => (
+  const dropdown = (r: MiscRow) => (
     <Dropdown trigger={['click']} menu={{
       items: [
-        { key: 'settings', label: '编辑设置' },
+        { key: 'info', label: '编辑信息' },
         { key: 'yaml', label: '编辑 YAML' },
+        { key: 'service', label: '编辑服务' },
+        { key: 'external', label: '编辑外部访问' },
         { type: 'divider' as const },
         { key: 'delete', label: '删除', danger: true },
       ],
       onClick: ({ key }) => {
-        const t = { clusterId, kind, namespace: r.namespace, name: r.name }
-        if (key === 'settings') { kind === 'service' ? setSvcObj(t) : setIngObj(t) }
+        const t = { clusterId, kind: 'service', namespace: r.namespace, name: r.name }
+        if (key === 'info') setInfoObj(t)
         else if (key === 'yaml') setYamlObj(t)
-        else if (key === 'delete') handleDelete(kind, r.namespace, r.name)
+        else if (key === 'service') { setSvcMode('service'); setSvcObj(t) }
+        else if (key === 'external') { setSvcMode('external'); setSvcObj(t) }
+        else if (key === 'delete') handleDelete(r.namespace, r.name)
       },
     }}>
       <Button size="small" type="link"><MoreOutlined /></Button>
     </Dropdown>
   )
 
-  const serviceColumns = [
+  const columns = [
     { title: '名称', dataIndex: 'name' },
-    { title: '命名空间', dataIndex: 'namespace', width: 180 },
-    { title: '类型', dataIndex: 'type', width: 130, render: (v: string) => (
-      <Tag color={SERVICE_TYPE_COLOR[v] || 'default'}>{v}</Tag>
-    ) },
-    { title: '端口', dataIndex: 'ports', render: (v: string) => v || '-' },
+    { title: '项目', dataIndex: 'namespace', width: 180 },
+    { title: '内部访问', key: 'internal', render: (_: unknown, r: MiscRow) => {
+        const ip = (r.cluster_ip as string) || ''
+        const ports = portForInternal(r.ports)
+        if (!ip) return ports || '-'
+        return ports ? `${ip}:${ports}` : ip
+      } },
+    { title: '外部访问', dataIndex: 'external_ip', render: (v: string) => v || '-' },
     { title: '创建时间', key: 'created_at', dataIndex: 'created_at', width: 170, render: fmt },
-    { title: '操作', width: 70, render: (_: unknown, r: MiscRow) => dropdown('service', r) },
-  ]
-
-  const ingressColumns = [
-    { title: '名称', dataIndex: 'name' },
-    { title: '命名空间', dataIndex: 'namespace', width: 180 },
-    { title: '类型', dataIndex: 'class', width: 130, render: (v: string) => (v ? <Tag>{v}</Tag> : '-') },
-    { title: 'Hosts', dataIndex: 'hosts', render: (v: string) => v || '-' },
-    { title: '创建时间', key: 'created_at', dataIndex: 'created_at', width: 170, render: fmt },
-    { title: '操作', width: 70, render: (_: unknown, r: MiscRow) => dropdown('ingress', r) },
-  ]
-
-  const items = [
-    {
-      key: 'services',
-      label: '服务',
-      children: (
-        <Table
-          rowKey={(r) => `${r.namespace}-${r.name}`}
-          size="small"
-          loading={loading}
-          dataSource={misc.services}
-          columns={serviceColumns}
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: (t: number) => `共 ${t} 条`, size: 'small' }}
-          locale={{ emptyText: '无 Service' }}
-        />
-      ),
-    },
-    {
-      key: 'ingresses',
-      label: '应用路由',
-      children: (
-        <Table
-          rowKey={(r) => `${r.namespace}-${r.name}`}
-          size="small"
-          loading={loading}
-          dataSource={misc.ingresses}
-          columns={ingressColumns}
-          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: (t: number) => `共 ${t} 条`, size: 'small' }}
-          locale={{ emptyText: '无 Ingress' }}
-        />
-      ),
-    },
+    { title: '操作', width: 70, render: (_: unknown, r: MiscRow) => dropdown(r) },
   ]
 
   return (
     <div>
       <Card size="small">
-        <Space size={8} style={{ marginBottom: 12 }}>
-          <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
-          <Select
-            size="small"
-            style={{ width: 200 }}
-            value={ns}
-            onChange={(v) => setNs(v as string)}
-            showSearch
-            optionFilterProp="label"
-            loading={nsLoading}
-            options={[
-              { value: NS_ALL, label: '全部命名空间' },
-              ...namespaces.map((n) => ({ value: n, label: n })),
-            ]}
-          />
-        </Space>
-        <Tabs
-          activeKey={tab}
-          onChange={setTab}
-          items={items}
-          tabBarExtraContent={
-            tab === 'services' ? (
-              <Button type="primary" size="small"
-                onClick={() => setSvcObj({ clusterId, kind: 'service', namespace: ns === NS_ALL ? 'default' : ns, name: '', create: true })}>
-                创建服务
-              </Button>
-            ) : (
-              <Button type="primary" size="small"
-                onClick={() => setIngObj({ clusterId, kind: 'ingress', namespace: ns === NS_ALL ? 'default' : ns, name: '', create: true })}>
-                创建路由
-              </Button>
-            )
-          }
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <Space size={8}>
+            <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
+            <Select
+              size="small"
+              style={{ width: 200 }}
+              value={ns}
+              onChange={(v) => setNs(v as string)}
+              showSearch
+              optionFilterProp="label"
+              loading={nsLoading}
+              options={[
+                { value: NS_ALL, label: '全部命名空间' },
+                ...namespaces.map((n) => ({ value: n, label: n })),
+              ]}
+            />
+          </Space>
+          <Button type="primary" size="small"
+            onClick={() => { setSvcMode('service'); setSvcObj({ clusterId, kind: 'service', namespace: ns === NS_ALL ? 'default' : ns, name: '', create: true }) }}>
+            创建服务
+          </Button>
+        </div>
+        <Table
+          rowKey={(r) => `${r.namespace}-${r.name}`}
+          size="small"
+          loading={loading}
+          dataSource={misc.services}
+          columns={columns}
+          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'], showTotal: (t: number) => `共 ${t} 条`, size: 'small' }}
+          locale={{ emptyText: '无 Service' }}
         />
       </Card>
 
       <ConfigObjectYamlModal target={yamlObj} onClose={() => setYamlObj(null)} onSaved={load} />
-      <ServiceSettingsModal target={svcObj} onClose={() => setSvcObj(null)} onSaved={load} />
-      <IngressSettingsModal target={ingObj} onClose={() => setIngObj(null)} onSaved={load} />
+      <EditInfoModal target={infoObj} kindLabel="服务" onClose={() => setInfoObj(null)} onSaved={load} />
+      <ServiceSettingsModal target={svcObj} mode={svcMode} onClose={() => setSvcObj(null)} onSaved={load} />
     </div>
   )
 }
