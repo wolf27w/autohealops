@@ -9,7 +9,8 @@
 |---|---|
 | 菜单改名 | 资源中心 → 「主机与虚拟机」→ **「节点管理」**（`/resources/hosts` 路径不变） |
 | 避免撞名 | 集群内「节点」改名 **「K8s 节点」**（`/clusters/:id/nodes`），避免与平台侧节点管理混淆 |
-| 页面按钮 | 节点管理页标题右侧加 **「Web 终端」** 按钮，点开进独立终端页（不是抽屉，终端需要空间） |
+| 页面按钮 | 节点管理页标题右侧加 **「Web 终端」** 按钮 → **新开浏览器标签页**（`window.open(..., '_blank')`），不是当前页跳转、也不是抽屉 |
+| 独立页面 | 该页**不套平台外壳**（无左栏/顶栏），整屏终端，左上角一个「← 返回平台」；与 `/screen` 大屏同样走独立路由的布局 |
 | 行内入口 | 列表行「终端」保持，点击带 `host` 参数**自动连上**该机器，不用再挑 |
 
 ## 二、权限口径
@@ -112,6 +113,6 @@
 
 ## 十、影响面
 
-- 前端：`pages/WebTerminal.tsx`（水印/禁复制/拦截弹窗）、`pages/HostManagement.tsx`（右上按钮）、`constants/nav.ts`（菜单改名）、`ClusterLayout`（集群内「节点」→「K8s 节点」）
+- 前端：`pages/WebTerminal.tsx`（水印/禁复制/拦截弹窗）、`pages/HostManagement.tsx`（右上按钮 → `window.open` 新标签）、`constants/nav.ts`（菜单改名）、`ClusterLayout`（集群内「节点」→「K8s 节点」）、`App.tsx`（`/resources/terminal` 从 MainLayout 内挪到独立路由）
 - 后端：`api/host_terminal.py`（WebSocket 命令拦截 + 审计写入）、新增表与迁移、危险命令规则配置
 - 不动：录制/回放链路、SFTP 白名单逻辑
