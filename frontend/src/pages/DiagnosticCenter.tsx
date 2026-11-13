@@ -2,8 +2,9 @@
 import { useEffect, useState } from 'react'
 import type { DBConnection } from '../types'
 import {
-  Tabs, Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress,
+  Tabs, Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress, Alert,
 } from 'antd'
+import { useNavigate } from 'react-router-dom'
 import { PlusOutlined, PlayCircleOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
 import Markdown from '../components/Markdown'
 import DBMonitor from './DBMonitor'
@@ -68,19 +69,23 @@ function Suggestion({ s, idx }: { s: string | SuggestionItem; idx: number }) {
 }
 
 export default function DiagnosticCenter() {
+  const navigate = useNavigate()
   return (
     <>
-      <div style={{ marginBottom: 8, color: '#8c8c8c', fontSize: 12 }}>
-        <b>数据库管理</b>：连接实例 + SQL 控制台（指标采集 / 慢 SQL / 巡检报告）。集群故障诊断见「诊断 → 集群故障诊断」；Pod / 应用类见「应用故障诊断」；会话式深挖用「应用诊断助手」。
-      </div>
-    <Tabs
-      defaultActiveKey="db"
-      items={[
-        { key: 'db', label: '数据库管理', children: <DBConnections /> },
-        { key: 'reports', label: '诊断报告', children: <ReportsTab /> },
-        { key: 'monitor', label: '数据库监控', children: <DBMonitor /> },
-      ]}
-    />
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="数据库实例纳管、监控、慢 SQL 与 SQL 工作台已迁到「资源中心 → 数据库」"
+        description="这里只保留跨实例的诊断报告（看结果）；单个库的监控 / 慢 SQL / 工作台 / 发起诊断请在资源详情页操作。"
+        action={<Button size="small" onClick={() => navigate('/resources/databases')}>去资源中心</Button>}
+      />
+      <Tabs
+        defaultActiveKey="reports"
+        items={[
+          { key: 'reports', label: '诊断报告', children: <ReportsTab /> },
+        ]}
+      />
     </>
   )
 }
