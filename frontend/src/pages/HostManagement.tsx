@@ -14,6 +14,7 @@ import {
 } from '../services/api'
 import type { HostItem, HostCheckResult, HostGroup, HostGroupMember, HostImportResult } from '../services/api'
 import type { User } from '../types'
+import { HostCommandAuditPanel } from '../components/HostCommandAuditDrawer'
 
 const STATUS: Record<string, { color: string; label: string }> = {
   online: { color: 'green', label: '在线' }, offline: { color: 'red', label: '离线' }, unknown: { color: 'default', label: '未知' },
@@ -37,6 +38,8 @@ export default function HostManagement() {
   const [sourceFilter, setSourceFilter] = useState<string>('')
   const [keyword, setKeyword] = useState('')
   const [kwInput, setKwInput] = useState('')  // 输入框即时值；300ms 防抖后写 keyword 触发查询
+  // 页面两个 Tab：主机列表 / 命令审计（R36 §八）
+  const [tab, setTab] = useState<'list' | 'audit'>('list')
 
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<HostItem | null>(null)
@@ -226,6 +229,15 @@ export default function HostManagement() {
         {(isAdmin || createableGroups.length > 0) && <Button icon={<ImportOutlined />} onClick={openImport}>批量导入</Button>}
         {(isAdmin || createableGroups.length > 0) && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加主机</Button>}
       </Space>}>
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => setTab(k as 'list' | 'audit')}
+        items={[
+          {
+            key: 'list',
+            label: '主机列表',
+            children: (
+              <>
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         {/* 左侧：分组树 + 类型 + 搜索 */}
         <div style={{ width: 200, flex: '0 0 200px' }}>
@@ -272,6 +284,17 @@ export default function HostManagement() {
             ]} />
         </Card>
       )}
+
+      </>
+            ),
+          },
+          {
+            key: 'audit',
+            label: '命令审计',
+            children: <HostCommandAuditPanel active={tab === 'audit'} />,
+          },
+        ]}
+      />
 
       {/* 新建（两步向导）/ 编辑 */}
       <Modal title={editing ? '编辑主机' : '添加主机'} open={modal} onCancel={() => setModal(false)} width={640} destroyOnClose

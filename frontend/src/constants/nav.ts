@@ -33,7 +33,6 @@ export const NAV: NavGroup[] = [
       { key: '/resources/hosts', label: '节点管理', icon: 'DesktopOutlined', minRole: 'admin', requiresGrant: 'host' },
       { key: '/resources/databases', label: '数据库管理', icon: 'DatabaseOutlined' },
       { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined', minRole: 'admin', requiresGrant: 'host' },
-      { key: '/resources/governance', label: '资源治理', icon: 'ControlOutlined', minRole: 'admin' },
     ],
   },
   {
@@ -123,8 +122,8 @@ export const LEGACY_REDIRECTS: Array<[string, string]> = [
   // 资源
   ['/host-management', '/resources/hosts'],
   ['/web-terminal', '/resources/terminal'],
-  ['/resource-governance', '/resources/governance'],
-  ['/zombie-services', '/resources/governance'],
+  ['/resource-governance', '/clusters'],
+  ['/zombie-services', '/clusters'],
   ['/node-management', '/clusters'],
   // 告警
   ['/alerts', '/alerts/handling'],

@@ -109,3 +109,81 @@ export async function sftpDownload(hostId: number, path: string) {
   a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 2000)
 }
+
+// ============ 命令审计（B8）：终端危险命令拦截审计列表 / CSV 导出 ============
+export interface HostCommandAuditItem {
+  id: number
+  host_id: number | null
+  host_name: string
+  user_id: number
+  username: string
+  session_id: string | null
+  command: string
+  risk: string
+  action: string
+  reason: string
+  client_ip: string
+  created_at: string
+}
+
+export interface HostCommandAuditsPage {
+  items: HostCommandAuditItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface HostCommandAuditParams {
+  host_id?: number
+  user_id?: number | string
+  keyword?: string
+  action?: 'allowed' | 'blocked'
+  start?: string
+  end?: string
+  page?: number
+  page_size?: number
+}
+
+export const listHostCommandAudits = (params: HostCommandAuditParams) =>
+  http.get<HostCommandAuditsPage>('/host-command-audits', { params })
+
+// 拼出带 query 的导出 URL（供直接下载 / fetch 用）
+export function hostCommandAuditsExportUrl(params: HostCommandAuditParams) {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === null || v === '') return
+    qs.append(k, String(v))
+  })
+  return `/api/v1/host-command-audits/export?${qs.toString()}`
+}
+
+// 浏览器下载：带 token header 拉 blob 再触发下载（window.open 无法带 header）
+export async function downloadHostCommandAudits(params: HostCommandAuditParams) {
+  const token = localStorage.getItem('token') || ''
+  const resp = await fetch(hostCommandAuditsExportUrl(params), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!resp.ok) {
+    let msg = `导出失败（${resp.status}）`
+    try {
+      const body = await resp.json()
+      msg = body?.message || body?.detail || msg
+    } catch { /* 非 JSON 响应 */ }
+    throw new Error(msg)
+  }
+  const blob = await resp.blob()
+  // 从 Content-Disposition 提取文件名，缺省用默认名
+  let filename = 'host-command-audits.csv'
+  const cd = resp.headers.get('Content-Disposition') || ''
+  const m = /filename\*?=(?:UTF-8''|UTF-8|['"])?([^;"']+)/i.exec(cd)
+  if (m && m[1]) {
+    try { filename = decodeURIComponent(m[1].trim()) } catch { filename = m[1].trim() }
+  }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+}

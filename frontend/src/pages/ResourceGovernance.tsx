@@ -22,7 +22,7 @@ const WORKLOAD_KINDS = [
 ]
 
 // ============ 命名空间级治理（原有逻辑） ============
-function NsLevelGovernance({ clusters, clusterId }: {
+export function NsLevelGovernance({ clusters, clusterId }: {
   clusters: Cluster[]; clusterId: number | undefined
 }) {
   const [namespaces, setNamespaces] = useState<string[]>([])
@@ -137,8 +137,8 @@ function NsLevelGovernance({ clusters, clusterId }: {
 }
 
 // ============ 工作负载管控表（R1） ============
-function WorkloadGovernance({ clusters, clusterId }: {
-  clusters: Cluster[]; clusterId: number | undefined
+export function WorkloadGovernance({ clusters, clusterId, hideClusterSelect }: {
+  clusters: Cluster[]; clusterId: number | undefined; hideClusterSelect?: boolean
 }) {
   const [entries, setEntries] = useState<ResourceGovernanceEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -316,7 +316,7 @@ function WorkloadGovernance({ clusters, clusterId }: {
         onCancel={() => setModalOpen(false)} onOk={handleSubmit} confirmLoading={saving} width={760} destroyOnClose>
         <Form form={form} layout="vertical">
           <Space wrap>
-            <Form.Item name="cluster_id" label="集群" rules={[{ required: true, message: '请选择集群' }]}>
+            <Form.Item name="cluster_id" label="集群" rules={[{ required: true, message: '请选择集群' }]} hidden={hideClusterSelect}>
               <Select style={{ width: 200 }} options={clusters.map((c) => ({ value: c.id, label: c.name }))} />
             </Form.Item>
             <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '请输入命名空间' }]}>

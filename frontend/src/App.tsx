@@ -22,12 +22,16 @@ const ServicesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({
 const IngressListRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.IngressListRoute })))
 const StorageRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.StorageRoute })))
 const ConfigsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigsRoute })))
+const ConfigMapsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigMapsRoute })))
+const SecretsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.SecretsRoute })))
+const StorageClassesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.StorageClassesRoute })))
 const InspectionRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.InspectionRoute })))
+const GovernanceRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.GovernanceRoute })))
+const ServiceAccountsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ServiceAccountsRoute })))
 // 资源中心
 const HostManagement = lazy(() => import('./pages/HostManagement'))
 const WebTerminal = lazy(() => import('./pages/WebTerminal'))
 const HostSessionReplay = lazy(() => import('./pages/HostSessionReplay'))
-const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
 const DbResourceList = lazy(() => import('./pages/DbResourceList'))
 const DbDetail = lazy(() => import('./pages/DbDetail'))
 const SqlTerminal = lazy(() => import('./pages/SqlTerminal'))
@@ -128,7 +132,6 @@ export default function App() {
         <Route path="resources/databases/:id" element={<DbDetail />} />
         <Route path="resources/terminal" element={<WebTerminal />} />
         <Route path="resources/terminal/:hostId" element={<WebTerminal />} />
-        <Route path="resources/governance" element={guard('/resources/governance', <ResourceGovernance />)} />
         <Route path="host-sessions/:id/replay" element={<HostSessionReplay />} />
 
         {/* ===== 告警监控 ===== */}
@@ -187,7 +190,12 @@ export default function App() {
         <Route path="services" element={<ServicesRoute />} />
         <Route path="ingresses" element={<IngressListRoute />} />
         <Route path="storage" element={<StorageRoute />} />
+        <Route path="storageclasses" element={<StorageClassesRoute />} />
         <Route path="configs" element={<ConfigsRoute />} />
+        <Route path="governance" element={<GovernanceRoute />} />
+        <Route path="configmaps" element={<ConfigMapsRoute />} />
+        <Route path="secrets" element={<SecretsRoute />} />
+        <Route path="serviceaccounts" element={<ServiceAccountsRoute />} />
         <Route path="inspection" element={<InspectionRoute />} />
       </Route>
     </Routes>

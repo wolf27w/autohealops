@@ -10,6 +10,8 @@ import IngressList from './IngressList'
 import StorageConfig from './StorageConfig'
 import ClusterInspection from './ClusterInspection'
 import ClusterMonitoring from './ClusterMonitoring'
+import GovernancePage from './GovernancePage'
+import ServiceAccountsPage from './ServiceAccountsPage'
 
 type WlKind = 'deployment' | 'statefulset' | 'daemonset' | 'cronjob'
 const KINDS: WlKind[] = ['deployment', 'statefulset', 'daemonset', 'cronjob']
@@ -49,6 +51,22 @@ export function StorageRoute() {
   return <StorageConfig clusterId={useClusterId()} initialTab="pvcs" />
 }
 
+export function ConfigMapsRoute() {
+  return <StorageConfig clusterId={useClusterId()} initialTab="configmaps" />
+}
+
+export function SecretsRoute() {
+  return <StorageConfig clusterId={useClusterId()} initialTab="secrets" />
+}
+
+export function StorageClassesRoute() {
+  return <StorageConfig clusterId={useClusterId()} initialTab="storageclasses" />
+}
+
+export function ServiceAccountsRoute() {
+  return <ServiceAccountsPage clusterId={useClusterId()} />
+}
+
 export function ConfigsRoute() {
   return <StorageConfig clusterId={useClusterId()} initialTab="configmaps" />
 }
@@ -59,4 +77,8 @@ export function InspectionRoute() {
 
 export function MonitoringRoute() {
   return <ClusterMonitoring clusterId={useClusterId()} />
+}
+
+export function GovernanceRoute() {
+  return <GovernancePage clusterId={useClusterId()} />
 }

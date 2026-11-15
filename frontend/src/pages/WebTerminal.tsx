@@ -2,27 +2,73 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Button, Drawer, Empty, Input, List, Popconfirm, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, Upload, message,
+  Alert, Button, Drawer, Empty, Input, List, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, Upload, message,
 } from 'antd'
 import type { UploadProps } from 'antd'
 import {
-  CloseOutlined, DownloadOutlined, FullscreenOutlined, HistoryOutlined, LoginOutlined, ReloadOutlined,
+  AuditOutlined, CloseOutlined, DownloadOutlined, FullscreenOutlined, HistoryOutlined, LoginOutlined, ReloadOutlined,
   SearchOutlined, FolderOpenOutlined, UploadOutlined, FileOutlined, FolderOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { getHosts, getHostGroups } from '../services/api'
-import type { HostItem, HostGroup } from '../services/api'
+import { getHosts, getHostGroups, getTerminalSecurity } from '../services/api'
+import type { HostItem, HostGroup, TerminalSecurity } from '../services/api'
 import {
   buildHostTerminalWsUrl, getHostSessions, kickHostSession, sftpDownload, sftpList, sftpUpload,
 } from '../services/hostConsoleApi'
 import type { HostSessionItem, SftpEntry } from '../services/hostConsoleApi'
 import { isAdmin } from '../utils/auth'
+import HostCommandAuditDrawer from '../components/HostCommandAuditDrawer'
 
 interface OpenTab { key: string; hostId: number; hostName: string; connected: boolean }
 
 const FONT_SIZES = [12, 13, 14, 16, 18]
+
+function TerminalWatermark({ hostName }: { hostName: string }) {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  const username = (() => {
+    try {
+      const raw = localStorage.getItem('user')
+      if (raw) {
+        const u = JSON.parse(raw)
+        if (u && typeof u.username === 'string') return u.username
+      }
+    } catch { /* ignore */ }
+    return '未知用户'
+  })()
+
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+  const text = [username, hostName, ts].filter(Boolean).join(' · ')
+
+  const tiles: { top: string; left: string }[] = []
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 4; c++) {
+      tiles.push({ top: `${r * 18}%`, left: `${c * 26}%` })
+    }
+  }
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 10 }}>
+      {tiles.map((t, i) => (
+        <span
+          key={i}
+          style={{
+            position: 'absolute', top: t.top, left: t.left,
+            transform: 'rotate(-20deg)', opacity: 0.07, color: '#b0b0b0',
+            fontSize: 13, whiteSpace: 'nowrap', userSelect: 'none',
+          }}
+        >{text}</span>
+      ))}
+    </div>
+  )
+}
 
 function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
   host: HostItem
@@ -64,6 +110,21 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
             setError(msg.message || '连接异常')
             setConnected(false)
             onStatus(false)
+          } else if (msg.type === 'command_blocked') {
+            // 危险命令被后端拦截：不当终端输出打印，弹窗 + toast 提示
+            message.warning(`命令已被拦截：${msg.command || ''}`)
+            Modal.warning({
+              title: '命令已被拦截',
+              content: (
+                <div style={{ lineHeight: 1.8 }}>
+                  <div style={{ background: '#f5f5f5', padding: '6px 10px', borderRadius: 4, fontFamily: 'Menlo, Monaco, "Courier New", monospace', fontSize: 13, wordBreak: 'break-all' }}>
+                    {msg.command || '-'}
+                  </div>
+                  {msg.reason && <div style={{ marginTop: 8 }}><span style={{ color: '#999' }}>原因：</span>{msg.reason}</div>}
+                  <div style={{ marginTop: 8, color: '#999' }}>如确需执行，请联系管理员或改用受控流程。</div>
+                </div>
+              ),
+            })
           }
         } catch { /* 非 JSON 文本当输出 */ }
         return
@@ -239,9 +300,12 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
   const [fontSize, setFontSize] = useState(13)
   const [sftpOpen, setSftpOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [auditOpen, setAuditOpen] = useState(false)
   const [sessions, setSessions] = useState<HostSessionItem[]>([])
   const [sessionBusy, setSessionBusy] = useState<number | null>(null)
   const [sessionIds, setSessionIds] = useState<Record<string, number | null>>({})
+  const [termSec, setTermSec] = useState<TerminalSecurity>({ block_dangerous: true, allow_paste: true, watermark: true, no_copy: true })
+  const termAreaRef = useRef<HTMLDivElement>(null)
 
   const admin = isAdmin()
 
@@ -259,6 +323,48 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // 终端安全开关：挂载时读一次（block_dangerous 由后端 WS 使用；前端只用 watermark/no_copy/allow_paste）
+  useEffect(() => {
+    getTerminalSecurity().then((d) => { if (d) setTermSec(d) }).catch(() => {})
+  }, [])
+
+  // 禁止复制 / 允许粘贴：在终端容器上拦截 copy/cut/contextmenu/paste（卸载时移除）
+  useEffect(() => {
+    const el = termAreaRef.current
+    if (!el) return
+    const clearClipboard = () => {
+      try {
+        const p = navigator.clipboard?.writeText('')
+        if (p) p.catch(() => {})
+      } catch { /* 静默 */ }
+    }
+    const onCopyCut = (e: ClipboardEvent) => {
+      if (!termSec.no_copy) return
+      e.preventDefault()
+      e.stopPropagation()
+      clearClipboard()
+    }
+    const onContextMenu = (e: MouseEvent) => {
+      if (termSec.no_copy) e.preventDefault()
+    }
+    const onPaste = (e: ClipboardEvent) => {
+      if (!termSec.allow_paste) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+    el.addEventListener('copy', onCopyCut, true)
+    el.addEventListener('cut', onCopyCut, true)
+    el.addEventListener('contextmenu', onContextMenu)
+    el.addEventListener('paste', onPaste, true)
+    return () => {
+      el.removeEventListener('copy', onCopyCut, true)
+      el.removeEventListener('cut', onCopyCut, true)
+      el.removeEventListener('contextmenu', onContextMenu)
+      el.removeEventListener('paste', onPaste, true)
+    }
+  }, [termSec.no_copy, termSec.allow_paste])
 
   const openHost = useCallback((h: HostItem) => {
     const key = `h-${h.id}`
@@ -412,6 +518,7 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
           <Space size={4}>
             <Button size="small" icon={<HistoryOutlined />} disabled={!activeHost} onClick={openHistory}>会话历史</Button>
             <Button size="small" icon={<FolderOpenOutlined />} disabled={!activeHost} onClick={() => setSftpOpen(true)}>文件传输</Button>
+            <Button size="small" icon={<AuditOutlined />} disabled={!activeHost} onClick={() => setAuditOpen(true)}>审计</Button>
             <Button
               size="small"
               icon={<FullscreenOutlined />}
@@ -429,7 +536,7 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
           </Space>
         </Space>
 
-        <div style={{ flex: 1, minHeight: 0 }}>
+        <div ref={termAreaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
           {!tabs.length ? (
             <Empty style={{ marginTop: 80 }} description="从左侧选择主机开始会话（每个标签 = 一条独立 SSH 连接）" />
           ) : (
@@ -461,12 +568,15 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
               }))}
             />
           )}
+          {termSec.watermark && <TerminalWatermark hostName={activeHost?.name || ''} />}
         </div>
       </div>
 
       <Drawer title={`文件传输 · ${activeHost?.name || ''}`} width={620} open={sftpOpen} onClose={() => setSftpOpen(false)} destroyOnClose>
         {activeHost ? <SftpPanel host={activeHost} /> : <Empty />}
       </Drawer>
+
+      <HostCommandAuditDrawer open={auditOpen} hostId={activeHost?.id ?? null} onClose={() => setAuditOpen(false)} />
 
       <Drawer
         title={`会话历史 · ${activeHost?.name || ''}`}

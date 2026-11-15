@@ -21,6 +21,8 @@ export default function ClusterLayout() {
   const [cluster, setCluster] = useState<ClusterInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [collapsed] = useState(false)
+  // 手风琴：只展开当前 key 所在分组
+  const [openKeys, setOpenKeys] = useState<string[]>(['app'])
 
   useEffect(() => {
     getCluster(clusterId)
@@ -39,16 +41,28 @@ export default function ClusterLayout() {
     const p = location.pathname
     if (p.includes('/nodes')) return 'nodes'
     if (p.includes('/workloads')) return 'workloads'
+    if (p.includes('/pods')) return 'pods'
     if (p.includes('/services')) return 'services'
     if (p.includes('/ingresses')) return 'ingresses'
-    if (p.includes('/pods')) return 'pods'
+    if (p.includes('/storageclasses')) return 'storageclasses'
     if (p.includes('/storage')) return 'storage'
-    if (p.includes('/configs')) return 'configs'
+    if (p.includes('/configmaps') || p.includes('/configs')) return 'configmaps'
+    if (p.includes('/secrets')) return 'secrets'
+    if (p.includes('/serviceaccounts')) return 'serviceaccounts'
+    if (p.includes('/governance')) return 'governance'
     if (p.includes('/inspection')) return 'inspection'
     return 'overview'
   }, [location.pathname])
 
+  const groupOf = (k: string) =>
+    ['configmaps', 'secrets', 'serviceaccounts'].includes(k) ? 'cfg'
+      : ['storage', 'storageclasses'].includes(k) ? 'stg'
+        : 'app'
+
+  useEffect(() => { setOpenKeys([groupOf(selectedKey)]) }, [selectedKey])
+
   const base = `/clusters/${clusterId}`
+  // 左栏结构按 R35 §2.1（2026-11-13 定稿）：概览 / K8s 节点 / 应用负载 / 配置 / 存储 / 资源治理 / 巡检与诊断
   const items = [
     { key: 'overview', label: '概览', onClick: () => navigate(base) },
     { key: 'nodes', label: 'K8s 节点', onClick: () => navigate(`${base}/nodes`) },
@@ -57,13 +71,29 @@ export default function ClusterLayout() {
       label: '应用负载',
       children: [
         { key: 'workloads', label: '工作负载', onClick: () => navigate(`${base}/workloads/${wlKind}`) },
+        { key: 'pods', label: '容器组', onClick: () => navigate(`${base}/pods`) },
         { key: 'services', label: '服务', onClick: () => navigate(`${base}/services`) },
         { key: 'ingresses', label: '应用路由', onClick: () => navigate(`${base}/ingresses`) },
-        { key: 'pods', label: '容器组', onClick: () => navigate(`${base}/pods`) },
       ],
     },
-    { key: 'storage', label: '存储', onClick: () => navigate(`${base}/storage`) },
-    { key: 'configs', label: '配置', onClick: () => navigate(`${base}/configs`) },
+    {
+      key: 'cfg',
+      label: '配置',
+      children: [
+        { key: 'configmaps', label: '配置字典', onClick: () => navigate(`${base}/configmaps`) },
+        { key: 'secrets', label: '保密字典', onClick: () => navigate(`${base}/secrets`) },
+        { key: 'serviceaccounts', label: '服务账户', onClick: () => navigate(`${base}/serviceaccounts`) },
+      ],
+    },
+    {
+      key: 'stg',
+      label: '存储',
+      children: [
+        { key: 'storage', label: '持久卷声明', onClick: () => navigate(`${base}/storage`) },
+        { key: 'storageclasses', label: '存储类', onClick: () => navigate(`${base}/storageclasses`) },
+      ],
+    },
+    { key: 'governance', label: '资源治理', onClick: () => navigate(`${base}/governance`) },
     // R33-5：集群内「监控告警」页已下线（与平台仪表盘/大屏重复），保留「巡检与诊断」
     { key: 'inspection', label: '巡检与诊断', onClick: () => navigate(`${base}/inspection`) },
   ]
@@ -95,7 +125,8 @@ export default function ClusterLayout() {
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={['app']}
+          openKeys={openKeys}
+          onOpenChange={(keys) => setOpenKeys(keys as string[])}
           items={items as never}
           style={{ borderRight: 'none' }}
         />

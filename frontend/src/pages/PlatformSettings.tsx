@@ -1,10 +1,62 @@
 // 系统设置页：平台级配置（Prometheus/ES/LDAP）+ 密码修改
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Card, Tabs, Form, Input, InputNumber, Switch, Button, message, Divider, Select, Space, Table } from 'antd'
-import { getSettings, updateSettings, changePassword, testEmbedding, getExternalToken, regenerateExternalToken, getMonitoringSources, setMonitoringSource } from '../services/api'
-import type { MonitoringSource } from '../services/api'
+import { getSettings, updateSettings, changePassword, testEmbedding, getExternalToken, regenerateExternalToken, getMonitoringSources, setMonitoringSource, getTerminalSecurity, updateTerminalSecurity } from '../services/api'
+import type { MonitoringSource, TerminalSecurity } from '../services/api'
 import RiskPolicy from './RiskPolicy'
 import ReleaseSettings from './ReleaseSettings'
+
+const TERMINAL_SEC_DEFAULTS: TerminalSecurity = { block_dangerous: true, allow_paste: true, watermark: true, no_copy: true }
+
+function TerminalSecurityPane() {
+  const [sec, setSec] = useState<TerminalSecurity>(TERMINAL_SEC_DEFAULTS)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const d = await getTerminalSecurity()
+      if (d) setSec(d)
+    } catch { /* 拦截器已提示 */ } finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await updateTerminalSecurity(sec)
+      message.success('已保存')
+    } catch { /* 拦截器已提示 */ } finally { setSaving(false) }
+  }
+
+  const rows: { key: keyof TerminalSecurity; label: string; desc: string }[] = [
+    { key: 'block_dangerous', label: '危险命令拦截', desc: '命中危险命令（如 rm -rf /）时拒绝执行并弹窗；关闭后仅审计不拦截' },
+    { key: 'allow_paste', label: '允许粘贴', desc: '允许在终端内粘贴文本；关闭后终端内粘贴被禁用' },
+    { key: 'watermark', label: '显示水印', desc: '终端区域覆盖用户名/主机/时间水印（防截屏溯源），不挡鼠标操作' },
+    { key: 'no_copy', label: '禁止复制', desc: '拦截复制/剪切并清空剪贴板，右键菜单禁用；仍可鼠标框选' },
+  ]
+
+  return (
+    <Card loading={loading}>
+      <Divider orientation="left">Web 终端安全</Divider>
+      <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 16 }}>
+        终端建立 WebSocket 连接时按此配置生效；保存后新连接即时生效。
+      </div>
+      {rows.map((r) => (
+        <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <Switch checked={sec[r.key]} onChange={(v) => setSec((p) => ({ ...p, [r.key]: v }))} />
+          <div>
+            <div style={{ fontWeight: 500 }}>{r.label}</div>
+            <div style={{ color: '#8c8c8c', fontSize: 12 }}>{r.desc}</div>
+          </div>
+        </div>
+      ))}
+      <Button type="primary" loading={saving} onClick={save}>保存</Button>
+    </Card>
+  )
+}
 
 export default function PlatformSettings() {
   const [settings, setSettings] = useState<Record<string, unknown>>({})
@@ -335,6 +387,11 @@ export default function PlatformSettings() {
             key: 'release',
             label: '发布',
             children: <ReleaseSettings />,
+          },
+          {
+            key: 'terminal',
+            label: 'Web 终端',
+            children: <TerminalSecurityPane />,
           },
           {
             key: 'password',

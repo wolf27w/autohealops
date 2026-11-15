@@ -468,6 +468,10 @@ export const removeWorkloadMount = (clusterId: number, kind: string, ns: string,
 // 集群管理其它资源：服务/路由/ConfigMap/Secret/存储(PVC)
 export const getMiscResources = (clusterId: number, namespace = '') =>
   http.get(`/resources/clusters/${clusterId}/misc-resources`, { params: { namespace } })
+// 服务账户（K8s ServiceAccount）列表：executor 侧 list + 角色/关联 secret 反查
+export interface ServiceAccountRow { name: string; namespace: string; role: string; secrets: string[]; created_at: string }
+export const getServiceAccounts = (clusterId: number, namespace = '') =>
+  http.get<{ items: ServiceAccountRow[] }>(`/clusters/${clusterId}/service-accounts`, { params: { namespace } })
 // 配置类对象（ConfigMap/Secret）YAML：查看 / 创建·编辑
 export const getObjectYaml = (clusterId: number, kind: string, ns: string, name: string) =>
   http.get(`/resources/clusters/${clusterId}/objects/${kind}/${ns}/${name}/yaml`)
@@ -533,6 +537,15 @@ export const deleteSelfHealRule = (id: number) => http.delete(`/self-heal-rules/
 // ============ 系统设置 ============
 export const getSettings = () => http.get<Record<string, unknown>>('/settings')
 export const updateSettings = (data: Payload) => http.put('/settings', data)
+// Web 终端安全开关（B9）：危险命令拦截 / 允许粘贴 / 显示水印 / 禁止复制
+export interface TerminalSecurity {
+  block_dangerous: boolean
+  allow_paste: boolean
+  watermark: boolean
+  no_copy: boolean
+}
+export const getTerminalSecurity = () => http.get<TerminalSecurity>('/terminal/security')
+export const updateTerminalSecurity = (data: Partial<TerminalSecurity>) => http.put<TerminalSecurity>('/terminal/security', data)
 // Embedding 配置连通性测试（可传未保存配置做「先测再存」）
 export const testEmbedding = (data?: Payload) => http.post('/settings/embedding/test', data ?? {})
 export const changePassword = (data: Payload) => http.post('/auth/change-password', data)

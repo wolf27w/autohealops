@@ -1,7 +1,7 @@
 // 集群内「工作负载列表」页组件（独立于 ClusterDetail 的工作负载 Tab）
 // 数据来源：getClusterDetail（NamespaceDetail[]，按 kind 聚合），不请求新接口
 import { useEffect, useMemo, useState, type Key } from 'react'
-import { Table, Tag, Button, Space, Select, Input, Dropdown, Modal, InputNumber, message, Empty, Card, Segmented } from 'antd'
+import { Table, Tag, Button, Space, Select, Input, Dropdown, Modal, InputNumber, message, Empty, Card, Tabs, Form } from 'antd'
 import { MoreOutlined, SearchOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useClusterNamespace, NS_ALL } from './NamespaceContext'
@@ -13,10 +13,12 @@ import {
   deleteWorkload,
   batchWorkloadOp,
   getWorkloads,
+  applyWorkloadYaml,
+  recreateWorkload,
 } from '../../services/api'
 import WorkloadYamlModal, { type WorkloadTarget } from '../../components/WorkloadYamlModal'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
-import { parseYaml, yamlToValues } from '../../components/workloadYaml'
+import { parseYaml, yamlToValues, stringifyYaml, asMap, asStr, type YamlNode } from '../../components/workloadYaml'
 import ReleaseHistoryModal from '../../components/ReleaseHistoryModal'
 import ReleaseModal from '../../components/ReleaseModal'
 
@@ -60,6 +62,95 @@ const KIND_LABEL: Record<string, string> = {
 
 const STATUS_COLOR: Record<string, string> = { 运行中: 'green', 更新中: 'orange', 已停止: 'default' }
 
+const ALIAS_KEY = 'kubesphere.io/alias-name'
+const DESC_KEY = 'kubesphere.io/description'
+
+// 编辑信息：名称只读 + 别名/描述（对齐 KubeSphere「编辑信息」入口）。
+// 工作负载没有专用 metadata 接口（updateObjectMetadata 仅限 configmap/secret/service/ingress/pvc），
+// 这里走 getWorkloadYaml → 合并注解 → applyWorkloadYaml 整份回写，保留其它注解与 labels。
+function EditInfoModal({ target, kindLabel, onClose, onSaved }: {
+  target: WorkloadTarget | null
+  kindLabel: string
+  onClose: () => void
+  onSaved?: () => void
+}) {
+  const [form] = Form.useForm()
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  // 剥离服务端管理字段（同 mergeWorkloadYaml），避免 server-side apply 冲突
+  const cleanRoot = (root: YamlNode) => {
+    const r = asMap(root)
+    delete r.status
+    const meta = asMap(r.metadata)
+    for (const k of ['generation', 'selfLink', 'managedFields', 'resourceVersion', 'uid', 'creationTimestamp']) delete meta[k]
+    r.metadata = meta
+    return r
+  }
+
+  useEffect(() => {
+    if (!target) return
+    setLoading(true)
+    getWorkloadYaml(target.clusterId, target.kind, target.namespace, target.name)
+      .then((d) => {
+        const root = parseYaml((d as { yaml?: string })?.yaml || '')
+        const meta = asMap(asMap(root).metadata)
+        const ann = asMap(meta.annotations)
+        form.setFieldsValue({ name: target.name, alias: asStr(ann[ALIAS_KEY]), description: asStr(ann[DESC_KEY]) })
+      })
+      .catch(() => message.error('加载失败'))
+      .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target])
+
+  const submit = async () => {
+    if (!target) return
+    const v = await form.validateFields()
+    setSaving(true)
+    try {
+      const d = await getWorkloadYaml(target.clusterId, target.kind, target.namespace, target.name)
+      const root = parseYaml((d as { yaml?: string })?.yaml || '')
+      const r = cleanRoot(root)
+      const meta = asMap(r.metadata)
+      const ann = asMap(meta.annotations)
+      ann[ALIAS_KEY] = (v.alias || '').trim()
+      ann[DESC_KEY] = (v.description || '').trim()
+      meta.annotations = ann
+      await applyWorkloadYaml(target.clusterId, target.kind, target.namespace, target.name, stringifyYaml(r))
+      message.success('已保存')
+      onSaved?.()
+      onClose()
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={`编辑信息：${target?.name || ''}（${kindLabel}）`} open={!!target} onCancel={onClose}
+      onOk={submit} okText="保存" confirmLoading={saving} width={640}>
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="名称"><Input disabled /></Form.Item>
+        <Form.Item name="alias" label="别名" rules={[{
+          validator: (_: unknown, val: string) => {
+            if (!val || !val.trim()) return Promise.resolve()
+            const t = val.trim()
+            return /^[\u4e00-\u9fa5A-Za-z0-9]([\u4e00-\u9fa5A-Za-z0-9-]*[\u4e00-\u9fa5A-Za-z0-9])?$/.test(t) && t.length <= 63
+              ? Promise.resolve()
+              : Promise.reject(new Error('别名只能包含中文、字母、数字和连字符（-），最长 63 个字符'))
+          },
+        }]}>
+          <Input placeholder="请输入别名" />
+        </Form.Item>
+        <Form.Item name="description" label="描述" rules={[{ max: 256, message: '描述最长 256 个字符' }]}>
+          <Input.TextArea rows={3} placeholder="请输入描述" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  )
+}
+
 export default function WorkloadsList({ clusterId, kind }: { clusterId: number; kind: 'deployment' | 'statefulset' | 'daemonset' | 'cronjob' }) {
   const navigate = useNavigate()
   const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
@@ -76,6 +167,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const [wlEdit, setWlEdit] = useState<WorkloadCreateTarget | null>(null)
   const [scaleTarget, setScaleTarget] = useState<WorkloadTarget | null>(null)
   const [scaleValue, setScaleValue] = useState<number>(1)
+  const [editInfoTarget, setEditInfoTarget] = useState<WorkloadTarget | null>(null)
 
   // 批量操作状态
   const [wlSel, setWlSel] = useState<Key[]>([])
@@ -86,6 +178,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   const isCronjob = kind === 'cronjob'
   const batchable = !isCronjob
   const scaleable = kind === 'deployment' || kind === 'statefulset'
+  const restartable = kind === 'deployment' || kind === 'statefulset' || kind === 'daemonset'
   const kindLabel = KIND_LABEL[kind] ?? kind
 
   const load = () => {
@@ -186,6 +279,25 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
       message.success('已触发滚动重启')
       load()
     } catch { /* 拦截器已提示 */ }
+  }
+
+  // 重新创建：走专用 recreate 接口（后端 deployment=先建新后删旧；statefulset/daemonset=滚动重启）
+  const handleRecreate = (r: ResourceItem) => {
+    Modal.confirm({
+      title: `重新创建 ${kindLabel} ${r.namespace}/${r.name}？`,
+      content: '将删除并立即用当前配置重建该工作负载，Pod 会重新调度，服务可能短暂中断。',
+      okText: '重新创建',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await recreateWorkload(clusterId, { kind, namespace: r.namespace, name: r.name })
+          message.success('已重新创建')
+          load()
+        } catch (e) {
+          message.error(`重新创建失败：${(e as Error)?.message || '未知错误'}`)
+        }
+      },
+    })
   }
 
   // 打开单个伸缩副本弹窗：默认当前副本；停止态回填上次副本
@@ -298,7 +410,6 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
         <a onClick={() => navigate(`/clusters/${clusterId}/workloads/${kind}/${r.namespace}/${r.name}`)}>{v}</a>
       ),
     },
-    { title: '命名空间', dataIndex: 'namespace' },
     {
       title: '状态', key: 'status', dataIndex: 'status', width: 140,
       filters: [
@@ -312,15 +423,16 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
         return st ? <Tag color={STATUS_COLOR[st]}>{st}</Tag> : '-'
       },
     },
+    { title: '项目', dataIndex: 'namespace', width: 180 },
+    {
+      title: '更新时间', key: 'update_time', dataIndex: 'update_time', width: 180,
+      render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-'),
+    },
     {
       title: '副本', key: 'replicas', width: 100,
       render: (_: unknown, r: ResourceItem) => (r.replicas == null ? '-' : `${r.ready_replicas ?? 0}/${r.replicas}`),
     },
     { title: '资源', render: (_: unknown, r: ResourceItem) => renderResources(r) || '-' },
-    {
-      title: '更新时间', key: 'update_time', dataIndex: 'update_time', width: 180,
-      render: (v: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-'),
-    },
     {
       title: '操作', key: 'actions', width: 140,
       render: (_: unknown, r: ResourceItem) => (
@@ -331,17 +443,22 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
           <Dropdown
             trigger={['click']}
             menu={{
-              // 去重口径（2026-11-13 老板定）：YAML 编辑 / 扩缩容 / 滚动重启 统一放「详情页 → 更多」，
-              // 列表只保留 进入编辑设置 + 发布历史（详情页没有该入口）+ 删除
               items: [
+                { key: 'info', label: '编辑信息' },
+                { key: 'yaml', label: '编辑 YAML' },
+                { key: 'recreate', label: '重新创建' },
                 { key: 'edit', label: '编辑设置' },
+                ...(scaleable ? [{ key: 'scale', label: '伸缩副本' }] : []),
+                ...(restartable ? [{ key: 'rollout', label: '滚动重启' }] : []),
                 ...(kind === 'deployment' ? [{ key: 'history', label: '发布历史' }] : []),
                 { type: 'divider' as const },
                 { key: 'delete', label: '删除', danger: true },
               ],
               onClick: ({ key: k }) => {
-                if (k === 'edit') openEdit(r)
+                if (k === 'info') setEditInfoTarget(tgt(r))
                 else if (k === 'yaml') setWlYaml(tgt(r))
+                else if (k === 'recreate') handleRecreate(r)
+                else if (k === 'edit') openEdit(r)
                 else if (k === 'scale') openScale(r)
                 else if (k === 'rollout') handleRollout(r)
                 else if (k === 'history') setReleaseHistoryTarget(tgt(r))
@@ -368,23 +485,21 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   ) : null
 
   const KINDS = [
-    { label: '部署', value: 'deployment' },
-    { label: '有状态副本集', value: 'statefulset' },
-    { label: '守护进程集', value: 'daemonset' },
-    { label: '定时任务', value: 'cronjob' },
+    { label: '部署 Deployment', value: 'deployment' },
+    { label: '有状态副本集 StatefulSet', value: 'statefulset' },
+    { label: '守护进程集 DaemonSet', value: 'daemonset' },
+    { label: '定时任务 CronJob', value: 'cronjob' },
   ]
 
   return (
     <div>
       <Card size="small">
-        <div style={{ marginBottom: 12 }}>
-          <Segmented
-            size="middle"
-            value={kind}
-            onChange={(v) => navigate(`/clusters/${clusterId}/workloads/${v}`)}
-            options={KINDS}
-          />
-        </div>
+        <Tabs
+          activeKey={kind}
+          onChange={(k) => navigate(`/clusters/${clusterId}/workloads/${k}`)}
+          items={KINDS.map((k) => ({ key: k.value, label: k.label }))}
+          style={{ marginBottom: 8 }}
+        />
         <Space size={8} wrap style={{ marginBottom: 12 }}>
           <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
           <Select
@@ -429,6 +544,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
       <WorkloadCreateModal target={wlCreate} onClose={() => setWlCreate(null)} onSaved={load} />
       <WorkloadCreateModal target={wlEdit} onClose={() => setWlEdit(null)} onSaved={load} />
       <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
+      <EditInfoModal target={editInfoTarget} kindLabel={kindLabel} onClose={() => setEditInfoTarget(null)} onSaved={load} />
       {releaseTarget && (
         <ReleaseModal open clusterId={releaseTarget.clusterId} namespace={releaseTarget.namespace}
           serviceName={releaseTarget.name} onClose={() => setReleaseTarget(null)} />
