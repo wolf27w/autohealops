@@ -5,11 +5,13 @@ import csv
 import io
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.core.database import async_session
@@ -23,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # 表结构缓存：conn_id -> (ts, data)，60s
 _SCHEMA_CACHE: dict[int, tuple[float, dict]] = {}
+
+# 库名/标识符校验：仅字母数字下划线，长度 1~64
+_IDENT_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
 def _safe_int(v, default=0) -> int:
@@ -354,7 +359,7 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
     ok, err = True, ""
     data: dict = {"columns": [], "rows": [], "truncated": False}
     try:
-        data = await _run_sql(c, sql)
+        data = await _run_sql(c, sql, database=(payload.get("database") or "").strip() or None)
     except Exception as e:  # noqa: BLE001
         ok, err = False, str(e)
     elapsed = round(time.time() - started, 3)
@@ -396,7 +401,7 @@ def _db_ready(c: DBConnection):
 
 
 async def _run_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: bool = False,
-                   timeout: float = 40.0) -> dict:
+                   timeout: float = 40.0, database: str | None = None) -> dict:
     """执行 SQL：agent 库走隧道，直连库由平台直接连（两种来源共用一套控制台）。"""
     if (getattr(c, "source", "direct") or "direct") == "agent":
         from app import agent_gateway
@@ -408,8 +413,8 @@ async def _run_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: boo
         return json.loads(raw)
     from app.services import db_direct_service
     if allow_write:
-        return await db_direct_service.exec_sql(c, sql)
-    return await db_direct_service.query(c, sql, limit)
+        return await db_direct_service.exec_sql(c, sql, database=database)
+    return await db_direct_service.query(c, sql, limit, database=database)
 
 
 async def _audit_sql(user, c: DBConnection, sql: str, elapsed: float, rows: int,
@@ -514,6 +519,9 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
         return {"code": 400, "message": why, "data": None}
     scope = (payload.get("scope") or "db").lower()
     table = (payload.get("table") or "").strip()
+    mode = (payload.get("mode") or "both").lower()
+    if mode not in ("structure", "data", "both"):
+        return {"code": 400, "message": "mode 仅支持 structure/data/both", "data": None}
     if scope == "table" and not table:
         return {"code": 400, "message": "导出单表需要指定表名", "data": None}
     try:
@@ -523,13 +531,14 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
             raw = await asyncio.to_thread(
                 agent_gateway.call, int(c.cluster_id), "DbExport",
                 json.dumps({"key": c.agent_db_key, "db": c.database, "table": table if scope == "table" else "",
-                            "rows": rows}).encode(),
+                            "rows": rows, "mode": mode}).encode(),
                 120.0,
             )
             return {"code": 200, "message": "success", "data": json.loads(raw)}
         from app.services import db_direct_service
         return {"code": 200, "message": "success",
-                "data": await db_direct_service.export_sql(c, c.database, table if scope == "table" else "", rows)}
+                "data": await db_direct_service.export_sql(c, c.database, table if scope == "table" else "",
+                                                          rows, mode)}
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"导出失败：{e}", "data": None}
 
@@ -581,6 +590,159 @@ async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin
     return {"code": 200, "message": "success", "data": result}
 
 
+@router.post("/{conn_id}/databases")
+async def create_database(conn_id: int, payload: dict, user=Depends(require_operator)):
+    """建库（仅直连库；agent 库暂不支持）。库名仅字母数字下划线、长度 1~64。"""
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return {"code": 400, "message": "库名不能为空", "data": None}
+    if not _IDENT_RE.match(name):
+        return {"code": 400, "message": "库名仅允许字母/数字/下划线，长度 1~64", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id, "manage"):
+        return {"code": 403, "message": "无管理权限", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+    from app.services import db_direct_service
+    try:
+        existing = await db_direct_service.list_databases(c)
+        if name in existing:
+            return {"code": 400, "message": f"数据库 {name} 已存在", "data": None}
+        await db_direct_service.create_database(c, name)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"建库失败：{e}", "data": None}
+    return {"code": 200, "message": "success", "data": {"name": name}}
+
+
+@router.delete("/{conn_id}/databases/{name}")
+async def drop_database(conn_id: int, name: str, confirm: bool = False, user=Depends(require_operator)):
+    """删库（仅直连库；agent 库暂不支持）。必须带 confirm=true 才执行，否则 400。"""
+    if not confirm:
+        return {"code": 400, "message": "删除数据库会真实删库，需显式确认（confirm=true）", "data": None}
+    name = (name or "").strip()
+    if not _IDENT_RE.match(name):
+        return {"code": 400, "message": "库名仅允许字母/数字/下划线，长度 1~64", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id, "manage"):
+        return {"code": 403, "message": "无管理权限", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+    from app.services import db_direct_service
+    try:
+        existing = await db_direct_service.list_databases(c)
+        if name not in existing:
+            return {"code": 400, "message": f"数据库 {name} 不存在", "data": None}
+        await db_direct_service.drop_database(c, name)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"删库失败：{e}", "data": None}
+    return {"code": 200, "message": "success", "data": {"name": name}}
+
+
+@router.post("/{conn_id}/import-sql")
+async def import_sql_file(conn_id: int, payload: dict, user=Depends(require_operator)):
+    """导入 SQL 脚本内容（不限大小），按 `;` 切分逐条执行。
+
+    body: {sql, mode: "stop"|"skip"}；mode=stop 遇错即停，mode=skip 跳过错误继续。
+    仅直连库（agent 库暂不支持此能力）。
+    """
+    sql = payload.get("sql") or ""
+    mode = (payload.get("mode") or "stop").lower()
+    if mode not in ("stop", "skip"):
+        return {"code": 400, "message": "mode 仅支持 stop / skip", "data": None}
+    if not (sql or "").strip():
+        return {"code": 400, "message": "sql 不能为空", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id, "manage"):
+        return {"code": 403, "message": "无管理权限", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+
+    started = time.time()
+    result, err = {}, ""
+    try:
+        from app.services import db_direct_service
+        result = await db_direct_service.import_sql(c, c.database, sql, mode)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    elapsed = round(time.time() - started, 2)
+    await _audit_sql(user, c, f"IMPORT-SQL mode={mode} ({len(sql)} bytes)",
+                     elapsed, 0, not err, err, "db_import_sql",
+                     int(result.get("executed") or 0))
+    if err:
+        return {"code": 500, "message": f"导入失败：{err}", "data": None}
+    return {"code": 200, "message": "success", "data": result}
+
+
+@router.get("/{conn_id}/backup")
+async def backup_database(conn_id: int, databases: str = "", schema_only: bool = False,
+                          user=Depends(require_any_user)):
+    """生成库备份并直接以附件下载（内存拼 SQL 流式返回，不落盘）。
+
+    query: databases=逗号分隔的库名（缺省=连接默认库）；schema_only=true 只导结构。
+    仅直连库（agent 库暂不支持）。
+    """
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+
+    dbs = [d.strip() for d in (databases or "").split(",") if d.strip()] \
+        or ([c.database] if c.database else [])
+    if not dbs:
+        return {"code": 400, "message": "未指定数据库（连接未配置默认库，需用 databases 参数指定）", "data": None}
+    for d in dbs:
+        if not _IDENT_RE.match(d):
+            return {"code": 400, "message": f"数据库名 {d} 非法（仅字母数字下划线，长度≤64）", "data": None}
+
+    # 预检：连接可达 + 目标库存在（在开始流式返回前给出 JSON 错误，避免响应头已发再报错）
+    from app.services import db_direct_service
+    try:
+        existing = await db_direct_service.list_databases(c)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"备份预检失败：{e}", "data": None}
+    missing = [d for d in dbs if d not in existing]
+    if missing:
+        return {"code": 400, "message": f"数据库不存在：{', '.join(missing)}", "data": None}
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"{c.name or 'db'}-backup-{ts}.sql"
+    ascii_name = f"db-{c.id}-{ts}.sql"
+    from urllib.parse import quote
+    disposition = (f'attachment; filename="{ascii_name}"; '
+                   f"filename*=UTF-8''{quote(filename, safe='')}")
+    gen = db_direct_service.backup_sql(c, dbs, schema_only)
+    return StreamingResponse(
+        gen,
+        media_type="application/sql; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
+
+
 @router.post("/{conn_id}/exec")
 async def exec_connection(conn_id: int, payload: dict, user=Depends(require_admin)):
     """执行 SQL（DML/DDL）：仅管理员 + 必须显式 confirm，全额审计。
@@ -603,7 +765,8 @@ async def exec_connection(conn_id: int, payload: dict, user=Depends(require_admi
     started = time.time()
     data, err = {}, ""
     try:
-        data = await _run_sql(c, sql, limit=200, allow_write=True, timeout=60.0)
+        data = await _run_sql(c, sql, limit=200, allow_write=True, timeout=60.0,
+                              database=(payload.get("database") or "").strip() or None)
     except Exception as e:  # noqa: BLE001
         err = str(e)
     elapsed = round(time.time() - started, 3)

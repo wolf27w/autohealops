@@ -39,13 +39,13 @@ def _info(c, readonly: bool = True) -> dict:
     }
 
 
-async def _connect(c, readonly: bool = True):
+async def _connect(c, readonly: bool = True, database: str | None = None):
     if (c.db_type or "mysql").lower() != "mysql":
         raise RuntimeError(f"直连执行暂只支持 mysql（当前 {c.db_type}）")
     info = _info(c, readonly)
     return await aiomysql.connect(
         host=info["host"], port=info["port"], user=info["user"], password=info["password"],
-        db=info["database"], charset="utf8mb4", autocommit=True, connect_timeout=8,
+        db=(database or info["database"]), charset="utf8mb4", autocommit=True, connect_timeout=8,
     )
 
 
@@ -57,9 +57,9 @@ def _norm(v):
     return v
 
 
-async def query(c, sql: str, limit: int = 200) -> dict:
+async def query(c, sql: str, limit: int = 200, database: str | None = None) -> dict:
     limit = max(1, min(int(limit or 200), MAX_ROWS))
-    conn = await _connect(c, readonly=True)
+    conn = await _connect(c, readonly=True, database=database)
     try:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(sql)
@@ -71,8 +71,8 @@ async def query(c, sql: str, limit: int = 200) -> dict:
         conn.close()
 
 
-async def exec_sql(c, sql: str) -> dict:
-    conn = await _connect(c, readonly=False)
+async def exec_sql(c, sql: str, database: str | None = None) -> dict:
+    conn = await _connect(c, readonly=False, database=database)
     try:
         async with conn.cursor() as cur:
             await cur.execute(sql)
@@ -160,7 +160,10 @@ def _q(v) -> str:
     return f"'{s}'"
 
 
-async def export_sql(c, db: str, table: str = "", rows: int = 1000) -> dict:
+async def export_sql(c, db: str, table: str = "", rows: int = 1000, mode: str = "both") -> dict:
+    mode = (mode or "both").lower()
+    if mode not in ("structure", "data", "both"):
+        raise RuntimeError(f"mode 仅支持 structure/data/both（当前 {mode}）")
     rows = max(1, min(int(rows or 1000), MAX_ROWS))
     db = db or c.database
     if not db:
@@ -182,9 +185,12 @@ async def export_sql(c, db: str, table: str = "", rows: int = 1000) -> dict:
         total, truncated = 0, False
         for t in tables:
             async with conn.cursor() as cur:
-                await cur.execute(f"SHOW CREATE TABLE `{db}`.`{t}`")
-                row = await cur.fetchone()
-                buf.write(f"-- ---------- table {t} ----------\n{row[1]};\n\n")
+                if mode != "data":
+                    await cur.execute(f"SHOW CREATE TABLE `{db}`.`{t}`")
+                    row = await cur.fetchone()
+                    buf.write(f"-- ---------- table {t} ----------\n{row[1]};\n\n")
+                if mode == "structure":
+                    continue
                 await cur.execute(f"SELECT * FROM `{db}`.`{t}` LIMIT {rows}")
                 cols = [d[0] for d in (cur.description or [])]
                 col_list = ",".join(f"`{x}`" for x in cols)
@@ -274,3 +280,239 @@ async def probe(c) -> tuple[bool, str]:
         return True, ""
     except Exception as e:  # noqa: BLE001
         return False, str(e)
+
+
+# ============ SQL 终端：库管理 / 导入 / 备份（source=direct，MySQL） ============
+
+_MAX_STMT_LEN = 10 * 1024 * 1024  # 单条语句超过 10MB 跳过，避免卡死
+_STMT_TIMEOUT = 60.0             # 单条语句执行超时（秒）
+_BATCH_SIZE = 200                # 每批最多处理的语句数
+
+
+def split_sql_statements(text: str) -> list[str]:
+    """按 `;` 切分 SQL 语句，忽略字符串 / 行注释 / 块注释里的分号。
+
+    处理：单引号/双引号/反引号字符串（含反斜杠转义、双写转义）、`-- ` 与 `#` 行注释、`/* */` 块注释。
+    不引入第三方依赖，纯状态机实现。
+    """
+    stmts: list[str] = []
+    cur: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        # 行注释：# 或 --（后跟空白才视为注释，避免把减法 `1--2` 误判）
+        if ch == "#":
+            while i < n and text[i] not in "\r\n":
+                cur.append(text[i])
+                i += 1
+            continue
+        if ch == "-" and nxt == "-" and (i + 2 >= n or text[i + 2] in " \t\r\n"):
+            while i < n and text[i] not in "\r\n":
+                cur.append(text[i])
+                i += 1
+            continue
+        # 块注释 /* */
+        if ch == "/" and nxt == "*":
+            cur.append(ch)
+            cur.append(nxt)
+            i += 2
+            while i < n:
+                cur.append(text[i])
+                if text[i] == "*" and i + 1 < n and text[i + 1] == "/":
+                    cur.append(text[i + 1])
+                    i += 2
+                    break
+                i += 1
+            continue
+        # 字符串：' " `
+        if ch in ("'", '"', "`"):
+            quote = ch
+            cur.append(ch)
+            i += 1
+            while i < n:
+                cur.append(text[i])
+                if text[i] == "\\" and quote != "`" and i + 1 < n:
+                    # 反斜杠转义（MySQL 字符串内 \' 不算结束）
+                    cur.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    # 双写转义（'' 或 "" 或 ``）
+                    if i + 1 < n and text[i + 1] == quote:
+                        cur.append(text[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == ";":
+            stmts.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    tail = "".join(cur).strip()
+    if tail:
+        stmts.append(tail)
+    return stmts
+
+
+def _sql_blank(s: str) -> bool:
+    """去掉注释后是否无实际内容（纯注释语句跳过用）。"""
+    out: list[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "#":
+            while i < n and s[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "-" and i + 1 < n and s[i + 1] == "-" and (i + 2 >= n or s[i + 2] in " \t\r\n"):
+            while i < n and s[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and s[i + 1] == "*":
+            i += 2
+            while i < n and not (s[i] == "*" and i + 1 < n and s[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out).strip() == ""
+
+
+async def list_databases(c) -> set[str]:
+    """当前账号可见的库名集合（建库/删库/备份预检用）。"""
+    conn = await _connect(c, readonly=True)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute("SHOW DATABASES")
+            return {r[0] for r in await cur.fetchall()}
+    finally:
+        conn.close()
+
+
+async def create_database(c, name: str) -> None:
+    conn = await _connect(c, readonly=False)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(f"CREATE DATABASE `{name}` DEFAULT CHARACTER SET utf8mb4")
+    finally:
+        conn.close()
+
+
+async def drop_database(c, name: str) -> None:
+    conn = await _connect(c, readonly=False)
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(f"DROP DATABASE `{name}`")
+    finally:
+        conn.close()
+
+
+async def import_sql(c, db: str, sql: str, mode: str = "stop") -> dict:
+    """导入 SQL 脚本（不限大小）：按 `;` 切分逐条执行，支持 stop/skip 两种错误模式。
+
+    - stop：遇第一条错误立即停止；skip：跳过错误继续执行。
+    - 空语句/纯注释语句/超长语句跳过；单条语句带超时，避免卡死。
+    - 返回 {total, executed, skipped, failed, errors, stopped}。
+    """
+    mode = (mode or "stop").lower()
+    db = db or c.database
+    conn = await _connect(c, readonly=False)
+    try:
+        if db:
+            async with conn.cursor() as cur:
+                await cur.execute(f"USE `{db}`")
+        stmts = split_sql_statements(sql or "")
+        executed = skipped = 0
+        errors: list[dict] = []
+        stopped = False
+        total = len(stmts)
+        for start in range(0, total, _BATCH_SIZE):
+            batch = stmts[start:start + _BATCH_SIZE]
+            for j, raw in enumerate(batch):
+                idx = start + j
+                s = raw.strip()
+                if not s or _sql_blank(s):
+                    skipped += 1
+                    continue
+                if len(s) > _MAX_STMT_LEN:
+                    skipped += 1
+                    errors.append({"index": idx, "statement_head": s[:120],
+                                   "error": "语句过长（>10MB），已跳过"})
+                    continue
+                try:
+                    async with conn.cursor() as cur:
+                        await asyncio.wait_for(cur.execute(s), timeout=_STMT_TIMEOUT)
+                    executed += 1
+                except Exception as e:  # noqa: BLE001
+                    errors.append({"index": idx, "statement_head": s[:120], "error": str(e)[:300]})
+                    if mode == "stop":
+                        stopped = True
+                        break
+            if stopped:
+                break
+        return {"total": total, "executed": executed, "skipped": skipped,
+                "failed": len(errors), "errors": errors, "stopped": stopped}
+    finally:
+        conn.close()
+
+
+async def backup_sql(c, databases: list[str], schema_only: bool = False):
+    """生成库备份 SQL（异步生成器，逐段 yield 字节，不落盘）。
+
+    用主账号（readonly=False）保证能读到全部表/数据；全程流式，大库也不会整体载入内存。
+    """
+    conn = await _connect(c, readonly=False)
+    try:
+        yield ("-- AutoHealOps backup\n"
+               f"-- host: {c.host}:{c.port}  time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+               "SET NAMES utf8mb4;\n"
+               "SET FOREIGN_KEY_CHECKS=0;\n"
+               "SET UNIQUE_CHECKS=0;\n\n").encode("utf-8")
+        for db in databases:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema=%s AND table_type='BASE TABLE' ORDER BY table_name""", (db,))
+                tables = [r[0] for r in await cur.fetchall()]
+            yield (f"\n-- ==================== database: {db} ({len(tables)} tables) ====================\n"
+                   ).encode("utf-8")
+            yield (f"CREATE DATABASE IF NOT EXISTS `{db}` DEFAULT CHARACTER SET utf8mb4;\n"
+                   f"USE `{db}`;\n\n").encode("utf-8")
+            for t in tables:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"SHOW CREATE TABLE `{db}`.`{t}`")
+                    row = await cur.fetchone()
+                    if row is None or len(row) < 2:
+                        continue
+                    yield f"-- ---------- table: {t} ----------\n{row[1]};\n\n".encode("utf-8")
+                    if schema_only:
+                        continue
+                    await cur.execute(f"SELECT * FROM `{db}`.`{t}`")
+                    cols = [d[0] for d in (cur.description or [])]
+                    if not cols:
+                        continue
+                    col_list = ",".join(f"`{x}`" for x in cols)
+                    prefix = f"INSERT INTO `{db}`.`{t}` ({col_list}) VALUES "
+                    batch: list[str] = []
+                    while True:
+                        rows = await cur.fetchmany(500)
+                        if not rows:
+                            break
+                        for r in rows:
+                            batch.append("(" + ",".join(_q(v) for v in r) + ")")
+                        if len(batch) >= 500:
+                            yield (prefix + ",".join(batch) + ";\n").encode("utf-8")
+                            batch = []
+                    if batch:
+                        yield (prefix + ",".join(batch) + ";\n").encode("utf-8")
+                yield "\n".encode("utf-8")
+        yield "SET FOREIGN_KEY_CHECKS=1;\nSET UNIQUE_CHECKS=1;\n".encode("utf-8")
+    finally:
+        conn.close()
