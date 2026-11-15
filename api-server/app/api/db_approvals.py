@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.core.database import async_session
-from app.middleware.permission import require_admin, require_any_user, require_operator
+from app.middleware.permission import require_any_user, require_operator
 from app.models import DBConnection, DbApprovalPolicy, DbApprovalRequest
 from app.services import db_approval_service
 
@@ -63,8 +63,10 @@ async def get_approval_policy(conn_id: int, user=Depends(require_any_user)):
 
 
 @router.put("/db-connections/{conn_id}/approval-policy")
-async def upsert_approval_policy(conn_id: int, payload: dict, user=Depends(require_admin)):
+async def upsert_approval_policy(conn_id: int, payload: dict, user=Depends(require_any_user)):
     """upsert 审核策略：body 里 4 个 bool 任意子集，有则改、无则建，返回最新策略。"""
+    if not await db_approval_service.can_approve_db(user, conn_id):
+        return {"code": 403, "message": "只有管理员或项目管理员可以审批", "data": None}
     # 只取 4 个 bool 字段中本次提交的（任意子集）
     updates = {k: bool(payload[k]) for k in _POLICY_BOOL_FIELDS if k in payload and payload[k] is not None}
     async with async_session() as session:
@@ -109,7 +111,12 @@ def _req_dict(r: DbApprovalRequest, include_token: bool = False) -> dict:
 
 @router.post("/db-approvals")
 async def create_db_approval(payload: dict, user=Depends(require_operator)):
-    """新建审核单：body {conn_id, kind, sql?, export?:{databases,mode,schema_only}, execute_mode, scheduled_at?}。"""
+    """新建审核单：body {conn_id, kind, sql?, export?..., action?, mode?, name?, execute_mode, scheduled_at?}。
+
+    action 区分执行方式（缺省 sql）：
+      import 需要 sql+mode；create_db/drop_db 需要 name；sql 需要 sql；export 走 export 字段。
+    原样存入 payload（JSON 字符串），不丢字段。
+    """
     conn_id = int(payload.get("conn_id") or 0)
     kind = (payload.get("kind") or "").lower()
     if kind not in _KINDS:
@@ -120,7 +127,21 @@ async def create_db_approval(payload: dict, user=Depends(require_operator)):
     if execute_mode not in ("immediate", "scheduled"):
         return {"code": 400, "message": "execute_mode 仅支持 immediate/scheduled", "data": None}
 
-    if kind == "export":
+    action = (payload.get("action") or "sql").lower()
+    if action == "import":
+        sql = (payload.get("sql") or "").strip()
+        if not sql:
+            return {"code": 400, "message": "sql 必填", "data": None}
+        mode = (payload.get("mode") or "stop").lower()
+        if mode not in ("stop", "skip"):
+            return {"code": 400, "message": "mode 仅支持 stop / skip", "data": None}
+        stored = {"action": "import", "sql": sql, "mode": mode}
+    elif action in ("create_db", "drop_db"):
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return {"code": 400, "message": "name 必填", "data": None}
+        stored = {"action": action, "name": name}
+    elif kind == "export":
         ep = payload.get("export") or {}
         stored = {"export": {
             "databases": ep.get("databases") or [],
@@ -149,15 +170,16 @@ async def create_db_approval(payload: dict, user=Depends(require_operator)):
 @router.get("/db-approvals")
 async def list_db_approvals(status: str = "", conn_id: int = 0, mine: int = 1,
                            page: int = 1, page_size: int = 20, user=Depends(require_any_user)):
-    """审核单列表：admin 用 mine=0 看全部，非 admin 强制只看自己（requested_by=username）。"""
+    """审核单列表：admin 或项目管理员用 mine=0 看全部，其他人强制只看自己（requested_by=username）。"""
     from sqlalchemy import func as sa_func
+    can_view_all = user.role == "admin" or await db_approval_service.is_project_manager(user)
     async with async_session() as session:
         stmt = select(DbApprovalRequest)
         if status:
             stmt = stmt.where(DbApprovalRequest.status == status)
         if conn_id:
             stmt = stmt.where(DbApprovalRequest.conn_id == conn_id)
-        if user.role != "admin" or mine:
+        if not can_view_all or mine:
             stmt = stmt.where(DbApprovalRequest.requested_by == (getattr(user, "username", "") or ""))
         total = (await session.execute(
             select(sa_func.count()).select_from(stmt.subquery())
@@ -168,19 +190,27 @@ async def list_db_approvals(status: str = "", conn_id: int = 0, mine: int = 1,
             stmt.order_by(DbApprovalRequest.id.desc())
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars())
+    approvable = await db_approval_service.can_approve_conn_ids(user)
+    items = []
+    for r in rows:
+        d = _req_dict(r, include_token=True)
+        d["can_approve"] = approvable is None or r.conn_id in approvable
+        items.append(d)
     return {"code": 200, "message": "success", "data": {
-        "items": [_req_dict(r, include_token=True) for r in rows],
+        "items": items,
         "total": int(total), "page": page, "page_size": page_size,
     }}
 
 
 @router.post("/db-approvals/{req_id}/approve")
-async def approve_db_approval(req_id: int, payload: dict, user=Depends(require_admin)):
+async def approve_db_approval(req_id: int, payload: dict, user=Depends(require_any_user)):
     """审批通过：body {execute_mode?, scheduled_at?}；immediate 立即执行，scheduled 置 approved 等定时。"""
     async with async_session() as session:
         req = await session.get(DbApprovalRequest, req_id)
         if not req:
             return {"code": 404, "message": "审核单不存在", "data": None}
+        if not await db_approval_service.can_approve_db(user, req.conn_id):
+            return {"code": 403, "message": "只有管理员或项目管理员可以审批", "data": None}
         if req.status != "pending":
             return {"code": 400, "message": f"仅待审批（pending）可审批（当前 {req.status}）", "data": None}
         if payload.get("execute_mode") in ("immediate", "scheduled"):
@@ -204,12 +234,14 @@ async def approve_db_approval(req_id: int, payload: dict, user=Depends(require_a
 
 
 @router.post("/db-approvals/{req_id}/reject")
-async def reject_db_approval(req_id: int, payload: dict, user=Depends(require_admin)):
+async def reject_db_approval(req_id: int, payload: dict, user=Depends(require_any_user)):
     """驳回：body {reason}。"""
     async with async_session() as session:
         req = await session.get(DbApprovalRequest, req_id)
         if not req:
             return {"code": 404, "message": "审核单不存在", "data": None}
+        if not await db_approval_service.can_approve_db(user, req.conn_id):
+            return {"code": 403, "message": "只有管理员或项目管理员可以审批", "data": None}
         if req.status != "pending":
             return {"code": 400, "message": f"仅待审批（pending）可驳回（当前 {req.status}）", "data": None}
         req.status = "rejected"

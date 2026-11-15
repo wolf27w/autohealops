@@ -7,13 +7,20 @@
 """
 import json
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
 from app.core.database import async_session
-from app.models import DBConnection, DbApprovalPolicy, DbApprovalRequest
+from app.models import (
+    DBConnection,
+    DbApprovalPolicy,
+    DbApprovalRequest,
+    ProjectDBConnection,
+    UserProjectPermission,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +73,21 @@ async def classify_sql(sql: str) -> str:
     if head in _WRITE_HEADS:
         return "write"
     return "write"
+
+
+def classify_sql_batch(sql: str) -> str:
+    """整批 SQL 脚本分类（import-sql 用）：DDL 优先级最高。
+
+    文本里含 create/alter/drop/truncate/rename 视为 ddl；
+    否则含 insert/update/delete/replace 视为 write；否则 query。
+    用词边界匹配，避免 created_at / dropdown 这类误命中。
+    """
+    text = (sql or "").lower()
+    if re.search(r"\b(create|alter|drop|truncate|rename)\b", text):
+        return "ddl"
+    if re.search(r"\b(insert|update|delete|replace)\b", text):
+        return "write"
+    return "query"
 
 
 def _parse_dt(v) -> datetime | None:
@@ -129,7 +151,32 @@ async def execute_request(req: DbApprovalRequest) -> None:
             payload = {}
 
         try:
-            if _req.kind in ("query", "write", "ddl"):
+            action = (payload.get("action") or "sql").lower()
+            if action in ("import", "create_db", "drop_db"):
+                if (getattr(c, "source", "direct") or "direct") == "agent":
+                    raise RuntimeError("agent 接入的库暂不支持平台侧执行此操作")
+                from app.services import db_direct_service
+                if action == "import":
+                    sql = (payload.get("sql") or "").strip()
+                    mode = (payload.get("mode") or "stop").lower()
+                    if not sql:
+                        raise RuntimeError("SQL 为空")
+                    result = await db_direct_service.import_sql(c, c.database, sql, mode)
+                    _req.result_summary = (
+                        f"导入完成：执行 {int(result.get('executed') or 0)} 条，"
+                        f"失败 {int(result.get('failed') or 0)}"
+                    )
+                else:
+                    name = (payload.get("name") or "").strip()
+                    if not name:
+                        raise RuntimeError("库名不能为空")
+                    if action == "create_db":
+                        await db_direct_service.create_database(c, name)
+                        _req.result_summary = f"已建库 {name}"
+                    else:
+                        await db_direct_service.drop_database(c, name)
+                        _req.result_summary = f"已删库 {name}"
+            elif _req.kind in ("query", "write", "ddl"):
                 from app.api.db_connections import _run_sql
                 sql = (payload.get("sql") or "").strip()
                 if not sql:
@@ -221,3 +268,56 @@ async def get_download_sql(req: DbApprovalRequest) -> str:
         from app.core.redis_client import redis_pool
         return await redis_pool.get(f"db_approval_dl:{req.id}:{req.download_token}") or ""
     return ""
+
+
+async def can_approve_db(user, conn_id: int) -> bool:
+    """判断用户能否审批某数据库连接的审核单。
+
+    admin 恒真；否则该库须挂到某项目、且用户在该项目为 manager（项目管理员）。
+    """
+    if getattr(user, "role", "") == "admin":
+        return True
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserProjectPermission.id)
+            .join(ProjectDBConnection, ProjectDBConnection.project_id == UserProjectPermission.project_id)
+            .where(
+                UserProjectPermission.user_id == user.id,
+                UserProjectPermission.permission == "manager",
+                ProjectDBConnection.db_connection_id == conn_id,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def is_project_manager(user) -> bool:
+    """判断用户是否至少是某个项目的管理员（供列表接口决定是否可看全部审核单）。"""
+    if getattr(user, "role", "") == "admin":
+        return True
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserProjectPermission.id).where(
+                UserProjectPermission.user_id == user.id,
+                UserProjectPermission.permission == "manager",
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def can_approve_conn_ids(user) -> set | None:
+    """用户可作为项目管理员审批的数据库连接 id 集合；admin 返回 None 表示全部。
+
+    供列表接口批量打 can_approve 标记用（避免逐行查库）。
+    """
+    if getattr(user, "role", "") == "admin":
+        return None
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(ProjectDBConnection.db_connection_id)
+            .join(UserProjectPermission, UserProjectPermission.project_id == ProjectDBConnection.project_id)
+            .where(
+                UserProjectPermission.user_id == user.id,
+                UserProjectPermission.permission == "manager",
+            ).distinct()
+        )).scalars().all()
+    return set(rows)

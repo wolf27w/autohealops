@@ -625,6 +625,9 @@ async def create_database(conn_id: int, payload: dict, user=Depends(require_oper
         return {"code": 400, "message": why, "data": None}
     if (getattr(c, "source", "direct") or "direct") == "agent":
         return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+    block = await _check_approval(conn_id, "ddl")
+    if block:
+        return block
     from app.services import db_direct_service
     try:
         existing = await db_direct_service.list_databases(c)
@@ -655,6 +658,9 @@ async def drop_database(conn_id: int, name: str, confirm: bool = False, user=Dep
         return {"code": 400, "message": why, "data": None}
     if (getattr(c, "source", "direct") or "direct") == "agent":
         return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+    block = await _check_approval(conn_id, "ddl")
+    if block:
+        return block
     from app.services import db_direct_service
     try:
         existing = await db_direct_service.list_databases(c)
@@ -690,6 +696,12 @@ async def import_sql_file(conn_id: int, payload: dict, user=Depends(require_oper
         return {"code": 400, "message": why, "data": None}
     if (getattr(c, "source", "direct") or "direct") == "agent":
         return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+
+    from app.services import db_approval_service
+    kind = db_approval_service.classify_sql_batch(sql)
+    block = await _check_approval(conn_id, kind)
+    if block:
+        return block
 
     started = time.time()
     result, err = {}, ""
