@@ -6,7 +6,7 @@ import {
   Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber,
   Space, Tag, message, Popconfirm, Dropdown, Empty, Switch, Tooltip, Spin,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined, CodeOutlined } from '@ant-design/icons'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL, listDbGroups,
@@ -252,8 +252,9 @@ export default function DbResourceList() {
   ]
 
   return (
-    <Card size="small" title="数据库资源"
+    <Card size="small" title="数据库管理"
       extra={<Space>
+        <Button icon={<CodeOutlined />} onClick={() => window.open('/sql-terminal', '_blank', 'noopener')}>SQL 终端</Button>
         {admin && <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>添加数据库</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
       </Space>}>

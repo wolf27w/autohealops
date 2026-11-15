@@ -30,6 +30,7 @@ const HostSessionReplay = lazy(() => import('./pages/HostSessionReplay'))
 const ResourceGovernance = lazy(() => import('./pages/ResourceGovernance'))
 const DbResourceList = lazy(() => import('./pages/DbResourceList'))
 const DbDetail = lazy(() => import('./pages/DbDetail'))
+const SqlTerminal = lazy(() => import('./pages/SqlTerminal'))
 const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))
 // 告警监控
 const AlertHandling = lazy(() => import('./pages/AlertHandling'))
@@ -104,6 +105,9 @@ export default function App() {
           </RequireAuth>
         }
       />
+      {/* 独立整屏终端：新标签页打开，不套平台侧栏（节点管理→Web 终端、数据库管理→SQL 终端） */}
+      <Route path="/terminal" element={<RequireAuth><WebTerminal standalone /></RequireAuth>} />
+      <Route path="/sql-terminal" element={<RequireAuth><SqlTerminal /></RequireAuth>} />
       <Route
         path="/"
         element={
