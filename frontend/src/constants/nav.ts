@@ -30,8 +30,8 @@ export const NAV: NavGroup[] = [
     key: 'g-resource', label: '资源中心', icon: 'ClusterOutlined',
     children: [
       { key: '/clusters', label: 'K8s 集群', icon: 'ClusterOutlined' },
-      { key: '/resources/hosts', label: '主机与虚拟机', icon: 'DesktopOutlined', minRole: 'admin', requiresGrant: 'host' },
-      { key: '/resources/databases', label: '数据库', icon: 'DatabaseOutlined' },
+      { key: '/resources/hosts', label: '节点管理', icon: 'DesktopOutlined', minRole: 'admin', requiresGrant: 'host' },
+      { key: '/resources/databases', label: '数据库管理', icon: 'DatabaseOutlined' },
       { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined', minRole: 'admin', requiresGrant: 'host' },
       { key: '/resources/governance', label: '资源治理', icon: 'ControlOutlined', minRole: 'admin' },
     ],

@@ -51,7 +51,7 @@ export default function ClusterLayout() {
   const base = `/clusters/${clusterId}`
   const items = [
     { key: 'overview', label: '概览', onClick: () => navigate(base) },
-    { key: 'nodes', label: '节点', onClick: () => navigate(`${base}/nodes`) },
+    { key: 'nodes', label: 'K8s 节点', onClick: () => navigate(`${base}/nodes`) },
     {
       key: 'app',
       label: '应用负载',
