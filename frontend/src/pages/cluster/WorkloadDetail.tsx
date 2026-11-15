@@ -18,10 +18,10 @@ import { parseYaml, asMap, asArr, asStr, yamlToValues, type YamlNode, type Workl
 import MonitorPanel from '../../components/cluster/MonitorPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
-  getWorkloadYaml, getWorkloadEvents, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
+  getWorkloadYaml, getWorkloadEventsRealtime, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
   getPodYaml, applyPodYaml, isolatePod, unisolatePod, getIsolatedPods,
 } from '../../services/api'
-import type { ClusterPod, WorkloadEventRow } from '../../services/api'
+import type { ClusterPod, WorkloadEventRow, WorkloadRealtimeEventRow } from '../../services/api'
 import type { PodTarget, Workload } from '../../types'
 import { podStatusColor, podReadyText } from '../../utils/podStatus'
 
@@ -47,34 +47,8 @@ interface WorkloadMeta {
   images: string[]
 }
 
-// 实时事件行（由 describe pod 的 Events 段解析而来）
-interface RealtimeEventRow {
-  pod: string
-  type: string
-  reason: string
-  age: string
-  message: string
-}
-
-// describe pod 的 Events 段 → 结构化行（Type/Reason/Age/From/Message）
-function parseDescribeEvents(pod: string, raw: string): RealtimeEventRow[] {
-  if (!raw) return []
-  const rows: RealtimeEventRow[] = []
-  let started = false
-  for (const line of raw.split('\n')) {
-    const t = line.trim()
-    if (!started) {
-      if (/^Type\s+Reason/i.test(t)) started = true
-      continue
-    }
-    if (!t) continue
-    if (/^-+(\s+-+)+$/.test(t)) continue // 表头分隔线
-    const m = t.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/)
-    if (!m) continue
-    rows.push({ pod, type: m[1], reason: m[2], age: m[3], message: m[5] })
-  }
-  return rows
-}
+// 实时事件行（后端按 Pod 取 k8s Event，同 Type+Reason+Message 聚合）
+type RealtimeEventRow = WorkloadRealtimeEventRow
 
 function strMap(n: YamlNode): Record<string, string> {
   const m = asMap(n)
@@ -204,13 +178,13 @@ export default function WorkloadDetail() {
       .finally(() => setEventsLoading(false))
   }
 
-  // 实时事件：后端按 Pod 汇总 describe 里的 Events，进入 Tab 时自动加载一次，不做轮询
+  // 实时事件：后端按 Pod 汇总 k8s Event（结构化 + 次数），进入 Tab 时自动加载一次，不做轮询
   const loadRealtimeEvents = () => {
     setRealtimeLoading(true)
-    getWorkloadEvents(clusterId, { namespace, name, kind })
+    getWorkloadEventsRealtime(clusterId, { namespace, name, kind })
       .then((d) => {
-        const pods = (d as { pods?: { pod: string; events?: string }[] }).pods || []
-        setRealtimeEvents(pods.flatMap((p) => parseDescribeEvents(p.pod, p.events || '')))
+        const evs = (d as { events?: RealtimeEventRow[] }).events || []
+        setRealtimeEvents(evs)
       })
       .catch(() => setRealtimeEvents([]))
       .finally(() => setRealtimeLoading(false))
@@ -410,15 +384,16 @@ export default function WorkloadDetail() {
     <div>
       <Space style={{ marginBottom: 8 }} wrap>
         <Button size="small" icon={<ReloadOutlined />} onClick={loadRealtimeEvents} loading={realtimeLoading}>刷新</Button>
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>实时拉取 describe 事件（按 Pod 汇总，进入本 Tab 时自动加载一次）</span>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>实时拉取 k8s Event（按 Pod 汇总、同类型同原因合并，进入本 Tab 时自动加载一次）</span>
       </Space>
       <Table rowKey={(_, i) => String(i)} size="small" dataSource={realtimeEvents} pagination={{ pageSize: 10, hideOnSinglePage: true }}
         columns={[
           { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => <Tag color={v === 'Warning' ? 'red' : 'default'}>{v}</Tag> },
           { title: '原因', dataIndex: 'reason', width: 160 },
-          { title: '对象', dataIndex: 'pod', width: 220, ellipsis: true, render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span> },
+          { title: '对象', dataIndex: 'pods', width: 220, ellipsis: true, render: (v: string[]) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{(v || []).join('、') || '-'}</span> },
           { title: '消息', dataIndex: 'message', ellipsis: true },
-          { title: '最近时间', dataIndex: 'age', width: 100, render: (v: string) => (v ? `${v} 前` : '-') },
+          { title: '次数', dataIndex: 'count', width: 60, render: (v: number) => (v == null ? '-' : String(v)) },
+          { title: '最近时间', dataIndex: 'last_timestamp', width: 160, render: (v: string) => fmtTime(v) },
         ]}
         locale={{ emptyText: <Empty description="暂无实时事件" /> }} />
     </div>

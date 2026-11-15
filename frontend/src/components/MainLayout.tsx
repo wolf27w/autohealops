@@ -1,7 +1,7 @@
 // 主布局：Sider 菜单 + Header + Content（全屏 + 现代配色）
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs, theme, AutoComplete, Input } from 'antd'
+import { Layout, Menu, Dropdown, Avatar, Space, Badge, Popover, Button, List, Empty, Tabs, theme, AutoComplete, Input, message } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   DashboardOutlined, ClusterOutlined, AlertOutlined, WarningOutlined,
@@ -15,12 +15,12 @@ import {
   SearchOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead } from '../services/api'
-import { getCurrentUser } from '../utils/auth'
+import { getUnreadCount, getInAppMessages, markInAppRead, markAllInAppRead, getHostGroups } from '../services/api'
+import { getCurrentUser, isAdmin } from '../utils/auth'
 import { useThemeMode } from '../utils/theme'
 import { useGlobalRefresh } from './GlobalRefreshContext'
 import {
-  NAV, OVERVIEW, visibleNav, matchNavKey, navOpenKeys, searchItems,
+  NAV, OVERVIEW, visibleNav, matchNavKey, navOpenKeys, searchItems, flattenNav, needsHostGrant,
 } from '../constants/nav'
 import type { NavGroup } from '../constants/nav'
 
@@ -88,7 +88,30 @@ export default function MainLayout() {
   const location = useLocation()
   // 安全读取当前用户（JSON.parse 写坏不崩溃）；按角色过滤菜单
   const user = getCurrentUser()
-  const navItems = visibleNav(user.role || 'viewer')
+  const [hostGrant, setHostGrant] = useState<boolean | null>(isAdmin() ? true : null)
+  useEffect(() => {
+    // admin 恒可见，无需请求；其余用户拉一次主机组列表，看是否被授予任意组角色
+    if (isAdmin()) return
+    getHostGroups()
+      .then((d) => setHostGrant(!!(d?.groups ?? []).some((g) => g.my_role)))
+      .catch(() => setHostGrant(false)) // 请求失败按「无授权」处理，不阻塞渲染
+  }, [])
+  const navItems = visibleNav(user.role || 'viewer', { hostGrant: !!hostGrant })
+
+  // 直链拦截：命中「需要主机授权」页面且无授权 → 弹回首页（只提示一次，避免循环）
+  const grantWarnedPath = useRef<string | null>(null)
+  useEffect(() => {
+    if (hostGrant !== false) return // 未加载完 / 已授权 / admin 不拦截
+    const leaf = flattenNav().find((n) => n.key === matchNavKey(location.pathname))
+    if (leaf && needsHostGrant(leaf)) {
+      if (grantWarnedPath.current !== location.pathname) {
+        grantWarnedPath.current = location.pathname
+        message.warning('无该主机组权限，请联系管理员授权')
+      }
+      navigate('/dashboard', { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostGrant, location.pathname])
 
   // 左侧菜单折叠（默认收起，记忆折叠状态）
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sider_collapsed') === '1')

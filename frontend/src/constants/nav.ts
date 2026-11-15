@@ -9,7 +9,7 @@ export interface NavLeaf {
   label: string
   icon: string           // 图标名（MainLayout 里映射成组件，本文件不依赖 antd）
   minRole?: Role          // 缺省 = 所有登录用户可见
-  requiresGrant?: 'host'  // 授权可见：admin，或被授予主机组权限的用户（P2 实现；当前仅按 minRole 判定）
+  requiresGrant?: 'host'  // 授权可见：admin，或被授予主机组权限的用户（由 canSee/visibleNav 按 hostGrant 判定）
 }
 
 export interface NavGroup {
@@ -30,9 +30,9 @@ export const NAV: NavGroup[] = [
     key: 'g-resource', label: '资源中心', icon: 'ClusterOutlined',
     children: [
       { key: '/clusters', label: 'K8s 集群', icon: 'ClusterOutlined' },
-      { key: '/resources/hosts', label: '节点管理', icon: 'DesktopOutlined', minRole: 'admin', requiresGrant: 'host' },
+      { key: '/resources/hosts', label: '节点管理', icon: 'DesktopOutlined', requiresGrant: 'host' },
       { key: '/resources/databases', label: '数据库管理', icon: 'DatabaseOutlined' },
-      { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined', minRole: 'admin', requiresGrant: 'host' },
+      { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined', requiresGrant: 'host' },
     ],
   },
   {
@@ -75,15 +75,30 @@ export function flattenNav(): NavLeaf[] {
   return NAV.flatMap((g) => g.children)
 }
 
-export function canSee(role: string, leaf: NavLeaf): boolean {
+/** canSee / visibleNav 的可选判定参数 */
+export interface NavSeeOpts {
+  /** 是否已授予主机组权限（admin 恒为 true 由其自身判定，无需额外传） */
+  hostGrant?: boolean
+}
+
+/** 该叶子是否需要主机组授权（admin 或 my_role 非空才可见） */
+export function needsHostGrant(leaf: NavLeaf): boolean {
+  return leaf.requiresGrant === 'host'
+}
+
+export function canSee(role: string, leaf: NavLeaf, opts?: NavSeeOpts): boolean {
+  // 主机授权叶子：admin 恒可见，其余按 hostGrant
+  if (needsHostGrant(leaf)) {
+    return role === 'admin' || !!opts?.hostGrant
+  }
   if (!leaf.minRole) return true
   return (ROLE_RANK[role as Role] ?? 0) >= ROLE_RANK[leaf.minRole]
 }
 
-/** 按角色过滤菜单：整组为空则不渲染 */
-export function visibleNav(role: string): NavGroup[] {
+/** 按角色过滤菜单：整组为空则不渲染。不传 opts 时主机授权叶子仅 admin 可见（向后兼容） */
+export function visibleNav(role: string, opts?: NavSeeOpts): NavGroup[] {
   return NAV
-    .map((g) => ({ ...g, children: g.children.filter((n) => canSee(role, n)) }))
+    .map((g) => ({ ...g, children: g.children.filter((n) => canSee(role, n, opts)) }))
     .filter((g) => g.children.length > 0)
 }
 

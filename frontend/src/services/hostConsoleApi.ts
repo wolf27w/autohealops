@@ -7,6 +7,8 @@ const http = {
     api.get(url, config) as unknown as Promise<T>,
   post: <T = unknown>(url: string, data?: unknown, config?: Record<string, unknown>) =>
     api.post(url, data, config) as unknown as Promise<T>,
+  put: <T = unknown>(url: string, data?: unknown, config?: Record<string, unknown>) =>
+    api.put(url, data, config) as unknown as Promise<T>,
 }
 
 export interface HostSessionItem {
@@ -92,6 +94,18 @@ export async function sftpUpload(hostId: number, dir: string, file: File, onProg
     xhr.send(file)
   })
 }
+
+export const sftpMkdir = (hostId: number, path: string) =>
+  http.post<{ path: string }>(`/hosts/${hostId}/sftp/mkdir`, { path })
+
+export const sftpDelete = (hostId: number, path: string) =>
+  http.post<{ path: string }>(`/hosts/${hostId}/sftp/delete`, { path })
+
+export const sftpRead = (hostId: number, path: string) =>
+  http.get<{ content: string }>(`/hosts/${hostId}/sftp/read`, { params: { path } })
+
+export const sftpWrite = (hostId: number, path: string, content: string) =>
+  http.put<{ path: string; size: number }>(`/hosts/${hostId}/sftp/write`, { path, content })
 
 export function sftpDownloadUrl(hostId: number, path: string) {
   const token = localStorage.getItem('token') || ''

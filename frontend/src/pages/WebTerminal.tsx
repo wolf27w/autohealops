@@ -1,13 +1,14 @@
 // R8：堡垒机 Web 终端（类 JumpServer 布局）——左栏分组树 + 主机，右侧多标签 SSH 会话
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Key } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Button, Drawer, Empty, Input, List, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, Upload, message,
+  Alert, Breadcrumb, Button, Drawer, Empty, Input, List, Modal, Popconfirm, Progress, Space, Spin, Table, Tabs, Tag, Tooltip, Tree, Typography, Upload, message,
 } from 'antd'
-import type { UploadProps } from 'antd'
+import type { TreeDataNode, UploadProps } from 'antd'
 import {
-  AuditOutlined, CloseOutlined, DownloadOutlined, FullscreenOutlined, HistoryOutlined, LoginOutlined, ReloadOutlined,
-  SearchOutlined, FolderOpenOutlined, UploadOutlined, FileOutlined, FolderOutlined, DeleteOutlined,
+  AuditOutlined, CloseOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, FileOutlined, FolderOpenOutlined, FolderOutlined, FolderViewOutlined,
+  FullscreenOutlined, HistoryOutlined, LoginOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, UploadOutlined,
 } from '@ant-design/icons'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -15,7 +16,7 @@ import '@xterm/xterm/css/xterm.css'
 import { getHosts, getHostGroups, getTerminalSecurity } from '../services/api'
 import type { HostItem, HostGroup, TerminalSecurity } from '../services/api'
 import {
-  buildHostTerminalWsUrl, getHostSessions, kickHostSession, sftpDownload, sftpList, sftpUpload,
+  buildHostTerminalWsUrl, getHostSessions, kickHostSession, sftpDelete, sftpDownload, sftpList, sftpMkdir, sftpRead, sftpUpload, sftpWrite,
 } from '../services/hostConsoleApi'
 import type { HostSessionItem, SftpEntry } from '../services/hostConsoleApi'
 import { isAdmin } from '../utils/auth'
@@ -287,6 +288,296 @@ function SftpPanel({ host }: { host: HostItem }) {
   )
 }
 
+// ============ 文件管理侧栏（T3）：树形目录 + 上传/下载/编辑/删除 ============
+
+const FM_ROOT = '/tmp'
+
+interface FmNode extends TreeDataNode {
+  path: string
+  name: string
+  is_dir: boolean
+  size: number
+  mtime: number
+  children?: FmNode[]
+}
+
+function fmtSize(v: number) {
+  if (v > 1048576) return `${(v / 1048576).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(v / 1024))} KB`
+}
+
+function fmtTime(ts: number) {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function fmDirname(p: string) {
+  const s = p.replace(/\/+$/, '')
+  const i = s.lastIndexOf('/')
+  return i <= 0 ? FM_ROOT : s.slice(0, i)
+}
+
+function updateTreeData(list: FmNode[], key: Key, children: FmNode[]): FmNode[] {
+  return list.map((n) => {
+    if (n.key === key) return { ...n, children }
+    if (n.children) return { ...n, children: updateTreeData(n.children, key, children) }
+    return n
+  })
+}
+
+function FileManagerSidebar({ host, onClose }: { host: HostItem; onClose: () => void }) {
+  const [treeData, setTreeData] = useState<FmNode[]>([])
+  const [expandedKeys, setExpandedKeys] = useState<Key[]>([FM_ROOT])
+  const [selectedKeys, setSelectedKeys] = useState<Key[]>([])
+  const [currentDir, setCurrentDir] = useState(FM_ROOT)
+  const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
+  const [pct, setPct] = useState<number | null>(null)
+
+  const [editOpen, setEditOpen] = useState(false)
+  const [editPath, setEditPath] = useState('')
+  const [editName, setEditName] = useState('')
+  const [editContent, setEditContent] = useState('')
+  const [editLoading, setEditLoading] = useState(false)
+  const [editSaving, setEditSaving] = useState(false)
+
+  const [mkdirOpen, setMkdirOpen] = useState(false)
+  const [mkdirName, setMkdirName] = useState('')
+  const [mkdirBusy, setMkdirBusy] = useState(false)
+
+  const rootNode = useCallback((): FmNode => ({
+    key: FM_ROOT, path: FM_ROOT, name: FM_ROOT, is_dir: true, size: 0, mtime: 0,
+    isLeaf: false, title: FM_ROOT,
+  }), [])
+
+  const entryToNode = useCallback((e: SftpEntry): FmNode => ({
+    key: e.path, path: e.path, name: e.name, is_dir: e.is_dir,
+    size: e.size, mtime: e.mtime, isLeaf: !e.is_dir, title: e.name,
+  }), [])
+
+  const loadDir = useCallback(async (path: string) => {
+    setLoadingPaths((s) => new Set(s).add(path))
+    try {
+      const d = await sftpList(host.id, path)
+      const children = (d.entries || []).map(entryToNode)
+      setTreeData((prev) => updateTreeData(prev, path, children))
+    } catch (e) {
+      message.error((e as Error).message || '目录读取失败')
+    } finally {
+      setLoadingPaths((s) => { const n = new Set(s); n.delete(path); return n })
+    }
+  }, [host.id, entryToNode])
+
+  // 初始加载根目录（组件按 host.id 重挂载，主机切换时自动重置到 /tmp）
+  useEffect(() => {
+    setTreeData([rootNode()])
+    setExpandedKeys([FM_ROOT])
+    setSelectedKeys([])
+    setCurrentDir(FM_ROOT)
+    loadDir(FM_ROOT)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const reload = useCallback(() => {
+    setTreeData([rootNode()])
+    setExpandedKeys([FM_ROOT])
+    setSelectedKeys([])
+    setCurrentDir(FM_ROOT)
+    loadDir(FM_ROOT)
+  }, [rootNode, loadDir])
+
+  const onExpand = (keys: Key[], info: { node: FmNode; expanded: boolean }) => {
+    setExpandedKeys(keys)
+    if (info.expanded && !info.node.isLeaf) loadDir(info.node.path)
+  }
+
+  const onSelect = (keys: Key[], info: { node: FmNode }) => {
+    setSelectedKeys(keys)
+    const node = info.node
+    setCurrentDir(node.is_dir ? node.path : fmDirname(node.path))
+  }
+
+  const doDownload = (n: FmNode) => {
+    sftpDownload(host.id, n.path).catch((e) => message.error(e.message))
+  }
+
+  const doDelete = async (n: FmNode) => {
+    try {
+      await sftpDelete(host.id, n.path)
+      message.success(`已删除 ${n.name}`)
+      loadDir(fmDirname(n.path))
+    } catch (e) {
+      message.error((e as Error).message || '删除失败')
+    }
+  }
+
+  const openEdit = async (path: string) => {
+    setEditPath(path)
+    setEditName(path.split('/').pop() || '')
+    setEditContent('')
+    setEditOpen(true)
+    setEditLoading(true)
+    try {
+      const d = await sftpRead(host.id, path)
+      setEditContent(d.content || '')
+    } catch (e) {
+      message.error((e as Error).message || '读取失败')
+      setEditOpen(false)
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
+  const saveEdit = async () => {
+    setEditSaving(true)
+    try {
+      await sftpWrite(host.id, editPath, editContent)
+      message.success('已保存')
+      setEditOpen(false)
+    } catch (e) {
+      message.error((e as Error).message || '保存失败')
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  const doMkdir = async () => {
+    const name = mkdirName.trim()
+    if (!name) { message.warning('请输入目录名'); return }
+    if (name.includes('/')) { message.warning('目录名不能包含 /'); return }
+    setMkdirBusy(true)
+    try {
+      await sftpMkdir(host.id, `${currentDir.replace(/\/+$/, '')}/${name}`)
+      message.success('已创建目录')
+      setMkdirOpen(false)
+      setMkdirName('')
+      setExpandedKeys((keys) => Array.from(new Set([...keys, currentDir])))
+      loadDir(currentDir)
+    } catch (e) {
+      message.error((e as Error).message || '创建失败')
+    } finally {
+      setMkdirBusy(false)
+    }
+  }
+
+  const uploadProps: UploadProps = {
+    multiple: true,
+    showUploadList: false,
+    beforeUpload: async (file) => {
+      setPct(0)
+      try {
+        await sftpUpload(host.id, currentDir, file as File, (p) => setPct(p))
+        message.success(`已上传 ${file.name}`)
+        loadDir(currentDir)
+      } catch (e) {
+        message.error((e as Error).message || '上传失败')
+      } finally {
+        setPct(null)
+      }
+      return false
+    },
+  }
+
+  const renderNode = (node: FmNode) => {
+    if (node.path === FM_ROOT) {
+      return (
+        <Space size={6}>
+          {loadingPaths.has(node.path) && <Spin size="small" />}
+          <FolderOutlined style={{ color: '#faad14' }} />
+          <span>{node.name}</span>
+        </Space>
+      )
+    }
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
+        {loadingPaths.has(node.path) && <Spin size="small" />}
+        {node.is_dir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileOutlined />}
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+        {!node.is_dir && <span style={{ color: '#999', fontSize: 11 }}>{fmtSize(node.size)}</span>}
+        <span style={{ color: '#bbb', fontSize: 11 }}>{fmtTime(node.mtime)}</span>
+        <Space size={0} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+          {!node.is_dir && (
+            <>
+              <Button size="small" type="text" icon={<DownloadOutlined />} onClick={(e) => { e.stopPropagation(); doDownload(node) }} />
+              <Button size="small" type="text" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); openEdit(node.path) }} />
+            </>
+          )}
+          <Popconfirm title={`确定删除${node.is_dir ? '目录' : '文件'}「${node.name}」？`} onConfirm={() => doDelete(node)} onPopupClick={(e) => e.stopPropagation()}>
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+          </Popconfirm>
+        </Space>
+      </div>
+    )
+  }
+
+  const segs = currentDir.split('/').filter(Boolean)
+  const breadcrumbItems = segs.map((s, i) => {
+    const p = '/' + segs.slice(0, i + 1).join('/')
+    return {
+      key: p,
+      title: (
+        <a onClick={() => { setCurrentDir(p); setSelectedKeys([p]) }}>{s}</a>
+      ),
+    }
+  })
+
+  return (
+    <div style={{ width: 320, minWidth: 320, borderLeft: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column', background: '#fff' }}>
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center' }}>
+        <FolderViewOutlined />
+        <Typography.Text strong style={{ marginLeft: 6 }}>文件管理</Typography.Text>
+        <span style={{ flex: 1 }} />
+        <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} />
+      </div>
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <Breadcrumb style={{ flex: 1, minWidth: 0, fontSize: 12 }} items={breadcrumbItems} />
+        <Button size="small" type="text" icon={<ReloadOutlined />} onClick={reload} />
+      </div>
+      <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
+        <Tree
+          blockNode
+          showIcon={false}
+          treeData={treeData}
+          expandedKeys={expandedKeys}
+          selectedKeys={selectedKeys}
+          onExpand={onExpand}
+          onSelect={onSelect}
+          titleRender={renderNode}
+        />
+      </div>
+      <div style={{ padding: 8, borderTop: '1px solid #f0f0f0' }}>
+        {pct !== null && <Progress percent={pct} size="small" style={{ marginBottom: 6 }} />}
+        <Space style={{ width: '100%' }}>
+          <Upload {...uploadProps}>
+            <Button size="small" icon={<UploadOutlined />}>上传</Button>
+          </Upload>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => { setMkdirName(''); setMkdirOpen(true) }}>新建目录</Button>
+        </Space>
+        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+          上传到：{currentDir}；文件≤1MB 可在线编辑
+        </Typography.Text>
+      </div>
+
+      <Modal title="新建目录" open={mkdirOpen} onOk={doMkdir} onCancel={() => setMkdirOpen(false)} confirmLoading={mkdirBusy} okText="创建" cancelText="取消" destroyOnClose>
+        <div style={{ marginBottom: 8 }}><Typography.Text type="secondary">创建于：{currentDir}</Typography.Text></div>
+        <Input placeholder="目录名（不含 /）" value={mkdirName} onChange={(e) => setMkdirName(e.target.value)} onPressEnter={doMkdir} />
+      </Modal>
+
+      <Modal title={`编辑 · ${editName}`} open={editOpen} onOk={saveEdit} onCancel={() => setEditOpen(false)} confirmLoading={editSaving} okText="保存" cancelText="取消" width={560} destroyOnClose>
+        <Spin spinning={editLoading}>
+          <Input.TextArea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            autoSize={{ minRows: 12, maxRows: 24 }}
+            style={{ fontFamily: 'Menlo, Monaco, "Courier New", monospace', fontSize: 12 }}
+          />
+        </Spin>
+      </Modal>
+    </div>
+  )
+}
+
 export default function WebTerminal({ standalone = false }: { standalone?: boolean }) {
   const { hostId } = useParams()
   const navigate = useNavigate()
@@ -299,6 +590,7 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
   const [activeKey, setActiveKey] = useState('')
   const [fontSize, setFontSize] = useState(13)
   const [sftpOpen, setSftpOpen] = useState(false)
+  const [fmOpen, setFmOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
   const [sessions, setSessions] = useState<HostSessionItem[]>([])
@@ -518,6 +810,7 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
           <Space size={4}>
             <Button size="small" icon={<HistoryOutlined />} disabled={!activeHost} onClick={openHistory}>会话历史</Button>
             <Button size="small" icon={<FolderOpenOutlined />} disabled={!activeHost} onClick={() => setSftpOpen(true)}>文件传输</Button>
+            <Button size="small" type={fmOpen ? 'primary' : 'default'} icon={<FolderViewOutlined />} disabled={!activeHost} onClick={() => setFmOpen((v) => !v)}>文件管理</Button>
             <Button size="small" icon={<AuditOutlined />} disabled={!activeHost} onClick={() => setAuditOpen(true)}>审计</Button>
             <Button
               size="small"
@@ -536,7 +829,8 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
           </Space>
         </Space>
 
-        <div ref={termAreaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
+          <div ref={termAreaRef} style={{ flex: 1, minWidth: 0, position: 'relative', overflow: 'hidden' }}>
           {!tabs.length ? (
             <Empty style={{ marginTop: 80 }} description="从左侧选择主机开始会话（每个标签 = 一条独立 SSH 连接）" />
           ) : (
@@ -569,6 +863,8 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
             />
           )}
           {termSec.watermark && <TerminalWatermark hostName={activeHost?.name || ''} />}
+          </div>
+          {fmOpen && activeHost && <FileManagerSidebar key={activeHost.id} host={activeHost} onClose={() => setFmOpen(false)} />}
         </div>
       </div>
 

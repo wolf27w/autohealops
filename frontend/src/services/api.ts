@@ -301,6 +301,18 @@ export const getClusterNamespaces = (clusterId: number) => http.get<string[]>(`/
 export const getNamespacePods = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/pods`)
 export const getPodContainers = (clusterId: number, ns: string, pod: string) => http.get<{ containers: string[] }>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/containers`)
 export const getWorkloadEvents = (clusterId: number, params?: PageParams) => http.get(`/resources/clusters/${clusterId}/workload-events`, { params })
+// 工作负载实时事件（结构化 + 次数，按 Type+Reason+Message 聚合）
+export interface WorkloadRealtimeEventRow {
+  type: string
+  reason: string
+  message: string
+  count: number
+  first_timestamp: string
+  last_timestamp: string
+  pods: string[]
+}
+export const getWorkloadEventsRealtime = (clusterId: number, params?: PageParams) =>
+  http.get<{ events: WorkloadRealtimeEventRow[] }>(`/resources/clusters/${clusterId}/workload-events-realtime`, { params })
 export const getNamespaces = (clusterId: number) => http.get(`/resources/clusters/${clusterId}/namespaces`)
 export const getNamespaceDeployments = (clusterId: number, ns: string) => http.get(`/resources/clusters/${clusterId}/namespaces/${ns}/deployments`)
 export const triggerCollect = (clusterId: number) => http.post(`/resources/clusters/${clusterId}/collect`)
