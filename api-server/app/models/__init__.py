@@ -21,6 +21,7 @@ from app.models.batch import BatchOperation, BatchOperationItem
 from app.models.cluster import Cluster
 from app.models.custom_task import CustomTask, CustomTaskLog
 from app.models.db_connection import DBConnection
+from app.models.db_approval import DbApprovalPolicy, DbApprovalRequest
 from app.models.decision import DecisionPolicy, DecisionResult
 from app.models.diagnosis import AIDiagnosisResult, DiagnosisFailure
 from app.models.diagnostic import DiagnosticReport, DiagnosticTask
@@ -121,6 +122,8 @@ __all__ = [
     "DiagnosticTask",
     "DiagnosticReport",
     "DBConnection",
+    "DbApprovalPolicy",
+    "DbApprovalRequest",
     "K8sEvent",
     "RepairPlan",
     "ExecutionLog",

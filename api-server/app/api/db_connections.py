@@ -354,6 +354,9 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
     ok_ready, why = _db_ready(c)
     if not ok_ready:
         return {"code": 400, "message": why, "data": None}
+    block = await _check_approval(conn_id, "query")
+    if block:
+        return block
 
     started = time.time()
     ok, err = True, ""
@@ -398,6 +401,16 @@ def _db_ready(c: DBConnection):
     if not c.password_encrypted and not c.readonly_password_encrypted:
         return False, "直连库缺少密码（无法连接）"
     return True, ""
+
+
+async def _check_approval(conn_id: int, kind: str):
+    """数据库操作入口拦截：策略要求审批时返回 428 信封，否则 None。"""
+    from app.services import db_approval_service
+    async with async_session() as session:
+        if await db_approval_service.needs_approval(session, conn_id, kind):
+            return {"code": 428, "message": "该操作需要审核",
+                    "data": {"need_approval": True, "kind": kind, "conn_id": conn_id}}
+    return None
 
 
 async def _run_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: bool = False,
@@ -517,6 +530,9 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
     ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
+    block = await _check_approval(conn_id, "export")
+    if block:
+        return block
     scope = (payload.get("scope") or "db").lower()
     table = (payload.get("table") or "").strip()
     mode = (payload.get("mode") or "both").lower()
@@ -761,6 +777,10 @@ async def exec_connection(conn_id: int, payload: dict, user=Depends(require_admi
     ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
+    from app.services import db_approval_service
+    block = await _check_approval(conn_id, await db_approval_service.classify_sql(sql))
+    if block:
+        return block
 
     started = time.time()
     data, err = {}, ""

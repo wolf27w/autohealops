@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.api import (
-    agent, ai_proxy, alert_policies, alert_silences, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
+    agent, ai_proxy, alert_policies, alert_silences, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_approvals, db_connections,
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
     projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resource_governance_ctl, resources, screens, self_heal_rules, service_accounts, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
@@ -66,6 +66,17 @@ async def _interval_worker(name: str, interval: float, fn, timeout: float | None
             logger.warning("%s 执行超时（>%.0fs），中断本轮，下轮继续", name, timeout)
         except Exception as e:  # noqa: BLE001
             logger.warning("%s 异常: %s", name, e)
+
+
+async def _run_due_db_approvals() -> int:
+    """数据库审核单定时执行（每 30s）：把到期 scheduled 单执行掉。异常只记日志。"""
+    try:
+        from app.services import db_approval_service
+        async with async_session() as session:
+            return await db_approval_service.run_due_scheduled(session)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("数据库审核定时执行 异常: %s", e)
+        return 0
 
 
 async def _maintenance_loop() -> None:
@@ -338,6 +349,8 @@ async def startup_tasks() -> None:
         ("告警自动处理", auto_process_alerts, 150.0),
         ("日志告警扫描", scan_log_alerts, 120.0),
         ("告警恢复自动关单", auto_close_tickets_for_resolved_alerts, 60.0),
+        # 数据库审核单定时执行（scheduled 单到点执行；与告警自动关单共用 30s 循环）
+        ("数据库审核定时执行", _run_due_db_approvals, 60.0),
         # 僵尸自愈计划收尾：告警已结束但计划还挂在 pending/executing → cancelled（每 5 秒兜底；
         # ORM 写入路径已由 orm_hooks 的告警状态钩子即时取消，这里只覆盖批量 update() 等绕过 ORM 的路径）
         ("僵尸计划收尾", close_stale_repair_plans, 120.0),
@@ -653,6 +666,7 @@ app.include_router(permissions.router)
 app.include_router(projects.router)
 app.include_router(release.router)
 app.include_router(db_connections.router)
+app.include_router(db_approvals.router)
 app.include_router(db_diagnosis.router)
 app.include_router(diagnostic.router)
 app.include_router(fault_diagnosis.router)
