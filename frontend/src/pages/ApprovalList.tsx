@@ -1,5 +1,5 @@
 // 审批列表页
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Tabs, Card, Space, Button, Table, Tag, Modal, Input, message, Empty, Checkbox, Select, Tooltip, Pagination, Drawer, DatePicker, Descriptions, Radio } from 'antd'
 import { getApprovals, getApproval, decideApproval, batchDecideApprovals, addApprover, transferApproval, getApprovalCommentTemplates, listDbApprovals, approveDbApproval, rejectDbApproval, dbApprovalDownloadUrl } from '../services/api'
@@ -236,12 +236,19 @@ function DbApprovalsTab() {
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
+  // mine 模式：0=看全部（admin 或任一可审批行），1=只看自己；首屏按 admin 初始化，加载后如有可审批行则切为 0
+  const [mineMode, setMineMode] = useState<0 | 1>(admin ? 0 : 1)
   const { data, refetch, isFetching } = useQuery({
-    queryKey: ['db-approvals', statusFilter ?? 'all', page, admin ? 0 : 1],
-    queryFn: () => listDbApprovals({ status: statusFilter, mine: admin ? 0 : 1, page, page_size: pageSize }),
+    queryKey: ['db-approvals', statusFilter ?? 'all', page, mineMode],
+    queryFn: () => listDbApprovals({ status: statusFilter, mine: mineMode, page, page_size: pageSize }),
   })
   const items = data?.items ?? []
   const total = data?.total ?? 0
+  const anyCanApprove = items.some((r) => (r as DbApprovalItem & { can_approve?: boolean }).can_approve === true)
+  useEffect(() => {
+    const want: 0 | 1 = admin || anyCanApprove ? 0 : 1
+    if (want !== mineMode) setMineMode(want)
+  }, [admin, anyCanApprove, mineMode])
 
   // 通过弹窗
   const [approveTarget, setApproveTarget] = useState<DbApprovalItem | null>(null)
@@ -265,6 +272,11 @@ function DbApprovalsTab() {
   }
   const renderExecMode = (row: DbApprovalItem) =>
     row.execute_mode === 'scheduled' ? `定时（${row.scheduled_at ?? '-'}）` : '立即'
+  // 某行是否能审批：后端给 can_approve 字段为准；拿不到（旧后端/无字段）时回退 isAdmin()
+  const canApproveRow = (row: DbApprovalItem) => {
+    const r = row as DbApprovalItem & { can_approve?: boolean }
+    return r.can_approve === true || (r.can_approve === undefined && admin)
+  }
 
   const doApprove = async () => {
     if (!approveTarget) return
@@ -364,7 +376,7 @@ function DbApprovalsTab() {
             render: (_: unknown, row: DbApprovalItem) => (
               <Space size="small">
                 <Button size="small" type="link" onClick={() => setDetail(row)}>查看</Button>
-                {admin && row.status === 'pending' && (
+                {canApproveRow(row) && row.status === 'pending' && (
                   <>
                     <Button size="small" type="link" onClick={() => { setApproveTarget(row); setApproveMode('immediate'); setApproveTime(null) }}>通过</Button>
                     <Button size="small" type="link" danger onClick={() => { setRejectTarget(row); setRejectReason('') }}>驳回</Button>

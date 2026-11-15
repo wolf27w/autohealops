@@ -739,6 +739,8 @@ export interface DbApprovalItem {
   download_token?: string
   download_expires_at?: string
   download_used?: boolean
+  /** 当前用户是否可审批（后端按 admin / 项目管理员计算） */
+  can_approve?: boolean
 }
 export interface DbApprovalCreatePayload {
   conn_id: number

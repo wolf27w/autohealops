@@ -11,7 +11,7 @@ import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../../components/ConfigObjectYamlModal'
 import ConfigObjectInfoModal from '../../components/ConfigObjectInfoModal'
 import ConfigObjectDataModal from '../../components/ConfigObjectDataModal'
-import ConfigObjectMetaModal from '../../components/ConfigObjectMetaModal'
+import ObjectMetaModal from '../../components/ObjectMetaModal'
 import ConfigObjectCreateModal from '../../components/ConfigObjectCreateModal'
 import PvcCreateModal from '../../components/PvcCreateModal'
 
@@ -341,7 +341,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
       <ConfigObjectYamlModal target={yamlObj} onClose={() => setYamlObj(null)} onSaved={reloadMisc} />
       <ConfigObjectInfoModal target={infoObj} onClose={() => setInfoObj(null)} onSaved={reloadMisc} />
-      <ConfigObjectMetaModal target={metaObj} onClose={() => setMetaObj(null)} onSaved={reloadMisc} />
+      <ObjectMetaModal open={!!metaObj} clusterId={clusterId} kind={metaObj?.kind ?? 'configmap'} namespace={metaObj?.namespace ?? ''} name={metaObj?.name ?? ''} onClose={() => setMetaObj(null)} onSaved={reloadMisc} />
       <ConfigObjectDataModal target={dataObj} onClose={() => setDataObj(null)} onSaved={reloadMisc} />
       <ConfigObjectCreateModal target={createObj} onClose={() => setCreateObj(null)} onSaved={reloadMisc} onEditYaml={onCreateEditYaml} />
       <PvcCreateModal target={pvcObj} onClose={() => setPvcObj(null)} onSaved={reloadMisc} />

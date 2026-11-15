@@ -1,15 +1,13 @@
 // 应用路由列表页（Ingress）：列对齐 KubeSphere 3.4.1（名称 / 网关地址 / 项目 / 创建时间）
 // 行操作：编辑信息 / 编辑 YAML / 编辑路由规则 / 编辑注解 / 编辑 TLS（我们追加）/ 删除（置底）
 import { useEffect, useState } from 'react'
-import { Card, Table, Button, Dropdown, Modal, message, Select, Space, Form, Input } from 'antd'
+import { Card, Table, Button, Dropdown, Modal, message, Select, Space } from 'antd'
 import { MoreOutlined } from '@ant-design/icons'
-import { getMiscResources, deleteObject, getObjectDetail, updateObjectMetadata } from '../../services/api'
+import { getMiscResources, deleteObject } from '../../services/api'
 import { useClusterNamespace, NS_ALL, nsParam } from './NamespaceContext'
 import ConfigObjectYamlModal, { type ConfigObjectTarget } from '../../components/ConfigObjectYamlModal'
 import IngressSettingsModal from '../../components/IngressSettingsModal'
-
-const ALIAS_KEY = 'kubesphere.io/alias-name'
-const DESC_KEY = 'kubesphere.io/description'
+import ObjectMetaModal from '../../components/ObjectMetaModal'
 
 interface MiscRow { namespace: string; name: string; [key: string]: unknown }
 interface MiscData {
@@ -21,75 +19,6 @@ interface MiscData {
 }
 
 const fmt = (v?: unknown) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
-
-// 编辑信息：名称只读 + 别名/描述（对齐 KubeSphere「编辑信息」入口）
-function EditInfoModal({ target, kindLabel, onClose, onSaved }: {
-  target: ConfigObjectTarget | null
-  kindLabel: string
-  onClose: () => void
-  onSaved?: () => void
-}) {
-  const [form] = Form.useForm()
-  const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (!target) return
-    setLoading(true)
-    getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)
-      .then((d) => {
-        const ann = ((d as { annotations?: Record<string, string> }).annotations) || {}
-        form.setFieldsValue({ name: target.name, alias: ann[ALIAS_KEY] || '', description: ann[DESC_KEY] || '' })
-      })
-      .catch(() => message.error('加载失败'))
-      .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target])
-
-  const submit = async () => {
-    if (!target) return
-    const v = await form.validateFields()
-    setSaving(true)
-    try {
-      const d = (await getObjectDetail(target.clusterId, target.kind, target.namespace, target.name)) as
-        { labels?: Record<string, string>; annotations?: Record<string, string> }
-      const ann = { ...(d.annotations || {}) }
-      ann[ALIAS_KEY] = (v.alias || '').trim()
-      ann[DESC_KEY] = (v.description || '').trim()
-      await updateObjectMetadata(target.clusterId, target.kind, target.namespace, target.name, d.labels || {}, ann)
-      message.success('已保存')
-      onSaved?.()
-      onClose()
-    } catch {
-      message.error('保存失败')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Modal title={`编辑信息：${target?.name || ''}（${kindLabel}）`} open={!!target} onCancel={onClose}
-      onOk={submit} okText="保存" confirmLoading={saving} width={640}>
-      <Form form={form} layout="vertical">
-        <Form.Item name="name" label="名称"><Input disabled /></Form.Item>
-        <Form.Item name="alias" label="别名" rules={[{
-          validator: (_: unknown, val: string) => {
-            if (!val || !val.trim()) return Promise.resolve()
-            const t = val.trim()
-            return /^[\u4e00-\u9fa5A-Za-z0-9]([\u4e00-\u9fa5A-Za-z0-9-]*[\u4e00-\u9fa5A-Za-z0-9])?$/.test(t) && t.length <= 63
-              ? Promise.resolve()
-              : Promise.reject(new Error('别名只能包含中文、字母、数字和连字符（-），最长 63 个字符'))
-          },
-        }]}>
-          <Input placeholder="请输入别名" />
-        </Form.Item>
-        <Form.Item name="description" label="描述" rules={[{ max: 256, message: '描述最长 256 个字符' }]}>
-          <Input.TextArea rows={3} placeholder="请输入描述" />
-        </Form.Item>
-      </Form>
-    </Modal>
-  )
-}
 
 export default function IngressList({ clusterId }: { clusterId: number }) {
   const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
@@ -191,7 +120,7 @@ export default function IngressList({ clusterId }: { clusterId: number }) {
       </Card>
 
       <ConfigObjectYamlModal target={yamlObj} onClose={() => setYamlObj(null)} onSaved={load} />
-      <EditInfoModal target={infoObj} kindLabel="路由" onClose={() => setInfoObj(null)} onSaved={load} />
+      <ObjectMetaModal open={!!infoObj} clusterId={clusterId} kind="ingress" namespace={infoObj?.namespace ?? ''} name={infoObj?.name ?? ''} onClose={() => setInfoObj(null)} onSaved={load} />
       <IngressSettingsModal target={ingObj} mode={ingMode} onClose={() => setIngObj(null)} onSaved={load} />
     </div>
   )
