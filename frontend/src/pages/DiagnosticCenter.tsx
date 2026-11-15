@@ -1,5 +1,5 @@
 // 诊断中心：数据库诊断（按需触发）+ 报告 + 趋势（应用诊断在 AI 诊断助手）
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DBConnection } from '../types'
 import {
   Tabs, Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber, Space, Tag, message, Popconfirm, Drawer, Switch, Progress, Alert,
@@ -88,12 +88,169 @@ export default function DiagnosticCenter() {
   )
 }
 
+// ============ 批量发起诊断 ============
+type BatchStatus = 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'
+
+interface BatchItem {
+  id: number
+  name: string
+  status: BatchStatus
+  error?: string
+}
+
+const BATCH_STATUS_MAP: Record<BatchStatus, { text: string; color: string }> = {
+  waiting: { text: '等待', color: 'default' },
+  running: { text: '诊断中', color: 'processing' },
+  done: { text: '完成', color: 'success' },
+  failed: { text: '失败', color: 'error' },
+  cancelled: { text: '已取消', color: 'default' },
+}
+
+const errMsg = (e: unknown) => {
+  const err = e as { message?: string; response?: { data?: { detail?: string; message?: string } } }
+  return err?.response?.data?.detail || err?.message || '诊断失败'
+}
+
+function BatchDiagnosisModal({ open, onClose, onRefresh }: { open: boolean; onClose: () => void; onRefresh: () => void }) {
+  const [connections, setConnections] = useState<DBConnection[]>([])
+  const [loadingList, setLoadingList] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [phase, setPhase] = useState<'select' | 'running' | 'done'>('select')
+  const [items, setItems] = useState<BatchItem[]>([])
+  const [cancelRequested, setCancelRequested] = useState(false)
+  const cancelRef = useRef(false)
+  const runningRef = useRef(false)
+
+  // 只在打开弹窗时拉取连接列表（不进页面就拉）
+  useEffect(() => {
+    if (!open) return
+    if (runningRef.current) { setPhase('running'); return }
+    setPhase('select')
+    setSelectedIds([])
+    setItems([])
+    setCancelRequested(false)
+    cancelRef.current = false
+    setLoadingList(true)
+    getDBConnections()
+      .then((d) => setConnections(((d || []) as DBConnection[])))
+      .catch(() => setConnections([]))
+      .finally(() => setLoadingList(false))
+  }, [open])
+
+  const start = async () => {
+    if (!selectedIds.length || runningRef.current) return
+    runningRef.current = true
+    cancelRef.current = false
+    setCancelRequested(false)
+    const queue = selectedIds
+      .map((id) => connections.find((c) => c.id === id))
+      .filter((c): c is DBConnection => !!c)
+      .map((c) => ({ id: c.id, name: c.name || `#${c.id}` }))
+    setItems(queue.map((q) => ({ ...q, status: 'waiting' as BatchStatus })))
+    setPhase('running')
+
+    let success = 0
+    let fail = 0
+    let next = 0
+    const patch = (id: number, p: Partial<BatchItem>) =>
+      setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...p } : it)))
+
+    // 简单 Promise 池：并发上限 3；已发出的不中断，取消后未发出的不再发
+    const worker = async () => {
+      while (true) {
+        if (cancelRef.current) return
+        const i = next
+        if (i >= queue.length) return
+        next = i + 1
+        const q = queue[i]
+        patch(q.id, { status: 'running' })
+        try {
+          await runDbDiagnosis(q.id)
+          patch(q.id, { status: 'done' })
+          success += 1
+          onRefresh() // 完成一个立刻刷新报告列表
+        } catch (e) {
+          patch(q.id, { status: 'failed', error: errMsg(e) })
+          fail += 1
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, () => worker()))
+
+    const cancelled = queue.length - success - fail
+    setItems((prev) => prev.map((it) => (it.status === 'waiting' ? { ...it, status: 'cancelled' } : it)))
+    setPhase('done')
+    runningRef.current = false
+    const parts = [`成功 ${success}`, `失败 ${fail}`]
+    if (cancelled > 0) parts.push(`已取消 ${cancelled}`)
+    message.success(`批量诊断完成：${parts.join('，')}`)
+  }
+
+  return (
+    <Modal
+      title="批量发起诊断"
+      open={open}
+      onCancel={onClose}
+      width={640}
+      maskClosable={phase !== 'running'}
+      footer={
+        phase === 'select' ? (
+          <Space>
+            <Button onClick={onClose}>取消</Button>
+            <Button type="primary" disabled={!selectedIds.length || loadingList} onClick={start}>
+              开始诊断{selectedIds.length ? `（${selectedIds.length}）` : ''}
+            </Button>
+          </Space>
+        ) : (
+          <Space>
+            {phase === 'running' && (
+              <Button disabled={cancelRequested} onClick={() => { cancelRef.current = true; setCancelRequested(true) }}>
+                取消剩余
+              </Button>
+            )}
+            <Button type="primary" disabled={phase === 'running'} onClick={onClose}>关闭</Button>
+          </Space>
+        )
+      }
+    >
+      {phase === 'select' ? (
+        <Table
+          rowKey="id"
+          size="small"
+          loading={loadingList}
+          dataSource={connections}
+          rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys as number[]) }}
+          columns={[
+            { title: '实例', dataIndex: 'name' },
+            { title: '类型', dataIndex: 'db_type', width: 100, render: (v: string) => v ? <Tag>{v}</Tag> : '-' },
+            { title: '地址', width: 220, render: (_, r: DBConnection) => r.host ? `${r.host}${r.port ? ':' + r.port : ''}` : '-' },
+          ]}
+          pagination={false}
+        />
+      ) : (
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={items}
+          columns={[
+            { title: '实例', dataIndex: 'name' },
+            { title: '状态', width: 120, render: (_, r: BatchItem) => <Tag color={BATCH_STATUS_MAP[r.status].color}>{BATCH_STATUS_MAP[r.status].text}</Tag> },
+            { title: '错误信息', dataIndex: 'error', ellipsis: true, render: (v: string) => v || '-' },
+          ]}
+          pagination={false}
+        />
+      )}
+    </Modal>
+  )
+}
+
 // ============ 诊断报告 ============
 function ReportsTab() {
   const [reports, setReports] = useState<DBReport[]>([])
   const [detail, setDetail] = useState<DBReport | null>(null)
   const [logPage, setLogPage] = useState(1)
   const [logTotal, setLogTotal] = useState(0)
+  const [batchOpen, setBatchOpen] = useState(false)
   const PAGE_SIZE = 20
 
   const load = (page = 1) => {
@@ -107,7 +264,7 @@ function ReportsTab() {
 
   return (
     <div>
-      <Card size="small" title="诊断报告">
+      <Card size="small" title="诊断报告" extra={<Button size="small" icon={<PlayCircleOutlined />} onClick={() => setBatchOpen(true)}>批量发起诊断</Button>}>
         <Table rowKey="id" dataSource={reports} size="small"
           pagination={{ current: logPage, pageSize: PAGE_SIZE, total: logTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => load(p) }}
           columns={[
@@ -149,6 +306,7 @@ function ReportsTab() {
           </div>
         )}
       </Drawer>
+      <BatchDiagnosisModal open={batchOpen} onClose={() => setBatchOpen(false)} onRefresh={() => load(1)} />
     </div>
   )
 }

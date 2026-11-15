@@ -4,9 +4,11 @@ import { useNavigate } from 'react-router-dom'
 import type { DBConnection } from '../types'
 import {
   Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber,
-  Space, Tag, message, Popconfirm, Dropdown, Empty, Switch, Tooltip, Spin,
+  Space, Tag, message, Popconfirm, Dropdown, Empty, Switch, Tooltip, Spin, Segmented,
 } from 'antd'
 import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined, CodeOutlined } from '@ant-design/icons'
+import DbInstanceTree, { type DbTreeConn } from '../components/db/DbInstanceTree'
+import DbInstanceTabs from '../components/db/DbInstanceTabs'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL, listDbGroups,
@@ -52,6 +54,33 @@ export default function DbResourceList() {
   const [conns, setConns] = useState<DbRow[]>([])
   const [groups, setGroups] = useState<{ id: number; name: string }[]>([])
   const [loading, setLoading] = useState(false)
+
+  // 视图模式（列表 / 树），记住到 localStorage（默认列表）
+  const [viewMode, setViewMode] = useState<'list' | 'tree'>(() => (
+    localStorage.getItem('db_view_mode') === 'tree' ? 'tree' : 'list'
+  ))
+  // 树视图：已打开实例页签 + 当前激活页签
+  const [openIds, setOpenIds] = useState<number[]>([])
+  const [activeId, setActiveId] = useState<number | null>(null)
+
+  const changeViewMode = (m: 'list' | 'tree') => {
+    setViewMode(m)
+    localStorage.setItem('db_view_mode', m)
+  }
+  // 树：点击实例 → 打开页签并激活
+  const openInstance = (id: number) => {
+    setOpenIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+    setActiveId(id)
+  }
+  // 树：关闭页签（关闭当前页签时切到相邻页签）
+  const closeInstance = (id: number) => {
+    const idx = openIds.indexOf(id)
+    const next = openIds.filter((x) => x !== id)
+    setOpenIds(next)
+    if (activeId === id) {
+      setActiveId(next.length ? next[Math.min(idx, next.length - 1)] : null)
+    }
+  }
 
   // 筛选状态
   const [kwInput, setKwInput] = useState('')   // 输入框即时值，300ms 防抖写 keyword
@@ -258,41 +287,75 @@ export default function DbResourceList() {
         {admin && <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>添加数据库</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
       </Space>}>
-      {/* 筛选条 */}
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Input
-          placeholder="搜索名称 / 主机 / 库名" allowClear prefix={<SearchOutlined />}
-          style={{ width: 220 }} value={kwInput} onChange={(e) => setKwInput(e.target.value)}
-        />
-        <Select value={typeFilter} style={{ width: 130 }} onChange={setTypeFilter}
-          options={[{ value: 'all', label: '全部类型' }, { value: 'mysql', label: 'MySQL' }, { value: 'pg', label: 'PostgreSQL' }, { value: 'oracle', label: 'Oracle' }]} />
-        <Select value={groupFilter} style={{ width: 140 }} onChange={setGroupFilter} options={groupOptions} />
-        <Select value={envFilter} style={{ width: 140 }} allowClear placeholder="环境标签"
-          onChange={(v) => setEnvFilter(v || undefined)}
-          options={[{ value: 'ungrouped', label: '未分组' }, ...envOptions]} />
-        <Select value={statusFilter} style={{ width: 120 }} onChange={setStatusFilter}
-          options={[{ value: 'all', label: '全部状态' }, { value: 'connected', label: '已连接' }, { value: 'failed', label: '采集失败' }, { value: 'unknown', label: '未知' }, { value: 'removed', label: '已下线' }]} />
-        <Select value={collectFilter} style={{ width: 130 }} onChange={setCollectFilter}
-          options={[{ value: 'all', label: '采集：全部' }, { value: 'on', label: '采集：已开启' }, { value: 'off', label: '采集：已关闭' }]} />
-      </Space>
+      {/* 视图切换（列表 / 树），记住到 localStorage */}
+      <Segmented
+        value={viewMode}
+        onChange={(v) => changeViewMode(v as 'list' | 'tree')}
+        options={[{ label: '列表', value: 'list' }, { label: '树', value: 'tree' }]}
+        style={{ marginBottom: 12 }}
+      />
 
-      {loading ? <Spin /> : conns.length === 0 ? (
-        // 空态：无数据时引导接入
-        <Empty style={{ padding: '40px 0' }} image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库资源">
-          <div style={{ maxWidth: 520, margin: '0 auto', textAlign: 'left' }}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>两种接入方式：</div>
-            <div style={{ marginBottom: 6 }}>① <b>手动纳管</b>：填写连接信息（主机 / 端口 / 账号密码）后，平台定时采集指标与慢 SQL、生成巡检报告。</div>
-            <div style={{ marginBottom: 12 }}>② <b>集群 Agent 自动上报</b>：部署集群 Agent 后，平台自动发现并纳管集群内的数据库实例。</div>
-            {admin && <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>添加数据库</Button>}
+      {viewMode === 'tree' ? (
+        // 树视图：左实例树 + 右多页签
+        <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', height: 'calc(100vh - 250px)', minHeight: 420 }}>
+          <div style={{ width: 320, flexShrink: 0 }}>
+            <DbInstanceTree
+              conns={conns as DbTreeConn[]}
+              activeId={activeId}
+              onOpen={openInstance}
+              keyword={keyword}
+              onRefresh={() => load()}
+            />
           </div>
-        </Empty>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <DbInstanceTabs
+              conns={conns as DbTreeConn[]}
+              openIds={openIds}
+              activeId={activeId}
+              onActive={(id) => setActiveId(id)}
+              onClose={closeInstance}
+            />
+          </div>
+        </div>
       ) : (
-        <Table
-          rowKey="id" size="small" loading={loading} dataSource={filtered}
-          pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
-          columns={columns}
-          onRow={(r) => ({ onClick: () => navigate(`/resources/databases/${r.id}`), style: { cursor: 'pointer' } })}
-        />
+        <>
+          {/* 筛选条 */}
+          <Space wrap style={{ marginBottom: 12 }}>
+            <Input
+              placeholder="搜索名称 / 主机 / 库名" allowClear prefix={<SearchOutlined />}
+              style={{ width: 220 }} value={kwInput} onChange={(e) => setKwInput(e.target.value)}
+            />
+            <Select value={typeFilter} style={{ width: 130 }} onChange={setTypeFilter}
+              options={[{ value: 'all', label: '全部类型' }, { value: 'mysql', label: 'MySQL' }, { value: 'pg', label: 'PostgreSQL' }, { value: 'oracle', label: 'Oracle' }]} />
+            <Select value={groupFilter} style={{ width: 140 }} onChange={setGroupFilter} options={groupOptions} />
+            <Select value={envFilter} style={{ width: 140 }} allowClear placeholder="环境标签"
+              onChange={(v) => setEnvFilter(v || undefined)}
+              options={[{ value: 'ungrouped', label: '未分组' }, ...envOptions]} />
+            <Select value={statusFilter} style={{ width: 120 }} onChange={setStatusFilter}
+              options={[{ value: 'all', label: '全部状态' }, { value: 'connected', label: '已连接' }, { value: 'failed', label: '采集失败' }, { value: 'unknown', label: '未知' }, { value: 'removed', label: '已下线' }]} />
+            <Select value={collectFilter} style={{ width: 130 }} onChange={setCollectFilter}
+              options={[{ value: 'all', label: '采集：全部' }, { value: 'on', label: '采集：已开启' }, { value: 'off', label: '采集：已关闭' }]} />
+          </Space>
+
+          {loading ? <Spin /> : conns.length === 0 ? (
+            // 空态：无数据时引导接入
+            <Empty style={{ padding: '40px 0' }} image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库资源">
+              <div style={{ maxWidth: 520, margin: '0 auto', textAlign: 'left' }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>两种接入方式：</div>
+                <div style={{ marginBottom: 6 }}>① <b>手动纳管</b>：填写连接信息（主机 / 端口 / 账号密码）后，平台定时采集指标与慢 SQL、生成巡检报告。</div>
+                <div style={{ marginBottom: 12 }}>② <b>集群 Agent 自动上报</b>：部署集群 Agent 后，平台自动发现并纳管集群内的数据库实例。</div>
+                {admin && <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>添加数据库</Button>}
+              </div>
+            </Empty>
+          ) : (
+            <Table
+              rowKey="id" size="small" loading={loading} dataSource={filtered}
+              pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
+              columns={columns}
+              onRow={(r) => ({ onClick: () => navigate(`/resources/databases/${r.id}`), style: { cursor: 'pointer' } })}
+            />
+          )}
+        </>
       )}
 
       {/* 添加/编辑表单（字段照搬 DiagnosticCenter.DBConnections） */}
