@@ -226,7 +226,7 @@ function SftpPanel({ host }: { host: HostItem }) {
   )
 }
 
-export default function WebTerminal() {
+export default function WebTerminal({ standalone = false }: { standalone?: boolean }) {
   const { hostId } = useParams()
   const navigate = useNavigate()
   const [groups, setGroups] = useState<HostGroup[]>([])
@@ -264,16 +264,17 @@ export default function WebTerminal() {
     const key = `h-${h.id}`
     setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, { key, hostId: h.id, hostName: h.name, connected: false }]))
     setActiveKey(key)
-    navigate(`/resources/terminal/${h.id}`, { replace: true })
-  }, [navigate])
+    if (!standalone) navigate(`/resources/terminal/${h.id}`, { replace: true })
+  }, [navigate, standalone])
 
   // 直达 /web-terminal/:hostId
   useEffect(() => {
+    if (standalone) return
     if (!hostId || !hosts.length) return
     const h = hosts.find((x) => String(x.id) === String(hostId))
     if (h) openHost(h)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hostId, hosts.length])
+  }, [standalone, hostId, hosts.length])
 
   const closeTab = (key: string) => {
     setTabs((prev) => {
@@ -330,7 +331,7 @@ export default function WebTerminal() {
   }
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 112px)', background: '#fff', borderRadius: 8, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: standalone ? '100vh' : 'calc(100vh - 112px)', background: '#fff', borderRadius: 8, overflow: 'hidden' }}>
       {/* 左栏 */}
       <div style={{ width: 280, borderRight: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: 8 }}>

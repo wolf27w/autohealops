@@ -5,7 +5,7 @@ import {
   Alert, Button, Card, Drawer, Form, Input, InputNumber, List, Menu, Modal, Popconfirm,
   Radio, Select, Space, Steps, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
 } from 'antd'
-import { DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
+import { CodeOutlined, DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   getHosts, createHost, updateHost, deleteHost, checkHost,
   getHostGroups, createHostGroup, updateHostGroup, deleteHostGroup,
@@ -218,8 +218,9 @@ export default function HostManagement() {
   const noPerm = !isAdmin && groups.length === 0
 
   return (
-    <Card size="small" title="主机 / 虚拟机（非集群节点）"
+    <Card size="small" title="节点管理"
       extra={<Space>
+        {!noPerm && <Button icon={<CodeOutlined />} onClick={() => window.open('/terminal', '_blank', 'noopener')}>Web 终端</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
         {isAdmin && <Button icon={<TeamOutlined />} onClick={() => setGroupDrawer(true)}>分组管理</Button>}
         {(isAdmin || createableGroups.length > 0) && <Button icon={<ImportOutlined />} onClick={openImport}>批量导入</Button>}
