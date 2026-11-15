@@ -18,7 +18,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from app.core.database import async_session
@@ -387,27 +387,27 @@ async def handle_collect_snapshot(ev: dict) -> None:
     now = datetime.now()
     qs = ev.get("quota_snapshots") or []
     rs = ev.get("resource_snapshots") or []
-    qobjs, robjs = [], []
+    qrows, rrows = [], []
 
     for r in qs:
         if not isinstance(r, dict):
             continue
         try:
-            qobjs.append(QuotaSnapshot(
-                cluster_id=cid,
-                namespace=str(r.get("namespace") or ""),
-                cpu_limit=str(r.get("cpu_limit") or "0"),
-                cpu_used=str(r.get("cpu_used") or "0"),
-                memory_limit=str(r.get("memory_limit") or "0"),
-                memory_used=str(r.get("memory_used") or "0"),
-                pod_limit=int(r.get("pod_limit") or 0),
-                pod_used=int(r.get("pod_used") or 0),
-                pvc_limit=int(r.get("pvc_limit") or 0),
-                pvc_used=int(r.get("pvc_used") or 0),
-                service_limit=int(r.get("service_limit") or 0),
-                service_used=int(r.get("service_used") or 0),
-                snapshot_time=_parse_dt(r.get("snapshot_time")) or now,
-            ))
+            qrows.append({
+                "cluster_id": cid,
+                "namespace": str(r.get("namespace") or ""),
+                "cpu_limit": str(r.get("cpu_limit") or "0"),
+                "cpu_used": str(r.get("cpu_used") or "0"),
+                "memory_limit": str(r.get("memory_limit") or "0"),
+                "memory_used": str(r.get("memory_used") or "0"),
+                "pod_limit": int(r.get("pod_limit") or 0),
+                "pod_used": int(r.get("pod_used") or 0),
+                "pvc_limit": int(r.get("pvc_limit") or 0),
+                "pvc_used": int(r.get("pvc_used") or 0),
+                "service_limit": int(r.get("service_limit") or 0),
+                "service_used": int(r.get("service_used") or 0),
+                "snapshot_time": _parse_dt(r.get("snapshot_time")) or now,
+            })
         except (TypeError, ValueError):
             continue
 
@@ -415,38 +415,42 @@ async def handle_collect_snapshot(ev: dict) -> None:
         if not isinstance(r, dict):
             continue
         try:
-            robjs.append(ResourceSnapshot(
-                cluster_id=cid,
-                namespace=str(r.get("namespace") or ""),
-                resource_type=str(r.get("resource_type") or ""),
-                resource_name=str(r.get("resource_name") or ""),
-                status=str(r.get("status") or ""),
-                replicas=int(r.get("replicas") or 0),
-                ready_replicas=int(r.get("ready_replicas") or 0),
-                container_count=int(r.get("container_count") or 0),
-                image_version=str(r.get("image_version") or ""),
-                cpu_usage=str(r.get("cpu_usage") or ""),
-                memory_usage=str(r.get("memory_usage") or ""),
-                cpu_request=str(r.get("cpu_request") or ""),
-                cpu_limit=str(r.get("cpu_limit") or ""),
-                memory_request=str(r.get("memory_request") or ""),
-                memory_limit=str(r.get("memory_limit") or ""),
-                update_time=_parse_dt(r.get("update_time")) if r.get("update_time") else None,
-                snapshot_time=_parse_dt(r.get("snapshot_time")) or now,
-            ))
+            rrows.append({
+                "cluster_id": cid,
+                "namespace": str(r.get("namespace") or ""),
+                "resource_type": str(r.get("resource_type") or ""),
+                "resource_name": str(r.get("resource_name") or ""),
+                "status": str(r.get("status") or ""),
+                "replicas": int(r.get("replicas") or 0),
+                "ready_replicas": int(r.get("ready_replicas") or 0),
+                "container_count": int(r.get("container_count") or 0),
+                "image_version": str(r.get("image_version") or ""),
+                "cpu_usage": str(r.get("cpu_usage") or ""),
+                "memory_usage": str(r.get("memory_usage") or ""),
+                "cpu_request": str(r.get("cpu_request") or ""),
+                "cpu_limit": str(r.get("cpu_limit") or ""),
+                "memory_request": str(r.get("memory_request") or ""),
+                "memory_limit": str(r.get("memory_limit") or ""),
+                "update_time": _parse_dt(r.get("update_time")) if r.get("update_time") else None,
+                "snapshot_time": _parse_dt(r.get("snapshot_time")) or now,
+            })
         except (TypeError, ValueError):
             continue
 
-    if not qobjs and not robjs:
+    if not qrows and not rrows:
         return
     try:
         async with async_session() as session:
-            if qobjs:
-                session.add_all(qobjs)
-            if robjs:
-                session.add_all(robjs)
+            # 批量插入（SQLAlchemy 2.0 的 executemany / insertmanyvalues），替代 add_all 逐条 emit。
+            # 分块 500 条/批，批间不 commit（整体一次 commit），避免单事务过大。
+            if qrows:
+                for i in range(0, len(qrows), 500):
+                    await session.execute(insert(QuotaSnapshot), qrows[i:i + 500])
+            if rrows:
+                for i in range(0, len(rrows), 500):
+                    await session.execute(insert(ResourceSnapshot), rrows[i:i + 500])
             await session.commit()
-        logger.info("agent 快照落库 cluster=%s quota=%d resource=%d", cid, len(qobjs), len(robjs))
+        logger.info("agent 快照落库 cluster=%s quota=%d resource=%d", cid, len(qrows), len(rrows))
     except Exception as e:  # noqa: BLE001
         logger.warning("agent 快照落库失败 cluster=%s: %s", cid, e)
 

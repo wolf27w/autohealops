@@ -7,8 +7,9 @@
 """
 import asyncio
 import json
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -122,18 +123,26 @@ async def flip_notify(host_id: int, host_name: str, paths: list[dict]) -> None:
         pass
 
 
-async def check_and_notify(host: Host) -> dict:
-    """检查 + 状态翻转通知。返回 check_host 结果。"""
+async def check_and_notify(host: Host, session=None) -> dict:
+    """检查 + 状态翻转通知。返回 check_host 结果。
+
+    状态持久化写到传入的 session（不 commit）；未传 session（如 API 单主机立即检查）则自开
+    session 并 commit，保持原行为。background_loop 传同一个 session，整轮结束后统一 commit，
+    避免每台主机单独开 session + 单独 commit（写放大）。
+    """
     res = await check_host(host)
     # 持久化 online 状态
     try:
-        async with async_session() as s:
-            h = await s.get(Host, host.id)
-            if h:
-                h.status = "online" if res["online"] else "offline"
-                h.last_error = "" if res["online"] else (res.get("error") or "")[:255]
-                from datetime import datetime
-                h.last_seen = datetime.now()
+        values = {
+            "status": "online" if res["online"] else "offline",
+            "last_error": "" if res["online"] else (res.get("error") or "")[:255],
+            "last_seen": datetime.now(),
+        }
+        if session is not None:
+            await session.execute(update(Host).where(Host.id == host.id).values(**values))
+        else:
+            async with async_session() as s:
+                await s.execute(update(Host).where(Host.id == host.id).values(**values))
                 await s.commit()
     except Exception as e:  # noqa: BLE001
         logger.warning("写主机状态失败: %s", e)
@@ -142,16 +151,37 @@ async def check_and_notify(host: Host) -> dict:
     return res
 
 
+def _status_values(res: dict) -> dict:
+    """把一次检测结果转成 hosts 表的状态字段（语义与旧逻辑一致）。"""
+    return {
+        "status": "online" if res.get("online") else "offline",
+        "last_error": "" if res.get("online") else (res.get("error") or "")[:255],
+        "last_seen": datetime.now(),
+    }
+
+
 async def background_loop() -> None:
     while True:
         try:
+            # 1) 短事务读主机列表后立即关事务：SSH 探测期间不持有事务/读快照
             async with async_session() as s:
-                hosts = list((await s.execute(select(Host).where(Host.enabled.is_(True), Host.source == "direct"))).scalars())
+                hosts = list((await s.execute(
+                    select(Host).where(Host.enabled.is_(True), Host.source == "direct"))).scalars())
+            # 2) 逐台探测（网络 I/O 不占数据库事务）
+            pending: dict[int, dict] = {}
             for h in hosts:
                 try:
-                    await check_and_notify(h)
+                    res = await check_host(h)
+                    pending[h.id] = _status_values(res)
+                    await flip_notify(h.id, h.name, res.get("paths") or [])
                 except Exception as e:  # noqa: BLE001
                     logger.warning("主机 %s 检查异常: %s", h.name, e)
+            # 3) 一次性短事务批量写回，只 commit 一次
+            if pending:
+                async with async_session() as s2:
+                    for hid, values in pending.items():
+                        await s2.execute(update(Host).where(Host.id == hid).values(**values))
+                    await s2.commit()
         except Exception as e:  # noqa: BLE001
             logger.warning("主机监控循环异常: %s", e)
         await asyncio.sleep(CHECK_INTERVAL_SEC)
