@@ -133,7 +133,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
   // 存储类操作 ⋯：编辑信息 / 删除（cluster-scoped，无命名空间）
   const makeStorageClassActions = (r: StorageClassRow) => {
-    const t: ConfigObjectTarget = { clusterId, kind: 'storageclass', namespace: '', name: r.name }
+    const t: ConfigObjectTarget = { clusterId, kind: 'storageclass', namespace: '-', name: r.name }
     const items: { key: string; label: string; danger?: boolean }[] = [
       { key: 'meta', label: '编辑信息' },
       { key: 'delete', label: '删除', danger: true },
@@ -145,7 +145,7 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
           items,
           onClick: ({ key }) => {
             if (key === 'meta') setMetaObj(t)
-            else if (key === 'delete') handleDelete('storageclass', '', r.name)
+            else if (key === 'delete') handleDelete('storageclass', '-', r.name)
           },
         }}
       >
