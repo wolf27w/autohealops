@@ -3,15 +3,17 @@
 // 支持：切换当前库、表级操作（DDL/导出/删除）、Ctrl/Cmd+Enter 执行、多结果标签、导入 SQL、导出、备份。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Tag, Space, Table, Empty, Popconfirm, Modal, message, Tabs, Radio, Input, Select, Alert, Collapse,
+  Button, Tag, Space, Table, Empty, Popconfirm, Modal, message, Tabs, Radio, Input, Select, Alert, Collapse, DatePicker,
 } from 'antd'
 import {
   ReloadOutlined, ImportOutlined, ExportOutlined, CloudDownloadOutlined, PlayCircleOutlined, EyeOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import DbInstanceTree, { type DbTreeConn, type DbTreeSelectNode } from '../components/db/DbInstanceTree'
+import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
   importSqlScript, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
+  createDbApproval, type DbApprovalKind,
 } from '../services/api'
 
 // ---------- 后端返回的连接行类型（getDBConnections 返回 unknown，这里按需断言） ----------
@@ -43,8 +45,17 @@ interface ResultItem {
   affected?: number
   truncated?: boolean
   elapsed?: number
+  pendingApproval?: boolean
 }
 interface ResultGroup { key: number; label: string; time: string; items: ResultItem[] }
+
+// 提交审核的 payload（execute_mode/scheduled_at 在提交时拼）
+type ApprovalSubmitPayload = {
+  conn_id: number
+  kind: DbApprovalKind
+  sql?: string
+  export?: { databases: string[]; mode: 'structure' | 'data' | 'both'; schema_only?: boolean }
+}
 
 // 选中对象（表/视图/函数/事件）→ 右侧对象操作区
 interface SelectedObj { kind: 'table' | 'view' | 'routine' | 'event'; db: string; name: string }
@@ -139,6 +150,15 @@ export default function SqlTerminal() {
   const [ddlText, setDdlText] = useState('')
   const [ddlTitle, setDdlTitle] = useState('')
 
+  // 提交审核弹窗（命中 428 审核策略）
+  const [approvalOpen, setApprovalOpen] = useState(false)
+  const [approvalKind, setApprovalKind] = useState<DbApprovalKind | null>(null)
+  const [approvalPreview, setApprovalPreview] = useState('')
+  const [approvalMode, setApprovalMode] = useState<'immediate' | 'scheduled'>('immediate')
+  const [approvalTime, setApprovalTime] = useState<Dayjs | null>(null)
+  const [approvalLoading, setApprovalLoading] = useState(false)
+  const approvalPayloadRef = useRef<ApprovalSubmitPayload | null>(null)
+
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
 
   const load = () => {
@@ -224,6 +244,13 @@ export default function SqlTerminal() {
           affected: d?.affected_rows, truncated: d?.truncated, elapsed: Date.now() - t0,
         })
       } catch (e) {
+        const ea = e as { needApproval?: boolean; approvalData?: { kind?: DbApprovalKind } }
+        if (ea?.needApproval) {
+          const kind: DbApprovalKind = ea.approvalData?.kind || (isReadStmt(st) ? 'query' : 'write')
+          openApprovalModal(kind, st, { conn_id: cur.id, kind, sql: st })
+          items.push({ sql: st, ok: false, pendingApproval: true, elapsed: Date.now() - t0 })
+          break
+        }
         items.push({ sql: st, ok: false, err: errMsg(e), elapsed: Date.now() - t0 })
       }
     }
@@ -293,7 +320,17 @@ export default function SqlTerminal() {
       saveBlob(blob, `${cur.name}-export-${ts()}.sql`)
       message.success('导出完成')
       setExportOpen(false)
-    } catch { /* 拦截器已提示 */ }
+    } catch (e) {
+      if ((e as { needApproval?: boolean })?.needApproval) {
+        const modeLabel = exportMode === 'structure' ? '仅结构' : exportMode === 'data' ? '仅数据' : '结构+数据'
+        openApprovalModal('export', `导出库：${exportDbs.join('、')}（${modeLabel}）`, {
+          conn_id: cur.id, kind: 'export',
+          export: { databases: exportDbs, mode: exportMode, schema_only: exportMode === 'structure' },
+        })
+        setExportOpen(false)
+      }
+      /* 其它错误由拦截器提示 */
+    }
     finally { setExportLoading(false) }
   }
 
@@ -309,6 +346,39 @@ export default function SqlTerminal() {
       setBackupOpen(false)
     } catch { /* 拦截器已提示 */ }
     finally { setBackupLoading(false) }
+  }
+
+  // ---------- 提交审核（命中 428 审核策略） ----------
+  const approvalKindMeta: Record<string, { label: string; color: string }> = {
+    query: { label: '查询', color: 'blue' },
+    write: { label: '写入', color: 'orange' },
+    ddl: { label: 'DDL', color: 'purple' },
+    export: { label: '导出', color: 'green' },
+  }
+  const openApprovalModal = (kind: DbApprovalKind, previewText: string, payload: ApprovalSubmitPayload) => {
+    setApprovalKind(kind)
+    setApprovalPreview(previewText)
+    setApprovalMode('immediate')
+    setApprovalTime(null)
+    approvalPayloadRef.current = payload
+    setApprovalOpen(true)
+  }
+  const submitApproval = async () => {
+    const p = approvalPayloadRef.current
+    if (!p) return
+    if (approvalMode === 'scheduled' && !approvalTime) { message.warning('请选择定时执行时间'); return }
+    setApprovalLoading(true)
+    try {
+      await createDbApproval({
+        ...p,
+        execute_mode: approvalMode,
+        scheduled_at: approvalMode === 'scheduled' ? approvalTime!.format('YYYY-MM-DD HH:mm:ss') : undefined,
+      })
+      message.success('已提交审核，等待审批')
+      setApprovalOpen(false)
+      approvalPayloadRef.current = null
+    } catch { /* 拦截器已提示 */ }
+    finally { setApprovalLoading(false) }
   }
 
   // 建库
@@ -481,6 +551,8 @@ export default function SqlTerminal() {
                                 />
                               </div>
                             )
+                          ) : r.pendingApproval ? (
+                            <Alert type="warning" showIcon message="该操作需要审批，已弹出提交审核窗口" description={<code>{r.sql}</code>} />
                           ) : (
                             <Alert type="error" showIcon message={r.err} description={<code>{r.sql}</code>} />
                           )}
@@ -619,6 +691,55 @@ export default function SqlTerminal() {
             <Radio value="full">完整备份（结构 + 数据）</Radio>
             <Radio value="schema">仅结构</Radio>
           </Radio.Group>
+        </Space>
+      </Modal>
+
+      {/* 提交审核弹窗（命中审核策略） */}
+      <Modal
+        title="提交审核"
+        open={approvalOpen}
+        onOk={submitApproval}
+        onCancel={() => { setApprovalOpen(false); approvalPayloadRef.current = null }}
+        okText="提交审核"
+        confirmLoading={approvalLoading}
+        width={640}
+        destroyOnClose
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <div>
+            <span style={{ marginRight: 8, fontSize: 13 }}>操作类别：</span>
+            {approvalKind && (
+              <Tag color={(approvalKindMeta[approvalKind] || {}).color}>
+                {(approvalKindMeta[approvalKind] || {}).label || approvalKind}
+              </Tag>
+            )}
+          </div>
+          <div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>{approvalKind === 'export' ? '导出范围' : 'SQL 预览'}</div>
+            <Input.TextArea
+              value={approvalPreview}
+              readOnly
+              autoSize={{ minRows: 4, maxRows: 10 }}
+              style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 12 }}
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>执行方式</div>
+            <Radio.Group value={approvalMode} onChange={(e) => setApprovalMode(e.target.value)}>
+              <Radio.Button value="immediate">立即执行（审批通过后）</Radio.Button>
+              <Radio.Button value="scheduled">定时执行</Radio.Button>
+            </Radio.Group>
+            {approvalMode === 'scheduled' && (
+              <DatePicker
+                showTime
+                format="YYYY-MM-DD HH:mm"
+                style={{ width: 200, marginLeft: 8 }}
+                value={approvalTime}
+                onChange={setApprovalTime}
+                placeholder="选择执行时间"
+              />
+            )}
+          </div>
         </Space>
       </Modal>
 

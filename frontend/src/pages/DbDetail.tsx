@@ -1,10 +1,11 @@
 // 数据库资源详情（R34-P1）：整页 + Tab 骨架
 // 概览 / 监控 / 慢SQL / 异常 / SQL 工作台 / 诊断 —— 各 Tab 由 components/db/* 提供
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Descriptions, Empty, Space, Spin, Tabs, Tag, Tooltip, message } from 'antd'
+import { Button, Card, Descriptions, Empty, Space, Spin, Switch, Tabs, Tag, Tooltip, message } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { getDBConnections, collectSlowSQL } from '../services/api'
+import { getDBConnections, collectSlowSQL, getDbApprovalPolicy, updateDbApprovalPolicy } from '../services/api'
+import type { DbApprovalPolicy } from '../services/api'
 import { isAdmin } from '../utils/auth'
 import type { ConsoleConn } from '../components/DbWorkbench'
 import DbMonitorPanel from '../components/db/DbMonitorPanel'
@@ -45,7 +46,81 @@ const STATUS: Record<string, { color: string; label: string }> = {
 
 const TYPE_COLOR: Record<string, string> = { mysql: 'blue', pg: 'green', oracle: 'volcano' }
 
-const TABS = ['overview', 'monitor', 'slow-sql', 'anomalies', 'console', 'diagnosis']
+const TABS = ['overview', 'monitor', 'slow-sql', 'anomalies', 'console', 'diagnosis', 'approval-policy']
+
+// 审核策略四类操作开关配置（B12-3a）
+const APPROVAL_ROWS: { key: keyof DbApprovalPolicy; title: string; desc: string }[] = [
+  { key: 'need_query', title: '查询需要审核', desc: 'SELECT/SHOW 等只读查询' },
+  { key: 'need_write', title: '写入需要审核', desc: 'INSERT/UPDATE/DELETE/REPLACE' },
+  { key: 'need_ddl', title: 'DDL 需要审核', desc: 'CREATE/ALTER/DROP/TRUNCATE/RENAME' },
+  { key: 'need_export', title: '导出需要审核', desc: '导出结构与数据' },
+]
+
+function DbApprovalPolicyPanel({ connId }: { connId: number }) {
+  const [policy, setPolicy] = useState<DbApprovalPolicy | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const editable = isAdmin()
+
+  useEffect(() => {
+    let mounted = true
+    setLoading(true)
+    getDbApprovalPolicy(connId)
+      .then((p) => { if (mounted) setPolicy(p) })
+      .catch(() => {})
+      .finally(() => { if (mounted) setLoading(false) })
+    return () => { mounted = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connId])
+
+  const save = async () => {
+    if (!policy) return
+    setSaving(true)
+    try {
+      await updateDbApprovalPolicy(connId, policy)
+      message.success('已保存')
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <Card size="small">
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spin /></div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card size="small">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {APPROVAL_ROWS.map((row) => (
+          <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Switch
+              checked={policy?.[row.key] ?? false}
+              disabled={!editable}
+              onChange={(v) => setPolicy((prev) => (prev ? { ...prev, [row.key]: v } : prev))}
+            />
+            <div>
+              <div>{row.title}</div>
+              <div style={{ color: '#8c8c8c', fontSize: 12 }}>{row.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 24 }}>
+        {editable ? (
+          <Button type="primary" loading={saving} onClick={save}>保存</Button>
+        ) : (
+          <span style={{ color: '#8c8c8c', fontSize: 12 }}>仅管理员/项目管理员可修改</span>
+        )}
+      </div>
+    </Card>
+  )
+}
 
 export default function DbDetail() {
   const { id } = useParams()
@@ -181,6 +256,7 @@ export default function DbDetail() {
           { key: 'anomalies', label: '异常', children: <DbAnomalyPanel connId={connId} /> },
           { key: 'console', label: 'SQL 工作台', children: <DbConsolePanel conn={conn} /> },
           { key: 'diagnosis', label: '诊断', children: <DbDiagnosisPanel connId={connId} /> },
+          { key: 'approval-policy', label: '审核策略', children: <DbApprovalPolicyPanel connId={connId} /> },
         ]}
       />
     </div>

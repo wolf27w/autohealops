@@ -27,6 +27,13 @@ api.interceptors.response.use(
     // 文件下载（blob）：不做业务码解包
     if (response.config.responseType === 'blob') return body
     if (body && body.code !== 200) {
+      // 428 = 需要审核（数据库操作审核机制）：不弹全局错误，交给调用方弹「提交审核」
+      if (body.code === 428) {
+        const err = new Error(body.message || '该操作需要审核') as Error & { needApproval?: boolean; approvalData?: unknown }
+        err.needApproval = true
+        err.approvalData = body.data
+        return Promise.reject(err)
+      }
       message.error(body.message || '请求失败')
       return Promise.reject(new Error(body.message))
     }
@@ -702,6 +709,56 @@ export const downloadDBBackup = (id: number, databases: string[], schemaOnly = f
 export const getUserClusterPerms = (userId: number) => http.get(`/permissions/${userId}/clusters`)
 export const addUserClusterPerm = (userId: number, data: Payload) => http.post(`/permissions/${userId}/clusters`, data)
 export const deleteUserClusterPerm = (permId: number) => http.delete(`/permissions/clusters/${permId}`)
+// ============ 数据库操作审核机制（B12） ============
+export interface DbApprovalPolicy { need_query: boolean; need_write: boolean; need_ddl: boolean; need_export: boolean }
+export const getDbApprovalPolicy = (connId: number) =>
+  http.get<DbApprovalPolicy>(`/db-connections/${connId}/approval-policy`)
+export const updateDbApprovalPolicy = (connId: number, payload: Partial<DbApprovalPolicy>) =>
+  http.put<DbApprovalPolicy>(`/db-connections/${connId}/approval-policy`, payload)
+
+export type DbApprovalKind = 'query' | 'write' | 'ddl' | 'export'
+export type DbApprovalStatus = 'pending' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired'
+export interface DbApprovalItem {
+  id: number
+  conn_id: number
+  conn_name?: string
+  db_name?: string
+  kind: DbApprovalKind
+  sql?: string
+  payload?: string
+  status: DbApprovalStatus
+  requested_by?: string
+  requested_at?: string
+  approved_by?: string
+  approved_at?: string
+  reject_reason?: string
+  execute_mode?: 'immediate' | 'scheduled'
+  scheduled_at?: string
+  executed_at?: string
+  result_summary?: string
+  download_token?: string
+  download_expires_at?: string
+  download_used?: boolean
+}
+export interface DbApprovalCreatePayload {
+  conn_id: number
+  kind: DbApprovalKind
+  sql?: string
+  export?: { databases: string[]; mode: 'structure' | 'data' | 'both'; schema_only?: boolean }
+  execute_mode: 'immediate' | 'scheduled'
+  scheduled_at?: string
+}
+export const createDbApproval = (payload: DbApprovalCreatePayload) =>
+  http.post<{ id: number }>('/db-approvals', payload)
+export const listDbApprovals = (params: { status?: string; conn_id?: number; mine?: number; page?: number; page_size?: number }) =>
+  http.get<{ items: DbApprovalItem[]; total: number; page: number; page_size: number }>('/db-approvals', { params })
+export const approveDbApproval = (id: number, body: { execute_mode?: 'immediate' | 'scheduled'; scheduled_at?: string }) =>
+  http.post(`/db-approvals/${id}/approve`, body)
+export const rejectDbApproval = (id: number, reason: string) =>
+  http.post(`/db-approvals/${id}/reject`, { reason })
+export const dbApprovalDownloadUrl = (id: number, token: string) =>
+  `/api/v1/db-approvals/${id}/download?token=${encodeURIComponent(token)}`
+
 export const getUserDBPerms = (userId: number) => http.get(`/permissions/${userId}/db`)
 export const addUserDBPerm = (userId: number, data: Payload) => http.post(`/permissions/${userId}/db`, data)
 export const deleteUserDBPerm = (permId: number) => http.delete(`/permissions/db/${permId}`)
