@@ -262,6 +262,91 @@ async def workload_events(cluster_id: int, namespace: str = "", name: str = "", 
     return {"code": 200, "message": "success", "data": {"pods": out}}
 
 
+async def _workload_pod_names(cluster_id: int, namespace: str, name: str, kind: str) -> list[str]:
+    """工作负载下的 Pod 名列表：deployment 走实时 list_deployment_pods，其余回退 DB 快照（最多 10 个）"""
+    pods: list[str] = []
+    if kind == "deployment" and name:
+        r = await executor_client.acall(executor_client.list_deployment_pods, cluster_id, namespace, name)
+        pods = [p.get("name", "") for p in (r.get("pods") or [])][:10]
+    if not pods and name:
+        async with async_session() as session:
+            # 先带时间窗查（快）；空则回退全历史（只在采集停摆时发生，避免功能失效）
+            since = datetime.now() - timedelta(minutes=NS_LOOKBACK_MIN)
+            rows = (await session.execute(
+                select(ResourceSnapshot.resource_name).where(
+                    ResourceSnapshot.cluster_id == cluster_id,
+                    ResourceSnapshot.namespace == namespace,
+                    ResourceSnapshot.resource_type == "pod",
+                    ResourceSnapshot.snapshot_time >= since,
+                    ResourceSnapshot.resource_name.like(f"{name}-%"),
+                ).distinct().limit(10)
+            )).all()
+            if not rows:
+                rows = (await session.execute(
+                    select(ResourceSnapshot.resource_name).where(
+                        ResourceSnapshot.cluster_id == cluster_id,
+                        ResourceSnapshot.namespace == namespace,
+                        ResourceSnapshot.resource_type == "pod",
+                        ResourceSnapshot.resource_name.like(f"{name}-%"),
+                    ).distinct().limit(10)
+                )).all()
+            pods = [x[0] for x in rows]
+    return pods
+
+
+@router.get("/clusters/{cluster_id}/workload-events-realtime")
+async def workload_events_realtime(cluster_id: int, namespace: str = "", name: str = "",
+                                   kind: str = "deployment", user=Depends(require_any_user)):
+    """工作负载实时事件（结构化 + 次数）：按 Pod 取 k8s Event，同 Type+Reason+Message 合并
+
+    与 describe 版 workload-events 并存，不影响旧返回结构（别处仍用 describe 原文）。
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    pods = await _workload_pod_names(cluster_id, namespace, name, kind)
+    if not pods:
+        return {"code": 200, "message": "success", "data": {"events": []}}
+
+    # 并发取每个 Pod 的事件（信号量≤8，避免耗尽 gRPC 线程池）
+    sem = asyncio.Semaphore(8)
+
+    async def _one(pod: str):
+        async with sem:
+            return pod, await executor_client.acall(executor_client.get_pod_events, cluster_id, namespace, pod)
+
+    results = await asyncio.gather(*[_one(p) for p in pods])
+
+    # 聚合：同 Type+Reason+Message 合并，count 相加，取最早 First / 最晚 Last，记录涉及的 Pod
+    agg: dict[tuple, dict] = {}
+    for pod, r in results:
+        for ev in (r.get("events") or []):
+            key = (ev.get("type") or "", ev.get("reason") or "", ev.get("message") or "")
+            cur = agg.get(key)
+            if cur is None:
+                agg[key] = {
+                    "type": ev.get("type") or "",
+                    "reason": ev.get("reason") or "",
+                    "message": ev.get("message") or "",
+                    "count": int(ev.get("count") or 0),
+                    "first_timestamp": ev.get("first_timestamp") or "",
+                    "last_timestamp": ev.get("last_timestamp") or "",
+                    "pods": [pod],
+                }
+            else:
+                cur["count"] += int(ev.get("count") or 0)
+                ft = ev.get("first_timestamp") or ""
+                lt = ev.get("last_timestamp") or ""
+                if ft and (not cur["first_timestamp"] or ft < cur["first_timestamp"]):
+                    cur["first_timestamp"] = ft
+                if lt and (not cur["last_timestamp"] or lt > cur["last_timestamp"]):
+                    cur["last_timestamp"] = lt
+                if pod not in cur["pods"]:
+                    cur["pods"].append(pod)
+
+    events = sorted(agg.values(), key=lambda x: x["last_timestamp"] or "", reverse=True)
+    return {"code": 200, "message": "success", "data": {"events": events}}
+
+
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods")
 async def pods(cluster_id: int, namespace: str, user=Depends(require_any_user)):
     if denied := await _deny_cluster(user, cluster_id, namespace):

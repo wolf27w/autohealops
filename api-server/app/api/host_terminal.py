@@ -609,3 +609,117 @@ async def sftp_upload(host_id: int, request: Request, path: str = "/tmp", filena
                               execution_detail=f"上传文件 {target}（{written} 字节，sha256={hasher.hexdigest()}）到 {host.name}")
     return {"code": 200, "message": "success",
             "data": {"path": target, "size": written, "host": host.name}}
+
+
+# ---------------- SFTP 文件管理（mkdir / delete / read / write）----------------
+
+SFTP_TEXT_MAX = 1024 * 1024  # 文本在线编辑单文件上限 1MB
+
+
+async def _audit_sftp(action: str, host, detail: str) -> None:
+    """文件操作审计（独立短事务，失败只 log 不打断主流程）。"""
+    from app.services.audit_service import create_audit_record
+    from app.core.security import generate_trace_id
+    try:
+        await create_audit_record(generate_trace_id(),
+                                  trigger_snapshot=json.dumps({"action": action, "host_id": host.id}),
+                                  execution_detail=detail)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("SFTP 文件操作审计落库失败: %s", e)
+
+
+@router.post("/hosts/{host_id}/sftp/mkdir")
+async def sftp_mkdir(host_id: int, payload: dict, user: User = Depends(require_any_user)):
+    """创建目录（已存在报错）。body: {path}。"""
+    path = (payload or {}).get("path", "") or ""
+    p = await _sftp_guard(path)
+    host, conn = await _sftp_conn(host_id, user)
+    try:
+        async with conn.start_sftp_client() as sftp:
+            try:
+                await sftp.mkdir(p)
+            except asyncssh.SFTPError as e:
+                raise HTTPException(status_code=400, detail=f"创建目录失败：{e.reason or e}") from e
+    finally:
+        conn.close()
+        await conn.wait_closed()
+    await _audit_sftp("host_sftp_mkdir", host, f"创建目录 {p} 于 {host.name}")
+    return {"code": 200, "message": "success", "data": {"path": p}}
+
+
+@router.post("/hosts/{host_id}/sftp/delete")
+async def sftp_delete(host_id: int, payload: dict, user: User = Depends(require_any_user)):
+    """删除文件或空目录（目录非空时报错提示）。body: {path}。"""
+    path = (payload or {}).get("path", "") or ""
+    p = await _sftp_guard(path)
+    host, conn = await _sftp_conn(host_id, user)
+    try:
+        async with conn.start_sftp_client() as sftp:
+            try:
+                st = await sftp.stat(p)
+            except asyncssh.SFTPError as e:
+                raise HTTPException(status_code=404, detail=f"路径不存在或不可访问：{e.reason or e}") from e
+            mode = st.permissions if st.permissions else (st.type or 0)
+            is_dir = bool((mode & 0o170000) == 0o040000)
+            try:
+                if is_dir:
+                    await sftp.rmdir(p)
+                else:
+                    await sftp.remove(p)
+            except asyncssh.SFTPError as e:
+                detail = f"目录非空或删除失败：{e.reason or e}" if is_dir else f"删除失败：{e.reason or e}"
+                raise HTTPException(status_code=400, detail=detail) from e
+    finally:
+        conn.close()
+        await conn.wait_closed()
+    await _audit_sftp("host_sftp_delete", host, f"删除{'目录' if is_dir else '文件'} {p} 于 {host.name}")
+    return {"code": 200, "message": "success", "data": {"path": p}}
+
+
+@router.get("/hosts/{host_id}/sftp/read")
+async def sftp_read(host_id: int, path: str, user: User = Depends(require_any_user)):
+    """读取文本文件（≤1MB，超出返回 400）。query: path。返回 {content}。"""
+    p = await _sftp_guard(path)
+    host, conn = await _sftp_conn(host_id, user)
+    try:
+        async with conn.start_sftp_client() as sftp:
+            try:
+                async with sftp.open(p, "rb") as f:
+                    data = await f.read(SFTP_TEXT_MAX + 1)
+            except asyncssh.SFTPError as e:
+                raise HTTPException(status_code=404, detail=f"文件不存在或不可读：{e.reason or e}") from e
+    finally:
+        conn.close()
+        await conn.wait_closed()
+    if len(data) > SFTP_TEXT_MAX:
+        raise HTTPException(status_code=400, detail="文件超过 1MB，不支持在线编辑")
+    content = data.decode("utf-8", errors="replace")
+    await _audit_sftp("host_sftp_read", host, f"读取文件 {p}（{len(data)} 字节）于 {host.name}")
+    return {"code": 200, "message": "success", "data": {"content": content}}
+
+
+@router.put("/hosts/{host_id}/sftp/write")
+async def sftp_write(host_id: int, payload: dict, user: User = Depends(require_any_user)):
+    """写入文本文件（≤1MB，保留原文件权限）。body: {path, content}。"""
+    body = payload or {}
+    path = body.get("path", "") or ""
+    content = body.get("content", "") or ""
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="content 必须为文本")
+    p = await _sftp_guard(path)
+    data = content.encode("utf-8")
+    if len(data) > SFTP_TEXT_MAX:
+        raise HTTPException(status_code=400, detail="内容超过 1MB，无法写入")
+    host, conn = await _sftp_conn(host_id, user)
+    try:
+        async with conn.start_sftp_client() as sftp:
+            try:
+                async with sftp.open(p, "wb") as f:
+                    await f.write(data)
+            except asyncssh.SFTPError as e:
+                raise HTTPException(status_code=400, detail=f"写入失败：{e.reason or e}") from e
+    finally:
+        conn.close()
+        await conn.wait_closed()
+    await _audit_sftp("host_sftp_write", host, f"写入文件 {p}（{len(data)} 字节）于 {host.name}")
+    return {"code": 200, "message": "success", "data": {"path": p, "size": len(data)}}
