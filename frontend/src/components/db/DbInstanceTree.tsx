@@ -26,6 +26,15 @@ export interface DbInstanceTreeProps {
   onOpen: (id: number) => void  // 双击/点击实例 → 打开页签
   keyword?: string              // 过滤实例名/库名
   onRefresh?: (id: number) => void // 右键/行操作「刷新 schema」
+  /** 点击库/表/视图/函数/事件节点回调（可选，不传则不影响现有行为） */
+  onSelectNode?: (node: DbTreeSelectNode) => void
+}
+
+// 树节点点击回调的对外类型：kind 标识节点类型，db/name 为具体对象
+export interface DbTreeSelectNode {
+  kind: 'db' | 'table' | 'view' | 'routine' | 'event'
+  db?: string
+  name?: string
 }
 
 // ---------- schema 形状（与 DbWorkbench.SchemaData 一致） ----------
@@ -117,7 +126,7 @@ function buildDbChildren(id: number, s: SchemaData): DbTreeNode[] {
 }
 
 export default function DbInstanceTree(props: DbInstanceTreeProps): JSX.Element {
-  const { conns, activeId, onOpen, keyword, onRefresh } = props
+  const { conns, activeId, onOpen, keyword, onRefresh, onSelectNode } = props
 
   // 内部搜索 state；外部传了 keyword 则以外部为准
   const [internalKw, setInternalKw] = useState('')
@@ -224,7 +233,19 @@ export default function DbInstanceTree(props: DbInstanceTreeProps): JSX.Element 
   }
   const onSelect = (_keys: Key[], info: { node: TreeDataNode }) => {
     const n = info.node as DbTreeNode
-    if (n.kind === 'instance' && n.connId != null) onOpen(n.connId)
+    if (n.kind === 'instance' && n.connId != null) { onOpen(n.connId); return }
+    if (!onSelectNode) return
+    if (n.kind === 'database' && n.dbName) {
+      onSelectNode({ kind: 'db', db: n.dbName })
+      return
+    }
+    if (n.kind === 'leaf' && n.dbName && n.title) {
+      const kindMap: Record<string, 'table' | 'view' | 'routine' | 'event'> = {
+        table: 'table', view: 'view', function: 'routine', event: 'event',
+      }
+      const kind = kindMap[n.objKind || '']
+      if (kind) onSelectNode({ kind, db: n.dbName, name: String(n.title) })
+    }
   }
 
   // 全局刷新：清缓存并重载当前已展开的实例

@@ -618,11 +618,11 @@ export const getDiagnosisQuality = (days = 7) =>
 
 // ============ 数据库连接管理 ============
 // R6：agent 库只读查询（平台只发 key+SQL，凭据在 agent 本地）
-export const queryDBConnection = (id: number, sql: string) =>
-  http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/db-connections/${id}/query`, { sql })
+export const queryDBConnection = (id: number, sql: string, database?: string) =>
+  http.post<{ columns?: string[]; rows?: unknown[][]; truncated?: boolean }>(`/db-connections/${id}/query`, { sql, database })
 // 执行 SQL（DML/DDL，仅 admin；confirm=true 二次确认）
-export const execDBConnection = (id: number, sql: string) =>
-  http.post<{ columns?: string[]; rows?: unknown[][]; affected_rows?: number; write?: boolean }>(`/db-connections/${id}/exec`, { sql, confirm: true })
+export const execDBConnection = (id: number, sql: string, database?: string) =>
+  http.post<{ columns?: string[]; rows?: unknown[][]; affected_rows?: number; write?: boolean }>(`/db-connections/${id}/exec`, { sql, database, confirm: true })
 // 数据库对象：DDL / 导出 / 导入（MySQL）
 export const getObjectDDL = (id: number, kind: string, name: string, db?: string) =>
   http.get<{ ddl?: string }>(`/db-connections/${id}/object-ddl`, { params: { kind, name, db } })
@@ -674,6 +674,29 @@ export const getSlowSQLDigestTrend = (connId: number, digest: string, hours = 24
 export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: string; b_start?: string; b_end?: string; limit?: number }) =>
   http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
+
+// ============ SQL 终端（B11-b：库管理 / 导入 SQL / 备份）============
+// 建库
+interface DBNameResult { name?: string; created?: boolean }
+export const createDatabase = (id: number, name: string) =>
+  http.post<DBNameResult>(`/db-connections/${id}/databases`, { name })
+// 删库（confirm=true 二次确认）
+export const dropDatabase = (id: number, name: string) =>
+  http.delete<DBNameResult>(`/db-connections/${id}/databases/${encodeURIComponent(name)}`, { params: { confirm: true } })
+// 导入 SQL 脚本（逐条执行，mode=stop 遇错即停 / skip 跳过继续）
+export interface SqlImportErrorRow { index: number; statement_head: string; error: string }
+export interface SqlImportResult {
+  executed: number; failed?: number; skipped?: number
+  errors: SqlImportErrorRow[]; stopped: boolean
+}
+export const importSqlScript = (id: number, sql: string, mode: 'stop' | 'skip') =>
+  http.post<SqlImportResult>(`/db-connections/${id}/import-sql`, { sql, mode })
+// 备份下载（文件流 → blob，带 Authorization）
+export const downloadDBBackup = (id: number, databases: string[], schemaOnly = false) =>
+  api.get(`/db-connections/${id}/backup`, {
+    params: { databases: databases.join(','), schema_only: schemaOnly ? '1' : '0' },
+    responseType: 'blob',
+  }) as unknown as Promise<Blob>
 
 // ============ 权限管理（admin）============
 export const getUserClusterPerms = (userId: number) => http.get(`/permissions/${userId}/clusters`)
