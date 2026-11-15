@@ -10,9 +10,9 @@ from sqlalchemy import select
 from app.api import (
     agent, ai_proxy, alert_policies, alert_silences, alerts, approvals, approval_flows, audit, auth, batch, clusters, custom_tasks, db_connections,
     db_diagnosis, decisions, diagnostic, executions, external_access, fault_diagnosis, im_groups, in_app_messages, inspections, knowledge, log_alert_rules, log_sources, logs, mcp, monitoring, notifications, on_duty, permissions,
-    projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resource_governance_ctl, resources, screens, self_heal_rules, stats, tasks, terminal, tickets, users, watch, webhooks,
+    projects, release, repair_records, report_schedules, resource_alert_rules, resource_governance, resource_governance_ctl, resources, screens, self_heal_rules, service_accounts, stats, tasks, terminal, tickets, users, watch, webhooks,
 )
-from app.api import hosts, host_groups, jvm, host_terminal, zombie, prompt_health
+from app.api import hosts, host_groups, jvm, host_terminal, host_audits, zombie, prompt_health
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -626,6 +626,7 @@ app.include_router(batch.router)
 app.include_router(executions.router)
 app.include_router(custom_tasks.router)
 app.include_router(resources.router)
+app.include_router(service_accounts.router)
 app.include_router(jvm.router)
 app.include_router(resource_alert_rules.router)
 app.include_router(resource_governance.router)
@@ -660,6 +661,7 @@ app.include_router(agent.router)
 app.include_router(terminal.router)
 app.include_router(hosts.router)
 app.include_router(host_terminal.router)
+app.include_router(host_audits.router)
 app.include_router(zombie.router)
 app.include_router(host_groups.router)
 app.include_router(mcp.router)

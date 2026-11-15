@@ -763,6 +763,23 @@ class ExecutorClient:
             logger.error("list_namespaces 失败: %s", e)
             return {"success": False, "namespaces": [], "error": str(e)}
 
+    def list_service_accounts(self, cluster_id: int, namespace: str = "", trace_id: str = "") -> dict:
+        """ServiceAccount 列表（角色反查 + 关联 secret）→ 返回 {success, items, error}"""
+        try:
+            resp = _get_stub().ListServiceAccounts(
+                executor_pb2.ListServiceAccountsRequest(cluster_id=cluster_id, namespace=namespace),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "error": resp.error, "items": [
+                {"name": it.name, "namespace": it.namespace, "role": it.role,
+                 "secrets": list(it.secrets), "created_at": it.created_at}
+                for it in resp.items
+            ]}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_service_accounts 失败: %s", e)
+            return {"success": False, "items": [], "error": str(e)}
+
     def get_pod_events(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
         """单个 Pod 的 k8s Event → 返回 {success, events, error}"""
         try:
@@ -871,9 +888,12 @@ class ExecutorClient:
                                  for x in resp.secrets],
                     "pvcs": [{"namespace": x.namespace, "name": x.name, "status": x.status,
                                "capacity": x.capacity, "storage_class": x.storage_class,
-                               "volume_name": x.volume_name, "access_modes": x.access_modes} for x in resp.pvcs],
+                               "volume_name": x.volume_name, "access_modes": x.access_modes,
+                               "mounted": x.mounted, "mounted_by": list(x.mounted_by)} for x in resp.pvcs],
                     "storage_classes": [{"name": x.name, "provisioner": x.provisioner,
-                                         "is_default": x.is_default} for x in resp.storage_classes]}
+                                         "is_default": x.is_default, "pvc_count": x.pvc_count,
+                                         "allow_expansion": x.allow_expansion, "supports_clone": x.supports_clone,
+                                         "supports_snapshot": x.supports_snapshot} for x in resp.storage_classes]}
         except Exception as e:  # noqa: BLE001
             logger.error("list_misc_resources 失败: %s", e)
             return {"success": False, "error": str(e)}

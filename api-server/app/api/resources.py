@@ -580,7 +580,9 @@ async def misc_resources(cluster_id: int, namespace: str = "", user=Depends(requ
 
 
 # 可通过「对象」接口编辑的资源类型（YAML/元数据/删除）
-_CONFIG_OBJECT_KINDS = {"configmap", "secret", "service", "ingress", "pvc"}
+_CONFIG_OBJECT_KINDS = {"configmap", "secret", "service", "ingress", "pvc", "serviceaccount", "storageclass"}
+# 集群级对象（无 namespace；前端传 "-" 占位）
+_CLUSTER_SCOPED_KINDS = {"storageclass"}
 # 其中带「数据键值」语义的（编辑设置 = data）
 _DATA_KINDS = {"configmap", "secret"}
 
@@ -628,6 +630,8 @@ async def delete_object(cluster_id: int, kind: str, namespace: str, name: str, u
     """删除配置类对象（ConfigMap/Secret）（需操作员权限）"""
     if kind not in _CONFIG_OBJECT_KINDS:
         return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if kind in _CLUSTER_SCOPED_KINDS and namespace in ("-", "_"):
+        namespace = ""
     if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
         return denied
     r = await executor_client.acall(executor_client.delete_resource, cluster_id, kind, namespace, name)
@@ -642,6 +646,8 @@ async def object_detail(cluster_id: int, kind: str, namespace: str, name: str, u
     import yaml as _yaml
     if kind not in _CONFIG_OBJECT_KINDS:
         return {"code": 400, "message": f"不支持的对象类型 {kind}", "data": None}
+    if kind in _CLUSTER_SCOPED_KINDS and namespace in ("-", "_"):
+        namespace = ""
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
     r = await executor_client.acall(executor_client.get_workload_yaml, cluster_id, kind, namespace, name)

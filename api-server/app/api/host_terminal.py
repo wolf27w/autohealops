@@ -19,12 +19,15 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import Host, User
+from app.models import Host, HostCommandAudit, SystemSetting, User
+from app.services.command_guard import LineAssembler, check_command
 from app.services import host_group_service as hgs
 from app.services import host_session_service as hss
 from app.services import host_ssh
+from app.services.system_setting_service import get_setting, invalidate_setting_cache
 from app.api.terminal import _resolve_user
-from app.middleware.permission import require_any_user
+from app.middleware.auth import get_current_active_user
+from app.middleware.permission import require_admin, require_any_user
 
 router = APIRouter(prefix="/api/v1")
 logger = get_logger("api-server.host-terminal")
@@ -36,6 +39,48 @@ AUTH_FRAME_TIMEOUT_SEC = 5
 # session_id -> {"websocket": ws, "user_id": int, "task": asyncio.Task | None}
 ACTIVE: dict[int, dict] = {}
 _AUDIT_TASKS: set[asyncio.Task] = set()
+
+# ---------------- Web 终端安全开关（B9） ----------------
+# 存储于 system_settings.key = "terminal_security"（value 为 JSON 字符串）
+TERMINAL_SECURITY_KEY = "terminal_security"
+TERMINAL_SECURITY_DEFAULTS = {
+    "block_dangerous": True,   # 危险命令拦截
+    "allow_paste": True,       # 允许粘贴
+    "watermark": True,         # 显示水印
+    "no_copy": True,           # 禁止复制
+}
+
+
+async def _load_terminal_security() -> dict[str, bool]:
+    """读取终端安全开关（无记录/缺字段/坏 JSON 时回退默认值）。"""
+    cfg = dict(TERMINAL_SECURITY_DEFAULTS)
+    raw = await get_setting(TERMINAL_SECURITY_KEY, "")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for k in TERMINAL_SECURITY_DEFAULTS:
+                    if isinstance(data.get(k), bool):
+                        cfg[k] = data[k]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return cfg
+
+
+async def _save_terminal_security(cfg: dict[str, bool]) -> None:
+    """写回终端安全开关（JSON 字符串，upsert）。"""
+    async with async_session() as s:
+        result = await s.execute(
+            select(SystemSetting).where(SystemSetting.key == TERMINAL_SECURITY_KEY))
+        existing = result.scalar_one_or_none()
+        value = json.dumps(cfg, ensure_ascii=False)
+        if existing:
+            existing.value = value
+        else:
+            s.add(SystemSetting(key=TERMINAL_SECURITY_KEY, value=value,
+                                description="Web 终端安全开关（JSON）"))
+        await s.commit()
+    invalidate_setting_cache(TERMINAL_SECURITY_KEY)
 
 
 def _spawn_audit(coro) -> None:
@@ -58,6 +103,21 @@ def _client_ip(websocket: WebSocket) -> str:
 async def _load_host(host_id: int) -> Host | None:
     async with async_session() as s:
         return await s.get(Host, host_id)
+
+
+async def _audit_command(host_id: int, host_name: str, user_id: int, username: str,
+                         session_id: int | None, command: str, risk: str,
+                         action: str, reason: str, client_ip: str) -> None:
+    """命令审计落库（独立短事务，失败只 log 不打断终端）。"""
+    try:
+        async with async_session() as s:
+            s.add(HostCommandAudit(
+                host_id=host_id, host_name=host_name, user_id=user_id, username=username,
+                session_id=session_id, command=command, risk=risk, action=action,
+                reason=reason, client_ip=client_ip))
+            await s.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("主机命令审计落库失败: %s", e)
 
 
 async def _wait_auth_frame(websocket: WebSocket, timeout: float) -> dict | None:
@@ -145,6 +205,10 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
 
         last_activity = time.monotonic()
         stop = asyncio.Event()
+        assembler = LineAssembler()
+        # 终端安全开关：会话建立时读一次，缓存到局部变量（避免每行命令都查库）
+        term_sec = await _load_terminal_security()
+        block_dangerous = term_sec["block_dangerous"]
 
         async def pump_ws_to_ssh():
             nonlocal last_activity
@@ -158,8 +222,10 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                 last_activity = time.monotonic()
                 raw = msg.get("bytes")
                 text = msg.get("text")
+                decoded = ""
                 if raw:
                     data = bytes(raw)
+                    decoded = data.decode("utf-8", errors="replace")
                 elif text:
                     try:
                         j = json.loads(text)
@@ -173,7 +239,29 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                             pass
                         continue
                     data = text.encode("utf-8")
+                    decoded = text
                 else:
+                    continue
+                # 行缓冲解析：只在「回车提交」时拦截整行危险命令（不拦逐字符输入）
+                forward = True
+                for cmd in assembler.feed(decoded):
+                    blocked, risk, reason = check_command(cmd)
+                    if blocked and block_dangerous:
+                        forward = False
+                        await _send_safe(websocket, {"type": "command_blocked", "command": cmd,
+                                                     "reason": reason, "risk": risk})
+                        _spawn_audit(_audit_command(host.id, host.name, user.id, user.username,
+                                                    sess.id, cmd, risk, "blocked", reason,
+                                                    _client_ip(websocket)))
+                    else:
+                        # 未命中危险规则；或 block_dangerous=false 时命中但只审计不拦截
+                        _spawn_audit(_audit_command(host.id, host.name, user.id, user.username,
+                                                    sess.id, cmd,
+                                                    risk if blocked else "low",
+                                                    "allowed",
+                                                    reason if blocked else "",
+                                                    _client_ip(websocket)))
+                if not forward:
                     continue
                 if recorder:
                     recorder.add("input", data)
@@ -266,6 +354,27 @@ async def _close_safe(websocket: WebSocket) -> None:
         await websocket.close()
     except Exception:  # noqa: BLE001
         pass
+
+
+# ---------------- 终端安全开关（GET 任意登录用户 / PUT 仅 admin） ----------------
+
+
+@router.get("/terminal/security")
+async def get_terminal_security(user: User = Depends(get_current_active_user)):
+    """读取 Web 终端安全开关（任何登录用户可读，终端按此渲染）。"""
+    cfg = await _load_terminal_security()
+    return {"code": 200, "message": "ok", "data": cfg}
+
+
+@router.put("/terminal/security")
+async def update_terminal_security(payload: dict, user: User = Depends(require_admin)):
+    """更新 Web 终端安全开关（仅 admin；缺省字段保持原值）。"""
+    cfg = await _load_terminal_security()
+    for k in TERMINAL_SECURITY_DEFAULTS:
+        if k in payload and isinstance(payload[k], bool):
+            cfg[k] = payload[k]
+    await _save_terminal_security(cfg)
+    return {"code": 200, "message": "ok", "data": cfg}
 
 
 # ---------------- 会话历史 / 回放 / 踢下线 ----------------

@@ -185,6 +185,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.ListNamespacesRequest.SerializeToString,
                 response_deserializer=executor__pb2.ListNamespacesResponse.FromString,
                 _registered_method=True)
+        self.ListServiceAccounts = channel.unary_unary(
+                '/executor.ExecutorService/ListServiceAccounts',
+                request_serializer=executor__pb2.ListServiceAccountsRequest.SerializeToString,
+                response_deserializer=executor__pb2.ListServiceAccountsResponse.FromString,
+                _registered_method=True)
         self.SetupRBAC = channel.unary_unary(
                 '/executor.ExecutorService/SetupRBAC',
                 request_serializer=executor__pb2.SetupRBACRequest.SerializeToString,
@@ -455,6 +460,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListServiceAccounts(self, request, context):
+        """ServiceAccount 列表（含角色反查 + 关联 secret）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SetupRBAC(self, request, context):
         """云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
         """
@@ -679,6 +691,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.ListNamespaces,
                     request_deserializer=executor__pb2.ListNamespacesRequest.FromString,
                     response_serializer=executor__pb2.ListNamespacesResponse.SerializeToString,
+            ),
+            'ListServiceAccounts': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListServiceAccounts,
+                    request_deserializer=executor__pb2.ListServiceAccountsRequest.FromString,
+                    response_serializer=executor__pb2.ListServiceAccountsResponse.SerializeToString,
             ),
             'SetupRBAC': grpc.unary_unary_rpc_method_handler(
                     servicer.SetupRBAC,
@@ -1547,6 +1564,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/ListNamespaces',
             executor__pb2.ListNamespacesRequest.SerializeToString,
             executor__pb2.ListNamespacesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListServiceAccounts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ListServiceAccounts',
+            executor__pb2.ListServiceAccountsRequest.SerializeToString,
+            executor__pb2.ListServiceAccountsResponse.FromString,
             options,
             channel_credentials,
             insecure,

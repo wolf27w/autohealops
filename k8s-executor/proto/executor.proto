@@ -69,6 +69,8 @@ service ExecutorService {
   rpc CleanupEvicted(CleanupEvictedRequest) returns (CleanupEvictedResponse);
   // 命名空间列表（name + labels，R19 发布入口标签门控用）
   rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  // ServiceAccount 列表（含角色反查 + 关联 secret）
+  rpc ListServiceAccounts(ListServiceAccountsRequest) returns (ListServiceAccountsResponse);
 
   // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
   rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
@@ -421,6 +423,24 @@ message ListNamespacesResponse {
   string error = 3;
 }
 
+// ---------- ListServiceAccounts（ServiceAccount 列表：角色/关联 secret） ----------
+message ListServiceAccountsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;    // 空=全部命名空间
+}
+message ServiceAccountInfo {
+  string name = 1;
+  string namespace = 2;
+  string role = 3;              // 注解 kubesphere.io/role 或 rbac.authorization.k8s.io/*；取不到按 RoleBinding/ClusterRoleBinding 反查，仍无则空串
+  repeated string secrets = 4;  // SA 的 secrets[].name（旧版 K8s 才有；新版为空数组）
+  string created_at = 5;        // RFC3339
+}
+message ListServiceAccountsResponse {
+  bool success = 1;
+  repeated ServiceAccountInfo items = 2;
+  string error = 3;
+}
+
 // ---------- GetPodDetail（Pod 详情 / 容器组内容） ----------
 message GetPodDetailRequest {
   int64 cluster_id = 1;
@@ -539,6 +559,8 @@ message PvcInfo {
   string volume_name = 6;   // 绑定的 PV
   string access_modes = 7;
   string created_at = 8;    // RFC3339（创建时间）
+  bool mounted = 9;         // 是否已被 Pod 挂载
+  repeated string mounted_by = 10; // 挂载该 PVC 的 Pod 名（最多 10 个）
 }
 message ListMiscResourcesResponse {
   bool success = 1;
@@ -555,6 +577,10 @@ message StorageClassInfo {
   string provisioner = 2;
   bool is_default = 3;
   string created_at = 4;    // RFC3339（创建时间）
+  int32 pvc_count = 5;      // 该存储类的 PVC 数量
+  bool allow_expansion = 6; // 允许扩容
+  bool supports_clone = 7;  // 支持克隆（按 provisioner 能力推断）
+  bool supports_snapshot = 8; // 支持快照（按 provisioner 能力推断）
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------

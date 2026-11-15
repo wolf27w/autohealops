@@ -61,14 +61,20 @@ type PvcInfo struct {
 	VolumeName   string
 	AccessModes  string
 	CreatedAt    string
+	Mounted      bool
+	MountedBy    []string
 }
 
 // StorageClassInfo 存储类简况（cluster-scoped）
 type StorageClassInfo struct {
-	Name        string
-	Provisioner string
-	IsDefault   bool
-	CreatedAt   string
+	Name             string
+	Provisioner      string
+	IsDefault        bool
+	CreatedAt        string
+	PvcCount         int32
+	AllowExpansion   bool
+	SupportsClone    bool
+	SupportsSnapshot bool
 }
 
 // MiscResources 集群管理其它资源聚合
@@ -79,6 +85,19 @@ type MiscResources struct {
 	Secrets        []SecretInfo
 	PVCs           []PvcInfo
 	StorageClasses []StorageClassInfo
+}
+
+// cloneSnapshotCapability 按 provisioner 常见能力推断 StorageClass 是否支持克隆/快照
+func cloneSnapshotCapability(provisioner string) (clone, snapshot bool) {
+	p := strings.ToLower(provisioner)
+	if p == "" || p == "kubernetes.io/no-provisioner" {
+		return false, false
+	}
+	// CSI/云厂商/Longhorn/Rook-Ceph 等 provisioner 大多支持克隆与快照
+	if strings.Contains(p, "csi") || strings.Contains(p, "longhorn") || strings.Contains(p, "rook") || strings.Contains(p, "ceph") {
+		return true, true
+	}
+	return false, false
 }
 
 // 杂项资源短缓存：这些对象（服务/路由/配置/密钥/PVC）变动不频繁，
@@ -129,6 +148,7 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 		secrets        []SecretInfo
 		pvcs           []PvcInfo
 		storageClasses []StorageClassInfo
+		podMounts      map[string][]string // namespace/claimName → 挂载它的 Pod 名
 
 		wg       sync.WaitGroup
 		errMu    sync.Mutex
@@ -350,10 +370,37 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 					isDefault = true
 				}
 			}
-			items = append(items, StorageClassInfo{Name: sc.Name, Provisioner: sc.Provisioner, IsDefault: isDefault, CreatedAt: sc.CreationTimestamp.Format(time.RFC3339)})
+			allowExp := sc.AllowVolumeExpansion != nil && *sc.AllowVolumeExpansion
+			clone, snap := cloneSnapshotCapability(sc.Provisioner)
+			items = append(items, StorageClassInfo{Name: sc.Name, Provisioner: sc.Provisioner, IsDefault: isDefault, CreatedAt: sc.CreationTimestamp.Format(time.RFC3339), AllowExpansion: allowExp, SupportsClone: clone, SupportsSnapshot: snap})
 		}
 		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 		storageClasses = items
+	}()
+
+	// Pod 挂载 PVC 反查（用于 PVC「挂载状态」列）：只 list 一次 Pod，按 volume.claimName 反查
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		st := time.Now()
+		defer func() { mark("pods", st) }()
+		pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			// 挂载状态仅是附加列，list pods 失败不阻断整页（留空 = 全部未挂载）
+			log.Printf("[misc] list pods 失败（挂载状态留空）: %v", err)
+			return
+		}
+		m := make(map[string][]string)
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			for _, vol := range pod.Spec.Volumes {
+				if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName != "" {
+					key := pod.Namespace + "/" + vol.PersistentVolumeClaim.ClaimName
+					m[key] = append(m[key], pod.Name)
+				}
+			}
+		}
+		podMounts = m
 	}()
 
 	wg.Wait()
@@ -380,6 +427,26 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 	secrets = secrets[:trim(len(secrets))]
 	pvcs = pvcs[:trim(len(pvcs))]
 	storageClasses = storageClasses[:trim(len(storageClasses))]
+
+	// 回填 PVC 挂载状态 + StorageClass 的 PVC 数量（依赖上面 list 到的 PVC 与 Pod）
+	const maxMountedBy = 10
+	scPvcCount := make(map[string]int32)
+	for i := range pvcs {
+		p := &pvcs[i]
+		if p.StorageClass != "" {
+			scPvcCount[p.StorageClass]++
+		}
+		if mounts, ok := podMounts[p.Namespace+"/"+p.Name]; ok && len(mounts) > 0 {
+			p.Mounted = true
+			if len(mounts) > maxMountedBy {
+				mounts = mounts[:maxMountedBy]
+			}
+			p.MountedBy = mounts
+		}
+	}
+	for i := range storageClasses {
+		storageClasses[i].PvcCount = scPvcCount[storageClasses[i].Name]
+	}
 
 	res := &MiscResources{
 		Services:       services,

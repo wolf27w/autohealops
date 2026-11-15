@@ -10,6 +10,7 @@ from app.models.db_metric_snapshot import DBMetricSnapshot
 from app.models.host import Host
 from app.models.host_group import HostGroup, HostGroupMember
 from app.models.host_session import HostSession, HostSessionChunk
+from app.models.host_command_audit import HostCommandAudit
 from app.models.alert import Alert, AlertComment
 from app.models.alert_silence import AlertSilence
 from app.models.alert_policy import AlertPolicy
@@ -104,6 +105,7 @@ __all__ = [
     "DbGroup",
     "HostGroup",
     "HostGroupMember",
+    "HostCommandAudit",
     "KnowledgeEntry",
     "LogAlertRule",
     "LogSource",

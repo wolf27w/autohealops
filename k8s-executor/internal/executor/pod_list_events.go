@@ -369,6 +369,7 @@ var clusterScopedKinds = map[string]bool{
 	"namespace":                      true,
 	"mutatingwebhookconfiguration":   true,
 	"validatingwebhookconfiguration": true,
+	"storageclass":                   true,
 }
 
 // workloadGVR 工作负载/配置类资源类型 → GVR
@@ -392,6 +393,10 @@ func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}, nil
 	case "pvc":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}, nil
+	case "serviceaccount":
+		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}, nil
+	case "storageclass":
+		return schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}, nil
 	case "pod":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, nil
 	case "namespace":
@@ -487,6 +492,7 @@ func (e *Executor) ApplyWorkloadYaml(ctx context.Context, kind, namespace, name,
 func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name string) error {
 	switch kind {
 	case "configmap", "secret", "service", "ingress", "pvc",
+		"serviceaccount", "storageclass",
 		"deployment", "statefulset", "daemonset", "cronjob", "pod",
 		"namespace", "mutatingwebhookconfiguration", "validatingwebhookconfiguration":
 	default:
@@ -566,6 +572,10 @@ func kindMatches(kind, internal string) bool {
 		return kind == "Ingress"
 	case "pvc":
 		return kind == "PersistentVolumeClaim"
+	case "serviceaccount":
+		return kind == "ServiceAccount"
+	case "storageclass":
+		return kind == "StorageClass"
 	case "pod":
 		return kind == "Pod"
 	case "namespace":

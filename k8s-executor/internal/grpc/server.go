@@ -485,6 +485,29 @@ func (s *Server) ListNamespaces(ctx context.Context, req *pb.ListNamespacesReque
 	return &pb.ListNamespacesResponse{Success: true, Namespaces: ns}, nil
 }
 
+// ListServiceAccounts 列出 ServiceAccount（角色反查 + 关联 secret）
+func (s *Server) ListServiceAccounts(ctx context.Context, req *pb.ListServiceAccountsRequest) (*pb.ListServiceAccountsResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListServiceAccountsResponse{Success: false, Error: err.Error()}, nil
+	}
+	items, err := ex.ListServiceAccounts(ctx, req.Namespace)
+	if err != nil {
+		return &pb.ListServiceAccountsResponse{Success: false, Error: err.Error()}, nil
+	}
+	infos := make([]*pb.ServiceAccountInfo, 0, len(items))
+	for _, it := range items {
+		infos = append(infos, &pb.ServiceAccountInfo{
+			Name:      it.Name,
+			Namespace: it.Namespace,
+			Role:      it.Role,
+			Secrets:   it.Secrets,
+			CreatedAt: it.CreatedAt,
+		})
+	}
+	return &pb.ListServiceAccountsResponse{Success: true, Items: infos}, nil
+}
+
 // GetPodDetail Pod 详情（含容器组内容）
 func (s *Server) GetPodDetail(ctx context.Context, req *pb.GetPodDetailRequest) (*pb.GetPodDetailResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)
@@ -587,10 +610,10 @@ func (s *Server) ListMiscResources(ctx context.Context, req *pb.ListMiscResource
 		resp.Secrets = append(resp.Secrets, &pb.SecretInfo{Namespace: v.Namespace, Name: v.Name, Type: v.Type, DataCount: v.DataCount, CreatedAt: v.CreatedAt})
 	}
 	for _, v := range r.PVCs {
-		resp.Pvcs = append(resp.Pvcs, &pb.PvcInfo{Namespace: v.Namespace, Name: v.Name, Status: v.Status, Capacity: v.Capacity, StorageClass: v.StorageClass, VolumeName: v.VolumeName, AccessModes: v.AccessModes, CreatedAt: v.CreatedAt})
+		resp.Pvcs = append(resp.Pvcs, &pb.PvcInfo{Namespace: v.Namespace, Name: v.Name, Status: v.Status, Capacity: v.Capacity, StorageClass: v.StorageClass, VolumeName: v.VolumeName, AccessModes: v.AccessModes, CreatedAt: v.CreatedAt, Mounted: v.Mounted, MountedBy: v.MountedBy})
 	}
 	for _, v := range r.StorageClasses {
-		resp.StorageClasses = append(resp.StorageClasses, &pb.StorageClassInfo{Name: v.Name, Provisioner: v.Provisioner, IsDefault: v.IsDefault, CreatedAt: v.CreatedAt})
+		resp.StorageClasses = append(resp.StorageClasses, &pb.StorageClassInfo{Name: v.Name, Provisioner: v.Provisioner, IsDefault: v.IsDefault, CreatedAt: v.CreatedAt, PvcCount: v.PvcCount, AllowExpansion: v.AllowExpansion, SupportsClone: v.SupportsClone, SupportsSnapshot: v.SupportsSnapshot})
 	}
 	return resp, nil
 }
