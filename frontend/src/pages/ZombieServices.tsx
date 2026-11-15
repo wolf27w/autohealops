@@ -16,9 +16,13 @@ const STATUS: Record<string, { color: string; label: string }> = {
   unmapped: { color: 'orange', label: '未归因' },
 }
 
-export default function ZombieServices() {
+export default function ZombieServices({ fixedClusterId, hideClusterSelect }: {
+  /** 集群内页面固定集群（不再让用户切） */
+  fixedClusterId?: number
+  hideClusterSelect?: boolean
+} = {}) {
   const [clusters, setClusters] = useState<Cluster[]>([])
-  const [clusterId, setClusterId] = useState<number | undefined>()
+  const [clusterId, setClusterId] = useState<number | undefined>(fixedClusterId)
   const [namespace, setNamespace] = useState('')
   const [days, setDays] = useState(7)
   const [loading, setLoading] = useState(false)
@@ -28,9 +32,15 @@ export default function ZombieServices() {
   const [cfgText, setCfgText] = useState('')
 
   useEffect(() => {
+    if (fixedClusterId) setClusterId(fixedClusterId)
+  }, [fixedClusterId])
+
+  useEffect(() => {
     getClusters().then((d) => {
-      setClusters((d || []) as Cluster[])
-      if (d && d.length && !clusterId) setClusterId(d[0].id)
+      const list = (d || []) as Cluster[]
+      setClusters(fixedClusterId ? list.filter((c) => c.id === fixedClusterId) : list)
+      if (fixedClusterId) setClusterId(fixedClusterId)
+      else if (d && d.length && !clusterId) setClusterId(d[0].id)
     }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -75,11 +85,13 @@ export default function ZombieServices() {
         extra={<Button icon={<SettingOutlined />} onClick={openConfig}>检测配置</Button>}
       >
         <Space wrap style={{ marginBottom: 12 }}>
-          <Select
-            style={{ width: 200 }} placeholder="选择集群" value={clusterId} onChange={setClusterId}
-            options={clusters.map((c) => ({ value: c.id, label: c.name }))}
-            showSearch optionFilterProp="label"
-          />
+          {!hideClusterSelect && (
+            <Select
+              style={{ width: 200 }} placeholder="选择集群" value={clusterId} onChange={setClusterId}
+              options={clusters.map((c) => ({ value: c.id, label: c.name }))}
+              showSearch optionFilterProp="label"
+            />
+          )}
           <Input
             style={{ width: 180 }} placeholder="namespace（空=全部）" value={namespace}
             onChange={(e) => setNamespace(e.target.value)} allowClear

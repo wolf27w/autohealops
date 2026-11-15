@@ -22,7 +22,7 @@ export default function GovernancePage({ clusterId }: { clusterId: number }) {
         items={[
           { key: 'ns', label: '命名空间配额', children: <NsLevelGovernance clusters={clusters} clusterId={clusterId} /> },
           { key: 'workload', label: '工作负载管控', children: <WorkloadGovernance clusters={clusters} clusterId={clusterId} hideClusterSelect /> },
-          { key: 'zombie', label: '僵尸服务', children: <ZombieServices /> },
+          { key: 'zombie', label: '僵尸服务', children: <ZombieServices fixedClusterId={clusterId} hideClusterSelect /> },
         ]}
       />
     </Card>

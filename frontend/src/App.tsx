@@ -1,8 +1,10 @@
 // 路由配置（R34-P0：URL 前缀归位 · 资源/告警/诊断/平台）
 // 菜单树、角色门槛、旧地址重定向统一在 src/constants/nav.ts
-import { Fragment, lazy, Suspense } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { Spin } from 'antd'
+import { Fragment, lazy, Suspense, useEffect, useState } from 'react'
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Spin, message } from 'antd'
+import { isAdmin } from './utils/auth'
+import { getHostGroups } from './services/api'
 import MainLayout from './components/MainLayout'
 import { GlobalRefreshProvider } from './components/GlobalRefreshContext'
 import { LEGACY_REDIRECTS, minRoleForPath } from './constants/nav'
@@ -83,6 +85,29 @@ function guard(path: string, el: JSX.Element) {
   return minRoleForPath(path) === 'admin' ? <RequireRole role="admin">{el}</RequireRole> : el
 }
 
+// 主机授权守卫：独立整屏页（/terminal）不在 MainLayout 内，需自行判定主机组授权
+function RequireHostGrant({ children }: { children: JSX.Element }) {
+  const [ok, setOk] = useState<boolean | null>(isAdmin() ? true : null)
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (isAdmin()) { setOk(true); return }
+    getHostGroups()
+      .then((d) => {
+        const groups = (d as { groups?: Array<{ my_role?: string }> })?.groups || []
+        setOk(groups.some((g) => !!g.my_role))
+      })
+      .catch(() => setOk(false))
+  }, [])
+  useEffect(() => {
+    if (ok === false) {
+      message.warning('无该主机组权限，请联系管理员授权')
+      navigate('/dashboard', { replace: true })
+    }
+  }, [ok, navigate])
+  if (ok === null) return <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 120 }}><Spin size="large" /></div>
+  return ok ? children : null
+}
+
 // 旧地址重定向：替换前缀、保留尾部路径与 query（如 /web-terminal/7 → /resources/terminal/7）
 function LegacyRedirect({ from, to }: { from: string; to: string }) {
   const loc = useLocation()
@@ -110,7 +135,7 @@ export default function App() {
         }
       />
       {/* 独立整屏终端：新标签页打开，不套平台侧栏（节点管理→Web 终端、数据库管理→SQL 终端） */}
-      <Route path="/terminal" element={<RequireAuth><WebTerminal standalone /></RequireAuth>} />
+      <Route path="/terminal" element={<RequireAuth><RequireHostGrant><WebTerminal standalone /></RequireHostGrant></RequireAuth>} />
       <Route path="/sql-terminal" element={<RequireAuth><SqlTerminal /></RequireAuth>} />
       <Route
         path="/"
