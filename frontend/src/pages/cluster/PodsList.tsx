@@ -188,12 +188,13 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
       return (
         <Dropdown trigger={['click']} menu={{
           items: [
-            { key: 'metrics', label: '监控' },
+            // 顺序按 2026-11-13 17:52 定稿：日志 → 进容器 → JVM 诊断 → 隔离 → 监控 → 查看 YAML
             { key: 'logs', label: '日志' },
             { key: 'exec', label: '进容器' },
             { key: 'jvm', label: 'JVM 诊断' },
-            { key: 'yaml', label: '编辑 YAML' },
             isolated.has(key) ? { key: 'unisolate', label: '取消隔离' } : { key: 'isolate', label: '隔离' },
+            { key: 'metrics', label: '监控' },
+            { key: 'yaml', label: '查看 YAML' },
             { type: 'divider' as const },
             { key: 'delete', label: '删除', danger: true },
           ],
