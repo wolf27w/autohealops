@@ -484,6 +484,42 @@ func handleRequest(ctx context.Context, bridge *agentbridge.Bridge, f *agentpb.A
 		resp.Payload = out
 		return resp
 	}
+	if f.Method == "CreateDatabase" {
+		out, err := agentdb.CreateDatabaseByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
+	if f.Method == "DropDatabase" {
+		out, err := agentdb.DropDatabaseByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
+	if f.Method == "ImportSqlRaw" {
+		out, err := agentdb.ImportSqlRawByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
+	if f.Method == "Backup" {
+		out, err := agentdb.BackupByKey(ctx, f.Payload)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Payload = out
+		return resp
+	}
 	if f.Method == "DbSchemaByKey" {
 		out, err := agentdb.SchemaByKey(ctx, f.Payload)
 		if err != nil {

@@ -145,12 +145,20 @@ func ExportByKey(ctx context.Context, payload []byte) ([]byte, error) {
 		DB    string `json:"db"`
 		Table string `json:"table"`
 		Rows  int    `json:"rows"`
+		Mode  string `json:"mode"` // structure / data / both（缺省 both，兼容旧调用）
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return nil, fmt.Errorf("解析请求失败: %w", err)
 	}
 	if req.Rows <= 0 || req.Rows > maxExportRows {
 		req.Rows = 1000
+	}
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = "both"
+	}
+	if mode != "structure" && mode != "data" && mode != "both" {
+		return nil, fmt.Errorf("不支持的 mode=%s（structure/data/both）", req.Mode)
 	}
 	db, cfg, err := openByKey(req.Key)
 	if err != nil {
@@ -200,12 +208,17 @@ func ExportByKey(ctx context.Context, payload []byte) ([]byte, error) {
 			break
 		}
 		full := quoteIdent(req.DB) + "." + quoteIdent(tbl)
-		var name, ddl string
-		if err := db.QueryRowContext(qctx, "SHOW CREATE TABLE "+full).Scan(&name, &ddl); err != nil {
+		if mode != "data" {
+			var name, ddl string
+			if err := db.QueryRowContext(qctx, "SHOW CREATE TABLE "+full).Scan(&name, &ddl); err != nil {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("-- ---------- table %s ----------\n", tbl))
+			sb.WriteString(ddl + ";\n\n")
+		}
+		if mode == "structure" {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("-- ---------- table %s ----------\n", tbl))
-		sb.WriteString(ddl + ";\n\n")
 
 		rows, err := db.QueryContext(qctx, fmt.Sprintf("SELECT * FROM %s LIMIT %d", full, req.Rows))
 		if err != nil {
@@ -248,7 +261,7 @@ func ExportByKey(ctx context.Context, payload []byte) ([]byte, error) {
 
 	out, _ := json.Marshal(map[string]any{
 		"db": req.DB, "table": req.Table, "tables": len(tables), "rows": totalRows,
-		"bytes": sb.Len(), "truncated": truncated, "sql": sb.String(),
+		"bytes": sb.Len(), "truncated": truncated, "mode": mode, "sql": sb.String(),
 	})
 	return out, nil
 }
