@@ -18,6 +18,7 @@ from app.models import (
     DBConnection,
     DbApprovalPolicy,
     DbApprovalRequest,
+    Project,
     ProjectDBConnection,
     UserProjectPermission,
 )
@@ -321,3 +322,77 @@ async def can_approve_conn_ids(user) -> set | None:
             ).distinct()
         )).scalars().all()
     return set(rows)
+
+
+async def manager_project_ids(user) -> set[int]:
+    """用户作为项目管理员（manager）管理的项目 id 集合；admin 返回空集合（admin 不按项目限权）。"""
+    if getattr(user, "role", "") == "admin":
+        return set()
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(UserProjectPermission.project_id).where(
+                UserProjectPermission.user_id == user.id,
+                UserProjectPermission.permission == "manager",
+            ).distinct()
+        )).scalars().all()
+    return set(rows)
+
+
+async def conn_project_map(session, conn_ids) -> dict:
+    """批量取 conn_id -> (project_id, project_names_csv)。
+
+    一个库可能挂到多个项目：项目名排序后逗号拼接，project_id 取排序后的第一个。
+    未归属任何项目的 conn_id 不在结果里（调用方按缺失 → 未归属处理）。
+    """
+    if not conn_ids:
+        return {}
+    rows = (await session.execute(
+        select(
+            ProjectDBConnection.db_connection_id,
+            ProjectDBConnection.project_id,
+            Project.name,
+        )
+        .join(Project, Project.id == ProjectDBConnection.project_id)
+        .where(ProjectDBConnection.db_connection_id.in_(list(set(conn_ids))))
+        .order_by(Project.name)
+    )).all()
+    by_conn: dict[int, dict] = {}
+    for conn_id, project_id, name in rows:
+        entry = by_conn.get(conn_id)
+        if entry is None:
+            entry = {"project_id": project_id, "names": []}
+            by_conn[conn_id] = entry
+        entry["names"].append(name or "")
+    return {
+        c: (e["project_id"], ", ".join(e["names"]))
+        for c, e in by_conn.items()
+    }
+
+
+async def list_approval_projects(user) -> list[dict]:
+    """审核单筛选下拉的项目列表：admin=全部项目，项目管理员=其管理项目，其他=空。
+
+    返回 [{id, name, conn_count}]（conn_count = 该项目挂接的数据库实例数）。
+    """
+    from sqlalchemy import func as sa_func
+
+    if getattr(user, "role", "") == "admin":
+        pids = None
+    else:
+        pids = await manager_project_ids(user)
+        if not pids:
+            return []
+    async with async_session() as session:
+        stmt = (
+            select(Project.id, Project.name, sa_func.count(ProjectDBConnection.id))
+            .outerjoin(ProjectDBConnection, ProjectDBConnection.project_id == Project.id)
+            .group_by(Project.id, Project.name)
+            .order_by(Project.name)
+        )
+        if pids is not None:
+            stmt = stmt.where(Project.id.in_(pids))
+        rows = (await session.execute(stmt)).all()
+    return [
+        {"id": int(pid), "name": name or "", "conn_count": int(cnt)}
+        for pid, name, cnt in rows
+    ]

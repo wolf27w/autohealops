@@ -1,8 +1,8 @@
 // 审批列表页
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Tabs, Card, Space, Button, Table, Tag, Modal, Input, message, Empty, Checkbox, Select, Tooltip, Pagination, Drawer, DatePicker, Descriptions, Radio } from 'antd'
-import { getApprovals, getApproval, decideApproval, batchDecideApprovals, addApprover, transferApproval, getApprovalCommentTemplates, listDbApprovals, approveDbApproval, rejectDbApproval, dbApprovalDownloadUrl } from '../services/api'
+import { getApprovals, getApproval, decideApproval, batchDecideApprovals, addApprover, transferApproval, getApprovalCommentTemplates, listDbApprovals, listDbApprovalProjects, approveDbApproval, rejectDbApproval, dbApprovalDownloadUrl } from '../services/api'
 import type { DbApprovalItem } from '../services/api'
 import type { Approval } from '../types'
 import { isAdmin } from '../utils/auth'
@@ -236,19 +236,18 @@ function DbApprovalsTab() {
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
-  // mine 模式：0=看全部（admin 或任一可审批行），1=只看自己；首屏按 admin 初始化，加载后如有可审批行则切为 0
-  const [mineMode, setMineMode] = useState<0 | 1>(admin ? 0 : 1)
+  // 项目筛选：0=全部项目，-1=未归属，>0=具体项目 id（后端缺省按角色：admin=全部、项目管理员=其管理项目、其他=我提交的）
+  const [projectFilter, setProjectFilter] = useState<number>(0)
+  const { data: projects = [] } = useQuery({
+    queryKey: ['db-approvals-projects'],
+    queryFn: () => listDbApprovalProjects(),
+  })
   const { data, refetch, isFetching } = useQuery({
-    queryKey: ['db-approvals', statusFilter ?? 'all', page, mineMode],
-    queryFn: () => listDbApprovals({ status: statusFilter, mine: mineMode, page, page_size: pageSize }),
+    queryKey: ['db-approvals', statusFilter ?? 'all', projectFilter, page],
+    queryFn: () => listDbApprovals({ status: statusFilter, project_id: projectFilter, page, page_size: pageSize }),
   })
   const items = data?.items ?? []
   const total = data?.total ?? 0
-  const anyCanApprove = items.some((r) => (r as DbApprovalItem & { can_approve?: boolean }).can_approve === true)
-  useEffect(() => {
-    const want: 0 | 1 = admin || anyCanApprove ? 0 : 1
-    if (want !== mineMode) setMineMode(want)
-  }, [admin, anyCanApprove, mineMode])
 
   // 通过弹窗
   const [approveTarget, setApproveTarget] = useState<DbApprovalItem | null>(null)
@@ -350,6 +349,17 @@ function DbApprovalsTab() {
             { value: 'expired', label: '过期' },
           ]}
         />
+        <Select
+          placeholder="项目筛选"
+          style={{ width: 180 }}
+          value={projectFilter}
+          onChange={(v) => { setProjectFilter(v ?? 0); setPage(1) }}
+          options={[
+            { value: 0, label: '全部项目' },
+            ...(admin ? [{ value: -1 as number, label: '未归属' }] : []),
+            ...(projects ?? []).map((p) => ({ value: p.id, label: p.name })),
+          ]}
+        />
         <Button onClick={() => refetch()} loading={isFetching}>刷新</Button>
         <span style={{ color: '#999', fontSize: 12 }}>共 {total} 条</span>
       </Space>
@@ -365,6 +375,7 @@ function DbApprovalsTab() {
           { title: '单号', dataIndex: 'id', width: 70 },
           { title: '实例', dataIndex: 'conn_name', render: (v: string) => v || '-' },
           { title: '库', dataIndex: 'db_name', render: (v: string) => v || '-' },
+          { title: '项目', dataIndex: 'project_name', render: (v: string) => v ? v : <span style={{ color: '#999' }}>未归属</span> },
           { title: '类别', dataIndex: 'kind', render: (v: string) => renderKind(v) },
           { title: '状态', dataIndex: 'status', render: (v: string) => renderStatus(v) },
           { title: '提交人', dataIndex: 'requested_by', render: (v: string) => v || '-' },
@@ -449,6 +460,7 @@ function DbApprovalsTab() {
               <Descriptions.Item label="单号">#{detail.id}</Descriptions.Item>
               <Descriptions.Item label="实例">{detail.conn_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="库">{detail.db_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="项目">{detail.project_name || '未归属'}</Descriptions.Item>
               <Descriptions.Item label="类别">{renderKind(detail.kind)}</Descriptions.Item>
               <Descriptions.Item label="状态">{renderStatus(detail.status)}</Descriptions.Item>
               <Descriptions.Item label="提交人">{detail.requested_by || '-'}</Descriptions.Item>

@@ -430,6 +430,40 @@ async def _run_sql(c: DBConnection, sql: str, limit: int = 200, allow_write: boo
     return await db_direct_service.query(c, sql, limit, database=database)
 
 
+# agent 版本过低：这些错误文案说明 agent 侧没有该 method（升级 agent 后可用）
+_AGENT_UNSUPPORTED_HINTS = ("unknown method", "unsupported method", "方法不存在", "不支持的方法")
+
+
+async def _agent_call(cluster_id: int, method: str, payload: dict, timeout: float):
+    """经 agent 反向隧道调用，返回 (data, err, unsupported)。
+
+    - data: 响应解析后的 dict（成功时）
+    - err: 失败原因（字符串；成功为空）
+    - unsupported: True 表示 agent 版本过低不支持该 method（需升级 agent）
+    """
+    from app import agent_gateway
+    try:
+        raw = await asyncio.to_thread(
+            agent_gateway.call, int(cluster_id), method,
+            json.dumps(payload, ensure_ascii=False).encode(), timeout,
+        )
+        if not raw:
+            return {}, "", False
+        return json.loads(raw), "", False
+    except Exception as e:  # noqa: BLE001
+        msg = str(e) or ""
+        low = msg.lower()
+        if any(h in low for h in _AGENT_UNSUPPORTED_HINTS):
+            return None, "", True
+        return None, msg, False
+
+
+def _iter_chunks(text: str, size: int = 64 * 1024):
+    """把字符串按块 yield bytes（agent 备份 SQL 流式返回，避免一次性写大字符串）。"""
+    for i in range(0, len(text), size):
+        yield text[i:i + size].encode("utf-8")
+
+
 async def _audit_sql(user, c: DBConnection, sql: str, elapsed: float, rows: int,
                      ok: bool, err: str, mode: str, affected: int = 0) -> None:
     """审计：只记元信息（谁/集群/库/SQL 摘要/耗时/行数/影响行数/成败），不落结果。"""
@@ -543,14 +577,17 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
     try:
         rows = int(payload.get("rows") or 1000)
         if (getattr(c, "source", "direct") or "direct") == "agent":
-            from app import agent_gateway
-            raw = await asyncio.to_thread(
-                agent_gateway.call, int(c.cluster_id), "DbExport",
-                json.dumps({"key": c.agent_db_key, "db": c.database, "table": table if scope == "table" else "",
-                            "rows": rows, "mode": mode}).encode(),
+            data, err, unsupported = await _agent_call(
+                int(c.cluster_id), "DbExport",
+                {"key": c.agent_db_key, "db": c.database, "table": table if scope == "table" else "",
+                 "rows": rows, "mode": mode},
                 120.0,
             )
-            return {"code": 200, "message": "success", "data": json.loads(raw)}
+            if unsupported:
+                return {"code": 400, "message": "agent 版本过低，请升级到支持该操作的版本", "data": None}
+            if err:
+                return {"code": 500, "message": f"导出失败：{err}", "data": None}
+            return {"code": 200, "message": "success", "data": data}
         from app.services import db_direct_service
         return {"code": 200, "message": "success",
                 "data": await db_direct_service.export_sql(c, c.database, table if scope == "table" else "",
@@ -608,7 +645,7 @@ async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin
 
 @router.post("/{conn_id}/databases")
 async def create_database(conn_id: int, payload: dict, user=Depends(require_operator)):
-    """建库（仅直连库；agent 库暂不支持）。库名仅字母数字下划线、长度 1~64。"""
+    """建库（直连库或 agent 库均支持）。库名仅字母数字下划线、长度 1~64。"""
     name = (payload.get("name") or "").strip()
     if not name:
         return {"code": 400, "message": "库名不能为空", "data": None}
@@ -624,7 +661,15 @@ async def create_database(conn_id: int, payload: dict, user=Depends(require_oper
     if not ok:
         return {"code": 400, "message": why, "data": None}
     if (getattr(c, "source", "direct") or "direct") == "agent":
-        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+        _data, err, unsupported = await _agent_call(
+            int(c.cluster_id), "CreateDatabase",
+            {"key": c.agent_db_key, "name": name}, 60.0,
+        )
+        if unsupported:
+            return {"code": 400, "message": "agent 版本过低，请升级到支持该操作的版本", "data": None}
+        if err:
+            return {"code": 500, "message": f"建库失败：{err}", "data": None}
+        return {"code": 200, "message": "success", "data": {"name": name}}
     block = await _check_approval(conn_id, "ddl")
     if block:
         return block
@@ -641,7 +686,7 @@ async def create_database(conn_id: int, payload: dict, user=Depends(require_oper
 
 @router.delete("/{conn_id}/databases/{name}")
 async def drop_database(conn_id: int, name: str, confirm: bool = False, user=Depends(require_operator)):
-    """删库（仅直连库；agent 库暂不支持）。必须带 confirm=true 才执行，否则 400。"""
+    """删库（直连库或 agent 库均支持）。必须带 confirm=true 才执行，否则 400。"""
     if not confirm:
         return {"code": 400, "message": "删除数据库会真实删库，需显式确认（confirm=true）", "data": None}
     name = (name or "").strip()
@@ -657,7 +702,15 @@ async def drop_database(conn_id: int, name: str, confirm: bool = False, user=Dep
     if not ok:
         return {"code": 400, "message": why, "data": None}
     if (getattr(c, "source", "direct") or "direct") == "agent":
-        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+        _data, err, unsupported = await _agent_call(
+            int(c.cluster_id), "DropDatabase",
+            {"key": c.agent_db_key, "name": name}, 60.0,
+        )
+        if unsupported:
+            return {"code": 400, "message": "agent 版本过低，请升级到支持该操作的版本", "data": None}
+        if err:
+            return {"code": 500, "message": f"删库失败：{err}", "data": None}
+        return {"code": 200, "message": "success", "data": {"name": name}}
     block = await _check_approval(conn_id, "ddl")
     if block:
         return block
@@ -677,7 +730,7 @@ async def import_sql_file(conn_id: int, payload: dict, user=Depends(require_oper
     """导入 SQL 脚本内容（不限大小），按 `;` 切分逐条执行。
 
     body: {sql, mode: "stop"|"skip"}；mode=stop 遇错即停，mode=skip 跳过错误继续。
-    仅直连库（agent 库暂不支持此能力）。
+    直连库与 agent 库均支持（agent 库经隧道下发 ImportSqlRaw）。
     """
     sql = payload.get("sql") or ""
     mode = (payload.get("mode") or "stop").lower()
@@ -695,7 +748,21 @@ async def import_sql_file(conn_id: int, payload: dict, user=Depends(require_oper
     if not ok:
         return {"code": 400, "message": why, "data": None}
     if (getattr(c, "source", "direct") or "direct") == "agent":
-        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
+        started = time.time()
+        result, err, unsupported = await _agent_call(
+            int(c.cluster_id), "ImportSqlRaw",
+            {"key": c.agent_db_key, "db": c.database or "", "sql": sql, "mode": mode},
+            180.0,
+        )
+        elapsed = round(time.time() - started, 2)
+        await _audit_sql(user, c, f"IMPORT-SQL mode={mode} ({len(sql)} bytes)",
+                         elapsed, 0, not err and not unsupported, err, "db_import_sql",
+                         int((result or {}).get("executed") or 0))
+        if unsupported:
+            return {"code": 400, "message": "agent 版本过低，请升级到支持该操作的版本", "data": None}
+        if err:
+            return {"code": 500, "message": f"导入失败：{err}", "data": None}
+        return {"code": 200, "message": "success", "data": result}
 
     from app.services import db_approval_service
     kind = db_approval_service.classify_sql_batch(sql)
@@ -725,7 +792,7 @@ async def backup_database(conn_id: int, databases: str = "", schema_only: bool =
     """生成库备份并直接以附件下载（内存拼 SQL 流式返回，不落盘）。
 
     query: databases=逗号分隔的库名（缺省=连接默认库）；schema_only=true 只导结构。
-    仅直连库（agent 库暂不支持）。
+    直连库与 agent 库均支持（agent 库经隧道下发 Backup）。
     """
     async with async_session() as session:
         c = await session.get(DBConnection, conn_id)
@@ -736,8 +803,6 @@ async def backup_database(conn_id: int, databases: str = "", schema_only: bool =
     ok, why = _db_ready(c)
     if not ok:
         return {"code": 400, "message": why, "data": None}
-    if (getattr(c, "source", "direct") or "direct") == "agent":
-        return {"code": 400, "message": "该操作暂不支持 agent 接入的库", "data": None}
 
     dbs = [d.strip() for d in (databases or "").split(",") if d.strip()] \
         or ([c.database] if c.database else [])
@@ -746,6 +811,30 @@ async def backup_database(conn_id: int, databases: str = "", schema_only: bool =
     for d in dbs:
         if not _IDENT_RE.match(d):
             return {"code": 400, "message": f"数据库名 {d} 非法（仅字母数字下划线，长度≤64）", "data": None}
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"{c.name or 'db'}-backup-{ts}.sql"
+    ascii_name = f"db-{c.id}-{ts}.sql"
+    from urllib.parse import quote
+    disposition = (f'attachment; filename="{ascii_name}"; '
+                   f"filename*=UTF-8''{quote(filename, safe='')}")
+
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        data, err, unsupported = await _agent_call(
+            int(c.cluster_id), "Backup",
+            {"key": c.agent_db_key, "databases": dbs, "schema_only": bool(schema_only)},
+            300.0,
+        )
+        if unsupported:
+            return {"code": 400, "message": "agent 版本过低，请升级到支持该操作的版本", "data": None}
+        if err:
+            return {"code": 500, "message": f"备份失败：{err}", "data": None}
+        sql_text = (data or {}).get("sql") or ""
+        return StreamingResponse(
+            _iter_chunks(sql_text),
+            media_type="application/sql; charset=utf-8",
+            headers={"Content-Disposition": disposition},
+        )
 
     # 预检：连接可达 + 目标库存在（在开始流式返回前给出 JSON 错误，避免响应头已发再报错）
     from app.services import db_direct_service
@@ -757,12 +846,6 @@ async def backup_database(conn_id: int, databases: str = "", schema_only: bool =
     if missing:
         return {"code": 400, "message": f"数据库不存在：{', '.join(missing)}", "data": None}
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = f"{c.name or 'db'}-backup-{ts}.sql"
-    ascii_name = f"db-{c.id}-{ts}.sql"
-    from urllib.parse import quote
-    disposition = (f'attachment; filename="{ascii_name}"; '
-                   f"filename*=UTF-8''{quote(filename, safe='')}")
     gen = db_direct_service.backup_sql(c, dbs, schema_only)
     return StreamingResponse(
         gen,

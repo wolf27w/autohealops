@@ -9,11 +9,11 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import false, select
 
 from app.core.database import async_session
 from app.middleware.permission import require_any_user, require_operator
-from app.models import DBConnection, DbApprovalPolicy, DbApprovalRequest
+from app.models import DBConnection, DbApprovalPolicy, DbApprovalRequest, Project, ProjectDBConnection
 from app.services import db_approval_service
 
 router = APIRouter(prefix="/api/v1")
@@ -167,20 +167,78 @@ async def create_db_approval(payload: dict, user=Depends(require_operator)):
     return {"code": 200, "message": "success", "data": {"id": req.id}}
 
 
+@router.get("/db-approvals/projects")
+async def list_db_approval_projects(user=Depends(require_any_user)):
+    """审核单筛选下拉的项目列表：admin 返回全部项目，项目管理员返回其管理项目，其他返回空。"""
+    data = await db_approval_service.list_approval_projects(user)
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.get("/db-approvals")
-async def list_db_approvals(status: str = "", conn_id: int = 0, mine: int = 1,
+async def list_db_approvals(status: str = "", conn_id: int = 0, mine: int = 0,
+                           project_id: int = 0, scope: str = "",
                            page: int = 1, page_size: int = 20, user=Depends(require_any_user)):
-    """审核单列表：admin 或项目管理员用 mine=0 看全部，其他人强制只看自己（requested_by=username）。"""
+    """审核单列表（按项目收紧）。
+
+    可见范围（缺省按角色）：
+      - admin：全部；可传 project_id 按项目过滤，project_id=-1 只看未归属任何项目的库
+      - 项目管理员（非 admin）：只看到自己 manager 项目下那些库的审核单
+      - 其他：只看自己提交的（requested_by=username）
+      - scope=mine：强制只看自己提交的（覆盖角色缺省）
+    """
     from sqlalchemy import func as sa_func
-    can_view_all = user.role == "admin" or await db_approval_service.is_project_manager(user)
+
+    is_admin = user.role == "admin"
+    username = getattr(user, "username", "") or ""
+
+    # scope 优先；为空时回退旧 mine 参数（mine=1 等价 scope=mine；缺省 0 = 角色缺省）
+    if scope == "mine":
+        scope_mine = True
+    elif scope:
+        scope_mine = False
+    else:
+        scope_mine = bool(int(mine))
+
     async with async_session() as session:
         stmt = select(DbApprovalRequest)
+
+        # 角色缺省可见范围
+        if scope_mine:
+            stmt = stmt.where(DbApprovalRequest.requested_by == username)
+        elif is_admin:
+            pass  # admin 缺省全部
+        else:
+            pids = await db_approval_service.manager_project_ids(user)
+            if pids:
+                stmt = stmt.where(DbApprovalRequest.conn_id.in_(
+                    select(ProjectDBConnection.db_connection_id).where(
+                        ProjectDBConnection.project_id.in_(pids)
+                    )
+                ))
+            else:
+                stmt = stmt.where(DbApprovalRequest.requested_by == username)
+
+        # 项目过滤
+        if project_id == -1:
+            # 未归属任何项目的库：仅 admin 可见
+            if is_admin:
+                stmt = stmt.where(DbApprovalRequest.conn_id.not_in(
+                    select(ProjectDBConnection.db_connection_id)
+                ))
+            else:
+                stmt = stmt.where(false())
+        elif project_id > 0:
+            stmt = stmt.where(DbApprovalRequest.conn_id.in_(
+                select(ProjectDBConnection.db_connection_id).where(
+                    ProjectDBConnection.project_id == project_id
+                )
+            ))
+
         if status:
             stmt = stmt.where(DbApprovalRequest.status == status)
         if conn_id:
             stmt = stmt.where(DbApprovalRequest.conn_id == conn_id)
-        if not can_view_all or mine:
-            stmt = stmt.where(DbApprovalRequest.requested_by == (getattr(user, "username", "") or ""))
+
         total = (await session.execute(
             select(sa_func.count()).select_from(stmt.subquery())
         )).scalar() or 0
@@ -190,11 +248,18 @@ async def list_db_approvals(status: str = "", conn_id: int = 0, mine: int = 1,
             stmt.order_by(DbApprovalRequest.id.desc())
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars())
+
+        # 项目名/项目 id 批量映射（一次 join，避免逐行查库）
+        proj_map = await db_approval_service.conn_project_map(session, [r.conn_id for r in rows])
+
     approvable = await db_approval_service.can_approve_conn_ids(user)
     items = []
     for r in rows:
         d = _req_dict(r, include_token=True)
         d["can_approve"] = approvable is None or r.conn_id in approvable
+        p = proj_map.get(r.conn_id)
+        d["project_id"] = p[0] if p else 0
+        d["project_name"] = p[1] if p else ""
         items.append(d)
     return {"code": 200, "message": "success", "data": {
         "items": items,

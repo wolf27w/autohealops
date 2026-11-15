@@ -741,6 +741,10 @@ export interface DbApprovalItem {
   download_used?: boolean
   /** 当前用户是否可审批（后端按 admin / 项目管理员计算） */
   can_approve?: boolean
+  /** 审核单归属项目（一库多项目时取排序后第一个；未归属为 0） */
+  project_id?: number
+  /** 审核单归属项目名（多项目逗号拼接；未归属为空串） */
+  project_name?: string
 }
 export interface DbApprovalCreatePayload {
   conn_id: number
@@ -752,8 +756,11 @@ export interface DbApprovalCreatePayload {
 }
 export const createDbApproval = (payload: DbApprovalCreatePayload) =>
   http.post<{ id: number }>('/db-approvals', payload)
-export const listDbApprovals = (params: { status?: string; conn_id?: number; mine?: number; page?: number; page_size?: number }) =>
+export const listDbApprovals = (params: { status?: string; conn_id?: number; mine?: number; scope?: string; project_id?: number; page?: number; page_size?: number }) =>
   http.get<{ items: DbApprovalItem[]; total: number; page: number; page_size: number }>('/db-approvals', { params })
+export interface DbApprovalProject { id: number; name: string; conn_count: number }
+export const listDbApprovalProjects = () =>
+  http.get<DbApprovalProject[]>('/db-approvals/projects')
 export const approveDbApproval = (id: number, body: { execute_mode?: 'immediate' | 'scheduled'; scheduled_at?: string }) =>
   http.post(`/db-approvals/${id}/approve`, body)
 export const rejectDbApproval = (id: number, reason: string) =>
