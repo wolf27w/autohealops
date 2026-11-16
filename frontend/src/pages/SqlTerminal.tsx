@@ -14,7 +14,7 @@ import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
   importSqlScript, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
-  createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase,
+  createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase, testDBConnection,
 } from '../services/api'
 
 // ---------- 后端返回的连接行类型（getDBConnections 返回 unknown，这里按需断言） ----------
@@ -116,6 +116,8 @@ export default function SqlTerminal() {
   const [currentDb, setCurrentDb] = useState<string | null>(null)
   const pendingNodeRef = useRef<DbTreeSelectNode | null>(null)
   const [selObj, setSelObj] = useState<SelectedObj | null>(null)
+  // 连接状态（2026-11-16 老板口径）：默认不连接，必须点「连接」后才能执行任何库操作
+  const [connState, setConnState] = useState<Record<number, 'off' | 'connecting' | 'on' | 'failed'>>({})
 
   // 编辑器
   const [sql, setSql] = useState('')
@@ -174,6 +176,25 @@ export default function SqlTerminal() {
   const approvalPayloadRef = useRef<ApprovalSubmitPayload | null>(null)
 
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
+  const connected = !!cur && connState[cur.id] === 'on'
+  const connectCur = async () => {
+    if (!cur) return
+    setConnState((m) => ({ ...m, [cur.id]: 'connecting' }))
+    try {
+      await testDBConnection(cur.id)
+      setConnState((m) => ({ ...m, [cur.id]: 'on' }))
+      message.success(`已连接：${cur.name}`)
+    } catch {
+      setConnState((m) => ({ ...m, [cur.id]: 'failed' }))
+    }
+  }
+  const disconnectCur = () => {
+    if (!cur) return
+    setConnState((m) => ({ ...m, [cur.id]: 'off' }))
+    setCurrentDb(null)
+    setSelObj(null)
+    message.info(`已断开：${cur.name}`)
+  }
 
   const load = () => {
     setLoading(true)
@@ -247,6 +268,7 @@ export default function SqlTerminal() {
   }
 
   const run = async () => {
+    if (!connected) { message.warning('请先连接数据库'); return }
     if (!cur) return
     const { list, missingEnd } = splitStatements(sql)
     if (missingEnd) { setErr('SQL 语句必须以分号结尾（;）'); return }
@@ -507,6 +529,14 @@ export default function SqlTerminal() {
         {cur && (
           <>
             <Tag color="blue">{cur.name}</Tag>
+            <Tag color={connected ? 'green' : connState[cur.id] === 'failed' ? 'red' : 'default'}>
+              {connected ? '已连接' : connState[cur.id] === 'connecting' ? '连接中' : connState[cur.id] === 'failed' ? '连接失败' : '未连接'}
+            </Tag>
+            <Button size="small" type={connected ? 'default' : 'primary'}
+              loading={connState[cur.id] === 'connecting'}
+              onClick={() => (connected ? disconnectCur() : connectCur())}>
+              {connected ? '断开' : '连接'}
+            </Button>
             <span style={{ fontSize: 12, color: '#8c8c8c' }}>
               当前库：<b style={{ color: '#1677ff' }}>{currentDb || (cur.database || '-')}</b>
             </span>
@@ -514,12 +544,12 @@ export default function SqlTerminal() {
         )}
         <span style={{ flex: 1 }} />
         <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>
-        <Button disabled={!cur} onClick={createDb}>新建库</Button>
-        <Button disabled={!cur || !currentDb} onClick={openDbEdit}>编辑库</Button>
-        <Button danger disabled={!cur || !currentDb} onClick={dropDb}>删除库</Button>
-        <Button icon={<ImportOutlined />} disabled={!cur} onClick={() => { setImportResult(null); setImportOpen(true) }}>导入 SQL</Button>
-        <Button icon={<ExportOutlined />} disabled={!cur} onClick={() => { setExportDbs(currentDb ? [currentDb] : []); setExportOpen(true) }}>导出</Button>
-        <Button icon={<CloudDownloadOutlined />} disabled={!cur} onClick={() => { setBackupDbs(currentDb ? [currentDb] : []); setBackupOpen(true) }}>备份</Button>
+        <Button disabled={!connected} onClick={createDb}>新建库</Button>
+        <Button disabled={!connected || !currentDb} onClick={openDbEdit}>编辑库</Button>
+        <Button danger disabled={!connected || !currentDb} onClick={dropDb}>删除库</Button>
+        <Button icon={<ImportOutlined />} disabled={!connected} onClick={() => { setImportResult(null); setImportOpen(true) }}>导入 SQL</Button>
+        <Button icon={<ExportOutlined />} disabled={!connected} onClick={() => { setExportDbs(currentDb ? [currentDb] : []); setExportOpen(true) }}>导出</Button>
+        <Button icon={<CloudDownloadOutlined />} disabled={!connected} onClick={() => { setBackupDbs(currentDb ? [currentDb] : []); setBackupOpen(true) }}>备份</Button>
       </div>
 
       {/* 主体 */}
@@ -547,17 +577,21 @@ export default function SqlTerminal() {
                   已选 <b>{selObj.kind === 'table' ? '表' : selObj.kind === 'view' ? '视图' : selObj.kind === 'routine' ? '函数' : '事件'}</b>：{selObj.db}.{selObj.name}
                 </span>
                 <span style={{ flex: 1 }} />
-                <Button size="small" icon={<EyeOutlined />} onClick={() => viewDDL(selObj)}>查看结构</Button>
+                <Button size="small" icon={<EyeOutlined />} disabled={!connected} onClick={() => viewDDL(selObj)}>查看结构</Button>
                 {selObj.kind === 'table' && (
                   <>
-                    <Button size="small" onClick={() => openDesigner(selObj)}>表结构</Button>
-                    <Button size="small" icon={<ExportOutlined />} onClick={() => exportTable(selObj)}>导出该表</Button>
+                    <Button size="small" disabled={!connected} onClick={() => openDesigner(selObj)}>表结构</Button>
+                    <Button size="small" icon={<ExportOutlined />} disabled={!connected} onClick={() => exportTable(selObj)}>导出该表</Button>
                     <Popconfirm title={`确认删除表 ${selObj.db}.${selObj.name}？不可恢复`} onConfirm={() => dropTable(selObj)}>
-                      <Button size="small" danger icon={<DeleteOutlined />}>删除表</Button>
+                      <Button size="small" danger icon={<DeleteOutlined />} disabled={!connected}>删除表</Button>
                     </Popconfirm>
                   </>
                 )}
               </div>
+            )}
+            {!connected && cur && (
+              <Alert type="info" showIcon style={{ marginBottom: 8 }}
+                message="未连接：点右上角「连接」后才能执行 SQL、建库/删库、导入导出与表结构操作（默认不自动连接）" />
             )}
             <Input.TextArea
               value={sql}
@@ -565,11 +599,11 @@ export default function SqlTerminal() {
               placeholder={'select * from information_schema.tables limit 10;\n-- 多条语句用分号分隔，Ctrl/Cmd+Enter 执行'}
               style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 150 }}
               onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !busy && sql.trim()) { e.preventDefault(); run() }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !busy && connected && sql.trim()) { e.preventDefault(); run() }
               }}
             />
             <Space style={{ marginTop: 6 }} wrap>
-              <Button type="primary" icon={<PlayCircleOutlined />} loading={busy} disabled={!cur || !sql.trim()} onClick={run}>
+              <Button type="primary" icon={<PlayCircleOutlined />} loading={busy} disabled={!connected || !sql.trim()} onClick={run}>
                 执行（Ctrl/Cmd+Enter）
               </Button>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>

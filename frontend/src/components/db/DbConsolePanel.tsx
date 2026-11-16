@@ -27,7 +27,6 @@ export default function DbConsolePanel({ conn }: Props) {
       onToggleCollect={notify}
       onToggleInspect={notify}
       hideSidebar
-      autoConnect
     />
   )
 }

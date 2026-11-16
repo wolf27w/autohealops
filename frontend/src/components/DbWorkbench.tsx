@@ -656,7 +656,14 @@ export default function DbWorkbench({
 
       {/* 右：操作条 + SQL + 结果 */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : connState[cur.id] !== 'on' ? null : (
+        {!cur ? <Empty description="请选择左侧数据库" style={{ marginTop: 80 }} /> : connState[cur.id] !== 'on' ? (
+          <div style={{ marginTop: 80, textAlign: 'center' }}>
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={connState[cur.id] === 'failed' ? '连接失败，请重试' : '未连接'} />
+            <Button type="primary" style={{ marginTop: 8 }} loading={connState[cur.id] === 'connecting'}
+              onClick={() => connect(cur)}>连接 {cur.name}</Button>
+          </div>
+        ) : (
           <>
             <Space wrap size={6}>
               <b>{cur.name}</b>
