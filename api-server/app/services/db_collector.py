@@ -14,6 +14,7 @@ from datetime import datetime
 import aiomysql
 from sqlalchemy import func, or_, select
 
+from app.core.config import settings
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.security import decrypt_aes256_gcm
@@ -156,6 +157,7 @@ async def _pg_collect(conn_info: dict, threshold_sec: float) -> list[dict]:
 async def _oracle_collect(conn_info: dict, threshold_sec: float) -> list[dict]:
     """采集 Oracle 慢 SQL（可选依赖 oracledb，未装则降级返回空）"""
     try:
+        _maybe_oracle_thick()
         import oracledb  # noqa: PLC0415  # 可选依赖
     except ImportError:
         logger.warning("oracledb 未安装，Oracle 慢 SQL 采集跳过（安装后即时生效）")
@@ -353,6 +355,45 @@ def _build_conn_info(c: DBConnection, readonly: bool = False) -> dict:
     }
 
 
+_ORACLE_THICK_READY = False
+
+
+def _maybe_oracle_thick() -> None:
+    """可选启用 oracledb thick 模式（支持 11g 这类 thin 模式不支持的版本）。
+
+    配置项：ORACLE_CLIENT_LIB_DIR 指向 Oracle Instant Client 解压目录；
+    未配置或目录不存在时保持 thin 模式（12.1+ 可用），不报错。
+    """
+    global _ORACLE_THICK_READY
+    if _ORACLE_THICK_READY:
+        return
+    lib = (getattr(settings, "ORACLE_CLIENT_LIB_DIR", "") or "").strip()
+    if lib:
+        import os
+        if os.path.isdir(lib):
+            try:
+                import oracledb
+                oracledb.init_oracle_client(lib_dir=lib)
+                logger.info("oracledb 已启用 thick 模式（lib_dir=%s）", lib)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("oracledb thick 模式初始化失败: %s", e)
+    _ORACLE_THICK_READY = True
+
+
+def _oracle_error_hint(msg: str) -> str:
+    """把常见 Oracle 驱动错误翻译成可操作提示。"""
+    if "DPY-3010" in msg:
+        return (msg + "\n提示：该 Oracle 版本低于 12.1，python-oracledb thin 模式不支持；"
+                      "需安装 Oracle Instant Client 并配置 ORACLE_CLIENT_LIB_DIR 后重启 api-server（启用 thick 模式）。")
+    if "DPY-6001" in msg or "ORA-12514" in msg:
+        return msg + "\n提示：服务名/SID 不对。请填监听注册的 service_name（同一实例常用 ORCL），不要填用户名。"
+    if "DPY-6003" in msg or "ORA-12505" in msg:
+        return msg + "\n提示：SID 不对。请改用「Service Name」模式并填监听注册的服务名。"
+    if "ORA-01017" in msg:
+        return msg + "\n提示：用户名或密码错误（服务名是对的）。"
+    return msg
+
+
 async def test_db_connection(c: DBConnection) -> dict:
     """测试数据库连接（mysql/pg/oracle），优先用只读诊断账号。返回 {success, message}
 
@@ -382,6 +423,7 @@ async def test_db_connection(c: DBConnection) -> dict:
             await conn.execute("SELECT 1")
             await conn.close()
         elif c.db_type == "oracle":
+            _maybe_oracle_thick()
             import oracledb  # noqa: PLC0415  # 可选依赖
             role = (info.get("oracle_role") or "").lower()
             auth_mode = oracledb.AUTH_MODE_DEFAULT
@@ -414,7 +456,10 @@ async def test_db_connection(c: DBConnection) -> dict:
             return {"success": False, "message": f"不支持的数据库类型 {c.db_type}"}
         return {"success": True, "message": "连接成功"}
     except Exception as e:  # noqa: BLE001
-        return {"success": False, "message": f"连接失败: {e}"}
+        msg = str(e)
+        if (c.db_type or "").lower() == "oracle":
+            msg = _oracle_error_hint(msg)
+        return {"success": False, "message": f"连接失败: {msg}"}
 
 
 async def _mysql_collect_health(conn_info: dict) -> list[dict]:
