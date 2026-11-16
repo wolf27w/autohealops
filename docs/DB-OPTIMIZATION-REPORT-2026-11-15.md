@@ -74,3 +74,20 @@ ALTER TABLE pod_metrics DROP INDEX ix_pod_metrics_cluster_id;
 - 任何 `ALTER TABLE`、`DROP INDEX`、`ANALYZE TABLE` 均未执行
 - 未修改任何实例参数
 - 建议 2 与 3 需要改代码（批量插入 / 排查锁等待），属开发任务，可另开
+
+---
+
+## 七、执行记录（2026-11-16）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 3 个低风险冗余索引（ix_pm5m_pod / ix_db_metric_snapshots_db_connection_id / ix_pod_metrics_cluster_id） | 已不在库中 | 现 `pod_metrics_5m` / `pod_metrics` / `db_metric_snapshots` 已无这三个索引 |
+| `INSERT resource_snapshots` 批量写 | ✅ B17-2（`8010a2b`） | add_all → insert() 字典批量，200 行 19.7s → 0.31s |
+| `UPDATE hosts SET last_seen` 35s | ✅ B17-2（`8010a2b`） | 改为短事务读取 + SSH 探测期间不持事务 + 整轮一次批量 update 单次 commit |
+| `INSERT pod_metrics_5m` 聚合（3.8s/次、扫全表） | ✅ B17-3（`cae0e5f`） | 以 `MAX(bucket_at)` 为水位增量推进，正常只聚合 2~3 个桶；实测 2h 窗口 791ms → 15 分钟窗口 104ms |
+| 告警列表 `SELECT alerts ...`（1s+/次、扫 62 万行） | ✅ B17-3（`cae0e5f`） | `group=true` 改为 SQL 侧 GROUP BY 取 MAX(id)+COUNT(*)，只回一页完整行；实测分组/翻页口径一致 |
+| `COUNT(DISTINCT) FROM resource_snapshots`（15s/次） | ✅ B17-3（`cae0e5f`） | 仪表盘「每集群每类型最新快照」加 24h 时间窗；实测该查询 7ms（走 `ix_rs_cluster_type_time` loose index scan） |
+| `DELETE pod_metrics a JOIN b` 去重（一次性 291s） | 未做 | 已是一次性任务；如再需要，按 `id > ?` 游标 + LIMIT 分批 |
+| 补 alerts 复合索引（status, created_at） | 待批 | 当前 `alerts` 仅 348 行，暂无收益，等量级上来再加（DDL 需评审） |
+| 删 `resource_snapshots.idx_cluster_namespace`（读 1.46 亿次） | 待观察 | 观察期未满，且是热点索引，未动 |
+| 分区 / 换 SSD / 时序外迁 | 暂缓 | 按老板「只优化不动」口径 |
