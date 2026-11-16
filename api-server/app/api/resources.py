@@ -2087,8 +2087,18 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
                                         container, tail, previous)
         results.append({"pod": p.get("name"), "phase": p.get("phase"),
                         "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
+    # 2026-11-16（R5）：额外返回合并后的列式 rows（前端聚合日志弹窗用），pods 保持兼容
+    try:
+        from app.api.workload_logs import merge_log_lines
+        entries = [(r["pod"], (r.get("logs") or "").splitlines()) for r in results if r.get("success")]
+        rows = merge_log_lines(entries, prefix=False)
+    except Exception:  # noqa: BLE001
+        rows = []
+    errors = [{"pod": r["pod"], "error": r.get("error") or "日志获取失败"} for r in results if not r.get("success")]
     return {"code": 200, "message": "success",
-            "data": {"kind": kind, "name": name, "tail": tail, "previous": previous, "pods": results}}
+            "data": {"kind": kind, "name": name, "tail": tail, "previous": previous, "pods": results,
+                     "columns": ["pod", "line"], "rows": rows, "errors": errors,
+                     "truncated": any(len((r.get("logs") or "").splitlines()) >= tail for r in results)}}
 
 
 _MEM_UNITS = {"Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4,
