@@ -2,7 +2,7 @@
 // 不引图表库，用 SVG polyline 画简单折线（CPU / 内存 / 网络，跨容器跨 Pod 求和）；无数据时显示空态。
 // 图宽跟随容器自适应（ResizeObserver 实测宽度），网络曲线依赖后端返回 net_rx / net_tx。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Segmented, Button, Empty, Spin, Space, Tag } from 'antd'
+import { Segmented, Button, Empty, Spin, Space } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { getWorkloadMetrics } from '../../services/api'
 
@@ -15,12 +15,13 @@ interface MetricsPayload {
   pod_container_count: Record<string, number>
 }
 
+// 与「容器监控」（Pod 监控抽屉）保持完全一致的时间范围
 const RANGES = [
-  { value: '15m', label: '15分钟' },
-  { value: '30m', label: '30分钟' },
+  { value: '10m', label: '10分钟' },
   { value: '1h', label: '1小时' },
-  { value: '6h', label: '6小时' },
   { value: '24h', label: '24小时' },
+  { value: '72h', label: '3天' },
+  { value: '168h', label: '7天' },
 ]
 
 // 跨容器 / 跨 Pod 按时间戳求和 → 单一折线
@@ -86,6 +87,42 @@ function SparkLine({ points, color, unit, height = 130, width = 720 }: {
   )
 }
 
+// 双曲线（入站/出站同图），时间轴对齐；与容器监控的网络图一致
+function SparkLineMulti({ rx, tx, height = 150, width = 720 }: {
+  rx: { t: number; v: number }[]
+  tx: { t: number; v: number }[]
+  height?: number
+  width?: number
+}) {
+  const all = [...rx, ...tx]
+  if (!all.length) return <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+  const W = Math.max(200, width), H = height, PAD = 10
+  const t0 = Math.min(...all.map((p) => p.t))
+  const t1 = Math.max(...all.map((p) => p.t))
+  const spanT = Math.max(1, t1 - t0)
+  const maxV = Math.max(1, ...all.map((p) => p.v))
+  const path = (pts: { t: number; v: number }[]) => pts.map((p) => {
+    const x = PAD + ((p.t - t0) / spanT) * (W - PAD * 2)
+    const y = H - PAD - (p.v / maxV) * (H - PAD * 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+  const lastRx = rx[rx.length - 1]
+  const lastTx = tx[tx.length - 1]
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+        {rx.length > 1 && <polyline points={path(rx)} fill="none" stroke="#722ed1" strokeWidth={2} />}
+        {tx.length > 1 && <polyline points={path(tx)} fill="none" stroke="#fa8c16" strokeWidth={2} />}
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#8c8c8c', marginTop: 4 }}>
+        <span style={{ color: '#722ed1' }}>入站 当前 {lastRx ? lastRx.v.toFixed(2) : '-'} KB/s</span>
+        <span style={{ color: '#fa8c16' }}>出站 当前 {lastTx ? lastTx.v.toFixed(2) : '-'} KB/s</span>
+        <span>{fmtT(t0)} ~ {fmtT(t1)}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function MonitorPanel({ clusterId, kind, namespace, name }: {
   clusterId: number
   kind: string
@@ -129,8 +166,6 @@ export default function MonitorPanel({ clusterId, kind, namespace, name }: {
   const netRx = useMemo(() => sumSeries(data.net_rx).map((p) => ({ ...p, v: p.v / 1024 })), [data.net_rx])
   const netTx = useMemo(() => sumSeries(data.net_tx).map((p) => ({ ...p, v: p.v / 1024 })), [data.net_tx])
 
-  const containerCount = Math.max(1, data.cpu.length)
-  const podCount = Object.keys(data.pod_container_count).length
   const hasAny = cpu.length > 0 || mem.length > 0 || netRx.length > 0 || netTx.length > 0
 
   return (
@@ -138,8 +173,6 @@ export default function MonitorPanel({ clusterId, kind, namespace, name }: {
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented value={range} onChange={(v) => setRange(v as string)} options={RANGES} />
         <Button size="small" icon={<ReloadOutlined />} onClick={() => load(range)} loading={loading}>刷新</Button>
-        <Tag color="blue">{containerCount} 个容器</Tag>
-        <Tag color="geekblue">{podCount} 个 Pod</Tag>
       </Space>
       {loading && !hasAny ? (
         <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
@@ -150,20 +183,16 @@ export default function MonitorPanel({ clusterId, kind, namespace, name }: {
       ) : (
         <div>
           <div style={{ marginBottom: 16 }}>
-            <b>CPU（core，跨容器求和）</b>
+            <b>CPU（core）</b>
             <SparkLine points={cpu} color="#1677ff" unit="core" width={wrapWidth} />
           </div>
           <div style={{ marginBottom: 16 }}>
-            <b>内存（MB，跨容器求和）</b>
+            <b>内存（MB）</b>
             <SparkLine points={mem} color="#52c41a" unit="MB" width={wrapWidth} />
           </div>
-          <div style={{ marginBottom: 16 }}>
-            <b>网络入站（KB/s，跨 Pod 求和）</b>
-            <SparkLine points={netRx} color="#722ed1" unit="KB/s" width={wrapWidth} />
-          </div>
           <div style={{ marginBottom: 8 }}>
-            <b>网络出站（KB/s，跨 Pod 求和）</b>
-            <SparkLine points={netTx} color="#fa8c16" unit="KB/s" width={wrapWidth} />
+            <b>网络（KB/s）</b>
+            <SparkLineMulti rx={netRx} tx={netTx} width={wrapWidth} />
           </div>
           <div style={{ fontSize: 12, color: '#8c8c8c' }}>
             数据源：集群 Prometheus（保留 7 天）；采样间隔随范围自动调整；平台不存储这些指标。
