@@ -5,6 +5,7 @@ import { getSettings, updateSettings, changePassword, testEmbedding, getExternal
 import type { MonitoringSource, TerminalSecurity } from '../services/api'
 import RiskPolicy from './RiskPolicy'
 import ReleaseSettings from './ReleaseSettings'
+import OracleClientsPanel from '../components/settings/OracleClientsPanel'
 
 const TERMINAL_SEC_DEFAULTS: TerminalSecurity = { block_dangerous: true, allow_paste: true, watermark: true, no_copy: true }
 
@@ -392,6 +393,11 @@ export default function PlatformSettings() {
             key: 'terminal',
             label: 'Web 终端',
             children: <TerminalSecurityPane />,
+          },
+          {
+            key: 'oracle-clients',
+            label: 'Oracle 客户端',
+            children: <OracleClientsPanel />,
           },
           {
             key: 'password',

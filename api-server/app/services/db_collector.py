@@ -367,7 +367,15 @@ def _maybe_oracle_thick() -> None:
     global _ORACLE_THICK_READY
     if _ORACLE_THICK_READY:
         return
-    lib = (getattr(settings, "ORACLE_CLIENT_LIB_DIR", "") or "").strip()
+    lib = ""
+    try:
+        # 平台内管理的版本优先（/平台设置 → Oracle 客户端 → 启用某版本）
+        from app.services import oracle_client_service
+        lib = oracle_client_service.active_lib_dir()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取平台 Oracle 客户端配置失败：%s", e)
+    if not lib:
+        lib = (getattr(settings, "ORACLE_CLIENT_LIB_DIR", "") or "").strip()
     if lib:
         import os
         if os.path.isdir(lib):

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     # Oracle Instant Client 目录（可选；配置后用 thick 模式，支持 11g 等老版本）
     ORACLE_CLIENT_LIB_DIR: str = ""
+    # Oracle 客户端安装根目录（多版本管理；空=api-server/data/oracle_clients）
+    ORACLE_CLIENT_HOME: str = ""
     # Redis（缓存/限流/会话/分布式锁）
     REDIS_URL: str
 
