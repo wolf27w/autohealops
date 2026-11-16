@@ -34,7 +34,12 @@ async def upload_client(request: Request, name: str, user=Depends(require_admin)
         name = svc.safe_name(name)
     except ValueError as e:
         return {"code": 400, "message": str(e), "data": None}
-    tmp = Path(tempfile.gettempdir()) / f"oracle-client-{uuid.uuid4().hex}.pkg"
+    from urllib.parse import urlparse
+    fname = (request.headers.get("x-filename") or request.query_params.get("filename") or "").strip()
+    suffix = (Path(urlparse(fname).path).suffix or ".zip").lower()
+    if suffix not in (".zip", ".gz", ".tgz", ".dmg", ".pkg"):
+        suffix = ".zip"
+    tmp = Path(tempfile.gettempdir()) / f"oracle-client-{uuid.uuid4().hex}{suffix}"
     try:
         total = 0
         with open(tmp, "wb") as f:
@@ -78,7 +83,11 @@ async def download_client(payload: dict, user=Depends(require_admin)):
     except ValueError as e:
         return {"code": 400, "message": str(e), "data": None}
 
-    tmp = Path(tempfile.gettempdir()) / f"oracle-client-{uuid.uuid4().hex}.pkg"
+    from urllib.parse import urlparse
+    suffix = (Path(urlparse(url).path).suffix or ".pkg").lower()
+    if suffix not in (".zip", ".gz", ".tgz", ".dmg", ".pkg"):
+        suffix = ".pkg"
+    tmp = Path(tempfile.gettempdir()) / f"oracle-client-{uuid.uuid4().hex}{suffix}"
     try:
         async with httpx.AsyncClient(timeout=None, follow_redirects=True, trust_env=False) as client:
             async with client.stream("GET", url) as r:

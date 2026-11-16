@@ -8,6 +8,7 @@
 PG/Oracle 驱动为可选依赖（asyncpg / oracledb），未安装时优雅降级：
 采集返回空 + 状态标记 unknown，不报错、不阻塞调度。装驱动后即时生效。
 """
+import asyncio
 import json
 from datetime import datetime
 
@@ -164,15 +165,18 @@ async def _oracle_collect(conn_info: dict, threshold_sec: float) -> list[dict]:
         return []
 
     threshold_ms = threshold_sec * 1000  # 秒 → 毫秒
-    dsn = f"{conn_info['host']}:{conn_info['port']}/{conn_info['database']}"
-    conn = None
+
+    def _fetch() -> list:
+        conn = _oracle_connect_sync(conn_info, oracledb)
+        try:
+            cur = conn.cursor()
+            cur.execute(ORACLE_SLOW_SQL, (threshold_ms,))
+            return cur.fetchall()
+        finally:
+            conn.close()
+
     try:
-        conn = await oracledb.connect_async(
-            user=conn_info["username"], password=conn_info["password"], dsn=dsn,
-        )
-        cur = conn.cursor()
-        cur.execute(ORACLE_SLOW_SQL, (threshold_ms,))
-        rows = cur.fetchall()
+        rows = await asyncio.to_thread(_fetch)
         return [
             {
                 "digest": (r[0] or "")[:64],
@@ -187,12 +191,6 @@ async def _oracle_collect(conn_info: dict, threshold_sec: float) -> list[dict]:
     except Exception as e:  # noqa: BLE001
         logger.warning("Oracle %s 慢 SQL 采集失败: %s", conn_info.get("name"), e)
         return []
-    finally:
-        if conn:
-            try:
-                await conn.close()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 async def collect_connection_slow_sql(conn_id: int) -> int:
@@ -388,6 +386,33 @@ def _maybe_oracle_thick() -> None:
     _ORACLE_THICK_READY = True
 
 
+def _oracle_connect_sync(info: dict, oracledb, auth_mode=None):
+    """同步建连（thin/thick 都支持）；调用方负责丢线程池执行，避免阻塞事件循环。"""
+    kw = {"user": info["username"], "password": info["password"], "dsn": _oracle_dsn(info, oracledb)}
+    if auth_mode is not None:
+        kw["mode"] = auth_mode
+    return oracledb.connect(**kw)
+
+
+def _oracle_dsn(info: dict, oracledb=None) -> str:
+    """按连接方式构造 DSN：tns 描述符 / SID / Service Name（Easy Connect）。
+
+    统一走 dsn= 而不是 host/port/service_name 关键字：thick 模式不支持后者。
+    """
+    mode = (info.get("connect_mode") or "service_name").lower()
+    if mode == "tns":
+        return (info.get("tns_descriptor") or "").strip()
+    host = (info.get("host") or "").strip()
+    port = int(info.get("port") or 1521)
+    if mode == "sid":
+        sid = (info.get("sid") or "").strip()
+        if oracledb is not None:
+            return oracledb.makedsn(host, port, sid=sid)
+        return f"{host}:{port}:{sid}"
+    svc = (info.get("service_name") or info.get("database") or "").strip()
+    return f"{host}:{port}/{svc}"
+
+
 def _oracle_error_hint(msg: str) -> str:
     """把常见 Oracle 驱动错误翻译成可操作提示。"""
     if "DPY-3010" in msg:
@@ -439,27 +464,15 @@ async def test_db_connection(c: DBConnection) -> dict:
                 auth_mode = oracledb.AUTH_MODE_SYSDBA
             elif role == "sysoper":
                 auth_mode = oracledb.AUTH_MODE_SYSOPER
-            mode = (info.get("connect_mode") or "service_name").lower()
-            if mode == "tns":
-                conn = await oracledb.connect_async(
-                    user=info["username"], password=info["password"],
-                    dsn=info["tns_descriptor"], mode=auth_mode,
-                )
-            elif mode == "sid":
-                conn = await oracledb.connect_async(
-                    user=info["username"], password=info["password"],
-                    host=info["host"], port=info["port"], sid=info["sid"], mode=auth_mode,
-                )
-            else:
-                conn = await oracledb.connect_async(
-                    user=info["username"], password=info["password"],
-                    host=info["host"], port=info["port"],
-                    service_name=info["service_name"] or info["database"], mode=auth_mode,
-                )
-            cur = conn.cursor()
-            await cur.execute("SELECT 1 FROM DUAL")
-            await cur.fetchone()
-            await conn.close()
+            def _probe():
+                conn = _oracle_connect_sync(info, oracledb, auth_mode)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT 1 FROM DUAL")
+                    cur.fetchone()
+                finally:
+                    conn.close()
+            await asyncio.to_thread(_probe)
         else:
             return {"success": False, "message": f"不支持的数据库类型 {c.db_type}"}
         return {"success": True, "message": "连接成功"}
@@ -901,7 +914,7 @@ def _parse_ora_interval(value) -> float:
     return sign * (days * 86400 + hours * 3600 + minutes * 60 + seconds)
 
 
-async def _oracle_collect_health(conn_info: dict) -> list[dict]:
+def _oracle_health_sync(conn_info: dict) -> list[dict]:
     """Oracle 健康指标（可选依赖 oracledb；未装降级返回空）
 
     v$ 视图普遍需要权限，每个查询块单独 try/except，权限不足只降级对应块。
@@ -910,12 +923,9 @@ async def _oracle_collect_health(conn_info: dict) -> list[dict]:
         import oracledb  # noqa: PLC0415
     except ImportError:
         return []
-    dsn = f"{conn_info['host']}:{conn_info['port']}/{conn_info['database']}"
     conn = None
     try:
-        conn = await oracledb.connect_async(
-            user=conn_info["username"], password=conn_info["password"], dsn=dsn,
-        )
+        conn = _oracle_connect_sync(conn_info, oracledb)
     except Exception as e:  # noqa: BLE001
         logger.warning("Oracle %s 健康采集连接失败: %s", conn_info.get("name"), e)
         return []
@@ -1147,11 +1157,20 @@ async def _oracle_collect_health(conn_info: dict) -> list[dict]:
     finally:
         if conn:
             try:
-                await conn.close()
+                conn.close()
             except Exception:  # noqa: BLE001
                 pass
     return out
 
+
+async def _oracle_collect_health(conn_info: dict) -> list[dict]:
+    """异步包装：Oracle 驱动是同步的，统一丢线程池执行。"""
+    try:
+        _maybe_oracle_thick()
+        import oracledb  # noqa: F401,PLC0415
+    except ImportError:
+        return []
+    return await asyncio.to_thread(_oracle_health_sync, conn_info)
 
 
 async def _latest_snapshot_metrics(conn_id: int) -> list[dict]:

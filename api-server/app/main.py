@@ -295,6 +295,13 @@ async def startup_tasks() -> None:
     global _background_task
     from app.services import scheduler_service
 
+    # Oracle thick 模式必须抢在任何 thin 连接之前初始化（一旦建过 thin 连接就无法切换）
+    try:
+        from app.services.db_collector import _maybe_oracle_thick
+        _maybe_oracle_thick()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Oracle thick 模式初始化跳过: %s", e)
+
     await seed_default_users()
     # 凭据到期补齐：功能上线前接入的集群 cred_type 仍是 unknown（否则列表一直显示「未知」、到期通知扫不到）
     try:
