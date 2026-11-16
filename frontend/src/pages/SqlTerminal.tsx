@@ -2,6 +2,7 @@
 // 布局：顶部工具栏 + 左侧资源树（实例→库→表/视图/函数/事件）+ 右侧上半 SQL 编辑器 + 下半多结果区。
 // 支持：切换当前库、表级操作（DDL/导出/删除）、Ctrl/Cmd+Enter 执行、多结果标签、导入 SQL、导出、备份。
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
 import {
   Button, Tag, Space, Table, Empty, Popconfirm, Modal, message, Tabs, Radio, Input, Select, Alert, Collapse, DatePicker,
 } from 'antd'
@@ -10,11 +11,12 @@ import {
 } from '@ant-design/icons'
 import DbInstanceTree, { type DbTreeConn, type DbTreeSelectNode } from '../components/db/DbInstanceTree'
 import TableDesignerModal from '../components/db/TableDesignerModal'
+import { useSqlSuggest, keywordsFor, referencedTables, MIRROR_STYLE } from '../components/useSqlSuggest'
 import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
   importSqlScript, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
-  createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase, testDBConnection,
+  createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase, testDBConnection, getTableSchema,
 } from '../services/api'
 
 // ---------- 后端返回的连接行类型（getDBConnections 返回 unknown，这里按需断言） ----------
@@ -118,6 +120,12 @@ export default function SqlTerminal() {
   const [selObj, setSelObj] = useState<SelectedObj | null>(null)
   // 连接状态（2026-11-16 老板口径）：默认不连接，必须点「连接」后才能执行任何库操作
   const [connState, setConnState] = useState<Record<number, 'off' | 'connecting' | 'on' | 'failed'>>({})
+  // ---- SQL 自动补全（2026-11-16）：关键字 + 库/表/视图 + 被引用表的字段 ----
+  const [schemaTables, setSchemaTables] = useState<{ db: string; name: string }[]>([])
+  const [schemaViews, setSchemaViews] = useState<{ db: string; name: string }[]>([])
+  const [tableCols, setTableCols] = useState<Record<string, string[]>>({})
+  const taRef = useRef<{ resizableTextArea?: { textArea: HTMLTextAreaElement } } | null>(null)
+  const colCacheRef = useRef<Map<string, string[]>>(new Map())
 
   // 编辑器
   const [sql, setSql] = useState('')
@@ -177,6 +185,50 @@ export default function SqlTerminal() {
 
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
   const connected = !!cur && connState[cur.id] === 'on'
+  // 候选词：关键字（按库类型）+ 库名 + 当前库的表/视图 + 已加载字段
+  const candidates = useMemo(() => {
+    const out: string[] = keywordsFor(cur?.db_type)
+    for (const d of dbList) out.push(d)
+    const db = currentDb
+    for (const t of schemaTables) if (!db || t.db === db) out.push(t.name)
+    for (const v of schemaViews) if (!db || v.db === db) out.push(v.name)
+    for (const cols of Object.values(tableCols)) out.push(...cols)
+    return out
+  }, [cur?.db_type, dbList, currentDb, schemaTables, schemaViews, tableCols])
+
+  // 被 SQL 引用的表 → 拉一次字段名（缓存；最多 2 张，避免每敲一个字都过隧道）
+  useEffect(() => {
+    if (!cur || !connected) return
+    const tables = referencedTables(sql).slice(0, 2)
+    if (!tables.length) return
+    const db = currentDb || cur.database || ''
+    if (!db) return
+    const timer = setTimeout(() => {
+      for (const t of tables) {
+        const key = `${cur.id}:${db}:${t}`
+        if (colCacheRef.current.has(key)) {
+          const cols = colCacheRef.current.get(key)!
+          setTableCols((prev) => (prev[key] ? prev : { ...prev, [key]: cols }))
+          continue
+        }
+        getTableSchema(cur.id, db, t)
+          .then((sch) => {
+            const cols = (sch.columns || []).map((c) => c.name)
+            if (!cols.length) return
+            colCacheRef.current.set(key, cols)
+            setTableCols((prev) => ({ ...prev, [key]: cols }))
+          })
+          .catch(() => { /* 表不存在/无权限：静默 */ })
+      }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [sql, cur?.id, connected, currentDb])
+
+  const suggest = useSqlSuggest(
+    () => candidates,
+    () => taRef.current?.resizableTextArea?.textArea ?? null,
+  )
+
   const connectCur = async () => {
     if (!cur) return
     setConnState((m) => ({ ...m, [cur.id]: 'connecting' }))
@@ -225,8 +277,10 @@ export default function SqlTerminal() {
     getDBSchema(cur.id)
       .then((d) => {
         if (!alive) return
-        const raw = d as unknown as { databases?: string[] }
+        const raw = d as unknown as { databases?: string[]; tables?: { db: string; name: string }[]; views?: { db: string; name: string }[] }
         setDbList((raw?.databases || []).filter((x) => !SYS_DBS.has(x)))
+        setSchemaTables((raw?.tables || []).filter((t) => !SYS_DBS.has(t.db)))
+        setSchemaViews((raw?.views || []).filter((v) => !SYS_DBS.has(v.db)))
       })
       .catch(() => { if (alive) setDbList([]) })
     return () => { alive = false }
@@ -593,15 +647,66 @@ export default function SqlTerminal() {
               <Alert type="info" showIcon style={{ marginBottom: 8 }}
                 message="未连接：点右上角「连接」后才能执行 SQL、建库/删库、导入导出与表结构操作（默认不自动连接）" />
             )}
-            <Input.TextArea
-              value={sql}
-              onChange={(e) => setSql(e.target.value)}
-              placeholder={'select * from information_schema.tables limit 10;\n-- 多条语句用分号分隔，Ctrl/Cmd+Enter 执行'}
-              style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 150 }}
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !busy && connected && sql.trim()) { e.preventDefault(); run() }
-              }}
-            />
+            <div style={{ position: 'relative' }}>
+              <Input.TextArea
+                ref={taRef as never}
+                value={sql}
+                onChange={(e) => { setSql(e.target.value); suggest.syncSuggest(e.target.value, e.target.selectionStart ?? 0) }}
+                onKeyUp={(e) => {
+                  const el = e.target as HTMLTextAreaElement
+                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+                    suggest.syncSuggest(el.value, el.selectionStart ?? 0)
+                  }
+                }}
+                onBlur={() => setTimeout(() => suggest.close(), 120)}
+                placeholder={'select * from information_schema.tables limit 10;\n-- 输入时自动补全（关键字/库/表/字段）· 多条语句用分号分隔 · Ctrl/Cmd+Enter 执行'}
+                style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 150 }}
+                onKeyDown={(e) => {
+                  const applied = (next: string, caret: number) => {
+                    setSql(next)
+                    requestAnimationFrame(() => {
+                      const ta = taRef.current?.resizableTextArea?.textArea
+                      if (ta) { ta.focus(); ta.setSelectionRange(caret, caret) }
+                    })
+                  }
+                  if (suggest.handleKey(e, sql, applied)) return
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !busy && connected && sql.trim()) { e.preventDefault(); run() }
+                }}
+              />
+              {/* 光标定位用隐藏镜像 */}
+              <div ref={suggest.mirrorRef as unknown as React.Ref<HTMLDivElement>} style={MIRROR_STYLE} />
+              {suggest.sugg && (
+                <div style={{
+                  position: 'absolute', top: suggest.caretPos.top, left: suggest.caretPos.left, zIndex: 20, width: 320,
+                  background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
+                  boxShadow: '0 6px 16px rgba(0,0,0,.12)', maxHeight: 220, overflow: 'auto',
+                }}>
+                  {suggest.sugg.items.map((it, i) => (
+                    <div
+                      key={it}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        suggest.applySugg(sql, it, (next, caret) => {
+                          setSql(next)
+                          requestAnimationFrame(() => {
+                            const ta = taRef.current?.resizableTextArea?.textArea
+                            if (ta) { ta.focus(); ta.setSelectionRange(caret, caret) }
+                          })
+                        })
+                      }}
+                      style={{
+                        padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+                        fontFamily: 'Menlo, Consolas, monospace',
+                        background: i === suggest.sugg!.idx ? '#e6f4ff' : 'transparent',
+                      }}
+                    >{it}</div>
+                  ))}
+                  <div style={{ padding: '3px 10px', fontSize: 11, color: '#bfbfbf', borderTop: '1px solid #f5f5f5' }}>
+                    ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭
+                  </div>
+                </div>
+              )}
+            </div>
             <Space style={{ marginTop: 6 }} wrap>
               <Button type="primary" icon={<PlayCircleOutlined />} loading={busy} disabled={!connected || !sql.trim()} onClick={run}>
                 执行（Ctrl/Cmd+Enter）
