@@ -6,7 +6,7 @@ import {
   Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber,
   Space, Tag, message, Popconfirm, Dropdown, Empty, Switch, Tooltip, Spin, Segmented,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined, CodeOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined } from '@ant-design/icons'
 import DbInstanceTree, { type DbTreeConn } from '../components/db/DbInstanceTree'
 import DbInstanceTabs from '../components/db/DbInstanceTabs'
 import {
@@ -225,7 +225,7 @@ export default function DbResourceList() {
   const columns = [
     {
       title: '名称', render: (_: unknown, r: DbRow) => (
-        <a onClick={(e) => { e.stopPropagation(); navigate(`/resources/databases/${r.id}`) }}>{r.name}</a>
+        <a onClick={(e) => { e.stopPropagation(); navigate(`/resources/databases/${r.id}?from=list`) }}>{r.name}</a>
       ),
     },
     { title: '类型', width: 110, render: (_: unknown, r: DbRow) => <Tag color={DB_TYPE[r.db_type || '']?.color}>{DB_TYPE[r.db_type || '']?.label || r.db_type || '-'}</Tag> },
@@ -261,7 +261,12 @@ export default function DbResourceList() {
             trigger={['click']}
             dropdownRender={() => (
               <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 3px 6px -4px rgba(0,0,0,.12),0 6px 16px 0 rgba(0,0,0,.08)', padding: '4px 0', minWidth: 120 }}>
-                <MenuItem onClick={() => navigate(`/resources/databases/${r.id}`)}>查看详情</MenuItem>
+                <MenuItem onClick={() => navigate(`/resources/databases/${r.id}?from=list`)}>连接（概览）</MenuItem>
+                <MenuItem onClick={() => navigate(`/resources/databases/${r.id}?from=list&tab=monitor`)}>监控</MenuItem>
+                <MenuItem onClick={() => navigate(`/resources/databases/${r.id}?from=list&tab=slow-sql`)}>慢 SQL</MenuItem>
+                <MenuItem onClick={() => navigate(`/resources/databases/${r.id}?from=list&tab=diagnosis`)}>诊断</MenuItem>
+                <MenuItem onClick={() => navigate(`/resources/databases/${r.id}?from=list&tab=approval-policy`)}>审核</MenuItem>
+                <div style={{ height: 1, background: '#f0f0f0', margin: '4px 0' }} />
                 <MenuItem onClick={() => testConn(r)}>测试连接</MenuItem>
                 {admin && <MenuItem onClick={() => openModal(r)}>编辑</MenuItem>}
                 {admin && <MenuItem onClick={() => doCollect(r)}>立即采集</MenuItem>}
@@ -283,7 +288,6 @@ export default function DbResourceList() {
   return (
     <Card size="small" title="数据库管理"
       extra={<Space>
-        <Button icon={<CodeOutlined />} onClick={() => window.open('/sql-terminal', '_blank', 'noopener')}>SQL 终端</Button>
         {admin && <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>添加数据库</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
       </Space>}>
@@ -291,7 +295,7 @@ export default function DbResourceList() {
       <Segmented
         value={viewMode}
         onChange={(v) => changeViewMode(v as 'list' | 'tree')}
-        options={[{ label: '列表', value: 'list' }, { label: '树', value: 'tree' }]}
+        options={[{ label: '数据库列表', value: 'list' }, { label: '数据库连接', value: 'tree' }]}
         style={{ marginBottom: 12 }}
       />
 
@@ -305,6 +309,7 @@ export default function DbResourceList() {
               onOpen={openInstance}
               keyword={keyword}
               onRefresh={() => load()}
+              onSelectNode={(node) => { if (node.connId != null) openInstance(node.connId) }}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -352,7 +357,7 @@ export default function DbResourceList() {
               rowKey="id" size="small" loading={loading} dataSource={filtered}
               pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
               columns={columns}
-              onRow={(r) => ({ onClick: () => navigate(`/resources/databases/${r.id}`), style: { cursor: 'pointer' } })}
+              onRow={(r) => ({ onClick: () => navigate(`/resources/databases/${r.id}?from=list`), style: { cursor: 'pointer' } })}
             />
           )}
         </>

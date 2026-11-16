@@ -1,4 +1,4 @@
-// 容器组列表页：命名空间下拉 + 名称搜索 + 状态筛选 + 5s 轮询（无刷新按钮，全局顶栏有）
+// 容器组列表页：命名空间下拉 + 名称搜索 + 5s 轮询（无刷新按钮，全局顶栏有）
 // 行操作收进 ⋯：监控/日志/进容器/JVM 诊断/编辑 YAML/隔离/删除；支持行选择批量删除
 import { useEffect, useMemo, useState, type Key } from 'react'
 import { Card, Table, Tag, Button, Space, Select, Input, Dropdown, Modal, message, Drawer, Empty, Segmented } from 'antd'
@@ -20,17 +20,10 @@ import { podStatusColor, podReadyText } from '../../utils/podStatus'
 const fmt = (v?: string) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
 const podStatus = (p: ClusterPod) => p.status || p.phase || (p.ready ? 'Running' : 'Pending')
 
-const FIXED_STATUSES = [
-  'Running', 'Pending', 'ContainerCreating', 'PodInitializing', 'CrashLoopBackOff',
-  'ImagePullBackOff', 'ErrImagePull', 'CreateContainerConfigError', 'Completed',
-  'Succeeded', 'Terminating', 'Failed', 'Error', 'Unknown', 'NotReady',
-]
-
 export default function PodsList({ clusterId }: { clusterId: number }) {
   const { ns, setNs, namespaces, loading: nsLoading } = useClusterNamespace()
   const [pods, setPods] = useState<ClusterPod[]>([])
   const [searchText, setSearchText] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [selected, setSelected] = useState<Key[]>([])
   const [isolated, setIsolated] = useState<Set<string>>(new Set())
 
@@ -66,22 +59,16 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
       .catch(() => setIsolated(new Set()))
   }, [clusterId, ns])
 
-  // 命名空间/状态变化时清空勾选
-  useEffect(() => { setSelected([]) }, [ns, statusFilter])
-
-  const statusOptions = useMemo(() => {
-    const dyn = pods.map((p) => podStatus(p))
-    return Array.from(new Set([...FIXED_STATUSES, ...dyn])).map((s) => ({ value: s, label: s }))
-  }, [pods])
+  // 命名空间变化时清空勾选
+  useEffect(() => { setSelected([]) }, [ns])
 
   const rows = useMemo(() => {
     const q = searchText.trim().toLowerCase()
     return pods.filter((p) => {
       if (q && !(p.name || '').toLowerCase().includes(q) && !(p.namespace || '').toLowerCase().includes(q)) return false
-      if (statusFilter && podStatus(p) !== statusFilter) return false
       return true
     })
-  }, [pods, searchText, statusFilter])
+  }, [pods, searchText])
 
   const selectedItems = useMemo(
     () => rows.filter((p) => selected.includes(`${p.namespace}-${p.name}`)),
@@ -232,17 +219,6 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
             style={{ width: 180 }}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-          />
-          <Select
-            size="small"
-            style={{ width: 180 }}
-            allowClear
-            placeholder="状态筛选"
-            value={statusFilter}
-            onChange={(v) => setStatusFilter(v ? String(v) : undefined)}
-            showSearch
-            optionFilterProp="label"
-            options={statusOptions}
           />
         </Space>
 

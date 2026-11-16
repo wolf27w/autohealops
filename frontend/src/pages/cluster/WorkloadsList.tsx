@@ -56,7 +56,7 @@ const KIND_TO_KEY: Record<string, keyof Pick<NamespaceDetail, 'deployments' | 's
 const KIND_LABEL: Record<string, string> = {
   deployment: '无状态',
   statefulset: '有状态',
-  daemonset: '守护集',
+  daemonset: '守护进程',
   cronjob: '定时任务',
 }
 
@@ -265,7 +265,7 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
 
   const confirmDelete = (r: ResourceItem) => {
     Modal.confirm({
-      title: `删除 ${kind} ${r.namespace}/${r.name}？`,
+      title: `删除 ${kindLabel} ${r.namespace}/${r.name}？`,
       content: '删除后该工作负载的全部 Pod 将被回收，请谨慎操作。',
       okButtonProps: { danger: true },
       okText: '确认删除',
@@ -485,10 +485,10 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
   ) : null
 
   const KINDS = [
-    { label: '部署 Deployment', value: 'deployment' },
-    { label: '有状态副本集 StatefulSet', value: 'statefulset' },
-    { label: '守护进程集 DaemonSet', value: 'daemonset' },
-    { label: '定时任务 CronJob', value: 'cronjob' },
+    { label: '无状态', value: 'deployment' },
+    { label: '有状态', value: 'statefulset' },
+    { label: '守护进程', value: 'daemonset' },
+    { label: '定时任务', value: 'cronjob' },
   ]
 
   return (

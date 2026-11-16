@@ -37,7 +37,6 @@ const HostSessionReplay = lazy(() => import('./pages/HostSessionReplay'))
 const DbResourceList = lazy(() => import('./pages/DbResourceList'))
 const DbDetail = lazy(() => import('./pages/DbDetail'))
 const SqlTerminal = lazy(() => import('./pages/SqlTerminal'))
-const DiagnosticCenter = lazy(() => import('./pages/DiagnosticCenter'))
 // 告警监控
 const AlertHandling = lazy(() => import('./pages/AlertHandling'))
 const Tickets = lazy(() => import('./pages/Tickets'))
@@ -47,7 +46,6 @@ const NotificationCenter = lazy(() => import('./pages/NotificationCenter'))
 const OnDuty = lazy(() => import('./pages/OnDuty'))
 const LogSources = lazy(() => import('./pages/LogSources'))
 // 诊断与自愈
-const FaultDiagnosisHub = lazy(() => import('./pages/FaultDiagnosisHub'))
 const AgentChat = lazy(() => import('./pages/AgentChat'))
 const DiagnoseStrategy = lazy(() => import('./pages/DiagnoseStrategy'))
 const CustomTasks = lazy(() => import('./pages/CustomTasks'))
@@ -108,7 +106,7 @@ function RequireHostGrant({ children }: { children: JSX.Element }) {
   return ok ? children : null
 }
 
-// 旧地址重定向：替换前缀、保留尾部路径与 query（如 /web-terminal/7 → /resources/terminal/7）
+// 旧地址重定向：替换前缀、保留尾部路径与 query（如 /web-terminal → /terminal）
 function LegacyRedirect({ from, to }: { from: string; to: string }) {
   const loc = useLocation()
   const rest = loc.pathname.slice(from.length)
@@ -136,6 +134,8 @@ export default function App() {
       />
       {/* 独立整屏终端：新标签页打开，不套平台侧栏（节点管理→Web 终端、数据库管理→SQL 终端） */}
       <Route path="/terminal" element={<RequireAuth><RequireHostGrant><WebTerminal standalone /></RequireHostGrant></RequireAuth>} />
+      {/* 兼容旧地址 /web-terminal/:id、/resources/terminal/:id（重定向后仍带 host 路径段） */}
+      <Route path="/terminal/:hostId" element={<RequireAuth><RequireHostGrant><WebTerminal standalone /></RequireHostGrant></RequireAuth>} />
       <Route path="/sql-terminal" element={<RequireAuth><SqlTerminal /></RequireAuth>} />
       <Route
         path="/"
@@ -155,8 +155,6 @@ export default function App() {
         <Route path="resources/hosts" element={guard('/resources/hosts', <HostManagement />)} />
         <Route path="resources/databases" element={<DbResourceList />} />
         <Route path="resources/databases/:id" element={<DbDetail />} />
-        <Route path="resources/terminal" element={<WebTerminal />} />
-        <Route path="resources/terminal/:hostId" element={<WebTerminal />} />
         <Route path="host-sessions/:id/replay" element={<HostSessionReplay />} />
 
         {/* ===== 告警监控 ===== */}
@@ -169,7 +167,6 @@ export default function App() {
         <Route path="alerts/sources" element={guard('/alerts/sources', <LogSources />)} />
 
         {/* ===== 诊断与自愈 ===== */}
-        <Route path="diagnose/fault" element={<FaultDiagnosisHub />} />
         <Route path="diagnose/agent" element={<AgentChat />} />
         <Route path="diagnose/strategy" element={guard('/diagnose/strategy', <DiagnoseStrategy />)} />
         <Route path="diagnose/tasks" element={guard('/diagnose/tasks', <CustomTasks />)} />

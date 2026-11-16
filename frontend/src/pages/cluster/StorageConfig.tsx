@@ -303,9 +303,13 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
 
   return (
     <div style={{ padding: 16 }}>
-      <Card size="small" title={pageTitle}
-        extra={
-          <Space>
+      <Card size="small" title={pageTitle}>
+        {/* 工具栏：命名空间固定在最左（与工作负载/容器组一致），操作在右 */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          marginBottom: 10, flexWrap: 'wrap', gap: 8,
+        }}>
+          <Space size={8}>
             {!isStorageClasses && (
               <>
                 <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
@@ -324,18 +328,16 @@ export default function StorageConfig({ clusterId, initialTab = 'pvcs' }: { clus
                 />
               </>
             )}
-            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+            <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
           </Space>
-        }>
+          {!isStorageClasses && (
+            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onCreate}>{createLabel}</Button>
+          )}
+        </div>
         <Tabs
           activeKey={activeKey}
           onChange={(k) => setActiveKey(k as StorageTab)}
           items={tabs}
-          tabBarExtraContent={
-            !isStorageClasses ? (
-              <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onCreate}>{createLabel}</Button>
-            ) : undefined
-          }
         />
       </Card>
 

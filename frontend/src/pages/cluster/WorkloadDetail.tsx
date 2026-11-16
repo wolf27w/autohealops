@@ -8,6 +8,7 @@ import { ReloadOutlined, MoreOutlined, DownOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import WorkloadYamlModal, { type WorkloadTarget } from '../../components/WorkloadYamlModal'
 import WorkloadMetricsDrawer from '../../components/WorkloadMetricsDrawer'
+import WorkloadLogsModal from '../../components/cluster/WorkloadLogsModal'
 import PodLogStreamModal from '../../components/PodLogStreamModal'
 import TerminalModal from '../../components/TerminalModal'
 import PodEventsModal from '../../components/PodEventsModal'
@@ -32,7 +33,7 @@ const VOL_TYPE_COLOR: Record<string, string> = {
 }
 
 const KIND_SHORT: Record<string, string> = {
-  deployment: '部署', statefulset: '有状态', daemonset: '守护集', cronjob: '定时任务',
+  deployment: '无状态', statefulset: '有状态', daemonset: '守护进程', cronjob: '定时任务',
 }
 
 interface WorkloadMeta {
@@ -83,6 +84,7 @@ export default function WorkloadDetail() {
   const [scaleVal, setScaleVal] = useState<number>(1)
   const [metricsOpen, setMetricsOpen] = useState(false)
   const [logPod, setLogPod] = useState<PodTarget | null>(null)
+  const [aggLogsOpen, setAggLogsOpen] = useState(false)
   const [execTarget, setExecTarget] = useState<PodTarget | null>(null)
   const [eventsPod, setEventsPod] = useState<PodTarget | null>(null)
   const [jvmPod, setJvmPod] = useState<PodTarget | null>(null)
@@ -450,6 +452,7 @@ export default function WorkloadDetail() {
             <span style={{ fontSize: 12, color: '#999' }}>{clusterName ? `${clusterName} / ` : ''}{namespace}</span>
           </Space>
           <Space>
+            <Button onClick={() => setAggLogsOpen(true)}>聚合日志</Button>
             <Button onClick={() => setWlEdit({ clusterId, kind, namespace, name, create: false, initialValues: editValues, existingYaml: yaml })}>编辑设置</Button>
             <Dropdown trigger={['click']} menu={{
               items: [
@@ -520,6 +523,14 @@ export default function WorkloadDetail() {
         onClose={() => setMetricsOpen(false)}
       />
       <PodLogStreamModal pod={logPod} onClose={() => setLogPod(null)} />
+      <WorkloadLogsModal
+        clusterId={clusterId}
+        namespace={namespace}
+        kind={kind}
+        name={name}
+        open={aggLogsOpen}
+        onClose={() => setAggLogsOpen(false)}
+      />
       <TerminalModal pod={execTarget} onClose={() => setExecTarget(null)} />
       <PodEventsModal pod={eventsPod} onClose={() => setEventsPod(null)} />
       <JvmDiagModal pod={jvmPod} onClose={() => setJvmPod(null)} />

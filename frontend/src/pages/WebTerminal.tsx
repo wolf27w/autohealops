@@ -1,7 +1,7 @@
 // R8：堡垒机 Web 终端（类 JumpServer 布局）——左栏分组树 + 主机，右侧多标签 SSH 会话
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Alert, Breadcrumb, Button, Drawer, Empty, Input, List, Modal, Popconfirm, Progress, Space, Spin, Table, Tabs, Tag, Tooltip, Tree, Typography, Upload, message,
 } from 'antd'
@@ -83,6 +83,11 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
   const fitRef = useRef<FitAddon | null>(null)
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
+  // 连接代次：重连/卸载时让旧 ws 的回调失效（dev StrictMode 会挂载两次，避免误报连接失败）
+  const seqRef = useRef(0)
+  const everConnectedRef = useRef(false)
+  // 左下角状态条默认隐藏，鼠标靠近才显示（避免挡住终端内容）
+  const [showStatus, setShowStatus] = useState(false)
 
   const connect = useCallback(() => {
     const term = termRef.current
@@ -94,15 +99,20 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
     if (fit) fit.fit()
     const cols = term.cols || 120
     const rows = term.rows || 32
+    const seq = ++seqRef.current
+    everConnectedRef.current = false
     const ws = new WebSocket(buildHostTerminalWsUrl(host.id, { cols, rows }))
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
 
     ws.onmessage = (ev) => {
+      if (seq !== seqRef.current) return
       if (typeof ev.data === 'string') {
         try {
           const msg = JSON.parse(ev.data)
           if (msg.type === 'ready') {
+            everConnectedRef.current = true
+            setError('')
             setConnected(true)
             onStatus(true)
             onSessionId(msg.session_id)
@@ -134,12 +144,18 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
       term.write(buf)
     }
     ws.onclose = (e) => {
+      if (seq !== seqRef.current) return
       setConnected(false)
       onStatus(false)
       onSessionId(null)
       if (e.code !== 1000) term.writeln(`\r\n\x1b[33m连接已关闭（code=${e.code}${e.reason ? ' ' + e.reason : ''}）\x1b[0m`)
     }
-    ws.onerror = () => setError('WebSocket 连接失败')
+    // 只有「从未连上」的异常才提示失败；已连上后断开由 onclose 的行内提示表达，
+    // 避免出现「明明已连接却提示 WebSocket 连接失败」的误导。
+    ws.onerror = () => {
+      if (seq !== seqRef.current) return
+      if (!everConnectedRef.current) setError('WebSocket 连接失败')
+    }
   }, [host, onSessionId, onStatus])
 
   useEffect(() => {
@@ -169,6 +185,7 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
     window.addEventListener('resize', onWinResize)
     return () => {
       window.removeEventListener('resize', onWinResize)
+      seqRef.current++  // 让即将触发的 onerror/onclose 全部失效
       wsRef.current?.close()
       term.dispose()
     }
@@ -183,12 +200,31 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {error && <Alert type="warning" showIcon message={error} style={{ margin: '8px 8px 0' }} closable onClose={() => setError('')} />}
-      <div ref={boxRef} style={{ flex: 1, minHeight: 0, padding: '4px 8px', background: '#1e1e1e' }} />
-      <Space style={{ padding: '6px 8px' }}>
-        <Tag color={connected ? 'green' : 'default'}>{connected ? '已连接' : '未连接'}</Tag>
-        <Button size="small" icon={<ReloadOutlined />} onClick={() => { wsRef.current?.close(); setTimeout(connect, 300) }}>重连</Button>
-        <Button size="small" icon={<CloseOutlined />} onClick={() => wsRef.current?.close()}>断开</Button>
-      </Space>
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        <div ref={boxRef} style={{ height: '100%', padding: '4px 8px', background: '#1e1e1e' }} />
+        {/* 左下角隐形热区：鼠标移到这里才显示连接状态与操作，避免常驻遮挡输入 */}
+        <div
+          onMouseEnter={() => setShowStatus(true)}
+          style={{ position: 'absolute', left: 0, bottom: 0, width: 180, height: 30, cursor: 'default' }}
+        />
+        <div
+          onMouseLeave={() => setShowStatus(false)}
+          style={{
+            position: 'absolute', left: 8, bottom: 32, display: 'flex', alignItems: 'center', gap: 8,
+            padding: '4px 8px', borderRadius: 6, background: 'rgba(30,30,30,.92)',
+            border: '1px solid #3a3a3a', boxShadow: '0 2px 8px rgba(0,0,0,.35)',
+            opacity: showStatus ? 1 : 0, pointerEvents: showStatus ? 'auto' : 'none',
+            transition: 'opacity .15s ease',
+          }}
+        >
+          <Tag color={connected ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>
+            {connected ? '已连接' : '未连接'}
+          </Tag>
+          <Button size="small" ghost icon={<ReloadOutlined />}
+            onClick={() => { wsRef.current?.close(); setTimeout(connect, 300) }}>重连</Button>
+          <Button size="small" ghost icon={<CloseOutlined />} onClick={() => wsRef.current?.close()}>断开</Button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -581,6 +617,7 @@ function FileManagerSidebar({ host, onClose }: { host: HostItem; onClose: () => 
 export default function WebTerminal({ standalone = false }: { standalone?: boolean }) {
   const { hostId } = useParams()
   const navigate = useNavigate()
+  const [sp] = useSearchParams()
   const [groups, setGroups] = useState<HostGroup[]>([])
   const [hosts, setHosts] = useState<HostItem[]>([])
   const [keyword, setKeyword] = useState('')
@@ -662,17 +699,29 @@ export default function WebTerminal({ standalone = false }: { standalone?: boole
     const key = `h-${h.id}`
     setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, { key, hostId: h.id, hostName: h.name, connected: false }]))
     setActiveKey(key)
-    if (!standalone) navigate(`/resources/terminal/${h.id}`, { replace: true })
+    if (!standalone) navigate(`/terminal?host=${h.id}`, { replace: true })
   }, [navigate, standalone])
 
-  // 直达 /web-terminal/:hostId
+  // 独立整屏页支持 ?host=<id> 直达（节点管理行「终端」/旧地址重定向都走这里）
+  const jumpedRef = useRef(false)
   useEffect(() => {
-    if (standalone) return
-    if (!hostId || !hosts.length) return
-    const h = hosts.find((x) => String(x.id) === String(hostId))
-    if (h) openHost(h)
+    if (jumpedRef.current) return
+    if (!standalone) {
+      if (!hostId || !hosts.length) return
+      const h = hosts.find((x) => String(x.id) === String(hostId))
+      if (h) { jumpedRef.current = true; openHost(h) }
+      return
+    }
+    const hid = sp.get('host') || hostId
+    if (!hid || !hosts.length) return
+    const h = hosts.find((x) => String(x.id) === String(hid))
+    if (!h) return
+    const key = `h-${h.id}`
+    jumpedRef.current = true
+    setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, { key, hostId: h.id, hostName: h.name, connected: false }]))
+    setActiveKey(key)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [standalone, hostId, hosts.length])
+  }, [standalone, hostId, hosts.length, sp])
 
   const closeTab = (key: string) => {
     setTabs((prev) => {

@@ -127,7 +127,20 @@ export default function DbDetail() {
   const connId = Number(id)
   const navigate = useNavigate()
   const [sp, setSp] = useSearchParams()
-  const tab = TABS.includes(sp.get('tab') || '') ? (sp.get('tab') as string) : 'overview'
+  const from = sp.get('from') || ''
+  // 从「数据库列表」进入 → 隐藏 SQL 工作台；从「数据库连接」进入 → 只显示 SQL 工作台；直链 → 全部页签
+  const visibleKeys = useMemo(() => {
+    if (from === 'list') return TABS.filter((k) => k !== 'console')
+    if (from === 'conn') return ['console']
+    return TABS
+  }, [from])
+  const rawTab = sp.get('tab') || ''
+  const tab = visibleKeys.includes(rawTab) ? rawTab : (from === 'conn' ? 'console' : 'overview')
+  const setTab = (k: string) => {
+    const params: Record<string, string> = { tab: k }
+    if (from) params.from = from
+    setSp(params, { replace: true })
+  }
   const [conn, setConn] = useState<DbConn | null>(null)
   const [loading, setLoading] = useState(true)
   const [collecting, setCollecting] = useState(false)
@@ -232,22 +245,24 @@ export default function DbDetail() {
   return (
     <div>
       <Space style={{ marginBottom: 12 }} size={12} wrap>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/resources/databases')}>返回列表</Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/resources/databases')}>{from === 'conn' ? '返回连接' : '返回列表'}</Button>
         <b style={{ fontSize: 16 }}>{conn.name}</b>
         <Tag color={TYPE_COLOR[conn.db_type || ''] || 'default'}>{conn.db_type}</Tag>
         <Tag color={status.color}>{status.label}</Tag>
         <span style={{ color: '#8c8c8c', fontSize: 12 }}>{conn.host}{conn.port ? `:${conn.port}` : ''}</span>
         <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        {isAdmin() && conn.source !== 'agent' && (
+        {from !== 'conn' && isAdmin() && conn.source !== 'agent' && (
           <Button size="small" loading={collecting} onClick={doCollect}>立即采集</Button>
         )}
-        <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />} onClick={() => setSp({ tab: 'diagnosis' }, { replace: true })}>
-          一键诊断
-        </Button>
+        {from !== 'conn' && (
+          <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />} onClick={() => setTab('diagnosis')}>
+            一键诊断
+          </Button>
+        )}
       </Space>
       <Tabs
         activeKey={tab}
-        onChange={(k) => setSp({ tab: k }, { replace: true })}
+        onChange={(k) => setTab(k)}
         destroyInactiveTabPane
         items={[
           { key: 'overview', label: '概览', children: overview },
@@ -257,7 +272,7 @@ export default function DbDetail() {
           { key: 'console', label: 'SQL 工作台', children: <DbConsolePanel conn={conn} /> },
           { key: 'diagnosis', label: '诊断', children: <DbDiagnosisPanel connId={connId} /> },
           { key: 'approval-policy', label: '审核策略', children: <DbApprovalPolicyPanel connId={connId} /> },
-        ]}
+        ].filter((i) => visibleKeys.includes(i.key))}
       />
     </div>
   )

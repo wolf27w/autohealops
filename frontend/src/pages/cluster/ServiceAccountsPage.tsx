@@ -226,29 +226,28 @@ export default function ServiceAccountsPage({ clusterId }: { clusterId: number }
   ]
 
   return (
-    <Card
-      size="small"
-      title="服务账户"
-      extra={(
-        <Space>
-          <Select
-            style={{ width: 200 }}
-            loading={nsLoading}
-            value={ns}
-            onChange={setNs}
-            options={[{ value: NS_ALL, label: '全部项目' }, ...namespaces.map((n) => ({ value: n, label: n }))]}
-          />
-          <Input
-            allowClear
-            placeholder="搜索名称 / 角色"
-            style={{ width: 200 }}
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-          />
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        </Space>
-      )}
-    >
+    <Card size="small" title="服务账户">
+      {/* 工具栏：命名空间固定在最左 */}
+      <Space size={8} style={{ marginBottom: 10 }} wrap>
+        <span style={{ color: '#8aa196', fontSize: 12 }}>命名空间</span>
+        <Select
+          size="small"
+          style={{ width: 200 }}
+          loading={nsLoading}
+          value={ns}
+          onChange={setNs}
+          options={[{ value: NS_ALL, label: '全部项目' }, ...namespaces.map((n) => ({ value: n, label: n }))]}
+        />
+        <Input
+          allowClear
+          size="small"
+          placeholder="搜索名称 / 角色"
+          style={{ width: 200 }}
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
+        <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+      </Space>
       <Table<ServiceAccountRow>
         size="small"
         rowKey={(r) => `${r.namespace}/${r.name}`}

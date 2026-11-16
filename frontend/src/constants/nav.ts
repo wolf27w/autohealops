@@ -32,7 +32,6 @@ export const NAV: NavGroup[] = [
       { key: '/clusters', label: 'K8s 集群', icon: 'ClusterOutlined' },
       { key: '/resources/hosts', label: '节点管理', icon: 'DesktopOutlined', requiresGrant: 'host' },
       { key: '/resources/databases', label: '数据库管理', icon: 'DatabaseOutlined' },
-      { key: '/resources/terminal', label: '堡垒机终端', icon: 'CodeOutlined', requiresGrant: 'host' },
     ],
   },
   {
@@ -50,7 +49,6 @@ export const NAV: NavGroup[] = [
   {
     key: 'g-diagnose', label: '诊断与自愈', icon: 'MedicineBoxOutlined',
     children: [
-      { key: '/diagnose/fault', label: '故障诊断', icon: 'ApartmentOutlined' },
       { key: '/diagnose/agent', label: '应用诊断助手', icon: 'MessageOutlined' },
       { key: '/diagnose/strategy', label: '自愈规则与审批', icon: 'SafetyOutlined', minRole: 'admin' },
       { key: '/diagnose/tasks', label: '定时与批量任务', icon: 'ClockCircleOutlined', minRole: 'admin' },
@@ -136,7 +134,8 @@ export function searchItems(): { value: string; label: string }[] {
 export const LEGACY_REDIRECTS: Array<[string, string]> = [
   // 资源
   ['/host-management', '/resources/hosts'],
-  ['/web-terminal', '/resources/terminal'],
+  ['/web-terminal', '/terminal'],
+  ['/resources/terminal', '/terminal'],
   ['/resource-governance', '/clusters'],
   ['/zombie-services', '/clusters'],
   ['/node-management', '/clusters'],
@@ -155,10 +154,10 @@ export const LEGACY_REDIRECTS: Array<[string, string]> = [
   ['/records', '/alerts/handling'],
   ['/batch', '/alerts/handling'],
   // 诊断
-  ['/diagnostic', '/diagnose/fault?tab=db'],
-  ['/fault-diagnosis', '/diagnose/fault'],
-  ['/fault-diagnosis/cluster', '/diagnose/fault?tab=cluster'],
-  ['/fault-diagnosis/app', '/diagnose/fault?tab=app'],
+  ['/diagnostic', '/resources/databases'],
+  ['/fault-diagnosis', '/alerts/handling'],
+  ['/fault-diagnosis/cluster', '/alerts/handling'],
+  ['/fault-diagnosis/app', '/alerts/handling'],
   ['/agent', '/diagnose/agent'],
   ['/strategy', '/diagnose/strategy'],
   ['/self-heal-rules', '/diagnose/strategy'],
