@@ -552,6 +552,309 @@ async def get_object_ddl(conn_id: int, kind: str, name: str, db: str = "",
         return {"code": 500, "message": f"获取 DDL 失败：{e}", "data": None}
 
 
+# ============ R37 §6.6：表结构设计器 + 编辑库（2026-11-16） ============
+# 定位：SQL 终端里「看结构」不够用，要能像客户端那样改字段/索引/表选项。
+# 安全口径：所有标识符与类型串都过白名单校验；执行前必须 dry_run 出 DDL 预览；
+# 命中审核策略（kind=ddl）时返回 428 信封，走既有 B12 审核单执行链。
+_TYPE_RE = re.compile(r"^[A-Za-z0-9_ ,()'\".+-]{1,200}$")
+_EXPR_DEFAULT_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _check_ident(v: str, what: str = "标识符") -> str:
+    v = (v or "").strip()
+    if not _IDENT_RE.match(v):
+        raise ValueError(f"{what}不合法：{v}")
+    return v
+
+
+def _check_type_spec(t: str) -> str:
+    t = (t or "").strip()
+    if not t or not _TYPE_RE.match(t) or ";" in t or "--" in t or "/*" in t or "`" in t:
+        raise ValueError(f"字段类型不合法：{t}")
+    return t
+
+
+def _lit(v: str) -> str:
+    s = str(v)
+    if ";" in s or "--" in s or "/*" in s:
+        raise ValueError("注释/默认值包含非法字符")
+    return "'" + s.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+def _column_def(col: dict) -> str:
+    """单列定义：`name` type [NOT NULL] [DEFAULT x] [AUTO_INCREMENT] [COMMENT '...']"""
+    name = _check_ident(col.get("name") or "", "字段名")
+    typ = _check_type_spec(col.get("type") or "")
+    parts = [f"`{name}` {typ}"]
+    if not bool(col.get("nullable", True)):
+        parts.append("NOT NULL")
+    dv = col.get("default")
+    if dv is not None and str(dv) != "":
+        s = str(dv)
+        up = s.upper()
+        if up == "NULL":
+            parts.append("DEFAULT NULL")
+        elif _EXPR_DEFAULT_RE.match(s) or up in ("CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP()"):
+            parts.append(f"DEFAULT {s}")
+        else:
+            parts.append(f"DEFAULT {_lit(s)}")
+    if col.get("auto_increment"):
+        parts.append("AUTO_INCREMENT")
+    if (col.get("comment") or "") != "":
+        parts.append(f"COMMENT {_lit(col.get('comment'))}")
+    return " ".join(parts)
+
+
+def _build_table_alter(database: str, table: str, ch: dict) -> str:
+    """结构化改动 → 单条 ALTER TABLE（RENAME TO 作为子句并入，便于审核单一次执行）。"""
+    _check_ident(database, "库名")
+    _check_ident(table, "表名")
+    ch = ch or {}
+    clauses: list[str] = []
+    for c in ch.get("add_columns") or []:
+        clause = "ADD COLUMN " + _column_def(c)
+        after = (c.get("after") or "").strip()
+        if after:
+            clause += f" AFTER `{_check_ident(after, 'after 字段')}`"
+        clauses.append(clause)
+    for name in ch.get("drop_columns") or []:
+        clauses.append(f"DROP COLUMN `{_check_ident(name, '字段名')}`")
+    for c in ch.get("modify_columns") or []:
+        clauses.append("MODIFY COLUMN " + _column_def(c))
+    for c in ch.get("change_columns") or []:
+        old = _check_ident(c.get("from") or "", "字段名")
+        clauses.append(f"CHANGE COLUMN `{old}` " + _column_def(c))
+    for i in ch.get("add_indexes") or []:
+        cols = ", ".join(f"`{_check_ident(x, '索引字段')}`" for x in (i.get("columns") or []))
+        if not cols:
+            raise ValueError("索引至少需要一个字段")
+        uniq = "UNIQUE " if i.get("unique") else ""
+        idx_name = (i.get("name") or "").strip()
+        name_sql = f"`{_check_ident(idx_name, '索引名')}` " if idx_name else ""
+        clauses.append(f"ADD {uniq}INDEX {name_sql}({cols})")
+    for name in ch.get("drop_indexes") or []:
+        clauses.append(f"DROP INDEX `{_check_ident(name, '索引名')}`")
+    if ch.get("comment") is not None:
+        clauses.append(f"COMMENT={_lit(ch.get('comment') or '')}")
+    if (ch.get("engine") or "").strip():
+        eng = str(ch["engine"]).strip()
+        if not re.match(r"^[A-Za-z0-9_]{1,32}$", eng):
+            raise ValueError(f"存储引擎不合法：{eng}")
+        clauses.append(f"ENGINE={eng}")
+    charset = (ch.get("charset") or "").strip()
+    if charset:
+        if not re.match(r"^[A-Za-z0-9_]{1,32}$", charset):
+            raise ValueError(f"字符集不合法：{charset}")
+        clause = f"CONVERT TO CHARACTER SET {charset}"
+        collation = (ch.get("collation") or "").strip()
+        if collation:
+            if not re.match(r"^[A-Za-z0-9_]{1,64}$", collation):
+                raise ValueError(f"排序规则不合法：{collation}")
+            clause += f" COLLATE {collation}"
+        clauses.append(clause)
+    if not clauses:
+        raise ValueError("没有任何改动")
+    new_name = (ch.get("rename_table") or "").strip()
+    if new_name:
+        clauses.append(f"RENAME TO `{_check_ident(new_name, '新表名')}`")
+    return f"ALTER TABLE `{database}`.`{table}`\n  " + ",\n  ".join(clauses)
+
+
+async def _rows(c: DBConnection, sql: str, limit: int = 500) -> list[dict]:
+    """执行只读 SQL 并把 columns/rows 转成 dict 行（直连与 agent 库统一）。"""
+    data = await _run_sql(c, sql, limit=limit)
+    cols = data.get("columns") or []
+    return [dict(zip(cols, r)) for r in (data.get("rows") or [])]
+
+
+@router.get("/{conn_id}/table-schema")
+async def get_table_schema(conn_id: int, database: str = "", table: str = "",
+                           user=Depends(require_any_user)):
+    """表结构详情：字段（类型/可空/默认/注释/AUTO_INCREMENT）+ 索引 + 表选项（MySQL）。"""
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    try:
+        db = _check_ident(database or c.database or "", "库名")
+        tbl = _check_ident(table, "表名")
+    except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+    try:
+        cols = await _rows(c, (
+            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT, "
+            "CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_KEY FROM information_schema.COLUMNS "
+            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY ORDINAL_POSITION"))
+        idx_rows = await _rows(c, (
+            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE "
+            "FROM information_schema.STATISTICS "
+            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY INDEX_NAME, SEQ_IN_INDEX"))
+        meta = await _rows(c, (
+            "SELECT ENGINE, TABLE_COLLATION, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES "
+            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}'"))
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"获取表结构失败：{e}", "data": None}
+    if not cols:
+        return {"code": 404, "message": f"表 {db}.{tbl} 不存在或无权限", "data": None}
+
+    columns = [{
+        "name": r.get("COLUMN_NAME"),
+        "type": r.get("COLUMN_TYPE") or "",
+        "nullable": (r.get("IS_NULLABLE") or "YES") == "YES",
+        "default": r.get("COLUMN_DEFAULT"),
+        "extra": r.get("EXTRA") or "",
+        "comment": r.get("COLUMN_COMMENT") or "",
+        "key": r.get("COLUMN_KEY") or "",
+        "charset": r.get("CHARACTER_SET_NAME") or "",
+        "collation": r.get("COLLATION_NAME") or "",
+    } for r in cols]
+
+    idx_map: dict[str, dict] = {}
+    for r in idx_rows:
+        name = r.get("INDEX_NAME") or ""
+        item = idx_map.setdefault(name, {
+            "name": name, "unique": _safe_int(r.get("NON_UNIQUE"), 1) == 0,
+            "type": r.get("INDEX_TYPE") or "", "columns": [],
+        })
+        item["columns"].append(r.get("COLUMN_NAME") or "")
+
+    tinfo = meta[0] if meta else {}
+    collation = tinfo.get("TABLE_COLLATION") or ""
+    return {"code": 200, "message": "success", "data": {
+        "database": db, "table": tbl,
+        "engine": tinfo.get("ENGINE") or "",
+        "charset": collation.split("_")[0] if collation else "",
+        "collation": collation,
+        "comment": tinfo.get("TABLE_COMMENT") or "",
+        "rows": _safe_int(tinfo.get("TABLE_ROWS")),
+        "columns": columns,
+        "indexes": list(idx_map.values()),
+    }}
+
+
+@router.post("/{conn_id}/table-alter")
+async def alter_table(conn_id: int, payload: dict, user=Depends(require_operator)):
+    """改表结构：body {database, table, changes, dry_run}。dry_run=true 只回 DDL 预览。"""
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id, "manage"):
+        return {"code": 403, "message": "无管理权限", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    database = (payload.get("database") or "").strip()
+    table = (payload.get("table") or "").strip()
+    try:
+        stmt = _build_table_alter(database or (c.database or ""), table, payload.get("changes") or {})
+    except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+    if bool(payload.get("dry_run", True)):
+        return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
+
+    block = await _check_approval(conn_id, "ddl")
+    if block:
+        return block
+    started = time.time()
+    err = ""
+    try:
+        await _run_sql(c, stmt, allow_write=True, timeout=120.0, database=database or None)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    await _audit_sql(user, c, stmt, round(time.time() - started, 2), 0, not err, err,
+                     "db_table_alter")
+    if err:
+        return {"code": 500, "message": f"执行失败：{err}", "data": None}
+    _SCHEMA_CACHE.pop(conn_id, None)
+    return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
+
+
+@router.get("/{conn_id}/databases/{name}/info")
+async def get_database_info(conn_id: int, name: str, user=Depends(require_any_user)):
+    """库选项（字符集/排序规则），编辑库弹窗回填用。"""
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限访问该数据库", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    try:
+        db = _check_ident(name, "库名")
+        rows = await _rows(c, (
+            "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA "
+            f"WHERE SCHEMA_NAME='{db}'"))
+    except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"获取库信息失败：{e}", "data": None}
+    if not rows:
+        return {"code": 404, "message": f"库 {db} 不存在", "data": None}
+    r = rows[0]
+    return {"code": 200, "message": "success", "data": {
+        "name": db,
+        "charset": r.get("DEFAULT_CHARACTER_SET_NAME") or "",
+        "collation": r.get("DEFAULT_COLLATION_NAME") or "",
+    }}
+
+
+@router.post("/{conn_id}/databases/{name}/alter")
+async def alter_database(conn_id: int, name: str, payload: dict, user=Depends(require_operator)):
+    """编辑库：改字符集/排序规则（body {charset, collation}，dry_run 可选）。"""
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id, "manage"):
+        return {"code": 403, "message": "无管理权限", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+    try:
+        db = _check_ident(name, "库名")
+        charset = (payload.get("charset") or "").strip()
+        collation = (payload.get("collation") or "").strip()
+        if not charset and not collation:
+            return {"code": 400, "message": "至少指定字符集或排序规则", "data": None}
+        if charset and not re.match(r"^[A-Za-z0-9_]{1,32}$", charset):
+            raise ValueError(f"字符集不合法：{charset}")
+        if collation and not re.match(r"^[A-Za-z0-9_]{1,64}$", collation):
+            raise ValueError(f"排序规则不合法：{collation}")
+        parts = []
+        if charset:
+            parts.append(f"CHARACTER SET {charset}")
+        if collation:
+            parts.append(f"COLLATE {collation}")
+        stmt = f"ALTER DATABASE `{db}` " + " ".join(parts)
+    except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+    if bool(payload.get("dry_run", False)):
+        return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
+
+    block = await _check_approval(conn_id, "ddl")
+    if block:
+        return block
+    started = time.time()
+    err = ""
+    try:
+        await _run_sql(c, stmt, allow_write=True, timeout=60.0)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    await _audit_sql(user, c, stmt, round(time.time() - started, 2), 0, not err, err,
+                     "db_alter_database")
+    if err:
+        return {"code": 500, "message": f"执行失败：{err}", "data": None}
+    return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
+
+
 @router.post("/{conn_id}/export")
 async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_user)):
     """导出库/表为 SQL（CREATE + INSERT，单表 ≤5000 行、总 ≤5MB）。"""

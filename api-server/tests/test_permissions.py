@@ -33,6 +33,7 @@ PUBLIC_ALLOWLIST = {
     ("GET", "/api/v1/external/tickets"),                  # 外部令牌 X-External-Token
     ("POST", "/api/v1/external/tickets"),                 # 外部令牌 X-External-Token
     ("GET", "/api/v1/stats/dashboard/stream"),            # SSE，?token= JWT
+    ("GET", "/api/v1/stats/screen/stream"),               # SSE 大屏实时推送，?token= JWT（screens.py 内校验 + 黑名单）
     ("POST", "/api/v1/webhooks/dingtalk/callback"),       # 机器人回调验签
     ("POST", "/api/v1/webhooks/feishu/callback"),         # 飞书验签
     ("POST", "/api/v1/webhooks/wechat/callback"),         # 企微验签
