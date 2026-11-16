@@ -12,7 +12,7 @@ from app.models.host_group import HostGroup, HostGroupMember
 from app.models.host_session import HostSession, HostSessionChunk
 from app.models.host_command_audit import HostCommandAudit
 from app.models.alert import Alert, AlertComment
-from app.models.alert_silence import AlertSilence
+from app.models.alert_silence import AlertInhibition, AlertSilence
 from app.models.alert_policy import AlertPolicy
 from app.models.approval import Approval
 from app.models.approval_flow import ApprovalFlow, DEFAULT_FLOW_NAME, DEFAULT_FLOW_NODES
@@ -62,6 +62,7 @@ __all__ = [
     "Alert",
     "AlertComment",
     "AlertSilence",
+    "AlertInhibition",
     "AlertPolicy",
     "Task",
     "TaskAuditLog",

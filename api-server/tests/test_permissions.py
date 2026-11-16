@@ -34,6 +34,7 @@ PUBLIC_ALLOWLIST = {
     ("POST", "/api/v1/external/tickets"),                 # 外部令牌 X-External-Token
     ("GET", "/api/v1/stats/dashboard/stream"),            # SSE，?token= JWT
     ("GET", "/api/v1/stats/screen/stream"),               # SSE 大屏实时推送，?token= JWT（screens.py 内校验 + 黑名单）
+    ("GET", "/api/v1/resources/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/logs/stream"),  # SSE 聚合日志跟随，?token= JWT（workload_logs.py 内校验）
     ("POST", "/api/v1/webhooks/dingtalk/callback"),       # 机器人回调验签
     ("POST", "/api/v1/webhooks/feishu/callback"),         # 飞书验签
     ("POST", "/api/v1/webhooks/wechat/callback"),         # 企微验签

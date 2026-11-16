@@ -510,6 +510,52 @@ def silence_matches(matchers: list[dict], alert) -> bool:
     return True
 
 
+def _json_list(value):
+    """把 JSON 字符串或 list 归一化为 list（抑制规则 matchers / equal_labels 用）。"""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            v = json.loads(value)
+            return v if isinstance(v, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
+def _alert_field(alert, key: str) -> str:
+    """按 matcher key 取告警字段的字符串值（与 silence_matches 一致）。"""
+    if key == "cluster_id":
+        return str(alert.cluster_id or "")
+    return str(getattr(alert, key, None) or "")
+
+
+def inhibition_matches(source_alert, target_alert, rule) -> bool:
+    """抑制规则是否命中（纯函数，供后续接线，本轮不改通知发送主流程）。
+
+    命中条件（全部满足）：
+    1. source_alert 匹配 rule.source_matchers（AND，复用 silence_matches 语义）；
+    2. target_alert 匹配 rule.target_matchers；
+    3. rule.equal_labels 指定的每个标签在 source 与 target 上取值相等。
+
+    rule 可为 ORM 对象或任意带 source_matchers/target_matchers/equal_labels 属性的对象，
+    属性值可为 JSON 字符串或 list。
+    """
+    source_matchers = _json_list(getattr(rule, "source_matchers", None))
+    target_matchers = _json_list(getattr(rule, "target_matchers", None))
+    equal_labels = _json_list(getattr(rule, "equal_labels", None))
+    if not source_matchers or not target_matchers:
+        return False
+    if not silence_matches(source_matchers, source_alert):
+        return False
+    if not silence_matches(target_matchers, target_alert):
+        return False
+    for label in equal_labels:
+        if _alert_field(source_alert, str(label)) != _alert_field(target_alert, str(label)):
+            return False
+    return True
+
+
 async def _alert_matched_silence(alert) -> bool:
     """是否存在「当前生效」的屏蔽条目命中该告警。表未迁移/DB 异常 → False（fail-open）。"""
     from app.models import AlertSilence
