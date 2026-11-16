@@ -50,7 +50,8 @@ export const getOracleClients = () => api.get<OracleClientsData>('/oracle-client
 export const uploadOracleClient = (name: string, file: File) =>
   api.post(`/oracle-clients/upload`, file, {
     params: { name },
-    headers: { 'Content-Type': 'application/octet-stream' },
+    // X-Filename 用来判断包类型（zip / tar.gz / dmg / pkg）
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
     timeout: 0,
   })
 

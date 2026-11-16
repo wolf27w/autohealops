@@ -45,7 +45,7 @@ export default function OracleClientsPanel() {
   const doUpload = async () => {
     const f = fileRef.current?.files?.[0]
     if (!f) { message.warning('请选择 zip / tar.gz 包'); return }
-    const name = uploadName.trim() || f.name.replace(/\.(zip|tar\.gz|tgz)$/i, '')
+    const name = uploadName.trim() || f.name.replace(/\.(zip|tar\.gz|tgz|dmg|pkg)$/i, '')
     setBusy('upload')
     try {
       await uploadOracleClient(name, f)
@@ -149,9 +149,9 @@ export default function OracleClientsPanel() {
         <Space wrap>
           <Input placeholder="版本名（如 19.19-linux-x64）" value={uploadName}
             onChange={(e) => setUploadName(e.target.value)} style={{ width: 260 }} />
-          <input ref={fileRef} type="file" accept=".zip,.gz,.tgz" />
+          <input ref={fileRef} type="file" accept=".zip,.gz,.tgz,.dmg,.pkg" />
           <Button type="primary" icon={<UploadOutlined />} loading={busy === 'upload'} onClick={doUpload}>上传并安装</Button>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>支持 Oracle 官方 zip（会自动去掉顶层目录），≤600MB</span>
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>支持 zip / tar.gz / dmg / pkg（自动处理顶层目录），≤600MB</span>
         </Space>
       </Card>
 
