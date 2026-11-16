@@ -35,7 +35,10 @@ kubectl apply -f k8s/ingress.yaml
 
 ## 三个硬约束
 
-1. **api-server 单副本**：agent 网关连接表在进程内，多副本会丢隧道调用（要 HA 得先拆网关）。
+1. **api-server 可多副本，但 agent 隧道必须在同一副本**：网关连接表在进程内，
+   因此 `agent-gateway` 已拆成独立 Deployment（单副本，R2，2026-11 落地）；
+   api-server 自身已可按 `replicas: 2` + HPA 跑（无状态，定时任务走 Redis 锁）。
+   ⚠️ 若把 `AGENT_GATEWAY_ENABLED` 打开回 api-server 进程内，就必须回到单副本。
 2. **agent CA 必须持久化**：丢了所有 agent 证书失效。
 3. **`AGENT_GATEWAY_PUBLIC_ADDR` 变更后必须重启 api-server**：服务端证书 SAN 在启动时重签，
    否则 agent 报 `certificate is valid for <旧地址>, not <新地址>`。
