@@ -12,6 +12,7 @@ import {
   deleteDBConnection, testDBConnection, collectSlowSQL, listDbGroups,
 } from '../services/api'
 import { isAdmin } from '../utils/auth'
+import { ENV_OPTIONS } from '../utils/env'
 
 // 本地行类型：后端返回字段（types.ts 里的 DBConnection 未覆盖这些，这里补全）
 interface DbRow extends DBConnection {
@@ -187,6 +188,15 @@ export default function DbResourceList() {
     return Array.from(set).map((v) => ({ value: v, label: v }))
   }, [conns])
 
+  // 表单下拉选项：全站统一枚举 ENV_OPTIONS（prod/release/qa）+ 历史存量值兜底（不在枚举内也保留，避免编辑丢失）
+  const envSelectOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: { value: string; label: string }[] = []
+    ENV_OPTIONS.forEach((e) => { seen.add(e.value); opts.push({ value: e.value, label: e.label }) })
+    envOptions.forEach((o) => { if (!seen.has(o.value)) { seen.add(o.value); opts.push(o) } })
+    return opts
+  }, [envOptions])
+
   const groupOptions = [
     { value: 'all', label: '全部分组' },
     ...groups.map((g) => ({ value: g.name, label: g.name })),
@@ -308,7 +318,13 @@ export default function DbResourceList() {
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="env_tag" label="环境" tooltip="生产/UAT/测试…；告警与工单按环境聚合（留空=未分组）">
-            <Input placeholder="如 生产 / UAT / 测试" />
+            <Select
+              allowClear
+              showSearch
+              placeholder="选择环境（留空=未分组）"
+              options={envSelectOptions}
+              optionFilterProp="label"
+            />
           </Form.Item>
           <Form.Item name="group_name" label="分组" tooltip="可直接输入新分组名；留空=未分组">
             <AutoComplete
