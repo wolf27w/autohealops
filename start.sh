@@ -125,6 +125,21 @@ start_executor() {
   if pgrep -f "k8s-executor/bin/executor" >/dev/null 2>&1; then echo "  [跳过] k8s-executor 已在运行"; return; fi
   nohup sh -c "cd '$ROOT' && exec ./k8s-executor/bin/executor" >> "$LOG_DIR/executor.log" 2>&1 < /dev/null &
   echo "  [启动] k8s-executor -> gRPC :9090 / 日志流 :9099"
+
+  # 就绪等待：:9090 与 :9099 都 LISTEN 才算起来。
+  # api-server 启动瞬间就会探活 + 查 Prometheus，若 executor 还没绑定端口会被误判 down（2026-11-16 踩坑）。
+  local i=0
+  while [ "$i" -lt 20 ]; do
+    if port_listening 9090 && port_listening 9099; then
+      echo "  [校验] k8s-executor :9090/:9099 就绪 ✓"
+      return 0
+    fi
+    sleep 1; i=$((i+1))
+  done
+  local s90="down" s99="down"
+  port_listening 9090 && s90="up"
+  port_listening 9099 && s99="up"
+  echo "  [警告] k8s-executor 20s 内未就绪（:9090=$s90 :9099=$s99），见 logs/executor.log"
 }
 
 start_frontend() {
@@ -135,9 +150,11 @@ start_frontend() {
 
 start_all() {
   echo "== 启动 AutoHealOps 服务 =="
+  # 顺序：先 executor 后 api-server。api-server 一启动就会探活 executor 并查 Prometheus，
+  # 反序会导致启动窗口内一堆 UNAVAILABLE 报错 + 仪表盘 60s 内显示 executor down。
+  start_executor
   start_api_server
   start_ai_service
-  start_executor
   start_frontend
   echo ""
   echo "等待服务拉起..."
