@@ -33,6 +33,8 @@ export interface DbInstanceTreeProps {
 // 树节点点击回调的对外类型：kind 标识节点类型，db/name 为具体对象
 export interface DbTreeSelectNode {
   kind: 'db' | 'table' | 'view' | 'routine' | 'event'
+  /** 节点所属实例（跨实例点击时父组件据此切换当前实例，避免操作打到别的库上） */
+  connId?: number
   db?: string
   name?: string
 }
@@ -236,7 +238,7 @@ export default function DbInstanceTree(props: DbInstanceTreeProps): JSX.Element 
     if (n.kind === 'instance' && n.connId != null) { onOpen(n.connId); return }
     if (!onSelectNode) return
     if (n.kind === 'database' && n.dbName) {
-      onSelectNode({ kind: 'db', db: n.dbName })
+      onSelectNode({ kind: 'db', connId: n.connId, db: n.dbName })
       return
     }
     if (n.kind === 'leaf' && n.dbName && n.title) {
@@ -244,7 +246,7 @@ export default function DbInstanceTree(props: DbInstanceTreeProps): JSX.Element 
         table: 'table', view: 'view', function: 'routine', event: 'event',
       }
       const kind = kindMap[n.objKind || '']
-      if (kind) onSelectNode({ kind, db: n.dbName, name: String(n.title) })
+      if (kind) onSelectNode({ kind, connId: n.connId, db: n.dbName, name: String(n.title) })
     }
   }
 

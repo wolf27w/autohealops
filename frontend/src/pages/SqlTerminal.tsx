@@ -9,11 +9,12 @@ import {
   ReloadOutlined, ImportOutlined, ExportOutlined, CloudDownloadOutlined, PlayCircleOutlined, EyeOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import DbInstanceTree, { type DbTreeConn, type DbTreeSelectNode } from '../components/db/DbInstanceTree'
+import TableDesignerModal from '../components/db/TableDesignerModal'
 import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
   importSqlScript, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
-  createDbApproval, type DbApprovalKind,
+  createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase,
 } from '../services/api'
 
 // ---------- 后端返回的连接行类型（getDBConnections 返回 unknown，这里按需断言） ----------
@@ -54,6 +55,8 @@ type ApprovalSubmitPayload = {
   conn_id: number
   kind: DbApprovalKind
   sql?: string
+  /** 执行时切到的库（后端原样存 payload） */
+  database?: string
   export?: { databases: string[]; mode: 'structure' | 'data' | 'both'; schema_only?: boolean }
 }
 
@@ -111,6 +114,7 @@ export default function SqlTerminal() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [currentDb, setCurrentDb] = useState<string | null>(null)
+  const pendingNodeRef = useRef<DbTreeSelectNode | null>(null)
   const [selObj, setSelObj] = useState<SelectedObj | null>(null)
 
   // 编辑器
@@ -150,6 +154,16 @@ export default function SqlTerminal() {
   const [ddlText, setDdlText] = useState('')
   const [ddlTitle, setDdlTitle] = useState('')
 
+  // 表结构设计器（R37 §6.6）
+  const [designerOpen, setDesignerOpen] = useState(false)
+  // 编辑库（字符集/排序规则）
+  const [dbEditOpen, setDbEditOpen] = useState(false)
+  const [dbEditName, setDbEditName] = useState('')
+  const [dbEditCharset, setDbEditCharset] = useState('')
+  const [dbEditCollation, setDbEditCollation] = useState('')
+  const [dbEditLoading, setDbEditLoading] = useState(false)
+  const [dbEditSaving, setDbEditSaving] = useState(false)
+
   // 提交审核弹窗（命中 428 审核策略）
   const [approvalOpen, setApprovalOpen] = useState(false)
   const [approvalKind, setApprovalKind] = useState<DbApprovalKind | null>(null)
@@ -180,6 +194,11 @@ export default function SqlTerminal() {
   useEffect(() => {
     setCurrentDb(null)
     setSelObj(null)
+    const pending = pendingNodeRef.current
+    if (pending && pending.connId === cur?.id) {
+      pendingNodeRef.current = null
+      applyNode(pending)
+    }
     if (!cur) { setDbList([]); return }
     let alive = true
     getDBSchema(cur.id)
@@ -193,13 +212,23 @@ export default function SqlTerminal() {
   }, [cur?.id])
 
   // ---------- 资源树回调 ----------
-  const handleSelectNode = (node: DbTreeSelectNode) => {
+  // 跨实例点击（在别的实例下点表）：先切当前实例，等切换 effect 重置完再把选择补回去，
+  // 否则 selObj 会带着 B 实例的对象、但操作打到 A 实例的连接上。
+  const applyNode = (node: DbTreeSelectNode) => {
     if (node.kind === 'db') {
       setCurrentDb(node.db ?? null)
       setSelObj(null)
-    } else if (node.kind === 'table' || node.kind === 'view' || node.kind === 'routine' || node.kind === 'event') {
+    } else {
       setSelObj({ kind: node.kind, db: node.db ?? '', name: node.name ?? '' })
     }
+  }
+  const handleSelectNode = (node: DbTreeSelectNode) => {
+    if (node.connId != null && node.connId !== cur?.id) {
+      pendingNodeRef.current = node
+      setSelectedId(node.connId)
+      return
+    }
+    applyNode(node)
   }
 
   // ---------- 执行 ----------
@@ -256,6 +285,50 @@ export default function SqlTerminal() {
     }
     setBusy(false)
     pushGroup(items)
+  }
+
+  // ---------- 表结构设计器 / 编辑库（R37 §6.6） ----------
+  const openDesigner = (o: SelectedObj) => {
+    if (!cur) return
+    if (o.kind !== 'table') { message.info('只有表支持结构设计'); return }
+    setDesignerOpen(true)
+  }
+
+  const openDbEdit = async () => {
+    if (!cur || !currentDb) return
+    setDbEditName(currentDb)
+    setDbEditCharset('')
+    setDbEditCollation('')
+    setDbEditOpen(true)
+    setDbEditLoading(true)
+    try {
+      const info = await getDatabaseInfo(cur.id, currentDb)
+      setDbEditCharset(info.charset || '')
+      setDbEditCollation(info.collation || '')
+    } catch { /* 拦截器已提示 */ } finally { setDbEditLoading(false) }
+  }
+
+  const saveDbEdit = async () => {
+    if (!cur || !dbEditName) return
+    const charset = dbEditCharset.trim()
+    const collation = dbEditCollation.trim()
+    if (!charset && !collation) { message.warning('至少填写字符集或排序规则'); return }
+    setDbEditSaving(true)
+    let stmt = ''
+    try {
+      const p = await alterDatabase(cur.id, dbEditName, { charset, collation, dry_run: true })
+      stmt = (p.statements || [])[0] || ''
+      await alterDatabase(cur.id, dbEditName, { charset, collation })
+      message.success(`已更新库 ${dbEditName}`)
+      setDbEditOpen(false)
+    } catch (e) {
+      const err = e as { needApproval?: boolean }
+      if (err?.needApproval) {
+        setDbEditOpen(false)
+        openApprovalModal('ddl', stmt || `ALTER DATABASE \`${dbEditName}\` ...`,
+          { conn_id: cur.id, kind: 'ddl', sql: stmt })
+      }
+    } finally { setDbEditSaving(false) }
   }
 
   // ---------- 表级/对象操作 ----------
@@ -442,6 +515,7 @@ export default function SqlTerminal() {
         <span style={{ flex: 1 }} />
         <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>
         <Button disabled={!cur} onClick={createDb}>新建库</Button>
+        <Button disabled={!cur || !currentDb} onClick={openDbEdit}>编辑库</Button>
         <Button danger disabled={!cur || !currentDb} onClick={dropDb}>删除库</Button>
         <Button icon={<ImportOutlined />} disabled={!cur} onClick={() => { setImportResult(null); setImportOpen(true) }}>导入 SQL</Button>
         <Button icon={<ExportOutlined />} disabled={!cur} onClick={() => { setExportDbs(currentDb ? [currentDb] : []); setExportOpen(true) }}>导出</Button>
@@ -476,6 +550,7 @@ export default function SqlTerminal() {
                 <Button size="small" icon={<EyeOutlined />} onClick={() => viewDDL(selObj)}>查看结构</Button>
                 {selObj.kind === 'table' && (
                   <>
+                    <Button size="small" onClick={() => openDesigner(selObj)}>表结构</Button>
                     <Button size="small" icon={<ExportOutlined />} onClick={() => exportTable(selObj)}>导出该表</Button>
                     <Popconfirm title={`确认删除表 ${selObj.db}.${selObj.name}？不可恢复`} onConfirm={() => dropTable(selObj)}>
                       <Button size="small" danger icon={<DeleteOutlined />}>删除表</Button>
@@ -739,6 +814,46 @@ export default function SqlTerminal() {
                 placeholder="选择执行时间"
               />
             )}
+          </div>
+        </Space>
+      </Modal>
+
+      {/* 表结构设计器 */}
+      {cur && selObj && (
+        <TableDesignerModal
+          open={designerOpen}
+          connId={cur.id}
+          database={selObj.db}
+          table={selObj.name}
+          onClose={() => setDesignerOpen(false)}
+          onApplied={() => { setDesignerOpen(false); setSelObj(null); load() }}
+          onNeedApproval={(sql) => openApprovalModal('ddl', sql, { conn_id: cur.id, kind: 'ddl', sql })}
+        />
+      )}
+
+      {/* 编辑库（字符集/排序规则） */}
+      <Modal
+        title={`编辑库：${dbEditName || '-'}`}
+        open={dbEditOpen}
+        onOk={saveDbEdit}
+        onCancel={() => setDbEditOpen(false)}
+        okText="保存"
+        confirmLoading={dbEditSaving}
+        destroyOnClose
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+            只改库默认字符集/排序规则，不改已有表和字段（已建对象需单独处理）。
+          </div>
+          <div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>字符集</div>
+            <Input value={dbEditCharset} disabled={dbEditLoading}
+              onChange={(e) => setDbEditCharset(e.target.value)} placeholder="utf8mb4" style={{ width: 240 }} />
+          </div>
+          <div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>排序规则</div>
+            <Input value={dbEditCollation} disabled={dbEditLoading}
+              onChange={(e) => setDbEditCollation(e.target.value)} placeholder="utf8mb4_unicode_ci" style={{ width: 280 }} />
           </div>
         </Space>
       </Modal>

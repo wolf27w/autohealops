@@ -698,6 +698,54 @@ export interface SqlImportResult {
 }
 export const importSqlScript = (id: number, sql: string, mode: 'stop' | 'skip') =>
   http.post<SqlImportResult>(`/db-connections/${id}/import-sql`, { sql, mode })
+// ============ R37 §6.6 表结构设计器 / 编辑库（2026-11-16） ============
+export interface DbTableColumn {
+  name: string
+  type: string
+  nullable: boolean
+  default?: string | number | null
+  extra?: string
+  comment?: string
+  key?: string
+  charset?: string
+  collation?: string
+}
+export interface DbTableIndex { name: string; unique: boolean; type?: string; columns: string[] }
+export interface DbTableSchema {
+  database: string
+  table: string
+  engine?: string
+  charset?: string
+  collation?: string
+  comment?: string
+  rows?: number
+  columns: DbTableColumn[]
+  indexes: DbTableIndex[]
+}
+export interface DbTableChanges {
+  add_columns?: Array<DbTableColumn & { after?: string }>
+  drop_columns?: string[]
+  modify_columns?: DbTableColumn[]
+  change_columns?: Array<DbTableColumn & { from: string }>
+  add_indexes?: Array<{ name?: string; columns: string[]; unique?: boolean }>
+  drop_indexes?: string[]
+  rename_table?: string
+  comment?: string
+  engine?: string
+  charset?: string
+  collation?: string
+}
+export const getTableSchema = (id: number, database: string, table: string) =>
+  http.get<DbTableSchema>(`/db-connections/${id}/table-schema`, { params: { database, table } })
+// 改表结构：dry_run=true 只回 DDL 预览；命中审核策略时抛 needApproval（428）
+export const alterTable = (id: number, body: { database: string; table: string; changes: DbTableChanges; dry_run?: boolean }) =>
+  http.post<{ statements: string[] }>(`/db-connections/${id}/table-alter`, body)
+export interface DbInfo { name: string; charset: string; collation: string }
+export const getDatabaseInfo = (id: number, name: string) =>
+  http.get<DbInfo>(`/db-connections/${id}/databases/${encodeURIComponent(name)}/info`)
+export const alterDatabase = (id: number, name: string, body: { charset?: string; collation?: string; dry_run?: boolean }) =>
+  http.post<{ statements: string[] }>(`/db-connections/${id}/databases/${encodeURIComponent(name)}/alter`, body)
+
 // 备份下载（文件流 → blob，带 Authorization）
 export const downloadDBBackup = (id: number, databases: string[], schemaOnly = false) =>
   api.get(`/db-connections/${id}/backup`, {
@@ -750,6 +798,8 @@ export interface DbApprovalCreatePayload {
   conn_id: number
   kind: DbApprovalKind
   sql?: string
+  /** 执行时切到的库（后端原样存 payload，执行链路会用它） */
+  database?: string
   export?: { databases: string[]; mode: 'structure' | 'data' | 'both'; schema_only?: boolean }
   execute_mode: 'immediate' | 'scheduled'
   scheduled_at?: string
