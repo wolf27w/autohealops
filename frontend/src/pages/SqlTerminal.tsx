@@ -74,7 +74,7 @@ const DDL_KIND: Record<SelectedObj['kind'], string> = {
 }
 
 // 按分号拆分（忽略引号/反引号内的分号）；尾巴无分号视为缺结尾
-function splitStatements(text: string): { list: string[]; missingEnd: boolean } {
+function splitStatements(text: string): { list: string[]; tail: string } {
   const list: string[] = []
   let cur = ''
   let quote: string | null = null
@@ -89,9 +89,8 @@ function splitStatements(text: string): { list: string[]; missingEnd: boolean } 
     if (ch === ';') { if (cur.trim()) list.push(cur.trim()); cur = ''; continue }
     cur += ch
   }
-  const rest = cur.trim()
-  if (rest) list.push(rest)   // 末尾没写分号也照常执行（以前会整段拒绝）
-  return { list, missingEnd: false }
+  // 口径（老板 2026-11-16）：只有以 ; 结尾的才算一条 SQL；末尾没写分号的单独返回，不混进 list
+  return { list, tail: cur.trim() }
 }
 
 const isReadStmt = (st: string) => READ_HEADS.has((st.trim().split(/\s+/)[0] || '').toLowerCase())
@@ -309,9 +308,9 @@ export default function SqlTerminal() {
   }
 
   // ---------- 执行 ----------
-  const pushGroup = (items: ResultItem[]) => {
+  const pushGroup = (items: ResultItem[], label?: string) => {
     const key = ++groupSeq.current
-    const g: ResultGroup = { key, label: `执行 ${key}`, time: new Date().toLocaleTimeString(), items }
+    const g: ResultGroup = { key, label: label || `执行 ${key}`, time: new Date().toLocaleTimeString(), items }
     setGroups((prev) => {
       const next = [...prev, g]
       return next.length > 5 ? next.slice(next.length - 5) : next
@@ -341,43 +340,53 @@ export default function SqlTerminal() {
     if (!connected) { message.warning('请先连接数据库'); return }
     if (!cur) return
     const { text, selected } = pickSql()
-    const { list } = splitStatements(text)
-    if (!list.length) { setErr('SQL 不能为空'); return }
-    if (selected) message.info(`只执行选中的 ${list.length} 条语句`)
+    const { list, tail } = splitStatements(text)
+    const stmts = [...list]
+    if (!stmts.length && tail) {
+      // 整段只有一条且没写分号：仍然执行这一条（避免单条 SQL 完全跑不了）
+      stmts.push(tail)
+    } else if (tail) {
+      message.warning(`最后一段未以分号结尾，未作为语句执行：${tail.slice(0, 40)}`)
+    }
+    if (!stmts.length) { setErr('SQL 不能为空'); return }
+    if (selected) message.info(`只执行选中的 ${stmts.length} 条语句`)
 
-    const writes = list.filter((st) => !isReadStmt(st))
+    const writes = stmts.filter((st) => !isReadStmt(st))
     if (writes.length && !window.confirm(`包含 ${writes.length} 条写操作，将真实修改数据库且无法自动回滚，继续？`)) return
 
     setBusy(true)
     setErr('')
-    const items: ResultItem[] = []
 
     // 当前库：随请求下发给后端（直连库会在连接时选库；agent 库忽略该参数，沿用 agent 侧默认库）
     const useDb = currentDb || cur.database || undefined
+    const multi = stmts.length > 1
 
-    for (const st of list) {
+    // 每条语句单独一个结果 tab（老板 2026-11-16：多 SQL 结果分不同 tab）
+    for (let i = 0; i < stmts.length; i++) {
+      const st = stmts[i]
+      const head = st.trim().split(/\s+/).slice(0, 3).join(' ').slice(0, 36)
+      const label = multi ? `语句 ${i + 1}：${head}` : '执行结果'
       const t0 = Date.now()
       try {
         const d = (isReadStmt(st) ? await queryDBConnection(cur.id, st, useDb) : await execDBConnection(cur.id, st, useDb)) as {
           columns?: string[]; rows?: unknown[][]; affected_rows?: number; truncated?: boolean
         }
-        items.push({
+        pushGroup([{
           sql: st, ok: true, columns: d?.columns, rows: d?.rows,
           affected: d?.affected_rows, truncated: d?.truncated, elapsed: Date.now() - t0,
-        })
+        }], label)
       } catch (e) {
         const ea = e as { needApproval?: boolean; approvalData?: { kind?: DbApprovalKind } }
         if (ea?.needApproval) {
           const kind: DbApprovalKind = ea.approvalData?.kind || (isReadStmt(st) ? 'query' : 'write')
           openApprovalModal(kind, st, { conn_id: cur.id, kind, sql: st })
-          items.push({ sql: st, ok: false, pendingApproval: true, elapsed: Date.now() - t0 })
+          pushGroup([{ sql: st, ok: false, pendingApproval: true, elapsed: Date.now() - t0 }], label)
           break
         }
-        items.push({ sql: st, ok: false, err: errMsg(e), elapsed: Date.now() - t0 })
+        pushGroup([{ sql: st, ok: false, err: errMsg(e), elapsed: Date.now() - t0 }], label)
       }
     }
     setBusy(false)
-    pushGroup(items)
   }
 
   // ---------- 表结构设计器 / 编辑库（R37 §6.6） ----------
