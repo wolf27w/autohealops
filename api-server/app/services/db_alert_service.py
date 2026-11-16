@@ -115,14 +115,20 @@ async def _probe_connection(c: DBConnection) -> tuple[bool, str]:
             await conn.close()
         elif c.db_type == "oracle":
             import oracledb  # noqa: PLC0415  # 可选依赖
-            conn = await oracledb.connect_async(
-                user=info["username"], password=info["password"],
-                host=info["host"], port=info["port"], service_name=info["database"],
-            )
-            cur = conn.cursor()
-            await cur.execute("SELECT 1 FROM DUAL")
-            await cur.fetchone()
-            await conn.close()
+            from app.services.db_collector import _maybe_oracle_thick, _oracle_connect_sync
+
+            _maybe_oracle_thick()
+
+            def _probe_oracle():
+                conn = _oracle_connect_sync(info, oracledb)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT 1 FROM DUAL")
+                    cur.fetchone()
+                finally:
+                    conn.close()
+
+            await asyncio.to_thread(_probe_oracle)
         else:
             return False, f"不支持的数据库类型 {c.db_type}"
         return True, ""

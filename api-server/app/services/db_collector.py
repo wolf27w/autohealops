@@ -68,14 +68,15 @@ LIMIT 100
 
 # Oracle 慢 SQL（v$sqlstats，按 sql_id 聚合；elapsed_time 单位微秒）
 ORACLE_SLOW_SQL = """
-SELECT sql_id, sql_fulltext, executions,
-       elapsed_time / executions / 1000 AS avg_latency_ms,
-       elapsed_time / 1000 AS max_latency_ms
-FROM v$sqlstats
-WHERE executions > 0
-  AND elapsed_time / executions / 1000 > %s
-ORDER BY elapsed_time / executions DESC
-FETCH FIRST 100 ROWS ONLY
+SELECT * FROM (
+  SELECT sql_id, sql_fulltext, executions,
+         elapsed_time / executions / 1000 AS avg_latency_ms,
+         elapsed_time / 1000 AS max_latency_ms
+  FROM v$sqlstats
+  WHERE executions > 0
+    AND elapsed_time / executions / 1000 > %s
+  ORDER BY elapsed_time / executions DESC
+) WHERE ROWNUM <= 100
 """
 
 
