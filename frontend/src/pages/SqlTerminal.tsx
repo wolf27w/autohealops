@@ -233,12 +233,17 @@ export default function SqlTerminal() {
   const connectCur = async () => {
     if (!cur) return
     setConnState((m) => ({ ...m, [cur.id]: 'connecting' }))
+    // 加超时：库不可达时后端探活可能挂很久，不能让按钮一直「连接中」
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> => Promise.race([
+      p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('连接超时')), ms)),
+    ])
     try {
-      await testDBConnection(cur.id)
+      await withTimeout(testDBConnection(cur.id), 12000)
       setConnState((m) => ({ ...m, [cur.id]: 'on' }))
       message.success(`已连接：${cur.name}`)
-    } catch {
+    } catch (e) {
       setConnState((m) => ({ ...m, [cur.id]: 'failed' }))
+      message.error(`连接失败：${(e as Error)?.message || '请检查网络/凭据'}`)
     }
   }
   const disconnectCur = () => {
@@ -339,7 +344,7 @@ export default function SqlTerminal() {
   const run = async () => {
     if (!connected) { message.warning('请先连接数据库'); return }
     if (!cur) return
-    const { text, selected } = pickSql()
+    const { text } = pickSql()
     const { list, tail } = splitStatements(text)
     const stmts = [...list]
     if (!stmts.length && tail) {
@@ -349,7 +354,6 @@ export default function SqlTerminal() {
       message.warning(`最后一段未以分号结尾，未作为语句执行：${tail.slice(0, 40)}`)
     }
     if (!stmts.length) { setErr('SQL 不能为空'); return }
-    if (selected) message.info(`只执行选中的 ${stmts.length} 条语句`)
 
     const writes = stmts.filter((st) => !isReadStmt(st))
     if (writes.length && !window.confirm(`包含 ${writes.length} 条写操作，将真实修改数据库且无法自动回滚，继续？`)) return
@@ -751,7 +755,7 @@ export default function SqlTerminal() {
                 执行（Ctrl/Cmd+Enter）
               </Button>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                {selLen > 0 ? `将只执行选中内容（${selLen} 字符）` : '支持多语句（分号分隔，最后一条可不写分号）· 含写操作需确认'}
+                {selLen > 0 ? `将只执行选中内容（${selLen} 字符）` : '支持多语句：以 ; 分隔（只有 ; 结尾才算一条）· 选中可只执行选中部分 · 含写操作需确认'}
               </span>
             </Space>
             {err && <div style={{ color: '#ff4d4f', fontSize: 13, marginTop: 4 }}>{err}</div>}
