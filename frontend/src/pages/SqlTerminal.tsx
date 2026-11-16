@@ -90,7 +90,8 @@ function splitStatements(text: string): { list: string[]; missingEnd: boolean } 
     cur += ch
   }
   const rest = cur.trim()
-  return { list, missingEnd: !!rest }
+  if (rest) list.push(rest)   // 末尾没写分号也照常执行（以前会整段拒绝）
+  return { list, missingEnd: false }
 }
 
 const isReadStmt = (st: string) => READ_HEADS.has((st.trim().split(/\s+/)[0] || '').toLowerCase())
@@ -131,6 +132,7 @@ export default function SqlTerminal() {
   const [sql, setSql] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [selLen, setSelLen] = useState(0)
 
   // 多结果
   const [groups, setGroups] = useState<ResultGroup[]>([])
@@ -321,12 +323,27 @@ export default function SqlTerminal() {
     setGroups((prev) => prev.filter((g) => g.key !== key))
   }
 
+  // 取要执行的 SQL：有选中就只跑选中部分（与工作台口径一致）
+  const pickSql = (): { text: string; selected: boolean } => {
+    const ta = taRef.current?.resizableTextArea?.textArea
+    if (ta) {
+      const a = ta.selectionStart ?? 0
+      const b = ta.selectionEnd ?? 0
+      if (b > a) {
+        const sel = ta.value.slice(a, b)
+        if (sel.trim()) return { text: sel, selected: true }
+      }
+    }
+    return { text: sql, selected: false }
+  }
+
   const run = async () => {
     if (!connected) { message.warning('请先连接数据库'); return }
     if (!cur) return
-    const { list, missingEnd } = splitStatements(sql)
-    if (missingEnd) { setErr('SQL 语句必须以分号结尾（;）'); return }
+    const { text, selected } = pickSql()
+    const { list } = splitStatements(text)
     if (!list.length) { setErr('SQL 不能为空'); return }
+    if (selected) message.info(`只执行选中的 ${list.length} 条语句`)
 
     const writes = list.filter((st) => !isReadStmt(st))
     if (writes.length && !window.confirm(`包含 ${writes.length} 条写操作，将真实修改数据库且无法自动回滚，继续？`)) return
@@ -657,6 +674,19 @@ export default function SqlTerminal() {
                   if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
                     suggest.syncSuggest(el.value, el.selectionStart ?? 0)
                   }
+                  // Shift 选择 / Ctrl+A 时刷新「将执行选中内容」提示（onSelect 某些场景不触发）
+                  if (e.shiftKey || e.key === 'a' || e.key === 'A') {
+                    setSelLen(Math.max(0, (el.selectionEnd ?? 0) - (el.selectionStart ?? 0)))
+                  }
+                }}
+                onSelect={(e) => {
+                  const el = e.target as HTMLTextAreaElement
+                  setSelLen(Math.max(0, (el.selectionEnd ?? 0) - (el.selectionStart ?? 0)))
+                }}
+                // 鼠标拖选/键盘 Shift 选择时也刷新「将执行选中内容」提示（onSelect 在某些场景不触发）
+                onMouseUp={(e) => {
+                  const el = e.target as HTMLTextAreaElement
+                  setSelLen(Math.max(0, (el.selectionEnd ?? 0) - (el.selectionStart ?? 0)))
                 }}
                 onBlur={() => setTimeout(() => suggest.close(), 120)}
                 placeholder={'select * from information_schema.tables limit 10;\n-- 输入时自动补全（关键字/库/表/字段）· 多条语句用分号分隔 · Ctrl/Cmd+Enter 执行'}
@@ -712,7 +742,7 @@ export default function SqlTerminal() {
                 执行（Ctrl/Cmd+Enter）
               </Button>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                每条以分号结尾 · 含写操作需确认
+                {selLen > 0 ? `将只执行选中内容（${selLen} 字符）` : '支持多语句（分号分隔，最后一条可不写分号）· 含写操作需确认'}
               </span>
             </Space>
             {err && <div style={{ color: '#ff4d4f', fontSize: 13, marginTop: 4 }}>{err}</div>}
