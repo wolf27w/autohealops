@@ -23,6 +23,39 @@ logger = get_logger("api-server.alerts")
 
 
 
+async def _page_group_ids(session, page_rows, limit: int = 20000) -> dict[int, list[int]]:
+    """给当前页的告警组补 group_ids（含最新一条）。
+
+    只查这一页涉及的分组键，并限制总条数（超限只保留已取到的），
+    避免历史上的超大分组把内存打满。返回 {最新告警 id: [组内 id desc...]}。
+    """
+    from sqlalchemy import and_, func, or_
+
+    if not page_rows:
+        return {}
+    svc = func.coalesce(func.nullif(Alert.deployment_name, ""), Alert.resource_name, "")
+    ns = func.coalesce(Alert.namespace, "")
+    conds = []
+    key_to_max: dict[tuple, int] = {}
+    for r in page_rows:
+        max_id, _cnt, cid, nsv, ft, sv = int(r[0]), r[1], r[2], r[3], r[4], r[5]
+        parts = [svc == sv, ns == nsv]
+        parts.append(Alert.cluster_id.is_(None) if cid is None else Alert.cluster_id == cid)
+        parts.append(Alert.fault_type.is_(None) if ft is None else Alert.fault_type == ft)
+        conds.append(and_(*parts))
+        key_to_max[(cid, nsv, ft, sv)] = max_id
+    rows = (await session.execute(
+        select(Alert.id, Alert.cluster_id, ns, Alert.fault_type, svc)
+        .where(or_(*conds)).order_by(Alert.id.desc()).limit(limit)
+    )).all()
+    out: dict[int, list[int]] = {}
+    for aid, cid, nsv, ft, sv in rows:
+        mid = key_to_max.get((cid, nsv, ft, sv))
+        if mid is not None:
+            out.setdefault(mid, []).append(int(aid))
+    return out
+
+
 @router.get("")
 async def list_alerts(cluster_id: int | None = None, severity: str | None = None, status: str | None = None,
                       fault_type: str | None = None, manual_required: bool | None = None,
@@ -76,14 +109,41 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
         # group_info: alert_id -> 该组合并信息（group_count/group_ids）；不合并时为空
         group_info: dict[int, dict] = {}
         if group:
-            # 全量取回匹配行（告警量不大，全量分组可接受），分组后再分页
-            all_alerts = list((await session.execute(query)).scalars())
-            grouped = group_alerts(all_alerts)
+            # SQL 侧分组（2026-11-16，B17）：原来把全部命中行拉到 Python 分组，
+            # pending 62 万行时单次 1s+；改为 GROUP BY 取每组 MAX(id)+COUNT(*)，只回一页的完整行。
+            svc = func.coalesce(func.nullif(Alert.deployment_name, ""), Alert.resource_name, "")
+            ns = func.coalesce(Alert.namespace, "")
+            gq = select(
+                Alert.cluster_id.label("cid"), ns.label("ns"), Alert.fault_type.label("ft"),
+                svc.label("svc"), func.max(Alert.id).label("max_id"), func.count().label("cnt"),
+            )
+            if conditions:
+                gq = gq.where(and_(*conditions))
+            gsub = gq.group_by(Alert.cluster_id, ns, Alert.fault_type, svc).subquery()
             if with_total:
-                total = len(grouped)
-            page_groups = grouped[(page - 1) * page_size:(page - 1) * page_size + page_size]
-            alerts = [g["alert"] for g in page_groups]
-            group_info = {g["alert"].id: g for g in page_groups}
+                total = int((await session.execute(
+                    select(func.count()).select_from(gsub))).scalar() or 0)
+            page_rows = (await session.execute(
+                select(gsub.c.max_id, gsub.c.cnt, gsub.c.cid, gsub.c.ns, gsub.c.ft, gsub.c.svc)
+                .order_by(gsub.c.max_id.desc())
+                .offset((page - 1) * page_size).limit(page_size)
+            )).all()
+            max_ids = [int(r[0]) for r in page_rows]
+            alert_by_id = {}
+            if max_ids:
+                alert_by_id = {a.id: a for a in (await session.execute(
+                    select(Alert).where(Alert.id.in_(max_ids)))).scalars()}
+            alerts = [alert_by_id[i] for i in max_ids if i in alert_by_id]
+            group_info = {int(r[0]): {"group_count": int(r[1]), "group_ids": [int(r[0])]}
+                          for r in page_rows}
+            try:
+                # 组内 id 列表只为前端展示（按页补，总量封顶，避免超大局打满内存）
+                ids_map = await _page_group_ids(session, page_rows, limit=20000)
+                for mid, ids in ids_map.items():
+                    if mid in group_info:
+                        group_info[mid]["group_ids"] = ids
+            except Exception as e:  # noqa: BLE001
+                logger.debug("告警组 ids 补全跳过：%s", e)
         else:
             if with_total:
                 total = (await session.execute(

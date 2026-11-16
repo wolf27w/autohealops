@@ -43,12 +43,40 @@ if RAW_RETENTION_HOURS >= ROLLUP_RETENTION_DAYS * 24:
 BATCH = 5000  # 单条 DELETE 控制在 5000 行（原来 20000 在 HDD 上单次 2~10s，会进慢 SQL 榜）
 
 
+async def _max_rolled_bucket() -> datetime | None:
+    """已聚合到的最大桶（无历史返回 None）。走 ix_pm5m_bucket，毫秒级。"""
+    async with async_session() as session:
+        return (await session.execute(text("SELECT MAX(bucket_at) FROM pod_metrics_5m"))).scalar()
+
+
+def _rollup_start(now: datetime, max_bucket: datetime | None, lookback_hours: int) -> datetime:
+    """增量起点（2026-11-16，B17）。
+
+    - 有历史：从最大桶往前 2 个桶开始（覆盖「还没写满」的当前桶，保证幂等补全）
+    - 无历史（首次启动）：回溯 lookback_hours 补齐停机空档
+    - 一律不早于原始数据保留期（更早的原始行已被清理，扫了也没数据）
+    """
+    floor = now - timedelta(hours=RAW_RETENTION_HOURS)
+    if max_bucket is None:
+        start = now - timedelta(hours=lookback_hours)
+    else:
+        start = max_bucket - timedelta(seconds=BUCKET_SECONDS * 2)
+    return max(start, floor)
+
+
 async def rollup_5m(lookback_hours: int = 2) -> int:
-    """把 [now-lookback, now-5min] 的原始采样聚合成 5 分钟桶（幂等）。"""
+    """把 [start, now-5min] 的原始采样聚合成 5 分钟桶（幂等 upsert，增量推进）。
+
+    2026-11-16：原来每次固定回溯 2h（每 10 分钟跑一次 = 20 倍重复聚合，HDD 上 3.8s/次），
+    改为以 pod_metrics_5m 的 MAX(bucket_at) 为水位，正常只处理最近 2~3 个桶。
+    """
     now = datetime.now()
     # 只处理已完成的桶（留 5 分钟余量）
     end = (now - timedelta(minutes=5)).replace(second=0, microsecond=0)
-    start = now - timedelta(hours=lookback_hours)
+    max_bucket = await _max_rolled_bucket()
+    start = _rollup_start(now, max_bucket, lookback_hours)
+    if start >= end:
+        return 0
     sql = text(
         f"""
         INSERT INTO pod_metrics_5m
@@ -69,7 +97,9 @@ async def rollup_5m(lookback_hours: int = 2) -> int:
         await session.commit()
         n = int(r.rowcount or 0)
     if n:
-        logger.info("指标降采样完成：%d 行（%s ~ %s）", n, start.strftime("%m-%d %H:%M"), end.strftime("%m-%d %H:%M"))
+        logger.info("指标降采样完成：%d 行（%s ~ %s，增量水位=%s）", n,
+                    start.strftime("%m-%d %H:%M"), end.strftime("%m-%d %H:%M"),
+                    max_bucket.strftime("%m-%d %H:%M") if max_bucket else "无")
     return n
 
 

@@ -805,13 +805,17 @@ async def _compute_dashboard(
         # 优化：不再对每个集群做 N+1 次 count 查询，改用「每集群每类型最新快照」临时表一次 JOIN 聚合
         # 注：快照每 60s 写入一轮，最新一轮可能正在写入 → 跳过 75s 内以取完整轮
         _snap_cut = now - timedelta(seconds=75)
+        # 2026-11-16（B17）：MAX(snapshot_time) 分组原来扫全历史（报告里 15s/次、8337 次）。
+        # 快照 60s 一轮，只需看最近 24h；更久没上报的集群视为过期（不再显示旧计数）。
+        _snap_floor = now - timedelta(hours=24)
         _latest = (
             select(
                 ResourceSnapshot.cluster_id.label("cid"),
                 ResourceSnapshot.resource_type.label("rt"),
                 func.max(ResourceSnapshot.snapshot_time).label("mt"),
             )
-            .where(ResourceSnapshot.snapshot_time <= _snap_cut)
+            .where(ResourceSnapshot.snapshot_time <= _snap_cut,
+                   ResourceSnapshot.snapshot_time >= _snap_floor)
             .group_by(ResourceSnapshot.cluster_id, ResourceSnapshot.resource_type)
             .subquery()
         )
