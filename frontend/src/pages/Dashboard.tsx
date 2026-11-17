@@ -7,7 +7,7 @@ import { ENV_OPTIONS, envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Card, Row, Col, Select, Table, Tag, Space, Empty, Badge, DatePicker, Switch, theme,
+  Card, Row, Col, Select, Table, Tag, Space, Empty, Badge, DatePicker, Switch, theme, Tooltip,
 } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -137,10 +137,12 @@ export default function Dashboard() {
   const hourPoints = [...hourMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
     .map(([k, v]) => ({ hour: k.slice(11), new: v.n, resolved: v.r, selfHealed: v.s }))
   const trendMax = Math.max(1, ...hourPoints.map((p) => Math.max(p.new, p.resolved, p.selfHealed)))
+  // Y 轴取整刻度（4 / 10 / 20 / 10 的倍数），保证刻度是整数且包住最大值
+  const trendScaleMax = trendMax <= 4 ? 4 : trendMax <= 10 ? 10 : trendMax <= 20 ? 20 : Math.ceil(trendMax / 10) * 10
   const trendSeries = [
-    { label: '新增', color: token.colorTextTertiary, d: smoothPath(hourPoints.map((p) => p.new), trendMax) },
-    { label: '已解决', color: token.colorPrimary, d: smoothPath(hourPoints.map((p) => p.resolved), trendMax) },
-    { label: '自愈', color: token.colorInfo, d: smoothPath(hourPoints.map((p) => p.selfHealed), trendMax) },
+    { label: '新增', color: token.colorTextTertiary, d: smoothPath(hourPoints.map((p) => p.new), trendScaleMax) },
+    { label: '已解决', color: token.colorPrimary, d: smoothPath(hourPoints.map((p) => p.resolved), trendScaleMax) },
+    { label: '自愈', color: token.colorInfo, d: smoothPath(hourPoints.map((p) => p.selfHealed), trendScaleMax) },
   ]
   const trendLabels = (() => {
     if (!hourPoints.length) return []
@@ -341,12 +343,37 @@ export default function Dashboard() {
             >
               {hourPoints.length ? (
                 <div>
-                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" width="100%" height={160} style={{ display: 'block', marginTop: 4 }}>
-                    {trendSeries.map((s) => (
-                      <path key={s.label} d={s.d} fill="none" stroke={s.color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                    ))}
-                  </svg>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: faint, fontVariantNumeric: 'tabular-nums' }}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {/* Y 轴数值刻度（与 SVG 的 0~100 映射对齐：max→8%、半值→52%、0→96%） */}
+                    <div style={{ width: 26, height: 160, position: 'relative', flex: 'none', fontSize: 11, color: faint, fontVariantNumeric: 'tabular-nums' }}>
+                      <span style={{ position: 'absolute', top: '8%', right: 2, transform: 'translateY(-50%)' }}>{trendScaleMax}</span>
+                      <span style={{ position: 'absolute', top: '52%', right: 2, transform: 'translateY(-50%)' }}>{Math.round(trendScaleMax / 2)}</span>
+                      <span style={{ position: 'absolute', top: '96%', right: 2, transform: 'translateY(-50%)' }}>0</span>
+                    </div>
+                    {/* 折线区（含网格线 + 逐小时悬停） */}
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', height: 160 }}>
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" width="100%" height={160} style={{ display: 'block' }}>
+                        {[8, 52, 96].map((y) => (
+                          <line key={y} x1="0" y1={y} x2="100" y2={y} stroke={token.colorBorderSecondary} strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+                        ))}
+                        {trendSeries.map((s) => (
+                          <path key={s.label} d={s.d} fill="none" stroke={s.color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                        ))}
+                      </svg>
+                      {/* 悬停层：每个小时一列，显示该小时三项数量 */}
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+                        {hourPoints.map((p) => (
+                          <Tooltip
+                            key={p.hour}
+                            title={`${p.hour}:00 · 新增 ${p.new} · 已解决 ${p.resolved} · 自愈 ${p.selfHealed}`}
+                          >
+                            <div style={{ flex: 1, height: '100%' }} />
+                          </Tooltip>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, marginLeft: 32, fontSize: 11, color: faint, fontVariantNumeric: 'tabular-nums' }}>
                     {trendLabels.map((h) => <span key={h}>{h}:00</span>)}
                   </div>
                 </div>
