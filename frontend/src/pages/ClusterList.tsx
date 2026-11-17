@@ -222,7 +222,7 @@ export default function ClusterList() {
         columns={[
           { title: '名称', dataIndex: 'name', render: (name, record) => (
             <Tooltip title={record.description || undefined}>
-              <a onClick={() => navigate(`/clusters/${record.id}`)}>{name}</a>
+              <a onClick={() => navigate(`/clusters/${record.id}`)} style={{ whiteSpace: 'nowrap' }}>{name}</a>
             </Tooltip>
           ) },
           { title: '环境', dataIndex: 'env_tag', render: (t) => <Tag color={ENV_TAG_COLOR[t] || 'default'}>{t}</Tag> },
