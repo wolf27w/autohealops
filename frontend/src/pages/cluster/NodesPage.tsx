@@ -379,7 +379,13 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
                   <Table
                     rowKey={(p) => `${p.namespace}-${p.name}`}
                     size="small"
-                    pagination={false}
+                    pagination={{
+                      pageSize: 10,
+                      size: 'small',
+                      showSizeChanger: true,
+                      pageSizeOptions: ['10', '20', '50'],
+                      showTotal: (t: number) => `共 ${t} 个`,
+                    }}
                     dataSource={pods}
                     columns={[
                       { title: '命名空间', dataIndex: 'namespace', width: 180 },

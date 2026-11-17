@@ -1,6 +1,6 @@
 // API 调用封装：axios 实例 + 统一拦截 + 全部接口函数（A3：类型化，消除 any）
 import axios, { type AxiosRequestConfig } from 'axios'
-import { message } from 'antd'
+import { message, Modal } from 'antd'
 import type {
   AiFeedbackData, Alert, AlertComment, Approval, BatchDecideResult, Cluster, CustomTask, DashboardData, DutyOverride,
   FaultDiagnosisItem, KnowledgeEntry, LogSource, NotificationConfig, NotificationLog, NotifyPolicy, OpResult, PageParams, PageResult, PlatformHealth, Ticket, TicketComment, TicketDetail, TicketStats, User, Workload,
@@ -10,6 +10,22 @@ const api = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
 })
+
+// 登录失效：弹一次可点的「去登录」（并发 401 只弹一个，不直接静默跳走）
+let loginPrompting = false
+function promptLogin() {
+  if (loginPrompting) return
+  loginPrompting = true
+  localStorage.removeItem('token')
+  Modal.confirm({
+    title: '登录已过期',
+    content: '当前登录状态已失效，请重新登录后继续操作。',
+    okText: '去登录',
+    cancelText: '留在本页',
+    onOk: () => { window.location.href = '/login' },
+    afterClose: () => { loginPrompting = false },
+  })
+}
 
 // 请求拦截器：添加 token
 api.interceptors.request.use((config) => {
@@ -41,8 +57,9 @@ api.interceptors.response.use(
   },
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token')
-      window.location.href = '/login'
+      promptLogin()
+    } else if (error.response?.status === 403) {
+      message.error(error.response?.data?.detail || '无权限执行该操作')
     } else {
       message.error(error.response?.data?.detail || error.message || '网络错误')
     }
@@ -714,6 +731,7 @@ export interface DbTableIndex { name: string; unique: boolean; type?: string; co
 export interface DbTableSchema {
   database: string
   table: string
+  db_type?: string
   engine?: string
   charset?: string
   collation?: string
