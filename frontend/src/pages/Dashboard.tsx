@@ -43,6 +43,20 @@ function ThinBar({ pct, color }: { pct?: number | null; color: string }) {
   )
 }
 
+// 平滑折线 path（坐标 0-100 百分比，viewBox 100x100 + preserveAspectRatio none，vector-effect 保线宽）
+function smoothPath(vals: number[], max: number): string {
+  const n = vals.length
+  if (!n) return ''
+  const pts: [number, number][] = vals.map((v, i) => [n === 1 ? 50 : (i / (n - 1)) * 100, 100 - (v / max) * 88 - 4])
+  if (n === 1) return `M ${pts[0][0]},${pts[0][1]}`
+  let d = `M ${pts[0][0]},${pts[0][1]}`
+  for (let i = 1; i < n; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i]
+    d += ` C ${(x0 + x1) / 2},${y0} ${(x0 + x1) / 2},${y1} ${x1},${y1}`
+  }
+  return d
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const { token } = theme.useToken()
@@ -111,7 +125,7 @@ export default function Dashboard() {
   const clusters = data?.clusters ?? []
 
   // ---- 派生数据 ----
-  // 告警趋势：后端 24h 是 5 分钟桶（~289 点），按小时聚合成柱状（纯 DOM 渲染，可控不重叠）
+  // 告警趋势：后端 24h 是 5 分钟桶（~289 点），按小时聚合后用 Date 时间轴折线（time scale 自动抽稀刻度，标签不重叠）
   const rawTrend = data?.alert_trend ?? []
   const hourMap = new Map<string, { n: number; r: number; s: number }>()
   for (const t of rawTrend) {
@@ -120,13 +134,19 @@ export default function Dashboard() {
     e.n += t.new; e.r += t.resolved; e.s += t.self_healed
     hourMap.set(h, e)
   }
-  const hourBars = [...hourMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([h, v]) => ({ hour: h.slice(11), new: v.n, resolved: v.r, self_healed: v.s }))
-  const trendMax = Math.max(1, ...hourBars.map((b) => b.new + b.resolved + b.self_healed))
-  const axisLabels = (() => {
-    if (hourBars.length === 0) return []
-    const idxs = new Set([0, Math.floor((hourBars.length - 1) * 0.2), Math.floor((hourBars.length - 1) * 0.4), Math.floor((hourBars.length - 1) * 0.6), Math.floor((hourBars.length - 1) * 0.8), hourBars.length - 1])
-    return [...idxs].sort((a, b) => a - b).map((i) => hourBars[i].hour)
+  const hourPoints = [...hourMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([k, v]) => ({ hour: k.slice(11), new: v.n, resolved: v.r, selfHealed: v.s }))
+  const trendMax = Math.max(1, ...hourPoints.map((p) => Math.max(p.new, p.resolved, p.selfHealed)))
+  const trendSeries = [
+    { label: '新增', color: token.colorTextTertiary, d: smoothPath(hourPoints.map((p) => p.new), trendMax) },
+    { label: '已解决', color: token.colorPrimary, d: smoothPath(hourPoints.map((p) => p.resolved), trendMax) },
+    { label: '自愈', color: token.colorInfo, d: smoothPath(hourPoints.map((p) => p.selfHealed), trendMax) },
+  ]
+  const trendLabels = (() => {
+    if (!hourPoints.length) return []
+    const n = hourPoints.length
+    const idxs = [...new Set([0, Math.floor((n - 1) * 0.2), Math.floor((n - 1) * 0.4), Math.floor((n - 1) * 0.6), Math.floor((n - 1) * 0.8), n - 1])]
+    return idxs.map((i) => hourPoints[i].hour)
   })()
   const aiDistData = (data?.ai_result_dist ?? []).map((d) => ({
     key: AI_RESULT_META[d.key]?.label ?? d.key,
@@ -304,36 +324,30 @@ export default function Dashboard() {
               />
             </Card>
 
-            {/* 告警趋势（按小时聚合，纯 DOM 柱状，避免图表库 X 轴标签重叠） */}
+            {/* 告警趋势（按小时聚合，SVG 折线，轴刻度可控不重叠） */}
             <Card
               title="告警趋势（最近 24 小时）"
               size="small"
               extra={
                 <span style={{ fontSize: 12, color: faint, display: 'inline-flex', gap: 12 }}>
-                  <span><i style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: token.colorTextTertiary, marginRight: 4 }} />新增</span>
-                  <span><i style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: token.colorPrimary, marginRight: 4 }} />已解决</span>
-                  <span><i style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: token.colorInfo, marginRight: 4 }} />自愈</span>
+                  {trendSeries.map((s) => (
+                    <span key={s.label}>
+                      <i style={{ display: 'inline-block', width: 12, height: 3, borderRadius: 2, background: s.color, marginRight: 4, verticalAlign: 'middle' }} />
+                      {s.label}
+                    </span>
+                  ))}
                 </span>
               }
             >
-              {hourBars.length ? (
+              {hourPoints.length ? (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 150, marginTop: 4 }}>
-                    {hourBars.map((b, i) => {
-                      const hNew = b.new > 0 ? Math.max(2, (b.new / trendMax) * 150) : 0
-                      const hRes = b.resolved > 0 ? Math.max(2, (b.resolved / trendMax) * 150) : 0
-                      const hSelf = b.self_healed > 0 ? Math.max(2, (b.self_healed / trendMax) * 150) : 0
-                      return (
-                        <div key={i} title={`${b.hour}:00  新增 ${b.new} · 已解决 ${b.resolved} · 自愈 ${b.self_healed}`} style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 1, minWidth: 2 }}>
-                          {b.self_healed > 0 && <span style={{ height: hSelf, background: token.colorInfo, borderRadius: 1 }} />}
-                          {b.resolved > 0 && <span style={{ height: hRes, background: token.colorPrimary, borderRadius: 1 }} />}
-                          {b.new > 0 && <span style={{ height: hNew, background: token.colorTextTertiary, borderRadius: 1 }} />}
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" width="100%" height={160} style={{ display: 'block', marginTop: 4 }}>
+                    {trendSeries.map((s) => (
+                      <path key={s.label} d={s.d} fill="none" stroke={s.color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                    ))}
+                  </svg>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: faint, fontVariantNumeric: 'tabular-nums' }}>
-                    {axisLabels.map((h) => <span key={h}>{h}:00</span>)}
+                    {trendLabels.map((h) => <span key={h}>{h}:00</span>)}
                   </div>
                 </div>
               ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />}
