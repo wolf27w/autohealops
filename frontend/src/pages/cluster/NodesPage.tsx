@@ -96,18 +96,22 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
   const [threshold, setThreshold] = useState(80)
   const [planLoading, setPlanLoading] = useState(false)
 
-  const load = () => {
-    setLoading(true)
+  // showLoading: 只有首拉需要遮罩；轮询/操作后刷新一律静默，避免 10s 一次整表闪烁
+  const load = (showLoading = false) => {
+    if (showLoading) setLoading(true)
     getNodes(clusterId)
       .then((d) => setNodes(d || []))
       .catch(() => setNodes([]))
       .finally(() => setLoading(false))
   }
 
-  // 首拉 + 10s 轮询
+  // 首拉 + 10s 轮询（轮询静默，页面不可见时跳过）
   useEffect(() => {
-    load()
-    const t = setInterval(load, 10000)
+    load(true)
+    const t = setInterval(() => {
+      if (document.hidden) return
+      load(false)
+    }, 10000)
     return () => clearInterval(t)
   }, [clusterId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -334,7 +338,7 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
         extra={
           <Space>
             <Button icon={<ApartmentOutlined />} onClick={runPlan}>均衡计划</Button>
-            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+            <Button icon={<ReloadOutlined />} onClick={() => load(true)}>刷新</Button>
           </Space>
         }>
         <Space style={{ marginBottom: 8, width: '100%' }} wrap>
@@ -359,7 +363,7 @@ export default function NodesPage({ clusterId }: { clusterId: number }) {
         <Table
           rowKey="name"
           size="small"
-          loading={loading}
+          loading={{ spinning: loading, delay: 300 }}
           dataSource={stateFilter === 'all' ? nodes : nodes.filter((n) => nodeState(n).key === stateFilter)}
           pagination={{ pageSize: 20 }}
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
