@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AutoHealOps · 运行大屏 Demo v5</title>
+<style>
+  :root{
+    --bg:#0e1412; --surface:#141b18; --surface-2:#0f1714; --elev:#1a2320;
+    --line:#232d28; --line-2:#2e3a34;
+    --ink:#e9efec; --ink-2:#a7b4ad; --ink-3:#7f8d86;
+    --ok:#37c08a; --warn:#e09a4e; --err:#f0736a; --info:#60a5fa; --cyan:#37c08a;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;color:var(--ink);overflow:hidden;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;background:var(--bg)}
+  a{color:inherit;text-decoration:none;cursor:pointer}
+  .screen{height:100vh;display:flex;flex-direction:column;padding:12px 16px 12px}
+  .hd{display:flex;align-items:center;gap:14px;padding:4px 2px 12px;border-bottom:1px solid var(--line)}
+  .title{font-size:22px;font-weight:700;letter-spacing:1px;color:var(--ink);display:flex;align-items:center;gap:10px}
+  .title:before{content:"";width:4px;height:20px;background:var(--ok);border-radius:2px;flex:none}
+  .sub{font-size:12px;color:var(--ink-3);letter-spacing:.5px;margin-top:2px}
+  .clock{margin-left:auto;text-align:right}
+  .clock .t{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .clock .d{font-size:12px;color:var(--ink-3)}
+  .pill{border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink-2);border-radius:6px;padding:3px 12px;font-size:12px}
+
+  .grid{flex:1;display:grid;grid-template-columns:300px 1fr 370px;gap:12px;min-height:0;padding-top:12px}
+  .col{display:flex;flex-direction:column;gap:12px;min-height:0}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-height:0}
+  .ph{display:flex;align-items:center;gap:8px;padding:9px 14px;font-size:13px;letter-spacing:.5px;color:var(--ink-2);border-bottom:1px solid var(--line);font-weight:600}
+  .ph .bar{width:3px;height:12px;background:var(--ok);border-radius:2px;flex:none}
+  .ph .r{margin-left:auto;font-size:11.5px;color:var(--ink-3);font-weight:400}
+  .pb{padding:10px 14px;overflow:auto;flex:1;min-height:0}
+
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+  .kpi{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:var(--surface)}
+  .kpi:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--info)}
+  .kpi.err:before{background:var(--err)}.kpi.ok:before{background:var(--ok)}.kpi.warn:before{background:var(--warn)}
+  .kpi .t{font-size:12px;color:var(--ink-3)}
+  .kpi .v{font-size:30px;font-weight:600;line-height:1.15;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .kpi .v small{font-size:13px;color:var(--ink-3);margin-left:3px;font-weight:500}
+  .kpi .d{font-size:11.5px;color:var(--ink-3)}
+  .kpi.err .v{color:var(--err)}.kpi.ok .v{color:var(--ok)}.kpi.warn .v{color:var(--warn)}
+
+  .clitem{border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--surface-2);cursor:pointer;margin-bottom:8px;transition:.15s}
+  .clitem:hover{border-color:var(--ok)}
+  .clitem .l1{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+  .dot.w{background:var(--warn)}
+  .clitem .env{margin-left:auto;font-size:11px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:6px;padding:0 7px}
+  .meter{margin-top:8px}
+  .meter .lb{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-3)}
+  .track{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:4px}
+  .track i{display:block;height:100%;background:var(--ok)}
+  .track.w i{background:var(--warn)}
+
+  .toplist{display:flex;flex-direction:column;gap:7px}
+  .tr{display:flex;align-items:center;gap:8px;font-size:12px}
+  .tr .no{width:16px;color:var(--ink-3);font-size:11px;text-align:right;flex:none}
+  .tr .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+  .tr .nm .ns{color:var(--ink-3);font-size:11px}
+  .tr .bar2{width:86px;height:5px;background:var(--line);border-radius:3px;overflow:hidden;flex:0 0 86px}
+  .tr .bar2 i{display:block;height:100%;background:var(--ok)}
+  .tr .bar2.m i{background:var(--warn)}
+  .tr .bar2.e i{background:var(--err)}
+  .tr .vv{width:52px;text-align:right;color:var(--ink-2);font-variant-numeric:tabular-nums;font-size:11.5px;flex:0 0 52px}
+
+  .nsblock{margin-bottom:10px}
+  .nshead{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2);padding:2px 2px 6px}
+  .nshead .cnt{color:var(--ink-3);font-size:11.5px}
+  .nshead .sev{margin-left:auto;font-size:11.5px}
+  .deps{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+  .dep{border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--surface-2)}
+  .dep .n{font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dep .r{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11.5px;color:var(--ink-3)}
+  .seg{display:flex;gap:3px}
+  .seg i{width:9px;height:9px;border-radius:2px;background:var(--line-2)}
+  .seg i.ok{background:var(--ok);animation:segBlink 1.8s ease-in-out infinite}
+  .seg i.ok:nth-child(2){animation-delay:.22s}
+  .seg i.ok:nth-child(3){animation-delay:.44s}
+  .seg i.ok:nth-child(4){animation-delay:.66s}
+  .seg i.ok:nth-child(5){animation-delay:.88s}
+  @keyframes segBlink{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion: reduce){.seg i.ok{animation:none}}
+  .seg i.bad{background:var(--err)}
+  .dep.ok{border-left:3px solid var(--ok)}
+  .dep.warn{border-left:3px solid var(--warn)}
+  .dep.err{border-left:3px solid var(--err)}
+
+  .tk{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:5px;margin-bottom:7px;background:var(--surface-2);border-left:3px solid var(--info);font-size:12.5px}
+  .tk.p1{border-color:var(--warn)}.tk.p0{border-color:var(--err)}
+  .tk .m{flex:1;min-width:0}
+  .tk .m .n{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tk .m .s{color:var(--ink-3);font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tk .st{font-size:11px;padding:0 7px;border-radius:4px;background:rgba(96,165,250,.14);color:var(--info);white-space:nowrap;flex:0 0 auto}
+  .tk.p1 .st{background:rgba(224,154,78,.14);color:var(--warn)}
+  .tk.p0 .st{background:rgba(240,115,106,.16);color:var(--err)}
+
+  .alitem{display:flex;gap:8px;padding:7px 10px;border-radius:5px;margin-bottom:6px;font-size:12.5px;background:var(--surface-2);border-left:3px solid var(--err)}
+  .alitem.p1{border-color:var(--warn)}
+  .alitem.p2{border-color:var(--info)}
+  .alitem .lv{font-size:11px;font-weight:700;padding:0 6px;border-radius:4px;background:rgba(240,115,106,.16);color:var(--err);flex:0 0 auto}
+  .alitem.p1 .lv{background:rgba(224,154,78,.14);color:var(--warn)}
+  .alitem.p2 .lv{background:rgba(96,165,250,.14);color:var(--info)}
+  .alitem .m{flex:1;min-width:0}
+  .alitem .m .n{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alitem .m .s{color:var(--ink-3);font-size:11.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alitem .tm{color:var(--ink-3);font-size:11px;flex:0 0 auto}
+
+  .ev{display:flex;gap:8px;font-size:12px;padding:6px 0;border-bottom:1px dashed var(--line-2)}
+  .ev:last-child{border:none}
+  .ev .t{color:var(--ink-3);flex:0 0 44px;font-variant-numeric:tabular-nums}
+  .ev .a{flex:0 0 auto;font-size:11px;padding:0 5px;border-radius:4px;background:rgba(55,192,138,.14);color:var(--ok)}
+  .ev .a.f{background:rgba(240,115,106,.16);color:var(--err)}
+  .ev .x{flex:1;min-width:0;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center}
+  .tile{border:1px solid var(--line);border-radius:6px;padding:8px 3px}
+  .tile .n{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+  .tile .l{font-size:11px;color:var(--ink-3)}
+
+  .ticker{margin-top:10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:12.5px;overflow:hidden}
+  .ticker .tag{color:var(--ok);border:1px solid rgba(55,192,138,.4);border-radius:4px;padding:0 6px;font-size:11px;flex:none}
+  .ticker .txt{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ticker .tm{margin-left:auto;color:var(--ink-3);font-size:11.5px}
+  .live{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(55,192,138,.4);background:rgba(55,192,138,.10);color:var(--ok);border-radius:6px;padding:3px 10px;font-size:11.5px}
+  .live i{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 1.4s infinite}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+  @keyframes flash{0%{background:rgba(55,192,138,.16)}100%{background:transparent}}
+  .flash{animation:flash 1.2s ease-out}
+
+  .fs{position:fixed;inset:0;background:var(--bg);z-index:50;display:none;flex-direction:column;padding:12px 16px}
+  .fs.on{display:flex}
+  .fs-hd{display:flex;align-items:center;gap:14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  .fs-hd .nm{font-size:22px;font-weight:700;color:var(--ink)}
+  .fs-hd .env{border:1px solid var(--line-2);border-radius:6px;padding:0 8px;font-size:11.5px;color:var(--ink-2)}
+  .close{margin-left:auto;border:1px solid var(--line-2);border-radius:6px;padding:6px 14px;font-size:13px;color:var(--ink-2);cursor:pointer;background:var(--surface-2)}
+  .close:hover{background:var(--elev)}
+  .fs-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:12px 0}
+  .fs-body{flex:1;min-height:0;display:flex;gap:12px;overflow-x:auto;padding-bottom:4px}
+  .nscol{flex:0 0 330px;display:flex;flex-direction:column;min-height:0;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+  .nscol .h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink-2)}
+  .nscol .h .c{margin-left:auto;font-size:11.5px;color:var(--ink-3)}
+  .nscol .b{padding:8px;overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:7px}
+  .nscol .dep{width:100%}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="hd">
+    <div><div class="title">AutoHealOps 运行大屏</div>
+      <div class="sub">集群 · 容器 Top · 自愈 · 优先处理 · 实时告警 · 自愈事件流</div></div>
+    <span class="pill">全部集群（3）</span><span class="live"><i></i>实时</span>
+    <div class="clock"><div class="t">17:08:00</div><div class="d">2026-11-11 周三</div></div>
+  </div>
+
+  <div class="grid">
+    <!-- 左：集群监控 + 容器 CPU/内存 Top -->
+    <div class="col">
+      <div class="panel" style="flex:0 0 auto">
+        <div class="ph"><span class="bar"></span>集群监控<span class="r">点击全屏</span></div>
+        <div class="pb" id="clusters"></div>
+      </div>
+      <div class="panel" style="flex:1;min-height:0">
+        <div class="ph"><span class="bar"></span>容器 CPU Top<span class="r">实时</span></div>
+        <div class="pb"><div class="toplist" id="cpuTop"></div></div>
+      </div>
+      <div class="panel" style="flex:1;min-height:0">
+        <div class="ph"><span class="bar"></span>容器内存 Top<span class="r">实时</span></div>
+        <div class="pb"><div class="toplist" id="memTop"></div></div>
+      </div>
+    </div>
+
+    <!-- 中：KPI + Deployment 矩阵 -->
+    <div class="col">
+      <div class="kpis">
+        <div class="kpi err"><div class="t">未处理告警</div><div class="v">5</div><div class="d">P0 1 · P1 2</div></div>
+        <div class="kpi warn"><div class="t">优先处理</div><div class="v">3</div><div class="d">P0 1 · P1 2</div></div>
+        <div class="kpi err"><div class="t">异常 Deployment</div><div class="v" id="kpi-bad">2</div><div class="d">就绪 &lt; 期望</div></div>
+        <div class="kpi ok"><div class="t">自愈成功率</div><div class="v">93<small>%</small></div><div class="d">24h 成功 28 / 30</div></div>
+        <div class="kpi ok"><div class="t">就绪率</div><div class="v" id="kpi-ready">97<small>%</small></div><div class="d">全部 namespace</div></div>
+      </div>
+      <div class="panel" style="flex:1;min-height:0">
+        <div class="ph"><span class="bar"></span>Deployment 状态（全部集群 · 按 namespace）<span class="r">点左侧集群进全屏</span></div>
+        <div class="pb" id="depmat"></div>
+      </div>
+      <div class="panel" style="flex:0 0 auto">
+        <div class="ph"><span class="bar"></span>自愈监控（24h）<span class="r">总 30 次</span></div>
+        <div class="pb"><div class="tiles">
+          <div class="tile"><div class="n" style="color:var(--cyan)">18</div><div class="l">自动自愈</div></div>
+          <div class="tile"><div class="n" style="color:#9fd7ff">7</div><div class="l">重启</div></div>
+          <div class="tile"><div class="n" style="color:#9fd7ff">4</div><div class="l">伸缩</div></div>
+          <div class="tile"><div class="n" style="color:var(--err)">2</div><div class="l">失败转工单</div></div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- 右：优先处理 + 实时告警 + 自愈事件流 -->
+    <div class="col">
+      <div class="panel" style="flex:0 0 34%;min-height:0">
+        <div class="ph"><span class="bar"></span>优先处理<span class="r">P0/P1 · 按 SLA</span></div>
+        <div class="pb">
+          <div class="tk p0"><span class="st">P0 · 12m</span><div class="m"><div class="n">cud-reporting-service 反复崩溃</div><div class="s">qa-cud-saas · 指派 吴永辉</div></div></div>
+          <div class="tk p1"><span class="st">P1 · 40m</span><div class="m"><div class="n">k8s-node28 内存 87% 需处置</div><div class="s">测试环境 · 值班组</div></div></div>
+          <div class="tk p1"><span class="st">P1 · 1h</span><div class="m"><div class="n">eft-module-oms 就绪 1/2</div><div class="s">qa-aero-chain · 探针失败</div></div></div>
+        </div>
+      </div>
+      <div class="panel" style="flex:1;min-height:0">
+        <div class="ph"><span class="bar"></span>实时故障告警<span class="r">5 条未处理</span></div>
+        <div class="pb">
+          <div class="alitem"><span class="lv">P0</span><div class="m"><div class="n">cud-reporting-service CrashLoopBackOff</div><div class="s">qa-cud-saas · 重启 12 次</div></div><span class="tm">2m</span></div>
+          <div class="alitem p1"><span class="lv">P1</span><div class="m"><div class="n">k8s-node28 内存压力 87%</div><div class="s">测试环境</div></div><span class="tm">40m</span></div>
+          <div class="alitem p1"><span class="lv">P1</span><div class="m"><div class="n">eft-module-oms 就绪 1/2</div><div class="s">qa-aero-chain</div></div><span class="tm">1h</span></div>
+          <div class="alitem p2"><span class="lv">P2</span><div class="m"><div class="n">测试环境MySQL(stg) 慢 SQL 6 条</div><div class="s">最长 2.4s</div></div><span class="tm">1h</span></div>
+          <div class="alitem p2"><span class="lv">P3</span><div class="m"><div class="n">3 个服务 7 天零流量</div><div class="s">僵尸候选 · qa</div></div><span class="tm">2h</span></div>
+        </div>
+      </div>
+      <div class="panel" style="flex:0 0 26%;min-height:0">
+        <div class="ph"><span class="bar"></span>自愈事件流<span class="r">实时</span></div>
+        <div class="pb" id="evflow">
+          <div class="ev"><span class="t">16:54</span><span class="a">扩容</span><span class="x">prod-eft-link/manifest-szxmft 2→3 副本</span></div>
+          <div class="ev"><span class="t">16:41</span><span class="a">重启</span><span class="x">qa-aero-chain/eft-module-oms 探针失败重启</span></div>
+          <div class="ev"><span class="t">16:20</span><span class="a f">失败</span><span class="x">qa-cud-saas/cud-reporting 重启后仍崩溃 → 转工单</span></div>
+          <div class="ev"><span class="t">15:58</span><span class="a">自愈</span><span class="x">prod-eft-web/eft-web-gateway 就地重启恢复</span></div>
+          <div class="ev"><span class="t">15:32</span><span class="a">伸缩</span><span class="x">qa-aero-chain/eft-module-hrs 1→2 副本</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ticker"><span class="tag">最新</span>
+    <span class="txt">16:54 生产环境 prod-eft-link/manifest-szxmft 内存 85% → 自动扩容 2→3 副本（成功）</span>
+    <span class="tm">实时</span></div>
+</div>
+
+<!-- 集群全屏：namespace 左右排列 -->
+<div class="fs" id="fs">
+  <div class="fs-hd">
+    <span class="nm" id="fs-name">生产环境</span><span class="env" id="fs-env">prod</span>
+    <span class="pill" id="fs-ver">v1.23.4 · agent</span>
+    <span class="clock" style="margin-left:0"><span class="t" id="fs-clock"></span></span>
+    <button class="close" onclick="closeFs()">退出全屏（Esc）</button>
+  </div>
+  <div class="fs-kpis">
+    <div class="kpi"><div class="t">节点</div><div class="v" id="fs-node">46</div><div class="d">健康 45 · 异常 1</div></div>
+    <div class="kpi"><div class="t">命名空间</div><div class="v" id="fs-ns">4</div><div class="d">全部</div></div>
+    <div class="kpi"><div class="t">Deployment</div><div class="v" id="fs-dep">10</div><div class="d">全部服务</div></div>
+    <div class="kpi err"><div class="t">异常</div><div class="v" id="fs-bad">0</div><div class="d">就绪 &lt; 期望</div></div>
+    <div class="kpi ok"><div class="t">就绪率</div><div class="v" id="fs-rate">100<small>%</small></div><div class="d">副本维度</div></div>
+    <div class="kpi"><div class="t">CPU / 内存</div><div class="v" id="fs-usage">66<small>%</small></div><div class="d">内存 73%</div></div>
+  </div>
+  <div class="fs-body" id="fs-body"></div>
+</div>
+
+<script>
+const CLUSTERS = [
+  {id:'prod', name:'生产环境', env:'prod', cpu:66, mem:73, pods:3902, health:'ok', nodes:46, ver:'v1.23.4'},
+  {id:'qa',   name:'测试环境', env:'qa',   cpu:42, mem:87, pods:1284, health:'warn', nodes:12, ver:'v1.23.4'},
+  {id:'uat',  name:'uat环境',  env:'uat',  cpu:31, mem:54, pods:412,  health:'ok', nodes:8,  ver:'v1.22.8'},
+];
+const DEPS = {
+  prod:[
+    {ns:'eft-web', items:[{n:'eft-web-portal',r:4,want:4},{n:'eft-web-admin',r:2,want:2},{n:'eft-web-gateway',r:3,want:3}]},
+    {ns:'eft-base', items:[{n:'eft-base-auth',r:2,want:2},{n:'eft-base-user',r:2,want:2},{n:'eft-base-msg',r:2,want:2},{n:'eft-base-job',r:1,want:1}]},
+    {ns:'eft-link', items:[{n:'manifest-szxmft',r:3,want:3},{n:'eft-link-sync',r:2,want:2}]},
+    {ns:'gsa', items:[{n:'gsa-module-client',r:2,want:2},{n:'gsa-module-server',r:2,want:2}]},
+  ],
+  qa:[
+    {ns:'qa-aero-chain', items:[{n:'eft-module-hrs',r:2,want:2},{n:'eft-module-oms',r:1,want:2},{n:'eft-module-wms',r:2,want:2}]},
+    {ns:'qa-cud-saas', items:[{n:'cud-reporting-service',r:0,want:1},{n:'cud-gateway',r:2,want:2}]},
+    {ns:'nacos', items:[{n:'nacos-config',r:1,want:1}]},
+  ],
+  uat:[
+    {ns:'uat-ebase', items:[{n:'issp-gateway',r:1,want:1},{n:'issp-auth',r:1,want:1},{n:'issp-ui',r:1,want:1}]},
+    {ns:'uat-cargo', items:[{n:'cargo-ui',r:1,want:1},{n:'eft-module-work',r:1,want:1}]},
+  ],
+};
+const CPU_TOP = [
+  ['cud-reporting-service','qa-cud-saas','92%',92,'e'],
+  ['manifest-szxmft','prod-eft-link','78%',78,''],
+  ['eft-module-hrs','qa-aero-chain','64%',64,''],
+  ['eft-web-gateway','prod-eft-web','51%',51,''],
+  ['nacos-config','qa-nacos','37%',37,''],
+];
+const MEM_TOP = [
+  ['cud-reporting-service','qa-cud-saas','99.9% (limit 1536Mi)',99,'e'],
+  ['eft-module-oms','qa-aero-chain','86%',86,'m'],
+  ['manifest-szxmft','prod-eft-link','85%',85,'m'],
+  ['eft-web-portal','prod-eft-web','71%',71,''],
+  ['broker-a','stg','62%',62,''],
+];
+const st = d => d.r>=d.want?'ok':(d.r>0?'warn':'err');
+const stText = s => s==='ok'?'运行中':s==='warn'?'降级':'异常';
+const stColor = s => s==='ok'?'var(--ok)':s==='warn'?'var(--warn)':'var(--err)';
+
+function depCard(d){
+  const s=st(d);
+  const seg=Array.from({length:d.want},(_,i)=>`<i class="${i<d.r?'ok':(s==='err'?'bad':'')}"></i>`).join('');
+  return `<div class="dep ${s}"><div class="n" title="${d.n}">${d.n}</div>
+    <div class="r"><span class="seg">${seg}</span>${d.r}/${d.want}
+    <span style="margin-left:auto;color:${stColor(s)}">${stText(s)}</span></div></div>`;
+}
+function renderClusters(){
+  document.getElementById('clusters').innerHTML = CLUSTERS.map(c=>`
+    <div class="clitem" onclick="openFs('${c.id}')" title="点击全屏查看该集群所有服务">
+      <div class="l1"><span class="dot ${c.health==='warn'?'w':''}"></span>${c.name}<span class="env">${c.env}</span></div>
+      <div class="meter">
+        <div class="lb"><span>CPU ${c.cpu}%</span><span>内存 ${c.mem}%</span></div>
+        <div class="track"><i style="width:${c.cpu}%"></i></div>
+        <div class="track ${c.mem>=85?'w':''}" style="margin-top:3px"><i style="width:${c.mem}%"></i></div>
+        <div class="lb" style="margin-top:4px"><span>Pod ${c.pods.toLocaleString()}</span>
+          <span style="color:${c.health==='warn'?'var(--warn)':'var(--ok)'}">${c.health==='warn'?'关注':'健康'}</span></div>
+      </div></div>`).join('');
+}
+function renderTops(){
+  const row=(list,cls)=>list.map((x,i)=>`
+    <div class="tr"><span class="no">${i+1}</span>
+      <span class="nm" title="${x[0]}">${x[0]} <span class="ns">${x[1]}</span></span>
+      <span class="bar2 ${x[4]||cls}"><i style="width:${x[3]}%"></i></span>
+      <span class="vv">${x[2]}</span></div>`).join('');
+  document.getElementById('cpuTop').innerHTML = row(CPU_TOP,'');
+  document.getElementById('memTop').innerHTML = row(MEM_TOP,'m');
+}
+function renderMainMatrix(){
+  document.getElementById('depmat').innerHTML = Object.keys(DEPS).map(id=>{
+    const c=CLUSTERS.find(x=>x.id===id);
+    return DEPS[id].map(g=>{
+      const bad=g.items.filter(d=>st(d)!=='ok').length;
+      return `<div class="nsblock"><div class="nshead">${c.name} / <b>${g.ns}</b>
+        <span class="cnt">${g.items.length} 个部署</span>
+        <span class="sev" style="color:${bad?'var(--err)':'var(--ok)'}">${bad?`异常 ${bad}`:'全部就绪'}</span></div>
+        <div class="deps">${g.items.map(depCard).join('')}</div></div>`;
+    }).join('');
+  }).join('');
+  const all=Object.values(DEPS).flat().flatMap(g=>g.items);
+  const bad=all.filter(d=>st(d)!=='ok').length;
+  const want=all.reduce((a,d)=>a+d.want,0), ready=all.reduce((a,d)=>a+d.r,0);
+  document.getElementById('kpi-bad').textContent=bad;
+  document.getElementById('kpi-ready').innerHTML=Math.round(ready/want*100)+'<small>%</small>';
+}
+/* 全屏：namespace 左右排列 */
+function openFs(id){
+  const c=CLUSTERS.find(x=>x.id===id);
+  document.getElementById('fs-name').textContent=c.name;
+  document.getElementById('fs-env').textContent=c.env;
+  document.getElementById('fs-ver').textContent=`${c.ver} · agent`;
+  const groups=DEPS[id], all=groups.flatMap(g=>g.items);
+  const bad=all.filter(d=>st(d)!=='ok').length;
+  const want=all.reduce((a,d)=>a+d.want,0), ready=all.reduce((a,d)=>a+d.r,0);
+  document.getElementById('fs-node').textContent=c.nodes;
+  document.getElementById('fs-ns').textContent=groups.length;
+  document.getElementById('fs-dep').textContent=all.length;
+  document.getElementById('fs-bad').textContent=bad;
+  document.getElementById('fs-rate').innerHTML=Math.round(ready/want*100)+'<small>%</small>';
+  document.getElementById('fs-usage').innerHTML=c.cpu+'<small>%</small>';
+  document.getElementById('fs-body').innerHTML = groups.map(g=>{
+    const gb=g.items.filter(d=>st(d)!=='ok').length;
+    return `<div class="nscol">
+      <div class="h">${g.ns}<span class="c">${g.items.length} 个部署
+        ${gb?`<b style="color:var(--err)">· 异常 ${gb}</b>`:'<b style="color:var(--ok)">· 全就绪</b>'}</span></div>
+      <div class="b">${g.items.map(depCard).join('')}</div></div>`;
+  }).join('');
+  document.getElementById('fs').classList.add('on');
+}
+function closeFs(){ document.getElementById('fs').classList.remove('on'); }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeFs(); });
+
+function tick(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const t=`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  document.querySelector('.clock .t').textContent=t;
+  document.getElementById('fs-clock').textContent=t;
+  const w=['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
+  document.querySelector('.clock .d').textContent=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${w}`;
+}
+tick(); setInterval(tick,1000);
+renderClusters(); renderTops(); renderMainMatrix();
+const m=(location.hash||'').match(/fs=(\w+)/); if(m) openFs(m[1]);
+
+/* ===== 实时模拟（真实环境由 SSE/WS 推送，见 docs） ===== */
+const EV_TPL = [
+  ['自愈','{ns}/{dep} 就绪恢复 {r}/{w}'],
+  ['重启','{ns}/{dep} 探针失败 → 原地重启'],
+  ['扩容','{ns}/{dep} 内存超阈值 → 副本 +1'],
+  ['失败','{ns}/{dep} 重启后仍异常 → 转工单'],
+  ['自愈','{ns}/{dep} 镜像拉取失败 → 回滚上一版本'],
+];
+let evSeq = 0;
+function jitter(v, min, max){ const n = v + (Math.random()*8-4); return Math.max(min, Math.min(max, n)); }
+function refreshTops(){
+  CPU_TOP.forEach(x=>{ x[3]=Math.round(jitter(x[3],5,99)); x[2]=x[3]+'%'; });
+  MEM_TOP.forEach(x=>{ x[3]=Math.round(jitter(x[3],5,99)); x[2]=x[3]+'%'; });
+  renderTops();
+}
+function pushEvent(){
+  const t = EV_TPL[evSeq % EV_TPL.length]; evSeq++;
+  const ids = Object.keys(DEPS);
+  const cid = ids[Math.floor(Math.random()*ids.length)];
+  const g = DEPS[cid][Math.floor(Math.random()*DEPS[cid].length)];
+  const d = g.items[Math.floor(Math.random()*g.items.length)];
+  const box = document.getElementById('evflow');
+  if(!box) return;
+  const now = new Date(); const p=n=>String(n).padStart(2,'0');
+  const el = document.createElement('div');
+  el.className = 'ev';
+  el.innerHTML = `<span class="t">${p(now.getHours())}:${p(now.getMinutes())}</span>
+    <span class="a ${t[0]==='失败'?'f':''}">${t[0]}</span>
+    <span class="x">${t[1].replace('{ns}',g.ns).replace('{dep}',d.n).replace('{r}',d.r).replace('{w}',d.want)}</span>`;
+  box.prepend(el);
+  while(box.children.length>6) box.removeChild(box.lastChild);
+  document.getElementById('evflow').firstChild.classList.add('flash');
+}
+function flipOne(){
+  const ids = Object.keys(DEPS);
+  const cid = ids[Math.floor(Math.random()*ids.length)];
+  const g = DEPS[cid][Math.floor(Math.random()*DEPS[cid].length)];
+  const d = g.items[Math.floor(Math.random()*g.items.length)];
+  if(Math.random()<0.5){ d.r = Math.max(0, d.r-1); } else { d.r = Math.min(d.want, d.r+1); }
+  renderMainMatrix();
+  if(document.getElementById('fs').classList.contains('on')){
+    const nm = document.getElementById('fs-name').textContent;
+    const c = CLUSTERS.find(x=>x.name===nm); if(c) openFs(c.id);
+  }
+}
+setInterval(refreshTops, 2500);
+setInterval(pushEvent, 6000);
+setInterval(flipOne, 9000);
+setInterval(()=>{
+  const el=document.querySelector('.ticker .txt');
+  if(el) el.textContent = `${new Date().toTimeString().slice(0,5)} 集群快照已刷新 · 自愈引擎运行中 · 巡检队列 0 待处理`;
+}, 5000);
+</script>
+</body>
+</html>

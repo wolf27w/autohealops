@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AutoHealOps · 集群监控（行式）Demo</title>
+<style>
+  :root{
+    --bg:#0e1412; --surface:#141b18; --surface-2:#0f1714;
+    --line:#232d28; --line-2:#2e3a34;
+    --ink:#e9efec; --ink-2:#a7b4ad; --ink-3:#7f8d86;
+    --ok:#37c08a; --warn:#e09a4e; --err:#f0736a; --info:#60a5fa;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;color:var(--ink);overflow:hidden;background:var(--bg);
+    font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums}
+
+  .screen{height:100vh;display:flex;flex-direction:column;padding:12px 18px 12px;gap:12px}
+
+  /* 集群头 */
+  .hd{display:flex;align-items:center;gap:14px;padding:2px 2px 12px;border-bottom:1px solid var(--line);flex:none}
+  .back{font-size:12.5px;color:var(--ink-3);border:1px solid var(--line-2);border-radius:6px;padding:4px 10px;cursor:pointer}
+  .back:hover{color:var(--ink)}
+  .title{font-size:24px;font-weight:700;letter-spacing:.5px;display:flex;align-items:center;gap:10px}
+  .title:before{content:"";width:4px;height:22px;background:var(--ok);border-radius:2px}
+  .tag{font-size:11.5px;padding:1px 8px;border-radius:4px;border:1px solid rgba(240,115,106,.35);background:rgba(240,115,106,.10);color:var(--err)}
+  .ver{font-size:12px;color:var(--ink-3)}
+  .mini{display:flex;align-items:center;gap:18px;margin-left:8px;font-size:12.5px;color:var(--ink-2)}
+  .mini b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;margin-left:3px}
+  .mini .e b{color:var(--err)}
+  .clock{margin-left:auto;text-align:right}
+  .clock .t{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+  .clock .d{font-size:11.5px;color:var(--ink-3)}
+
+  /* 表体 */
+  .wrap{flex:1;min-height:0;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:auto}
+  table.tbl{width:100%;height:100%;border-collapse:collapse;table-layout:fixed}
+  .tbl thead th{
+    position:sticky;top:0;z-index:1;
+    text-align:left;font-size:11.5px;font-weight:600;letter-spacing:1px;color:var(--ink-3);
+    background:var(--surface-2);padding:12px 26px;border-bottom:1px solid var(--line);white-space:nowrap;
+  }
+  .tbl tbody td{
+    padding:12px 26px;border-bottom:1px solid var(--line);vertical-align:middle;
+  }
+  .tbl tbody tr:last-child td{border-bottom:none}
+  .tbl tbody tr:hover td{background:rgba(55,192,138,.04)}
+
+  .ns{color:var(--ink-2);font-weight:600;font-size:15px;white-space:nowrap;border-right:1px solid var(--line-2)}
+  .ns .dot{display:inline-block;width:7px;height:7px;border-radius:2px;background:var(--ok);margin-right:9px;vertical-align:middle;opacity:.85}
+  .dep{color:var(--ink);font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dep .nsdup{display:none}
+  .cnt{font-size:15.5px;font-weight:600;color:var(--ink);white-space:nowrap}
+  .cnt em{font-style:normal;color:var(--ink-3);font-weight:400;margin:0 3px}
+  .cnt.warn{color:var(--warn)} .cnt.err{color:var(--err)}
+
+  /* 状态：一个容器一个方块 */
+  .cubes{display:flex;gap:7px;align-items:center;flex-wrap:nowrap}
+  .b{width:15px;height:15px;border-radius:3px;background:var(--ok);flex:none}
+  .b.ok{animation:blink 1.8s ease-in-out infinite}
+  .b.err{background:var(--err);animation:none}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.45}}
+  @media (prefers-reduced-motion: reduce){.b.ok{animation:none}}
+
+  /* 底部 */
+  .ticker{flex:none;border:1px solid var(--line);border-radius:6px;background:var(--surface);display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:12.5px;overflow:hidden}
+  .ticker .tag2{flex:none;color:var(--ok);border:1px solid rgba(55,192,138,.4);border-radius:4px;padding:0 6px;font-size:11px}
+  .ticker .txt{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ticker .tm{margin-left:auto;color:var(--ink-3);font-size:11.5px;flex:none}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="hd">
+    <span class="back">← 返回大屏</span>
+    <span class="title">生产环境</span>
+    <span class="tag">prod</span>
+    <span class="ver">v1.23.4 · agent</span>
+    <div class="mini">
+      <span>节点<b>46</b></span>
+      <span>namespace<b>4</b></span>
+      <span>Deployment<b>11</b></span>
+      <span class="e">异常<b>1</b></span>
+      <span>就绪率<b>98%</b></span>
+    </div>
+    <div class="clock"><div class="t">14:22:00</div><div class="d">2026-11-17 周二</div></div>
+  </div>
+
+  <div class="wrap">
+    <table class="tbl">
+      <colgroup>
+        <col style="width:24%" />
+        <col style="width:38%" />
+        <col style="width:16%" />
+        <col style="width:22%" />
+      </colgroup>
+      <thead>
+        <tr><th>NAMESPACE</th><th>DEPLOYMENT</th><th>容器数量</th><th>状态</th></tr>
+      </thead>
+      <tbody id="tb"></tbody>
+    </table>
+  </div>
+
+  <div class="ticker">
+    <span class="tag2">最新</span>
+    <span class="txt">14:19 eft-link/manifest-szxmft 内存 85% → 自动扩容 2→3 副本（成功）</span>
+    <span class="tm">实时</span>
+  </div>
+</div>
+
+<script>
+// 单集群数据（真实环境由集群接口按 namespace → Deployment 拉取）
+const GROUPS = [
+  { ns:'eft-web', deps:[
+    { n:'eft-web-portal',  r:4, w:4 },
+    { n:'eft-web-admin',   r:2, w:2 },
+    { n:'eft-web-gateway', r:3, w:3 },
+  ]},
+  { ns:'eft-base', deps:[
+    { n:'eft-base-auth', r:2, w:2 },
+    { n:'eft-base-user', r:2, w:2 },
+    { n:'eft-base-msg',  r:2, w:2 },
+    { n:'eft-base-job',  r:1, w:1 },
+  ]},
+  { ns:'eft-link', deps:[
+    { n:'manifest-szxmft', r:3, w:3 },
+    { n:'eft-link-sync',   r:0, w:2 },
+  ]},
+  { ns:'gsa', deps:[
+    { n:'gsa-module-client', r:2, w:2 },
+    { n:'gsa-module-server', r:1, w:2 },
+  ]},
+];
+
+function state(d){
+  if(d.r>=d.w) return {cls:'ok'};
+  if(d.r>0)    return {cls:'warn'};
+  return {cls:'err'};
+}
+
+// 一个容器一个方块：前 r 个正常(绿)，其余异常(红)；绿块依次呼吸
+function cubes(d){
+  const out=[];
+  for(let i=0;i<d.w;i++){
+    if(i<d.r) out.push(`<i class="b ok" style="animation-delay:${(i*0.12).toFixed(2)}s"></i>`);
+    else out.push('<i class="b err"></i>');
+  }
+  return out.join('');
+}
+
+function render(){
+  const rows=[];
+  GROUPS.forEach(g=>{
+    g.deps.forEach((d,i)=>{
+      const s=state(d);
+      rows.push(`<tr>
+        ${i===0?`<td class="ns" rowspan="${g.deps.length}"><span class="dot"></span>${g.ns}</td>`:''}
+        <td class="dep" title="${d.n}">${d.n}</td>
+        <td><span class="cnt ${s.cls==='warn'?'warn':s.cls==='err'?'err':''}">${d.r}<em>/</em>${d.w}</span></td>
+        <td><span class="cubes">${cubes(d)}</span></td>
+      </tr>`);
+    });
+  });
+  document.getElementById('tb').innerHTML = rows.join('');
+}
+
+function tick(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  document.querySelector('.clock .t').textContent=`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const w=['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
+  document.querySelector('.clock .d').textContent=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${w}`;
+}
+
+render(); tick(); setInterval(tick,1000);
+</script>
+</body>
+</html>

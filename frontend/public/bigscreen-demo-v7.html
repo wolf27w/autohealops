@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AutoHealOps · 运行大屏 Demo v7</title>
+<style>
+  :root{
+    --bg:#0e1412; --surface:#141b18; --surface-2:#0f1714; --head:#111917;
+    --line:#232d28; --line-2:#2e3a34;
+    --ink:#e9efec; --ink-2:#a7b4ad; --ink-3:#7f8d86;
+    --ok:#37c08a; --warn:#e09a4e; --err:#f0736a; --info:#60a5fa;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;color:var(--ink);overflow:hidden;background:var(--bg);
+    font:14px/1.45 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+
+  .screen{height:100vh;display:flex;flex-direction:column;padding:12px 16px;gap:10px}
+
+  /* header */
+  .hd{flex:none;display:flex;align-items:center;gap:12px;padding:0 2px 10px;border-bottom:1px solid var(--line)}
+  .title{font-size:20px;font-weight:700;letter-spacing:.8px;display:flex;align-items:center;gap:9px}
+  .title:before{content:"";width:3px;height:18px;background:var(--ok);border-radius:2px}
+  .pill{font-size:11.5px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 10px}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ok);border:1px solid rgba(55,192,138,.35);border-radius:5px;padding:2px 9px}
+  .live i{width:6px;height:6px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .clock{margin-left:auto;display:flex;align-items:baseline;gap:10px}
+  .clock .t{font-size:21px;font-weight:600;color:var(--ink)}
+  .clock .d{font-size:11.5px;color:var(--ink-3)}
+
+  /* KPI 条 */
+  .kpis{flex:none;display:grid;grid-template-columns:repeat(8,1fr);border:1px solid var(--line);border-radius:7px;background:var(--surface);overflow:hidden}
+  .kpi{padding:10px 14px;border-left:1px solid var(--line)}
+  .kpi:first-child{border-left:none}
+  .kpi .t{font-size:11.5px;color:var(--ink-3);display:flex;align-items:center;gap:5px}
+  .kpi .t i{width:5px;height:5px;border-radius:50%;background:var(--info)}
+  .kpi.ok .t i{background:var(--ok)}.kpi.warn .t i{background:var(--warn)}.kpi.err .t i{background:var(--err)}
+  .kpi .v{font-size:27px;font-weight:600;line-height:1.2;color:var(--ink)}
+  .kpi .v small{font-size:12px;font-weight:500;color:var(--ink-3);margin-left:2px}
+  .kpi .d{font-size:11px;color:var(--ink-3)}
+  .kpi.err .v{color:var(--err)}.kpi.ok .v{color:var(--ok)}.kpi.warn .v{color:var(--warn)}
+
+  /* 主体 */
+  .main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 476px;gap:10px}
+  .col{display:flex;flex-direction:column;gap:10px;min-height:0}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:7px;display:flex;flex-direction:column;min-height:0}
+  .ph{flex:none;display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:12.5px;font-weight:600;letter-spacing:.3px;color:var(--ink-2)}
+  .ph:before{content:"";width:3px;height:11px;background:var(--ok);border-radius:2px}
+  .ph .r{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink-3)}
+  .pb{flex:1;min-height:0;overflow:auto;padding:10px 14px}
+
+  /* 集群总览表 */
+  table.ct{width:100%;border-collapse:collapse}
+  .ct th{text-align:left;font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.4px;padding:1px 10px 9px;white-space:nowrap;border-bottom:1px solid var(--line)}
+  .ct td{padding:13px 10px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+  .ct tr:last-child td{border-bottom:none}
+  .ct tbody tr:hover td{background:rgba(55,192,138,.035)}
+  .ct .cname{font-size:14.5px;font-weight:600}
+  .ct .env{font-size:10.5px;padding:0 6px;border-radius:4px;margin-left:7px;border:1px solid var(--line-2);color:var(--ink-2)}
+  .env.prod{color:var(--err);border-color:rgba(240,115,106,.32);background:rgba(240,115,106,.09)}
+  .env.qa{color:var(--ok);border-color:rgba(55,192,138,.32);background:rgba(55,192,138,.09)}
+  .env.uat{color:var(--warn);border-color:rgba(224,154,78,.32);background:rgba(224,154,78,.09)}
+  .ct .v{font-size:14px}
+  .ct .v.err{color:var(--err)} .ct .v.warn{color:var(--warn)} .ct .v.ok{color:var(--ok)}
+  .meter{display:flex;align-items:center;gap:7px}
+  .meter .tr{width:54px;height:5px;border-radius:3px;background:var(--line);overflow:hidden;flex:none}
+  .meter .tr i{display:block;height:100%;background:var(--ok)}
+  .meter .tr.w i{background:var(--warn)} .meter .tr.e i{background:var(--err)}
+  .meter em{font-style:normal;font-size:13px;color:var(--ink-2);min-width:34px;text-align:right}
+
+  /* 故障诊断 */
+  .diag{display:flex;flex-direction:column;gap:9px}
+  .dgi{border:1px solid var(--line);border-left:3px solid var(--err);border-radius:6px;background:var(--surface-2);padding:11px 12px}
+  .dgi.p1{border-left-color:var(--warn)} .dgi.p2{border-left-color:var(--info)}
+  .dgi .top{display:flex;align-items:center;gap:8px}
+  .lv{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:rgba(240,115,106,.16);color:var(--err)}
+  .dgi.p1 .lv{background:rgba(224,154,78,.14);color:var(--warn)}
+  .dgi.p2 .lv{background:rgba(96,165,250,.14);color:var(--info)}
+  .dgi .nm{font-size:13.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dgi .age{margin-left:auto;font-size:11px;color:var(--ink-3);flex:none}
+  .dgi .who{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+  .dgi .jt{margin-top:8px;border-top:1px dashed var(--line-2);padding-top:7px;font-size:12px;color:var(--ink-2);line-height:1.5}
+  .dgi .jt b{color:var(--ink);font-weight:600}
+  .dgi .jt .hl{color:var(--ok)}
+  .dgi .ft{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .chip{font-size:10.5px;padding:1px 7px;border-radius:4px;background:rgba(55,192,138,.12);color:var(--ok)}
+  .dgi.p1 .chip{background:rgba(224,154,78,.12);color:var(--warn)}
+  .chip.gray{background:var(--line);color:var(--ink-2)}
+  .dgi .act{margin-left:auto;font-size:11px;color:var(--info)}
+
+  /* 自愈效果 */
+  .htiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+  .ht{border:1px solid var(--line);border-radius:6px;background:var(--surface-2);padding:10px 12px}
+  .ht .l{font-size:11px;color:var(--ink-3)}
+  .ht .n{font-size:24px;font-weight:600;line-height:1.2}
+  .ht .n.ok{color:var(--ok)} .ht .n.err{color:var(--err)}
+  .ht .n small{font-size:12px;color:var(--ink-3);margin-left:2px;font-weight:500}
+  .hacts{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .hacts .a{font-size:11px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 8px;background:var(--surface-2)}
+  .hacts .a b{color:var(--ink);margin-left:5px}
+  .hsub{font-size:11px;color:var(--ink-3);margin-bottom:6px;letter-spacing:.3px}
+  .ev{display:flex;gap:9px;font-size:11.5px;padding:6px 0;border-bottom:1px dashed var(--line-2)}
+  .ev:last-child{border-bottom:none}
+  .ev .t{flex:0 0 40px;color:var(--ink-3)}
+  .ev .g{flex:none;font-size:10.5px;padding:0 5px;border-radius:3px;background:rgba(55,192,138,.12);color:var(--ok)}
+  .ev .g.f{background:rgba(240,115,106,.14);color:var(--err)}
+  .ev .x{flex:1;min-width:0;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ticker */
+  .ticker{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:7px 14px;font-size:12px}
+  .ticker .tag{flex:none;font-size:10.5px;color:var(--ok);border:1px solid rgba(55,192,138,.35);border-radius:4px;padding:0 6px}
+  .ticker .txt{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ticker .tm{margin-left:auto;flex:none;font-size:11px;color:var(--ink-3)}
+
+  @media (max-width:1400px){
+    .kpis{grid-template-columns:repeat(4,1fr)}
+    .kpi{border-top:1px solid var(--line)}
+    .kpi:nth-child(-n+4){border-top:none}
+    .main{grid-template-columns:minmax(0,1fr) 420px}
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="hd">
+    <div class="title">AutoHealOps 运行大屏</div>
+    <span class="pill">全部集群（3）</span>
+    <span class="live"><i></i>实时</span>
+    <div class="clock"><span class="t num">14:31:00</span><span class="d">2026-11-17 周二</span></div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="main">
+    <!-- 左 -->
+    <div class="col">
+      <div class="panel" style="flex:0 0 auto">
+        <div class="ph">集群总览<span class="r">所有集群 · 5s 刷新</span></div>
+        <div style="padding:10px 14px 4px">
+          <table class="ct">
+            <thead><tr>
+              <th>集群</th><th>节点</th><th>Pod</th><th>容器</th><th>CPU</th><th>内存</th><th>未恢复告警</th><th>24h 自愈</th><th>就绪率</th>
+            </tr></thead>
+            <tbody id="ctBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" style="flex:1;min-height:0">
+        <div class="ph">自愈效果（24 小时）<span class="r">自动处置闭环</span></div>
+        <div class="pb" id="healBody"></div>
+      </div>
+    </div>
+
+    <!-- 右：故障诊断（重点） -->
+    <div class="panel" style="min-height:0">
+      <div class="ph">故障诊断<span class="r" id="diagR">进行中 4</span></div>
+      <div class="pb"><div class="diag" id="diagBody"></div></div>
+    </div>
+  </div>
+
+  <div class="ticker">
+    <span class="tag">最新</span>
+    <span class="txt" id="tkText">14:29 生产 efreight-prm 内存 82% → 自动扩容 3→4 副本（成功）</span>
+    <span class="tm">实时</span>
+  </div>
+</div>
+
+<script>
+const CLUSTERS = [
+  { name:'生产环境', env:'prod', envLabel:'生产', nodes:46, pods:3902, containers:5860, cpu:64, mem:71, alerts:2, healed:18, ready:98 },
+  { name:'测试环境', env:'qa',   envLabel:'测试', nodes:12, pods:1284, containers:1920, cpu:42, mem:87, alerts:3, healed:9,  ready:95 },
+  { name:'uat环境',  env:'uat',  envLabel:'UAT',  nodes:8,  pods:412,  containers:430,  cpu:31, mem:54, alerts:0, healed:3,  ready:100 },
+];
+const DIAG = [
+  { lv:'P0', cls:'', nm:'efreight-prm 堆内存长期高于 HPA 阈值', who:'生产环境 · prod-eft-cloud · 3 副本 · 命名空间 efreight', age:'42m',
+    jt:'诊断：<b>CMS GC 只涨不降、不归还 OS</b>；堆 60% 与 HPA 内存阈值 60% 重合 → 扩容后新 Pod 同样涨，<span class="hl">副本永远缩不回</span>。建议调 G1PeriodicGCInterval 或放宽阈值。',
+    chips:[['已建单 #1042',''],['等待审批','gray']], act:'查看工单 ›' },
+  { lv:'P1', cls:'p1', nm:'cud-reporting-service CrashLoopBackOff', who:'测试环境 · qa-cud-saas · 重启 12 次', age:'12m',
+    jt:'诊断：容器<b>启动即退出（exit 1）</b>，readiness 探针 5s 超时 → 排除资源问题，<span class="hl">疑似配置/镜像</span>，自动重启无效。',
+    chips:[['已自动转工单',''],['停止自动重启','gray']], act:'查看工单 ›' },
+  { lv:'P1', cls:'p1', nm:'k8s-node28 内存压力 87%', who:'测试环境 · 12 节点', age:'40m',
+    jt:'诊断：节点内存不足触发 <b>eviction</b>，滞回 5m 未转 False → 正在<b>驱逐低优先级 Pod</b>，预计释放 3.2 GB。',
+    chips:[['自愈执行中','']], act:'查看节点 ›' },
+  { lv:'P2', cls:'p2', nm:'测试环境 MySQL(stg) 慢 SQL 6 条', who:'托管 nacos 库 · HDD', age:'1h',
+    jt:'诊断：<b>缺索引</b>导致全表扫描，最长 2.4s；建议对 <b>order_no / tenant_id</b> 建联合索引（需走 DDL 审核）。',
+    chips:[['建议优化',''],['未自动处置','gray']], act:'查看详情 ›' },
+];
+const HEAL = {
+  ok:28, fail:2, rate:93, saved:'4.2',
+  acts:[['强删 Terminating',6],['重启容器',12],['扩容',8],['回滚版本',2],['其他',2]],
+  events:[
+    ['14:29','扩容','prod-eft-link/manifest-szxmft 内存 85% → 2→3 副本'],
+    ['14:18','自愈','prod-eft-web/eft-web-gateway 探针失败 → 就地重启恢复'],
+    ['14:06','失败','qa-cud-saas/cud-reporting 重启后仍崩溃 → 转工单'],
+    ['13:52','强删','prod-eft-cloud/shipping-api-7c9f 卡 Terminating 18m'],
+    ['13:41','扩容','qa-aero-chain/eft-module-hrs 1→2 副本'],
+    ['13:30','回滚','prod-eft-base/eft-base-msg 镜像拉取失败 → 回滚上一版'],
+    ['13:12','自愈','prod-eft-cloud/efreight-prm 副本回收 → 恢复正常'],
+    ['12:58','强删','qa-job/etl-runner 卡 Terminating 22m'],
+  ],
+};
+
+const sum = CLUSTERS.reduce((a,c)=>({nodes:a.nodes+c.nodes,pods:a.pods+c.pods,containers:a.containers+c.containers,alerts:a.alerts+c.alerts,healed:a.healed+c.healed}),{nodes:0,pods:0,containers:0,alerts:0,healed:0});
+const KPIS = [
+  { t:'集群', v:CLUSTERS.length, d:'健康 3 · 异常 0', cls:'ok' },
+  { t:'节点', v:sum.nodes, d:'压力 2 · 异常 0', cls:'' },
+  { t:'Pod', v:sum.pods.toLocaleString(), d:'全部命名空间', cls:'' },
+  { t:'容器', v:sum.containers.toLocaleString(), d:'运行中实例', cls:'' },
+  { t:'未恢复告警', v:sum.alerts, d:'P0 1 · P1 2 · P2 2', cls:'err' },
+  { t:'24h 自愈', v:sum.healed, d:'失败 2', cls:'ok' },
+  { t:'自愈成功率', v:HEAL.rate, unit:'%', d:'28 / 30', cls:'ok' },
+  { t:'平均恢复 MTTR', v:'3m12s', d:'P90 8m40s', cls:'' },
+];
+
+function bar(pct){
+  const cls = pct>=80?'e':pct>=60?'w':'';
+  return `<span class="meter"><span class="tr ${cls}"><i style="width:${pct}%"></i></span><em>${pct}%</em></span>`;
+}
+
+function renderKpis(){
+  document.getElementById('kpis').innerHTML = KPIS.map(k=>`
+    <div class="kpi ${k.cls}">
+      <div class="t"><i></i>${k.t}</div>
+      <div class="v num">${k.v}${k.unit?`<small>${k.unit}</small>`:''}</div>
+      <div class="d">${k.d}</div>
+    </div>`).join('');
+}
+
+function renderClusters(){
+  document.getElementById('ctBody').innerHTML = CLUSTERS.map(c=>`
+    <tr>
+      <td><span class="cname">${c.name}</span><span class="env ${c.env}">${c.envLabel}</span></td>
+      <td class="num">${c.nodes}</td>
+      <td class="num">${c.pods.toLocaleString()}</td>
+      <td class="num">${c.containers.toLocaleString()}</td>
+      <td>${bar(c.cpu)}</td>
+      <td>${bar(c.mem)}</td>
+      <td><span class="v num ${c.alerts?'err':'ok'}">${c.alerts}</span></td>
+      <td class="num">${c.healed}</td>
+      <td><span class="v num ${c.ready>=99?'ok':c.ready>=95?'warn':'err'}">${c.ready}%</span></td>
+    </tr>`).join('');
+}
+
+function renderDiag(){
+  document.getElementById('diagBody').innerHTML = DIAG.map(d=>`
+    <div class="dgi ${d.cls}">
+      <div class="top"><span class="lv">${d.lv}</span><span class="nm" title="${d.nm}">${d.nm}</span><span class="age num">${d.age}</span></div>
+      <div class="who">${d.who}</div>
+      <div class="jt">${d.jt}</div>
+      <div class="ft">${d.chips.map(c=>`<span class="chip ${c[1]}">${c[0]}</span>`).join('')}<span class="act">${d.act}</span></div>
+    </div>`).join('');
+  document.getElementById('diagR').textContent = `进行中 ${DIAG.length}`;
+}
+
+function renderHeal(){
+  document.getElementById('healBody').innerHTML = `
+    <div class="htiles">
+      <div class="ht"><div class="l">自愈成功</div><div class="n num ok">${HEAL.ok}</div></div>
+      <div class="ht"><div class="l">失败 / 转人工</div><div class="n num err">${HEAL.fail}</div></div>
+      <div class="ht"><div class="l">成功率</div><div class="n num ok">${HEAL.rate}<small>%</small></div></div>
+      <div class="ht"><div class="l">节省人工</div><div class="n num">${HEAL.saved}<small>h</small></div></div>
+    </div>
+    <div class="hacts">${HEAL.acts.map(a=>`<span class="a">${a[0]}<b class="num">${a[1]}</b></span>`).join('')}</div>
+    <div class="hsub">最近自愈事件</div>
+    ${HEAL.events.map(e=>`<div class="ev"><span class="t num">${e[0]}</span><span class="g ${e[1]==='失败'?'f':''}">${e[1]}</span><span class="x">${e[2]}</span></div>`).join('')}`;
+}
+
+function tick(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  document.querySelector('.clock .t').textContent=`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const w=['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
+  document.querySelector('.clock .d').textContent=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${w}`;
+}
+renderKpis(); renderClusters(); renderDiag(); renderHeal();
+tick(); setInterval(tick,1000);
+
+setInterval(()=>{
+  CLUSTERS.forEach(c=>{
+    c.cpu=Math.max(10,Math.min(99,c.cpu+Math.round(Math.random()*6-3)));
+    c.mem=Math.max(20,Math.min(99,c.mem+Math.round(Math.random()*6-3)));
+  });
+  renderClusters();
+},3000);
+</script>
+</body>
+</html>

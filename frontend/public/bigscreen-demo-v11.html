@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AutoHealOps · 运行大屏 Demo v11</title>
+<style>
+  :root{
+    --bg:#0d1117; --surface:#151b23; --surface-2:#10161e; --head:#182029;
+    --line:#232c38; --line-2:#2d3745;
+    --ink:#e6edf3; --ink-2:#9aa7b6; --ink-3:#6e7d8c;
+    --ok:#2ea043; --warn:#d29922; --err:#f85149; --info:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;color:var(--ink);overflow:hidden;
+    background:radial-gradient(1600px 560px at 50% -14%, rgba(88,166,255,.08), transparent 62%), var(--bg);
+    font:15px/1.45 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums}
+
+  .screen{height:100vh;display:flex;flex-direction:column;padding:12px 16px;gap:10px}
+
+  /* header */
+  .hd{flex:none;display:flex;align-items:center;gap:12px;height:46px}
+  .logo{width:28px;height:28px;border-radius:7px;background:var(--info);display:grid;place-items:center;flex:none}
+  .logo svg{width:17px;height:17px}
+  .title{font-size:22px;font-weight:700;letter-spacing:1.4px}
+  .sub{font-size:11px;color:var(--ink-3);letter-spacing:.8px;margin-top:-3px}
+  .pill{margin-left:6px;font-size:12px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:6px;padding:2px 10px;background:var(--surface-2)}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ok);border:1px solid rgba(46,160,67,.4);border-radius:6px;padding:2px 10px;background:rgba(46,160,67,.07)}
+  .live i{width:6px;height:6px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .clock{margin-left:auto;display:flex;align-items:baseline;gap:11px}
+  .clock .t{font-size:27px;font-weight:600}
+  .clock .d{font-size:12px;color:var(--ink-3)}
+
+  /* 全局概况条 */
+  .overview{flex:none;display:grid;grid-template-columns:auto repeat(8,1fr);
+    border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
+  .health{display:flex;align-items:center;gap:14px;padding:10px 20px 10px 16px;border-right:1px solid var(--line)}
+  .ring{--p:96;width:92px;height:92px;border-radius:50%;flex:none;display:grid;place-items:center;
+    background:conic-gradient(var(--ok) calc(var(--p)*1%), #1e2732 0)}
+  .ring .in{width:72px;height:72px;border-radius:50%;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring .in b{font-size:26px;font-weight:600;line-height:1}
+  .ring .in small{font-size:10px;color:var(--ink-3);margin-top:2px}
+  .health .lbl{font-size:12.5px;color:var(--ink-3)}
+  .health .lbl b{display:block;font-size:17px;color:var(--ok);font-weight:600;margin:1px 0 4px}
+  .health .lbl div{font-size:11px;line-height:1.6}
+
+  .kpi{padding:10px 14px;border-left:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;min-width:0}
+  .kpi .t{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+  .kpi .v{font-size:32px;font-weight:600;line-height:1.1;letter-spacing:-.8px}
+  .kpi .v small{font-size:12px;font-weight:500;color:var(--ink-3);margin-left:2px}
+  .kpi .d{font-size:10.5px;color:var(--ink-3);white-space:nowrap}
+  .kpi.ok .v{color:var(--ok)} .kpi.warn .v{color:var(--warn)} .kpi.err .v{color:var(--err)}
+
+  /* main：3 列 × 2 行，铺满 */
+  .main{flex:1;min-height:0;display:grid;grid-template-columns:1.12fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:10px}
+  .panel{display:flex;flex-direction:column;min-height:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .ph{flex:none;display:flex;align-items:center;gap:8px;height:42px;padding:0 14px;border-bottom:1px solid var(--line);font-size:14px;font-weight:600;background:var(--head)}
+  .ph:before{content:"";width:3px;height:13px;background:var(--info);border-radius:2px}
+  .ph .r{margin-left:auto;font-size:11px;font-weight:400;color:var(--ink-3)}
+  .pb{flex:1;min-height:0;padding:12px 14px;overflow:auto}
+
+  /* 环境概况 */
+  .envrow{padding:9px 0;border-bottom:1px solid var(--line)}
+  .envrow:first-child{padding-top:2px}
+  .envrow:last-child{border-bottom:none;padding-bottom:2px}
+  .envrow .top{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .envrow .nm{font-size:16px;font-weight:600}
+  .envrow .tag{font-size:10px;padding:1px 6px;border-radius:4px;border:1px solid var(--line-2);color:var(--ink-2)}
+  .tag.prod{color:var(--err);border-color:rgba(248,81,73,.35);background:rgba(248,81,73,.08)}
+  .tag.qa{color:var(--ok);border-color:rgba(46,160,67,.35);background:rgba(46,160,67,.08)}
+  .tag.uat{color:var(--warn);border-color:rgba(210,153,34,.35);background:rgba(210,153,34,.08)}
+  .envrow .hp{margin-left:auto;font-size:12px;color:var(--ok);font-weight:600}
+  .envrow .hp.warn{color:var(--warn)}
+  .envrow .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .envrow .cell .l{font-size:10.5px;color:var(--ink-3)}
+  .envrow .cell .v{font-size:15px;font-weight:600}
+  .envrow .cell .v small{font-size:10.5px;color:var(--ink-3);font-weight:400}
+  .envrow .cell .v.err{color:var(--err)}
+  .envrow .bar{height:5px;border-radius:3px;background:#1b2430;overflow:hidden;margin-top:7px}
+  .envrow .bar i{display:block;height:100%;background:var(--ok);border-radius:3px}
+  .envrow .bar i.w{background:var(--warn)}
+
+  /* 集群概况 */
+  .cl{padding:10px 0;border-bottom:1px solid var(--line)}
+  .cl:first-child{padding-top:2px} .cl:last-child{border-bottom:none;padding-bottom:2px}
+  .cl .top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .cl .nm{font-size:15.5px;font-weight:600}
+  .cl .st{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ok)}
+  .cl .st.warn{color:var(--warn)}
+  .cl .st i{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .mrow{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--ink-3);margin-top:4px}
+  .mrow .lb{width:28px;flex:none}
+  .mrow .tr{flex:1;height:6px;border-radius:3px;background:#1b2430;overflow:hidden}
+  .mrow .tr i{display:block;height:100%;background:var(--ok);border-radius:3px}
+  .mrow .tr.w i{background:var(--warn)} .mrow .tr.e i{background:var(--err)}
+  .mrow .vv{width:36px;text-align:right;color:var(--ink-2);font-size:12px;flex:none}
+  .cl .nums{display:flex;gap:14px;margin-top:6px;font-size:11.5px;color:var(--ink-3)}
+  .cl .nums b{color:var(--ink);font-weight:600;margin-left:3px;font-size:13px}
+  .cl .nums b.err{color:var(--err)}
+
+  /* 告警概况 */
+  .bigstat{display:flex;align-items:baseline;gap:7px}
+  .bigstat .n{font-size:44px;font-weight:600;line-height:1;color:var(--err)}
+  .bigstat .u{font-size:12.5px;color:var(--ink-3)}
+  .bigstat .delta{margin-left:auto;font-size:11.5px;color:var(--ink-3)}
+  .stack{display:flex;height:12px;border-radius:4px;overflow:hidden;margin:11px 0 8px;background:#1b2430}
+  .stack i{display:block}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11.5px;color:var(--ink-2)}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .legend i{width:8px;height:8px;border-radius:2px}
+  .legend b{color:var(--ink)}
+  .sect{font-size:11px;color:var(--ink-3);letter-spacing:.4px;margin:11px 0 6px;border-top:1px solid var(--line);padding-top:9px}
+  .bars{display:flex;align-items:flex-end;gap:3px;height:84px}
+  .bars .c{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%}
+  .bars .c span{display:block;border-radius:2px;background:var(--info)}
+  .bars .c span.h{background:var(--warn)} .bars .c span.e{background:var(--err)}
+  .axis{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink-3);margin-top:5px}
+
+  /* 自愈概况 */
+  .heal-top{display:flex;align-items:center;gap:14px}
+  .ring2{--p:93;width:106px;height:106px;border-radius:50%;flex:none;display:grid;place-items:center;
+    background:conic-gradient(var(--ok) calc(var(--p)*1%), #1e2732 0)}
+  .ring2 .in{width:84px;height:84px;border-radius:50%;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring2 .in b{font-size:26px;font-weight:600;line-height:1}
+  .ring2 .in small{font-size:10px;color:var(--ink-3);margin-top:2px}
+  .hgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;flex:1}
+  .hs .l{font-size:11px;color:var(--ink-3)}
+  .hs .v{font-size:20px;font-weight:600;margin-top:1px}
+  .hs .v.ok{color:var(--ok)} .hs .v.err{color:var(--err)}
+  .hs .v small{font-size:11px;color:var(--ink-3);font-weight:400;margin-left:1px}
+  .acts{margin-top:2px}
+  .acts .row{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-2);margin-bottom:7px}
+  .acts .row .lbl{width:84px;flex:none;color:var(--ink-3)}
+  .acts .row .bar{flex:1;height:7px;border-radius:4px;background:#1b2430;overflow:hidden}
+  .acts .row .bar i{display:block;height:100%;background:var(--ok);border-radius:4px}
+  .acts .row .bar i.b{background:var(--info)}
+  .acts .row .v{width:28px;text-align:right;color:var(--ink);font-weight:600;flex:none}
+
+  /* 资源 Top */
+  .toprow{display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 0}
+  .toprow .no{width:15px;color:var(--ink-3);font-size:10.5px;text-align:right;flex:none}
+  .toprow .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2)}
+  .toprow .nm em{font-style:normal;color:var(--ink-3);font-size:10.5px;margin-left:5px}
+  .toprow .bar{width:74px;height:6px;border-radius:3px;background:#1b2430;overflow:hidden;flex:none}
+  .toprow .bar i{display:block;height:100%;background:var(--info);border-radius:3px}
+  .toprow .bar.w i{background:var(--warn)} .toprow .bar.e i{background:var(--err)}
+  .toprow .vv{width:46px;text-align:right;color:var(--ink);font-size:12px;flex:none}
+
+  /* 数据库 */
+  .dbrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .dbrow:last-child{border-bottom:none}
+  .dbrow .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  .dbrow .dot.w{background:var(--warn)}
+  .dbrow .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2)}
+  .dbrow .nm em{font-style:normal;color:var(--ink-3);font-size:10.5px;margin-left:5px}
+  .dbrow .bar{width:64px;height:6px;border-radius:3px;background:#1b2430;overflow:hidden;flex:none}
+  .dbrow .bar i{display:block;height:100%;background:var(--ok);border-radius:3px}
+  .dbrow .bar.w i{background:var(--warn)} .dbrow .bar.e i{background:var(--err)}
+  .dbrow .vv{width:62px;text-align:right;color:var(--ink-2);font-size:11.5px;flex:none}
+
+  /* 底部故障 + ticker */
+  .bottom{flex:none;display:flex;gap:10px;align-items:stretch}
+  .faults{flex:1;display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .ft{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-left:3px solid var(--err);border-radius:7px;background:var(--surface);padding:9px 12px;min-width:0}
+  .ft.p1{border-left-color:var(--warn)} .ft.p2{border-left-color:var(--info)}
+  .ft .lv{font-size:10.5px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(248,81,73,.16);color:var(--err);flex:none}
+  .ft.p1 .lv{background:rgba(210,153,34,.15);color:var(--warn)}
+  .ft.p2 .lv{background:rgba(88,166,255,.15);color:var(--info)}
+  .ft .m{min-width:0;flex:1}
+  .ft .n{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ft .s{font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ft .age{font-size:11.5px;color:var(--ink-3);flex:none}
+  .ticker{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:7px;background:var(--surface);padding:0 14px;font-size:12.5px;max-width:560px}
+  .ticker .tag{flex:none;font-size:10.5px;color:var(--info);border:1px solid rgba(88,166,255,.35);border-radius:4px;padding:0 6px}
+  .ticker .txt{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  @media (max-width:1500px){
+    .overview{grid-template-columns:auto repeat(4,1fr)}
+    .health{grid-row:span 2}
+    .kpi:nth-child(n+6){border-top:1px solid var(--line)}
+    .main{grid-template-columns:1fr 1fr}
+    .main .panel:last-child{grid-column:span 2}
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="hd">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#08131f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4M12 11.2 6.6 16.9M12 11.2l5.4 5.7"/></svg></div>
+    <div><div class="title">AutoHealOps 运行大屏</div><div class="sub">全平台 · 全环境 · 故障诊断 · 自愈效果</div></div>
+    <span class="pill">全部环境（3）· 集群（3）</span>
+    <span class="live"><i></i>实时</span>
+    <div class="clock"><span class="t num">14:47:00</span><span class="d">2026-11-17 周二</span></div>
+  </div>
+
+  <div class="overview">
+    <div class="health">
+      <div class="ring" style="--p:96"><div class="in"><b class="num">96</b><small>健康分</small></div></div>
+      <div class="lbl">全局健康<b>运行正常</b><div>集群 96 · 告警 92 · 数据库 98</div></div>
+    </div>
+    <div class="kpi"><div class="t">集群</div><div class="v num">3</div><div class="d">全部健康</div></div>
+    <div class="kpi"><div class="t">节点</div><div class="v num">66</div><div class="d">压力 2</div></div>
+    <div class="kpi"><div class="t">Pod</div><div class="v num">5,598</div><div class="d">全命名空间</div></div>
+    <div class="kpi"><div class="t">容器</div><div class="v num">8,210</div><div class="d">运行中</div></div>
+    <div class="kpi err"><div class="t">未恢复告警</div><div class="v num">5</div><div class="d">P0 1 · P1 2</div></div>
+    <div class="kpi ok"><div class="t">24h 自愈</div><div class="v num">30</div><div class="d">失败 2</div></div>
+    <div class="kpi ok"><div class="t">自愈成功率</div><div class="v num">93<small>%</small></div><div class="d">28 / 30</div></div>
+    <div class="kpi"><div class="t">平均恢复</div><div class="v num">3m12s</div><div class="d">P90 8m40s</div></div>
+  </div>
+
+  <div class="main">
+    <!-- 环境概况（所有环境） -->
+    <div class="panel">
+      <div class="ph">环境概况<span class="r">生产 / UAT / 测试</span></div>
+      <div class="pb" id="envBody"></div>
+    </div>
+
+    <!-- 集群概况 -->
+    <div class="panel">
+      <div class="ph">集群概况<span class="r">3 个集群</span></div>
+      <div class="pb" id="clBody"></div>
+    </div>
+
+    <!-- 告警概况 -->
+    <div class="panel">
+      <div class="ph">告警概况<span class="r">24 小时</span></div>
+      <div class="pb">
+        <div class="bigstat"><span class="n num">5</span><span class="u">条未恢复</span><span class="delta">较昨日 −2</span></div>
+        <div class="stack"><i style="width:20%;background:var(--err)"></i><i style="width:40%;background:var(--warn)"></i><i style="width:40%;background:var(--info)"></i></div>
+        <div class="legend">
+          <span><i style="background:var(--err)"></i>P0 <b class="num">1</b></span>
+          <span><i style="background:var(--warn)"></i>P1 <b class="num">2</b></span>
+          <span><i style="background:var(--info)"></i>P2 <b class="num">2</b></span>
+          <span><i style="background:#3d4a5c"></i>P3 <b class="num">0</b></span>
+        </div>
+        <div class="sect">新增趋势（每小时）</div>
+        <div class="bars" id="bars"></div>
+        <div class="axis num"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+      </div>
+    </div>
+
+    <!-- 自愈概况 -->
+    <div class="panel">
+      <div class="ph">自愈概况<span class="r">24 小时</span></div>
+      <div class="pb">
+        <div class="heal-top">
+          <div class="ring2" style="--p:93"><div class="in"><b class="num">93</b><small>成功率 %</small></div></div>
+          <div class="hgrid">
+            <div class="hs"><div class="l">自愈成功</div><div class="v ok num">28</div></div>
+            <div class="hs"><div class="l">失败 / 转人工</div><div class="v err num">2</div></div>
+            <div class="hs"><div class="l">总处置</div><div class="v num">30</div></div>
+            <div class="hs"><div class="l">节省人工</div><div class="v num">4.2<small>h</small></div></div>
+          </div>
+        </div>
+        <div class="sect">动作分布</div>
+        <div class="acts">
+          <div class="row"><span class="lbl">重启容器</span><span class="bar"><i style="width:100%"></i></span><span class="v num">12</span></div>
+          <div class="row"><span class="lbl">扩容</span><span class="bar"><i class="b" style="width:67%"></i></span><span class="v num">8</span></div>
+          <div class="row"><span class="lbl">强删 Terminating</span><span class="bar"><i style="width:50%"></i></span><span class="v num">6</span></div>
+          <div class="row"><span class="lbl">回滚 / 其他</span><span class="bar"><i class="b" style="width:33%"></i></span><span class="v num">4</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 资源水位 Top -->
+    <div class="panel">
+      <div class="ph">资源水位 Top<span class="r">CPU / 内存</span></div>
+      <div class="pb" id="topBody"></div>
+    </div>
+
+    <!-- 数据库健康 -->
+    <div class="panel">
+      <div class="ph">数据库概况<span class="r">4 个实例</span></div>
+      <div class="pb" id="dbBody"></div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="faults">
+      <div class="ft"><span class="lv">P0</span><div class="m"><div class="n">efreight-prm 堆内存卡 HPA 阈值</div><div class="s">生产 · prod-eft-cloud</div></div><span class="age num">42m</span></div>
+      <div class="ft p1"><span class="lv">P1</span><div class="m"><div class="n">cud-reporting CrashLoopBackOff</div><div class="s">测试 · qa-cud-saas</div></div><span class="age num">12m</span></div>
+      <div class="ft p1"><span class="lv">P1</span><div class="m"><div class="n">k8s-node28 内存压力 87%</div><div class="s">测试环境</div></div><span class="age num">40m</span></div>
+      <div class="ft p2"><span class="lv">P2</span><div class="m"><div class="n">MySQL(stg) 慢 SQL 6 条</div><div class="s">托管 nacos 库</div></div><span class="age num">1h</span></div>
+    </div>
+    <div class="ticker"><span class="tag">最新</span><span class="txt">14:29 生产 efreight-prm 内存 82% → 自动扩容 3→4 副本（成功）</span></div>
+  </div>
+</div>
+
+<script>
+const ENVS = [
+  { name:'生产', tag:'prod', cls:'prod', clusters:1, nodes:46, pods:3902, containers:5860, alerts:2, healed:18, health:98 },
+  { name:'UAT',  tag:'uat',  cls:'uat',  clusters:1, nodes:8,  pods:412,  containers:430,  alerts:0, healed:3,  health:100 },
+  { name:'测试', tag:'qa',   cls:'qa',   clusters:1, nodes:12, pods:1284, containers:1920, alerts:3, healed:9,  health:95 },
+];
+const CLUSTERS = [
+  { name:'生产环境', env:'prod', label:'生产', nodes:46, pods:3902, containers:5860, cpu:64, mem:71, alerts:2 },
+  { name:'测试环境', env:'qa',   label:'测试', nodes:12, pods:1284, containers:1920, cpu:42, mem:87, alerts:3 },
+  { name:'uat环境',  env:'uat',  label:'UAT',  nodes:8,  pods:412,  containers:430,  cpu:31, mem:54, alerts:0 },
+];
+const TOP = [
+  ['cud-reporting-service','qa-cud-saas','92%',92,'e'],
+  ['manifest-szxmft','prod-eft-link','78%',78,''],
+  ['eft-module-hrs','qa-aero-chain','64%',64,''],
+  ['eft-web-gateway','prod-eft-web','51%',51,''],
+  ['nacos-config','qa-nacos','37%',37,''],
+];
+const MEMTOP = [
+  ['cud-reporting-service','qa-cud-saas','99%',99,'e'],
+  ['eft-module-oms','qa-aero-chain','86%',86,'w'],
+  ['manifest-szxmft','prod-eft-link','85%',85,'w'],
+  ['eft-web-portal','prod-eft-web','71%',71,''],
+  ['broker-a','stg','62%',62,''],
+];
+const DBS = [
+  ['mysql-192.168.6.99','生产 · 187/200',93,'w'],
+  ['oracle-173.32.48.234','生产 · 41/300',14,''],
+  ['redis-10.10.76.33','UAT · 22/500',4,''],
+  ['mysql-stg','测试 · 11/151',7,''],
+];
+
+function renderEnv(){
+  document.getElementById('envBody').innerHTML = ENVS.map(e=>`
+    <div class="envrow">
+      <div class="top"><span class="nm">${e.name}</span><span class="tag ${e.cls}">${e.tag}</span>
+        <span class="hp ${e.health<98?'warn':''}">健康 ${e.health}</span></div>
+      <div class="grid4">
+        <div class="cell"><div class="l">节点</div><div class="v num">${e.nodes}</div></div>
+        <div class="cell"><div class="l">Pod</div><div class="v num">${e.pods.toLocaleString()}</div></div>
+        <div class="cell"><div class="l">容器</div><div class="v num">${e.containers.toLocaleString()}</div></div>
+        <div class="cell"><div class="l">未恢复告警</div><div class="v num ${e.alerts?'err':''}">${e.alerts}</div></div>
+      </div>
+      <div class="bar"><i class="${e.health<98?'w':''}" style="width:${e.health}%"></i></div>
+    </div>`).join('');
+}
+
+function renderClusters(){
+  document.getElementById('clBody').innerHTML = CLUSTERS.map(c=>{
+    const bad = c.alerts>0 || c.mem>=85;
+    const cls = p => p>=80?'e':p>=60?'w':'';
+    return `<div class="cl">
+      <div class="top"><span class="nm">${c.name}</span><span class="tag ${c.env}">${c.label}</span>
+        <span class="st ${bad?'warn':''}"><i></i>${bad?'关注':'健康'}</span></div>
+      <div class="mrow"><span class="lb">CPU</span><span class="tr ${cls(c.cpu)}"><i style="width:${c.cpu}%"></i></span><span class="vv num">${c.cpu}%</span></div>
+      <div class="mrow"><span class="lb">内存</span><span class="tr ${cls(c.mem)}"><i style="width:${c.mem}%"></i></span><span class="vv num">${c.mem}%</span></div>
+      <div class="nums"><span>节点<b class="num">${c.nodes}</b></span><span>Pod<b class="num">${c.pods.toLocaleString()}</b></span><span>容器<b class="num">${c.containers.toLocaleString()}</b></span><span>告警<b class="num ${c.alerts?'err':''}">${c.alerts}</b></span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderTops(){
+  const row = (list)=>list.map((x,i)=>`
+    <div class="toprow"><span class="no">${i+1}</span><span class="nm" title="${x[0]}">${x[0]}<em>${x[1]}</em></span>
+      <span class="bar ${x[4]}"><i style="width:${x[3]}%"></i></span><span class="vv num">${x[2]}</span></div>`).join('');
+  document.getElementById('topBody').innerHTML =
+    `<div class="sect" style="margin-top:0;border-top:none;padding-top:0">CPU</div>${row(TOP)}
+     <div class="sect">内存</div>${row(MEMTOP)}`;
+}
+
+function renderDbs(){
+  document.getElementById('dbBody').innerHTML = DBS.map(d=>`
+    <div class="dbrow"><span class="dot ${d[3]==='w'?'w':''}"></span>
+      <span class="nm" title="${d[0]}">${d[0]}<em>${d[1]}</em></span>
+      <span class="bar ${d[3]}"><i style="width:${d[2]}%"></i></span><span class="vv num">${d[2]}%</span></div>`).join('');
+}
+
+const TREND=[2,1,0,0,1,3,5,4,2,1,2,6,9,7,5,3,2,4,8,6,4,3,2,1];
+function renderBars(){
+  const mx=Math.max(...TREND);
+  document.getElementById('bars').innerHTML=TREND.map(v=>{
+    if(!v) return '<div class="c"></div>';
+    const k=v>=8?'e':v>=6?'h':'';
+    return `<div class="c"><span class="${k}" style="height:${Math.round(v/mx*100)}%"></span></div>`;
+  }).join('');
+}
+function tick(){
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  document.querySelector('.clock .t').textContent=`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const w=['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
+  document.querySelector('.clock .d').textContent=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${w}`;
+}
+renderEnv(); renderClusters(); renderTops(); renderDbs(); renderBars(); tick(); setInterval(tick,1000);
+setInterval(()=>{ CLUSTERS.forEach(c=>{ c.cpu=Math.max(10,Math.min(99,c.cpu+Math.round(Math.random()*6-3))); c.mem=Math.max(20,Math.min(99,c.mem+Math.round(Math.random()*6-3))); }); renderClusters(); },3000);
+</script>
+</body>
+</html>
