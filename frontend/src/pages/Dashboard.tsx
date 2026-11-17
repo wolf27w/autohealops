@@ -1,19 +1,17 @@
-// 仪表盘 v3：5 段布局（决策优先 + 概览卡合并版）
-// 自上而下：健康分/健康总览 → KPI 卡 → 趋势/构成 → 待办队列（待处理告警/工单）→ 集群水位/DB 健康
+// 仪表盘 v4：态势脊柱 + 左右两栏（2026-11-17 按 design-taste-zh 重设计）
+// 结构：顶部工具栏（筛选 + 平台健康）→ 态势脊柱（健康分拆解 + 4 KPI 一条横带）
+//      → 左列（待办队列 / 告警趋势 / 容量提示）｜右列（集群水位 / 数据库健康 / AI 处置构成）
 // 数据源：GET /api/v1/stats/dashboard?range|start/end&cluster_id（5s 轮询，SSE 即时失效）+ /stats/platform-health
-// 注：按老板口径只按「集群」维度看，不做项目筛选；大屏 /screen 现为独立 iframe，不再复用本组件。
+// 注：按老板口径只按「集群」维度看，不做项目筛选；大屏 /screen 现为独立 iframe，不复用本组件。
 import { ENV_OPTIONS, envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Card, Row, Col, Select, Button, Table, Tag, Space, Progress, Empty, Badge, DatePicker, Switch, theme,
+  Card, Row, Col, Select, Table, Tag, Space, Empty, Badge, DatePicker, Switch, theme,
 } from 'antd'
-import { ReloadOutlined, FullscreenOutlined, FullscreenExitOutlined } from '@ant-design/icons'
-import { Line, Pie } from '@ant-design/charts'
 import { useNavigate } from 'react-router-dom'
 import dayjs, { type Dayjs } from 'dayjs'
 import { getDashboard, getPlatformHealth } from '../services/api'
-import { useThemeMode } from '../utils/theme'
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 import { ALERT_STATUS_LABEL } from '../constants'
@@ -21,29 +19,37 @@ import type { DashboardData, HealthScore, RealtimeAlert, DbHealthItem, ClusterWa
 
 // 全量告警处置结果（互斥且穷尽），与 stats.py ai_result_dist 口径一致
 const AI_RESULT_META: Record<string, { label: string; color: string }> = {
-  self_heal: { label: '自愈成功', color: '#52c41a' },
-  approval: { label: '审批后修复', color: '#1677ff' },
-  manual: { label: '人工处理', color: '#faad14' },
-  auto_resolved: { label: '自动恢复关闭', color: '#13c2c2' },
-  open: { label: '未解决', color: '#ff4d4f' },
+  self_heal: { label: '自愈成功', color: '#0d7a55' },
+  approval: { label: '审批后修复', color: '#2563eb' },
+  manual: { label: '人工处理', color: '#b54708' },
+  auto_resolved: { label: '自动恢复关闭', color: '#0e7490' },
+  open: { label: '未解决', color: '#b42318' },
 }
 // 待办队列优先级排序
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
 
-const scoreColor = (v: number) => (v >= 80 ? '#52c41a' : v >= 60 ? '#faad14' : '#ff4d4f')
+const scoreColor = (v: number) => (v >= 80 ? '#0d7a55' : v >= 60 ? '#b54708' : '#b42318')
 const clampPct = (v: number | null | undefined) =>
   v === null || v === undefined ? undefined : Math.max(0, Math.min(100, v))
 const fmtTime = (t: string | null | undefined) => (t ? String(t).slice(5, 16) : '-')
 
+// 细进度条（4px，替代 antd Progress 的厚重感）
+function ThinBar({ pct, color }: { pct?: number | null; color: string }) {
+  const v = clampPct(pct)
+  return (
+    <span style={{ display: 'inline-block', height: 4, borderRadius: 2, background: '#e3e8e5', width: '100%', overflow: 'hidden' }}>
+      <span style={{ display: 'block', height: '100%', borderRadius: 2, background: color, width: `${v ?? 0}%` }} />
+    </span>
+  )
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const { token } = theme.useToken()
-  const { mode } = useThemeMode()
-  const isDark = mode === 'dark'
   const ink = token.colorText
   const muted = token.colorTextSecondary
+  const faint = token.colorTextTertiary
   const linkColor = token.colorPrimary
-  const chartTheme = isDark ? ({ theme: 'classicDark' } as const) : {}
 
   // 时间范围：默认【实时】（跟随最新，滚动窗口 24h），也可自定义起止时间段
   const [live, setLive] = useState(true)
@@ -61,21 +67,10 @@ export default function Dashboard() {
     setLive(false) // 选了具体时间段 → 退出实时模式
   }
   const rangeLabel = live
-    ? '实时（最近 24 小时，自动刷新）'
-    : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}（自定义）` : '')
+    ? '实时（最近 24 小时）'
+    : (customRange ? `${customRange[0].format('MM-DD HH:mm')} ~ ${customRange[1].format('MM-DD HH:mm')}` : '')
   const [clusterId, setClusterId] = useState<number | undefined>(undefined)
   const [env, setEnv] = useState<string | undefined>(undefined)
-  const [fullscreen, setFullscreen] = useState(false)
-
-  useEffect(() => {
-    const onFs = () => setFullscreen(!!document.fullscreenElement)
-    document.addEventListener('fullscreenchange', onFs)
-    return () => document.removeEventListener('fullscreenchange', onFs)
-  }, [])
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) document.exitFullscreen()
-    else document.documentElement.requestFullscreen?.()
-  }
 
   // 实时推送（SSE）：后端缓存代次变化（告警/工单/审批/任务变更）→ 立即刷新，5s 轮询作兜底
   const qc = useQueryClient()
@@ -98,7 +93,7 @@ export default function Dashboard() {
   })
 
   // 仪表盘主数据（5s 轮询；placeholderData: keepPreviousData 切筛选时先展示上一次数据，不闪空白）
-  const { data, isFetching, refetch } = useQuery<DashboardData>({
+  const { data, isFetching } = useQuery<DashboardData>({
     queryKey: ['dashboard-v3', live, customRange?.[0]?.valueOf(), customRange?.[1]?.valueOf(), clusterId, env],
     queryFn: () => (!live && customRange
       ? getDashboard({
@@ -116,18 +111,26 @@ export default function Dashboard() {
   const clusters = data?.clusters ?? []
 
   // ---- 派生数据 ----
-  const trendData = (data?.alert_trend ?? []).flatMap((t) => {
-    const label = String(t.bucket || '')
-    const short = label.length > 11 ? label.slice(5) : label
-    return [
-      { bucket: short, type: '新增', value: t.new },
-      { bucket: short, type: '已解决', value: t.resolved },
-      { bucket: short, type: '自愈', value: t.self_healed },
-    ]
-  })
+  // 告警趋势：后端 24h 是 5 分钟桶（~289 点），按小时聚合成柱状（纯 DOM 渲染，可控不重叠）
+  const rawTrend = data?.alert_trend ?? []
+  const hourMap = new Map<string, { n: number; r: number; s: number }>()
+  for (const t of rawTrend) {
+    const h = String(t.bucket || '').slice(0, 13)  // "YYYY-MM-DD HH"
+    const e = hourMap.get(h) ?? { n: 0, r: 0, s: 0 }
+    e.n += t.new; e.r += t.resolved; e.s += t.self_healed
+    hourMap.set(h, e)
+  }
+  const hourBars = [...hourMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([h, v]) => ({ hour: h.slice(11), new: v.n, resolved: v.r, self_healed: v.s }))
+  const trendMax = Math.max(1, ...hourBars.map((b) => b.new + b.resolved + b.self_healed))
+  const axisLabels = (() => {
+    if (hourBars.length === 0) return []
+    const idxs = new Set([0, Math.floor((hourBars.length - 1) * 0.2), Math.floor((hourBars.length - 1) * 0.4), Math.floor((hourBars.length - 1) * 0.6), Math.floor((hourBars.length - 1) * 0.8), hourBars.length - 1])
+    return [...idxs].sort((a, b) => a - b).map((i) => hourBars[i].hour)
+  })()
   const aiDistData = (data?.ai_result_dist ?? []).map((d) => ({
     key: AI_RESULT_META[d.key]?.label ?? d.key,
-    color: AI_RESULT_META[d.key]?.color ?? '#8c8c8c',
+    color: AI_RESULT_META[d.key]?.color ?? '#626f69',
     value: d.count ?? d.value ?? 0,
   }))
   const aiTotal = aiDistData.reduce((s, d) => s + (d.value || 0), 0)
@@ -135,7 +138,6 @@ export default function Dashboard() {
     ...d,
     pct: aiTotal ? Math.round((d.value / aiTotal) * 1000) / 10 : 0,
   }))
-  const aiDistDraw = aiDistPct.filter((d) => (d.value || 0) > 0)
   const realtimeAlerts: RealtimeAlert[] = data?.realtime_alerts ?? []
   const waterline: ClusterWaterline[] = data?.cluster_waterline ?? []
   const dbHealth: DbHealthItem[] = data?.db_health ?? []
@@ -145,65 +147,71 @@ export default function Dashboard() {
     (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
   )
 
-  const platformOk = (ok: boolean | undefined) => (ok === undefined ? '#d9d9d9' : ok ? '#52c41a' : '#ff4d4f')
+  const platformOk = (ok: boolean | undefined) => (ok === undefined ? '#cbd4cf' : ok ? '#0d7a55' : '#b42318')
 
-  // ---- 第 1 段：健康分/健康总览 ----
+  // ---- 态势脊柱：健康分拆解 + 4 个 KPI ----
   const subScores = [
-    { label: '集群健康', value: hs.cluster_score, weight: '权重 40%' },
-    { label: '告警健康', value: hs.alert_score, weight: '权重 30%' },
-    { label: '数据库健康', value: hs.db_score, weight: '权重 30%' },
+    { label: '集群', value: hs.cluster_score },
+    { label: '告警', value: hs.alert_score },
+    { label: '数据库', value: hs.db_score },
+  ]
+  const spineKpis = [
+    { label: '未处理告警', value: kpi?.alert_pending ?? 0, foot: '待响应告警', alert: (kpi?.alert_pending ?? 0) > 0 },
+    { label: '待人工', value: kpi?.manual_pending ?? 0, foot: '需人工介入', alert: (kpi?.manual_pending ?? 0) > 0 },
+    { label: '自动处理 (24h)', value: kpi?.auto_processed_24h ?? 0, foot: '自愈 + 自动执行', alert: false },
+    { label: '待审核', value: kpi?.approval_pending ?? 0, foot: '变更审批待办', alert: (kpi?.approval_pending ?? 0) > 0 },
   ]
 
-  // ---- 第 2 段：KPI 卡（5 项） ----
-  const kpiCards = [
-    { title: '未处理告警', value: kpi?.alert_pending ?? 0, color: (kpi?.alert_pending ?? 0) > 0 ? '#ff4d4f' : '#1677ff', desc: '待响应告警' },
-    { title: '处理中', value: kpi?.plan_running ?? 0, color: (kpi?.plan_running ?? 0) > 0 ? '#faad14' : '#1677ff', desc: '自愈计划执行中' },
-    { title: '自动处理（24h）', value: kpi?.auto_processed_24h ?? 0, color: '#13c2c2', desc: '自愈 + 自动执行' },
-    { title: '待人工', value: kpi?.manual_pending ?? 0, color: (kpi?.manual_pending ?? 0) > 0 ? '#faad14' : '#1677ff', desc: '需人工介入' },
-    { title: '待审核', value: kpi?.approval_pending ?? 0, color: (kpi?.approval_pending ?? 0) > 0 ? '#1677ff' : '#8c8c8c', desc: '变更审批待办' },
-  ]
+  // 容量提示（纯前端推导：集群水位 + DB 使用率，不依赖新后端接口）
+  const capacityHints: Array<{ name: string; env?: string; text: string; level: 'high' | 'medium' }> = []
+  for (const w of waterline) {
+    if ((w.mem_pct ?? 0) >= 80) capacityHints.push({ name: w.cluster_name, env: w.env_tag, text: `内存水位 ${w.mem_pct}%`, level: 'high' })
+    else if ((w.cpu_pct ?? 0) >= 80) capacityHints.push({ name: w.cluster_name, env: w.env_tag, text: `CPU 水位 ${w.cpu_pct}%`, level: 'high' })
+    else if ((w.cpu_pct ?? 0) >= 60 || (w.mem_pct ?? 0) >= 60) capacityHints.push({ name: w.cluster_name, env: w.env_tag, text: `水位偏高（CPU ${w.cpu_pct ?? '-'}% / 内存 ${w.mem_pct ?? '-'}%）`, level: 'medium' })
+  }
+  for (const d of dbHealth) {
+    if (d.usage_pct >= 80) capacityHints.push({ name: d.name, text: `连接使用率 ${d.usage_pct}%`, level: 'medium' })
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* ===== 顶部栏：上下文筛选 + 全局健康分 + 平台健康 ===== */}
-      <Card bodyStyle={{ padding: '10px 16px' }} style={{ marginBottom: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <span style={{ fontSize: 16, fontWeight: 600, marginRight: 4 }}>仪表盘</span>
-          <Space size={8} wrap>
-            <Select
-              allowClear placeholder="全部环境" style={{ width: 120 }}
-              value={env}
-              onChange={(v) => setEnv(v)}
-              options={ENV_OPTIONS.map((e) => ({ value: e.value, label: e.label }))}
-            />
-            <Select
-              allowClear placeholder="全部集群" style={{ width: 160 }}
-              value={clusterId}
-              onChange={(v) => setClusterId(v)}
-              options={clusters.map((c) => ({ value: c.id, label: c.name }))}
-            />
-            <Space size={6}>
-              <Switch checked={live} onChange={(v: boolean) => setLive(v)} />
-              <span style={{ fontSize: 13 }}>实时</span>
-            </Space>
-            <DatePicker.RangePicker
-              showTime={{ format: 'HH:mm' }}
-              format="MM-DD HH:mm"
-              allowClear={false}
-              disabled={live}
-              value={live ? null : customRange}
-              placeholder={['实时（跟随最新）', '实时（跟随最新）']}
-              onChange={(v) => applyPick(v as [Dayjs | null, Dayjs | null] | null)}
-              presets={[
-                { label: '最近 10 分钟', value: presetValue('10m') },
-                { label: '最近 3 小时', value: presetValue('3h') },
-                { label: '最近 8 小时', value: presetValue('8h') },
-                { label: '最近 24 小时', value: presetValue('24h') },
-              ]}
-              style={{ width: 250 }}
-            />
-            <span style={{ fontSize: 12, color: muted }}>{rangeLabel}</span>
+      {/* ===== 工具栏：筛选 + 平台健康（刷新统一在顶栏，不再重复） ===== */}
+      <Card size="small" style={{ marginBottom: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          <span style={{ fontSize: 16, fontWeight: 600, marginRight: 4 }}>运行态势</span>
+          <Select
+            allowClear placeholder="全部环境" style={{ width: 112 }}
+            value={env}
+            onChange={(v) => setEnv(v)}
+            options={ENV_OPTIONS.map((e) => ({ value: e.value, label: e.label }))}
+          />
+          <Select
+            allowClear placeholder="全部集群" style={{ width: 160 }}
+            value={clusterId}
+            onChange={(v) => setClusterId(v)}
+            options={clusters.map((c) => ({ value: c.id, label: c.name }))}
+          />
+          <Space size={6}>
+            <Switch size="small" checked={live} onChange={(v: boolean) => setLive(v)} />
+            <span style={{ fontSize: 13, color: muted }}>实时</span>
           </Space>
+          <DatePicker.RangePicker
+            showTime={{ format: 'HH:mm' }}
+            format="MM-DD HH:mm"
+            allowClear={false}
+            disabled={live}
+            value={live ? null : customRange}
+            placeholder={['实时（跟随最新）', '实时（跟随最新）']}
+            onChange={(v) => applyPick(v as [Dayjs | null, Dayjs | null] | null)}
+            presets={[
+              { label: '最近 10 分钟', value: presetValue('10m') },
+              { label: '最近 3 小时', value: presetValue('3h') },
+              { label: '最近 8 小时', value: presetValue('8h') },
+              { label: '最近 24 小时', value: presetValue('24h') },
+            ]}
+            style={{ width: 240 }}
+          />
+          <span style={{ fontSize: 12, color: faint }}>{rangeLabel}</span>
 
           <div style={{ flex: 1 }} />
 
@@ -218,201 +226,216 @@ export default function Dashboard() {
             <span style={{ fontSize: 12, color: muted }}>executor</span>
             <Badge color={platformOk(platformHealth?.executor ?? undefined)} />
           </Space>
-
-          <Button icon={<ReloadOutlined spin={isFetching} />} onClick={() => refetch()}>刷新</Button>
-          <Button
-            type="text"
-            icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-            onClick={toggleFullscreen}
-          />
+          <span style={{ fontSize: 12, color: faint, fontVariantNumeric: 'tabular-nums' }}>
+            {isFetching ? '刷新中…' : '已更新'}
+          </span>
         </div>
       </Card>
 
-      {/* ===== 第 1 段 · 健康分/健康总览（决策优先） ===== */}
+      {/* ===== 态势脊柱：健康分 + 4 KPI 一条横带 ===== */}
       <Card bodyStyle={{ padding: '16px 20px' }}>
-        <Row gutter={[24, 16]} align="middle">
-          <Col flex="0 0 auto">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <Progress
-                type="circle" size={96} percent={clampPct(hs.total)}
-                strokeColor={scoreColor(hs.total)}
-                strokeWidth={10}
-                format={() => (
-                  <span style={{ fontSize: 24, fontWeight: 700, color: scoreColor(hs.total), fontVariantNumeric: 'tabular-nums' }}>
-                    {Math.round(hs.total)}
-                  </span>
-                )}
-              />
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: ink }}>全局健康分</div>
-                <div style={{ fontSize: 12.5, color: muted, lineHeight: 1.7, marginTop: 4, maxWidth: 240 }}>
-                  综合集群 / 告警 / 数据库三维健康，分值越高越稳定
-                </div>
-              </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+          {/* 健康分 */}
+          <div style={{ flex: '0 0 280px', minWidth: 240, paddingRight: 20, marginRight: 20, borderRight: `1px solid ${token.colorBorderSecondary}` }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span style={{ fontSize: 34, fontWeight: 600, lineHeight: 1, color: scoreColor(hs.total), fontVariantNumeric: 'tabular-nums' }}>{Math.round(hs.total)}</span>
+              <span style={{ fontSize: 12, color: muted }}>/ 100 全局健康分</span>
             </div>
-          </Col>
-          <Col flex="auto">
-            <Row gutter={[16, 12]}>
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
               {subScores.map((s) => (
-                <Col key={s.label} flex="1 1 160px">
-                  <div style={{ borderLeft: `3px solid ${scoreColor(s.value)}`, paddingLeft: 12 }}>
-                    <div style={{ fontSize: 12.5, color: muted }}>{s.label}</div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
-                      <span style={{ fontSize: 26, fontWeight: 700, color: scoreColor(s.value), fontVariantNumeric: 'tabular-nums' }}>{Math.round(s.value)}</span>
-                      <span style={{ fontSize: 12, color: muted }}>{s.weight}</span>
-                    </div>
-                  </div>
-                </Col>
+                <div key={s.label} style={{ display: 'grid', gridTemplateColumns: '44px minmax(0,1fr) 28px', gap: 8, alignItems: 'center', fontSize: 12, color: muted }}>
+                  <span>{s.label}</span>
+                  <ThinBar pct={s.value} color={scoreColor(s.value)} />
+                  <span style={{ textAlign: 'right', color: ink, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{Math.round(s.value)}</span>
+                </div>
               ))}
-            </Row>
-          </Col>
-        </Row>
+            </div>
+          </div>
+          {/* 4 KPI */}
+          {spineKpis.map((k) => (
+            <div key={k.label} style={{ flex: '1 1 150px', minWidth: 130, padding: '4px 20px', borderRight: `1px solid ${token.colorBorderSecondary}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: muted }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: k.alert ? token.colorError : token.colorPrimary, flex: '0 0 auto' }} />
+                {k.label}
+              </div>
+              <div style={{ fontSize: 26, fontWeight: 600, marginTop: 4, color: ink, fontVariantNumeric: 'tabular-nums' }}>{k.value}</div>
+              <div style={{ fontSize: 12, color: faint, marginTop: 2 }}>{k.foot}</div>
+            </div>
+          ))}
+        </div>
       </Card>
 
-      {/* ===== 第 2 段 · KPI 卡（5 项） ===== */}
-      <Row gutter={[12, 12]} align="stretch">
-        {kpiCards.map((k) => (
-          <Col key={k.title} flex="1 1 170px">
-            <Card bodyStyle={{ padding: '14px 16px' }} style={{ height: '100%' }}>
-              <div style={{ fontSize: 13, color: muted }}>{k.title}</div>
-              <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4, color: k.color, fontVariantNumeric: 'tabular-nums' }}>
-                {k.value}
-              </div>
-              <div style={{ fontSize: 12, color: muted, marginTop: 2 }}>{k.desc}</div>
-            </Card>
-          </Col>
-        ))}
-      </Row>
-
-      {/* ===== 第 3 段 · 趋势/构成图（告警趋势 2/3 + AI 处置构成 1/3） ===== */}
-      <Row gutter={[12, 12]} align="stretch">
+      {/* ===== 主两栏 ===== */}
+      <Row gutter={[12, 12]} align="top">
+        {/* 左列 */}
         <Col xs={24} lg={16}>
-          <Card title="告警趋势（新增 / 已解决 / 自愈）" size="small" style={{ height: '100%' }}>
-            {trendData.length ? (
-              <Line
-                data={trendData} xField="bucket" yField="value" colorField="type"
-                height={300} smooth {...chartTheme}
-                legend={{ color: { position: 'top' } }}
-                scale={{ color: { range: ['#1677ff', '#52c41a', '#13c2c2'] } }}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* 待办队列 */}
+            <Card
+              title="待办队列"
+              size="small"
+              extra={
+                <Space size={16}>
+                  <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alerts/tickets')}>
+                    待办工单 {kpi?.manual_pending ?? 0} ›
+                  </span>
+                  <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alerts/handling')}>
+                    待审核 {kpi?.approval_pending ?? 0} ›
+                  </span>
+                </Space>
+              }
+            >
+              <Table
+                rowKey="id" size="small" pagination={false}
+                dataSource={todoAlerts}
+                scroll={{ y: 300 }}
+                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前无待处理告警" /> }}
+                onRow={() => ({ onClick: () => navigate('/alerts/handling'), style: { cursor: 'pointer' } })}
+                columns={[
+                  { title: '级别', dataIndex: 'severity', width: 72, render: (s: string) => <SeverityTag severity={s} /> },
+                  { title: '事件', dataIndex: 'resource_name', ellipsis: true, render: (v: string, r: RealtimeAlert) => (
+                    <span>{v || '-'}{r.fault_type ? <span style={{ color: faint, marginLeft: 6 }}>{r.fault_type}</span> : null}</span>
+                  ) },
+                  { title: '环境', dataIndex: 'env', width: 76, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
+                  { title: '命名空间', dataIndex: 'namespace', width: 120, ellipsis: true },
+                  { title: '状态', dataIndex: 'status', width: 96, render: (s: string) => <StatusTag status={s} label={ALERT_STATUS_LABEL[s] || s} /> },
+                  { title: '时间', dataIndex: 'detected_at', width: 104, render: fmtTime },
+                ]}
               />
-            ) : <Empty description="暂无数据" />}
-          </Card>
-        </Col>
-        <Col xs={24} lg={8}>
-          <Card title="AI 诊断处置构成（最近 24 小时）" size="small" style={{ height: '100%' }}>
-            {aiTotal > 0 ? (
-              <>
-                <div style={{ position: 'relative' }}>
-                  <Pie
-                    data={aiDistDraw} angleField="value" colorField="key"
-                    height={250} radius={0.72} innerRadius={0.56} {...chartTheme}
-                    legend={false}
-                    label={false}
-                    scale={{ color: { domain: aiDistDraw.map((d) => d.key), range: aiDistDraw.map((d) => d.color) } }}
-                  />
-                  <div style={{
-                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                    textAlign: 'center', pointerEvents: 'none', lineHeight: 1.25,
-                  }}>
-                    <div style={{ fontSize: 13, color: muted }}>总计</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: ink }}>{aiTotal}</div>
+            </Card>
+
+            {/* 告警趋势（按小时聚合，纯 DOM 柱状，避免图表库 X 轴标签重叠） */}
+            <Card
+              title="告警趋势（最近 24 小时）"
+              size="small"
+              extra={
+                <span style={{ fontSize: 12, color: faint, display: 'inline-flex', gap: 12 }}>
+                  <span><i style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: token.colorTextTertiary, marginRight: 4 }} />新增</span>
+                  <span><i style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: token.colorPrimary, marginRight: 4 }} />已解决</span>
+                  <span><i style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: token.colorInfo, marginRight: 4 }} />自愈</span>
+                </span>
+              }
+            >
+              {hourBars.length ? (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 150, marginTop: 4 }}>
+                    {hourBars.map((b, i) => {
+                      const hNew = b.new > 0 ? Math.max(2, (b.new / trendMax) * 150) : 0
+                      const hRes = b.resolved > 0 ? Math.max(2, (b.resolved / trendMax) * 150) : 0
+                      const hSelf = b.self_healed > 0 ? Math.max(2, (b.self_healed / trendMax) * 150) : 0
+                      return (
+                        <div key={i} title={`${b.hour}:00  新增 ${b.new} · 已解决 ${b.resolved} · 自愈 ${b.self_healed}`} style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 1, minWidth: 2 }}>
+                          {b.self_healed > 0 && <span style={{ height: hSelf, background: token.colorInfo, borderRadius: 1 }} />}
+                          {b.resolved > 0 && <span style={{ height: hRes, background: token.colorPrimary, borderRadius: 1 }} />}
+                          {b.new > 0 && <span style={{ height: hNew, background: token.colorTextTertiary, borderRadius: 1 }} />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: faint, fontVariantNumeric: 'tabular-nums' }}>
+                    {axisLabels.map((h) => <span key={h}>{h}:00</span>)}
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 16px', marginTop: 6 }}>
-                  {aiDistPct.map((d) => (
-                    <div key={d.key} style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: ink }}>
-                      <span style={{ width: 10, height: 10, borderRadius: 2, background: d.color, marginRight: 6, flex: '0 0 auto', display: 'inline-block' }} />
-                      <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.key}</span>
-                      <span style={{ marginLeft: 6, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{d.pct}%</span>
+              ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />}
+            </Card>
+
+            {/* 容量提示 */}
+            <Card title="容量提示" size="small" extra={<span style={{ fontSize: 12, color: faint }}>按当前水位实时推导</span>}>
+              {capacityHints.length ? (
+                <div>
+                  {capacityHints.map((h, i) => (
+                    <div key={`${h.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: i < capacityHints.length - 1 ? `1px solid ${token.colorBorderSecondary}` : 'none' }}>
+                      <span style={{ fontWeight: 500, fontSize: 13, color: ink, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {h.name}
+                        {h.env ? <Tag color={envColor(h.env)} style={{ marginLeft: 4 }}>{envLabel(h.env)}</Tag> : null}
+                      </span>
+                      <span style={{ flex: 1, fontSize: 12, color: muted }}>{h.text}</span>
+                      <Tag color={h.level === 'high' ? 'red' : 'orange'}>{h.level === 'high' ? '建议扩容' : '关注'}</Tag>
                     </div>
                   ))}
                 </div>
-              </>
-            ) : <Empty description="暂无数据" />}
-          </Card>
+              ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前无容量风险" />}
+            </Card>
+          </div>
         </Col>
-      </Row>
 
-      {/* ===== 第 4 段 · 待办队列（待处理告警 / 工单） ===== */}
-      <Card
-        title="待办队列（待处理告警 / 工单）"
-        size="small"
-        extra={
-          <Space size={16}>
-            <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alerts/tickets')}>
-              待办工单 {kpi?.manual_pending ?? 0} ›
-            </span>
-            <span style={{ fontSize: 12.5, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/alerts/handling')}>
-              待审核 {kpi?.approval_pending ?? 0} ›
-            </span>
-          </Space>
-        }
-      >
-        <Table
-          rowKey="id" size="small" pagination={false}
-          dataSource={todoAlerts}
-          scroll={{ y: 260 }}
-          locale={{ emptyText: <Empty description="当前无待处理告警" /> }}
-          onRow={() => ({ onClick: () => navigate('/alerts/handling'), style: { cursor: 'pointer' } })}
-          columns={[
-            { title: '优先级', dataIndex: 'severity', width: 80, render: (s: string) => <SeverityTag severity={s} /> },
-            { title: '告警', dataIndex: 'resource_name', ellipsis: true, render: (v: string, r: RealtimeAlert) => (
-              <span>{v || '-'}{r.fault_type ? <span style={{ color: muted, marginLeft: 6 }}>{r.fault_type}</span> : null}</span>
-            ) },
-            { title: '环境', dataIndex: 'env', width: 80, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
-            { title: '命名空间', dataIndex: 'namespace', width: 110, ellipsis: true },
-            { title: '状态', dataIndex: 'status', width: 96, render: (s: string) => <StatusTag status={s} label={ALERT_STATUS_LABEL[s] || s} /> },
-            { title: '时间', dataIndex: 'detected_at', width: 110, render: fmtTime },
-            { title: '', width: 76, render: () => <span style={{ color: linkColor }}>去处理 ›</span> },
-          ]}
-        />
-      </Card>
+        {/* 右列 */}
+        <Col xs={24} lg={8}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* 集群水位 */}
+            <Card title="集群资源水位" size="small" extra={<span style={{ fontSize: 12, color: linkColor, cursor: 'pointer' }} onClick={() => navigate('/clusters')}>集群详情 ›</span>}>
+              <Table
+                rowKey="cluster_id" size="small" pagination={false}
+                dataSource={waterline}
+                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无集群数据" /> }}
+                onRow={(r) => ({ onClick: () => navigate(`/clusters/${r.cluster_id}`), style: { cursor: 'pointer' } })}
+                columns={[
+                  { title: '集群', dataIndex: 'cluster_name', ellipsis: true, render: (v: string, r: ClusterWaterline) => (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {r.env_tag ? <Tag color={envColor(r.env_tag)}>{envLabel(r.env_tag)}</Tag> : null}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+                    </span>
+                  ) },
+                  { title: 'CPU', dataIndex: 'cpu_pct', width: 90, render: (v: number | null) => v === null || v === undefined ? '-' : (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ flex: 1 }}><ThinBar pct={v} color={v >= 80 ? token.colorError : v >= 60 ? token.colorWarning : token.colorSuccess} /></span>
+                      <span style={{ fontSize: 12, color: ink, fontVariantNumeric: 'tabular-nums' }}>{v}%</span>
+                    </span>
+                  ) },
+                  { title: '内存', dataIndex: 'mem_pct', width: 90, render: (v: number | null) => v === null || v === undefined ? '-' : (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ flex: 1 }}><ThinBar pct={v} color={v >= 80 ? token.colorError : v >= 60 ? token.colorWarning : token.colorSuccess} /></span>
+                      <span style={{ fontSize: 12, color: ink, fontVariantNumeric: 'tabular-nums' }}>{v}%</span>
+                    </span>
+                  ) },
+                  { title: '待处理', dataIndex: 'alert_pending', width: 68, align: 'right' as const, render: (v: number) => <b style={{ color: v > 0 ? token.colorError : token.colorSuccess, fontVariantNumeric: 'tabular-nums' }}>{v}</b> },
+                ]}
+              />
+            </Card>
 
-      {/* ===== 第 5 段 · 集群资源水位 / DB 健康 ===== */}
-      <Row gutter={[12, 12]} align="stretch">
-        <Col xs={24} lg={12}>
-          <Card title="集群资源水位（点击进集群详情）" size="small" style={{ height: '100%' }}>
-            <Table
-              rowKey="cluster_id" size="small" pagination={false}
-              dataSource={waterline}
-              scroll={{ y: 260 }}
-              locale={{ emptyText: <Empty description="暂无集群数据" /> }}
-              onRow={(r) => ({ onClick: () => navigate(`/clusters/${r.cluster_id}`), style: { cursor: 'pointer' } })}
-              columns={[
-                { title: '环境', dataIndex: 'env_tag', width: 70, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
-                { title: '集群', dataIndex: 'cluster_name', ellipsis: true },
-                { title: 'CPU 水位', dataIndex: 'cpu_pct', width: 120, render: (v: number | null) => v === null || v === undefined ? '-' : (
-                  <Progress percent={clampPct(v)} size="small" strokeColor={v >= 80 ? '#ff4d4f' : v >= 60 ? '#faad14' : '#52c41a'} format={(p) => `${p ?? 0}%`} />
-                ) },
-                { title: '内存水位', dataIndex: 'mem_pct', width: 120, render: (v: number | null) => v === null || v === undefined ? '-' : (
-                  <Progress percent={clampPct(v)} size="small" strokeColor={v >= 80 ? '#ff4d4f' : v >= 60 ? '#faad14' : '#52c41a'} format={(p) => `${p ?? 0}%`} />
-                ) },
-                { title: 'Pod 数', dataIndex: 'pods', width: 76 },
-                { title: '待处理', dataIndex: 'alert_pending', width: 76, render: (v: number) => <b style={{ color: v > 0 ? '#ff4d4f' : '#52c41a' }}>{v}</b> },
-              ]}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card title="数据库健康" size="small" style={{ height: '100%' }}>
-            <Table
-              rowKey="id" size="small" pagination={false}
-              dataSource={dbHealth}
-              scroll={{ y: 260 }}
-              locale={{ emptyText: <Empty description="暂无数据库连接" /> }}
-              columns={[
-                { title: '名称', dataIndex: 'name', ellipsis: true },
-                { title: '类型', dataIndex: 'db_type', width: 70 },
-                { title: '状态', dataIndex: 'status', width: 70, render: (s: string) => <Tag color={s === 'failed' ? 'red' : 'green'}>{s === 'failed' ? '异常' : '正常'}</Tag> },
-                { title: '连接', width: 90, render: (_: unknown, r: DbHealthItem) => `${r.conn_used}/${r.conn_max}` },
-                { title: '使用率', dataIndex: 'usage_pct', width: 110, render: (v: number) => (
-                  <Progress percent={clampPct(v)} size="small" strokeColor={v >= 80 ? '#ff4d4f' : v >= 60 ? '#faad14' : '#52c41a'} format={(p) => `${p ?? 0}%`} />
-                ) },
-                { title: 'QPS', dataIndex: 'qps', width: 70 },
-                { title: 'TPS', dataIndex: 'tps', width: 70 },
-              ]}
-            />
-          </Card>
+            {/* 数据库健康 */}
+            <Card title="数据库健康" size="small">
+              <Table
+                rowKey="id" size="small" pagination={false}
+                dataSource={dbHealth}
+                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库连接" /> }}
+                columns={[
+                  { title: '名称', dataIndex: 'name', ellipsis: true, render: (v: string, r: DbHealthItem) => (
+                    <span>{v}<span style={{ color: faint, marginLeft: 6, fontSize: 12 }}>{r.db_type}</span></span>
+                  ) },
+                  { title: '状态', dataIndex: 'status', width: 60, render: (s: string) => <Tag color={s === 'failed' ? 'red' : 'green'}>{s === 'failed' ? '异常' : '正常'}</Tag> },
+                  { title: '连接', width: 96, render: (_: unknown, r: DbHealthItem) => (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ flex: 1 }}><ThinBar pct={r.usage_pct} color={r.usage_pct >= 80 ? token.colorError : r.usage_pct >= 60 ? token.colorWarning : token.colorSuccess} /></span>
+                      <span style={{ fontSize: 12, color: ink, fontVariantNumeric: 'tabular-nums' }}>{r.conn_used}/{r.conn_max}</span>
+                    </span>
+                  ) },
+                ]}
+              />
+            </Card>
+
+            {/* AI 处置构成 */}
+            <Card title="AI 诊断处置（最近 24h）" size="small">
+              {aiTotal > 0 ? (
+                <div style={{ display: 'grid', gap: 12 }}>
+                  <div style={{ display: 'flex', height: 8, borderRadius: 2, overflow: 'hidden', background: token.colorBorderSecondary }}>
+                    {aiDistPct.filter((d) => (d.value || 0) > 0).map((d) => (
+                      <span key={d.key} style={{ width: `${d.pct}%`, background: d.color }} />
+                    ))}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px 16px' }}>
+                    {aiDistPct.map((d) => (
+                      <div key={d.key} style={{ display: 'flex', alignItems: 'center', fontSize: 13 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 2, background: d.color, marginRight: 6, flex: '0 0 auto', display: 'inline-block' }} />
+                        <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: muted }}>{d.key}</span>
+                        <span style={{ marginLeft: 6, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{d.pct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />}
+            </Card>
+          </div>
         </Col>
       </Row>
     </div>
