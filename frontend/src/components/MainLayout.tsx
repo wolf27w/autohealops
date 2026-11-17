@@ -244,24 +244,24 @@ export default function MainLayout() {
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
       {/* trigger={null}：底部那根折叠条与顶部的折叠按钮重复，去掉底部的（2026-10-21 老板要求） */}
-      <Sider width={236} theme="dark" collapsible trigger={null} collapsed={collapsed} onCollapse={handleCollapse}>
-        <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#34d399,#059669)', display: 'grid', placeItems: 'center', boxShadow: '0 6px 16px rgba(16,185,129,0.35)', flex: 'none' }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#04231a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <Sider width={236} theme="light" collapsible trigger={null} collapsed={collapsed} onCollapse={handleCollapse}>
+        <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10, padding: collapsed ? 0 : '0 16px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+          <div style={{ width: 30, height: 30, borderRadius: 6, background: token.colorPrimary, display: 'grid', placeItems: 'center', flex: 'none' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="5" r="2.2" /><circle cx="5" cy="19" r="2.2" /><circle cx="19" cy="19" r="2.2" />
               <path d="M12 7.2v4M12 11.2 6.6 16.9M12 11.2l5.4 5.7" />
             </svg>
           </div>
           {!collapsed && (
             <div style={{ lineHeight: 1.15 }}>
-              <b style={{ color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>AutoHealOps</b>
-              <small style={{ display: 'block', color: '#6f8f80', fontSize: 9.5, letterSpacing: 2 }}>自愈运维平台</small>
+              <b style={{ color: token.colorText, fontSize: 15, letterSpacing: 0.4 }}>AutoHealOps</b>
+              <small style={{ display: 'block', color: token.colorTextTertiary, fontSize: 9.5, letterSpacing: 2 }}>自愈运维平台</small>
             </div>
           )}
         </div>
         <div style={{ flex: 1, overflow: 'auto', paddingBottom: 8 }}>
           <Menu
-            theme="dark"
+            theme="light"
             mode="inline"
             selectedKeys={[matchNavKey(location.pathname) ?? location.pathname]}
             items={toMenuItems(navItems)}

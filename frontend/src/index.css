@@ -1,14 +1,15 @@
-/* 全局样式：浅绿主题 + 高密度 + 有层次的底色（换肤 A：全局地基） */
+/* 全局样式：冷灰纸底 + 石绿强调 + 高密度（design-taste-zh 重设计 2026-11-17）
+   设计口径：冷静的作战指挥台 —— 零阴影 / 细线分隔 / 单一石绿强调 / 6px 圆角族 */
 :root {
-  --brand: #12b981;
-  --brand-d: #048c63;
-  --brand-l: #d5f5e5;
-  --brand-xl: #ecfdf5;
-  --ink: #0f2018;
-  --muted: #5a7368;
-  --faint: #8aa196;
-  --line: #d9e6de;
-  --line-2: #eaf2ec;
+  --brand: #0d7a55;
+  --brand-d: #0a6144;
+  --brand-l: #e7f2ec;
+  --brand-xl: #f0f6f3;
+  --ink: #101613;
+  --muted: #47524c;
+  --faint: #626f69;
+  --line: #e3e8e5;
+  --line-2: #cdd6d1;
 }
 
 * {
@@ -29,11 +30,8 @@ body {
   font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, -apple-system,
     'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* 淡绿渐变底色（不用纯白，增加层次） */
-  background:
-    radial-gradient(1100px 520px at 0% -8%, #dcf5e8 0%, transparent 55%),
-    radial-gradient(900px 480px at 108% 0%, #e6f7ee 0%, transparent 50%),
-    linear-gradient(180deg, #f3f8f4, #e8f1ea);
+  /* 冷灰纸底（不用渐变，稳） */
+  background: #f5f7f6;
 }
 
 /* 滚动条美化 */
@@ -42,107 +40,99 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cfe0d6;
+  background: #cbd4cf;
   border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b3ccbe;
+  background: #b3bfb9;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* ---------- 侧栏（深绿渐变 + 透明菜单） ---------- */
+/* ---------- 侧栏（浅色纸感 + 细线分隔） ---------- */
 .ant-layout-sider {
-  background: linear-gradient(180deg, #0f2a20 0%, #0b211a 100%) !important;
-  border-right: 1px solid #0a1d16;
+  background: #ffffff !important;
+  border-right: 1px solid var(--line);
 }
-/* 应用诊断页的内层会话栏：不受上面全局深绿侧栏影响，保持浅色（否则深底+深字看不见） */
+/* 应用诊断页的内层会话栏：保持浅色（不受任何主题影响） */
 .ant-layout-sider.agentchat-sider {
   background: #ffffff !important;
-  border-right: 1px solid #f0f0f0 !important;
+  border-right: 1px solid var(--line) !important;
 }
 .ant-layout-sider .ant-layout-sider-children {
   display: flex;
   flex-direction: column;
 }
-.ant-menu.ant-menu-dark {
-  background: transparent !important;
+.ant-menu.ant-menu-light {
   border-inline-end: none !important;
 }
-.ant-menu-dark .ant-menu-sub,
-.ant-menu-dark .ant-menu-inline {
-  background: transparent !important;
-}
-/* 可折叠分组标题（手风琴）：更明显、可点击 */
-.ant-menu-dark .ant-menu-submenu-title {
-  color: #cfe3d7 !important;
+/* 可折叠分组标题（手风琴）：明显、可点击 */
+.ant-menu-light .ant-menu-submenu-title {
+  color: var(--muted);
   font-weight: 600;
   font-size: 14px;
   letter-spacing: 0.3px;
   margin-inline: 8px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
-.ant-menu-dark .ant-menu-submenu-title:hover {
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: #ffffff !important;
+.ant-menu-light .ant-menu-submenu-title:hover {
+  background: #f0f3f2;
+  color: var(--ink);
 }
-.ant-menu-dark .ant-menu-submenu-open > .ant-menu-submenu-title,
-.ant-menu-dark .ant-menu-submenu-selected > .ant-menu-submenu-title {
-  color: #34d399 !important;
+.ant-menu-light .ant-menu-submenu-open > .ant-menu-submenu-title,
+.ant-menu-light .ant-menu-submenu-selected > .ant-menu-submenu-title {
+  color: var(--brand-d);
 }
-/* 展开箭头（更醒目） */
-.ant-menu-dark .ant-menu-submenu-arrow {
-  color: #7ba695;
+.ant-menu-light .ant-menu-submenu-arrow {
+  color: #8aa098;
 }
-.ant-menu-dark .ant-menu-submenu-arrow::before,
-.ant-menu-dark .ant-menu-submenu-arrow::after {
+.ant-menu-light .ant-menu-submenu-arrow::before,
+.ant-menu-light .ant-menu-submenu-arrow::after {
   background: currentColor;
 }
-.ant-menu-dark .ant-menu-submenu-open > .ant-menu-submenu-title .ant-menu-submenu-arrow,
-.ant-menu-dark .ant-menu-submenu-title:hover .ant-menu-submenu-arrow {
-  color: #34d399;
+.ant-menu-light .ant-menu-submenu-open > .ant-menu-submenu-title .ant-menu-submenu-arrow,
+.ant-menu-light .ant-menu-submenu-title:hover .ant-menu-submenu-arrow {
+  color: var(--brand);
 }
 /* 选中项：浅绿底 + 左侧强调条 */
-.ant-menu-dark .ant-menu-item-selected {
-  background: linear-gradient(90deg, rgba(18, 185, 129, 0.9), rgba(4, 140, 99, 0.85)) !important;
-  color: #fff !important;
+.ant-menu-light .ant-menu-item-selected {
+  background: var(--brand-l);
+  color: var(--brand-d);
   font-weight: 600;
-  box-shadow: 0 6px 14px rgba(5, 150, 105, 0.3);
 }
-.ant-menu-dark .ant-menu-item-selected::after {
+.ant-menu-light .ant-menu-item-selected::after {
   display: none;
 }
-.ant-menu-dark .ant-menu-item:hover {
-  color: #eafff4 !important;
+.ant-menu-light .ant-menu-item:hover {
+  color: var(--ink);
 }
 
-/* ---------- 顶栏（浅色玻璃） ---------- */
+/* ---------- 顶栏（实底 + 细线，不用毛玻璃） ---------- */
 .ant-layout-header {
-  background: rgba(255, 255, 255, 0.82) !important;
-  backdrop-filter: blur(10px);
+  background: #ffffff !important;
   border-bottom: 1px solid var(--line);
   box-shadow: none !important;
 }
 
-/* ---------- 卡片 ---------- */
+/* ---------- 卡片（扁平：1px 细线，零阴影） ---------- */
 .ant-card {
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: linear-gradient(180deg, #ffffff, #f7fbf8);
-  box-shadow: 0 6px 18px rgba(15, 32, 24, 0.04);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: none;
 }
 .ant-card-bordered {
   border-color: var(--line);
 }
 .ant-card-head {
-  border-bottom: 1px solid var(--line-2);
+  border-bottom: 1px solid var(--line);
   min-height: 44px;
 }
 
 /* ---------- 表格 ---------- */
 .ant-table-wrapper .ant-table {
-  font-size: 15px;
+  font-size: 14px;
 }
 .ant-table-thead > tr > th {
   font-weight: 600 !important;
@@ -150,14 +140,14 @@ body {
 
 /* ---------- 其它 ---------- */
 .ant-tag {
-  border-radius: 20px;
+  border-radius: 4px;
 }
 .ant-btn-primary {
-  box-shadow: 0 6px 14px rgba(4, 140, 99, 0.24);
+  box-shadow: none;
 }
 .ant-modal-content,
 .ant-drawer-content {
-  border-radius: 14px;
+  border-radius: 10px;
 }
 
 /* ================================================================
@@ -165,49 +155,45 @@ body {
    ConfigProvider 的 darkAlgorithm（antd 组件内部自动深色）
    ================================================================ */
 html[data-theme='dark'] body {
-  color: #e2e8f0;
-  background:
-    radial-gradient(1100px 520px at 0% -8%, rgba(16, 185, 129, 0.10) 0%, transparent 55%),
-    radial-gradient(900px 480px at 108% 0%, rgba(56, 189, 248, 0.08) 0%, transparent 50%),
-    linear-gradient(180deg, #0b1220, #0a101c);
+  color: #e9efec;
+  background: #0e1412;
 }
 
 html[data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: #273449;
+  background: #2a3630;
 }
 html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #3a4a42;
 }
 
-/* 侧栏：深蓝黑渐变 */
+/* 侧栏：深绿黑 */
 html[data-theme='dark'] .ant-layout-sider {
-  background: linear-gradient(180deg, #0d1b2e 0%, #0a1424 100%) !important;
-  border-right: 1px solid #16253a;
+  background: #141b18 !important;
+  border-right: 1px solid #232d28;
 }
-/* 应用诊断页内层会话栏：浅色模式/深色模式都保持白底（不受上面全局深色侧栏影响） */
+/* 应用诊断页内层会话栏：浅色模式/深色模式都保持白底 */
 html[data-theme='dark'] .ant-layout-sider.agentchat-sider {
   background: #ffffff !important;
-  border-right: 1px solid #f0f0f0 !important;
+  border-right: 1px solid #e3e8e5 !important;
 }
 
-/* 顶栏：深色玻璃 */
+/* 顶栏：深色实底 */
 html[data-theme='dark'] .ant-layout-header {
-  background: rgba(13, 23, 38, 0.82) !important;
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid #1e293b;
+  background: #141b18 !important;
+  border-bottom: 1px solid #232d28;
 }
 
-/* 卡片：深色渐变 + 深色边框 */
+/* 卡片：深色扁平 */
 html[data-theme='dark'] .ant-card {
-  border: 1px solid #1e293b;
-  background: linear-gradient(180deg, #111a2c, #0f1826);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  border: 1px solid #232d28;
+  background: #141b18;
+  box-shadow: none;
 }
 html[data-theme='dark'] .ant-card-head {
-  border-bottom: 1px solid #1e293b;
+  border-bottom: 1px solid #232d28;
 }
 
-/* 集群内布局侧栏强制白底（全局默认深绿渐变，集群页要统一白色，老板 2026-11-11） */
+/* 集群内布局侧栏强制白底（全局默认白底，集群页统一） */
 .ant-layout-sider.cluster-sider {
   background: #ffffff !important;
   border-right: 1px solid #f0f0f0 !important;
