@@ -7,7 +7,32 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { getHostSessionReplay } from '../services/hostConsoleApi'
+import { getHostSessionCast } from '../services/api'
 import type { ReplayChunk } from '../services/hostConsoleApi'
+
+// 解析 asciinema cast v2：首行 header(JSON) + 每行 [ts, "o"|"i", text]
+function parseCast(text: string): { cols?: number; rows?: number; chunks: ReplayChunk[] } | null {
+  const lines = String(text || '').trim().split('\n').filter(Boolean)
+  if (!lines.length) return null
+  let header: { version?: number; width?: number; height?: number } = {}
+  try { header = JSON.parse(lines[0]) } catch { return null }
+  if (!header || Number(header.version) !== 2) return null
+  const chunks: ReplayChunk[] = []
+  lines.slice(1).forEach((l, i) => {
+    try {
+      const arr = JSON.parse(l)
+      if (!Array.isArray(arr) || arr.length < 3) return
+      const [ts, dir, data] = arr
+      chunks.push({
+        seq: i,
+        ts_ms: Math.round(Number(ts) * 1000),
+        direction: dir === 'i' ? 'input' : 'output',
+        text: String(data),
+      })
+    } catch { /* 跳过坏行 */ }
+  })
+  return { cols: Number(header.width) || undefined, rows: Number(header.height) || undefined, chunks }
+}
 
 export default function HostSessionReplay() {
   const { id } = useParams()
@@ -34,8 +59,18 @@ export default function HostSessionReplay() {
       try {
         const d = await getHostSessionReplay(Number(id))
         if (cancelled) return
-        setChunks(d.chunks || [])
-        setMeta(d.session || {})
+        let list: ReplayChunk[] = d.chunks || []
+        let m: Record<string, unknown> = d.session || {}
+        // R43 H4：优先用新录像（asciinema cast），老会话没有 cast 时回落到录制块
+        try {
+          const parsed = parseCast(await getHostSessionCast(Number(id)))
+          if (parsed && parsed.chunks.length) {
+            list = parsed.chunks
+            m = { ...m, cols: parsed.cols, rows: parsed.rows }
+          }
+        } catch { /* 404 / 无录像 → 用块回放 */ }
+        setChunks(list)
+        setMeta(m)
       } catch (e) {
         if (!cancelled) setError((e as Error).message || '加载回放失败')
       } finally {
