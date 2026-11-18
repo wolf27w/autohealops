@@ -351,16 +351,45 @@ def start_server(addr: str) -> None:
         creds = grpc.ssl_server_credentials([(key_bytes, cert_bytes)],
                                             root_certificates=ca_bytes,
                                             require_client_auth=True)
-        _server.add_secure_port(addr, creds)
-        logger.info("Agent 反向隧道网关已启动（mTLS）: %s（CA 目录 %s）", addr, agent_pki.ca_dir())
+        bound = _server.add_secure_port(addr, creds)
+        if not bound:
+            logger.error("Agent 网关端口绑定失败（%s 已被占用）：本进程将收不到 agent 隧道，"
+                         "通常是旧 api-server 进程残留，请先杀掉旧进程再重启", addr)
+        else:
+            logger.info("Agent 反向隧道网关已启动（mTLS）: %s（CA 目录 %s）", addr, agent_pki.ca_dir())
     else:
-        _server.add_insecure_port(addr)
-        logger.warning("Agent 反向隧道网关已启动（明文，仅调试用）: %s", addr)
+        bound = _server.add_insecure_port(addr)
+        if not bound:
+            logger.error("Agent 网关端口绑定失败（%s 已被占用）：本进程将收不到 agent 隧道，"
+                         "通常是旧 api-server 进程残留，请先杀掉旧进程再重启", addr)
+        else:
+            logger.warning("Agent 反向隧道网关已启动（明文，仅调试用）: %s", addr)
     _server.start()
 
 
 def stop_server() -> None:
+    """停止隧道网关：先踢掉在线 agent 连接，再停 server。
+
+    背景（2026-11-18）：旧进程 graceful shutdown 时若隧道还有在线 agent，
+    gRPC 的 Tunnel 双向流不会结束 → 进程退不掉但已释放 8080，变成“占着 9095、
+    却没有 API” 的僵尸进程；新起的 api-server 拿不到 agent 隧道（bind 失败只 warn），
+    表现为「agent 接入的集群报错 / unreachable」。
+    """
     global _server
-    if _server is not None:
-        _server.stop(0)
-        _server = None
+    if _server is None:
+        return
+    with _agents_lock:
+        conns = list(_agents.values())
+        _agents.clear()
+    for a in conns:
+        a.alive = False
+        try:
+            a.fail_streams("平台重启/停止，隧道关闭")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        _server.stop(1)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("停止 Agent 网关失败: %s", e)
+    _server = None
+    logger.info("Agent 反向隧道网关已停止（断开 %d 条 agent 连接）", len(conns))
