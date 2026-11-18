@@ -1,10 +1,11 @@
 // 慢 SQL 面板（详情页 Tab）：时间范围筛选 + 慢 SQL 表格 + digest 趋势 + 两时段对比
 import { useEffect, useState } from 'react'
 import { Card, Table, Tag, Button, Space, DatePicker, Modal, Tooltip, message, Empty } from 'antd'
-import { ReloadOutlined, BarChartOutlined } from '@ant-design/icons'
+import { ReloadOutlined, BarChartOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { Line } from '@ant-design/charts'
 import { getSlowSQL, getSlowSQLDigestTrend, compareSlowSQL } from '../../services/api'
+import SlowSqlDiagnoseModal from './SlowSqlDiagnoseModal'
 
 // 慢 SQL 单条记录（后端字段，可选容错）
 interface SlowSQLRow {
@@ -57,6 +58,9 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
 
   // digest 趋势弹窗
   const [trend, setTrend] = useState<{ digest: string; data: TrendPoint[] } | null>(null)
+
+  // 慢 SQL 诊断弹窗（被诊断的行）
+  const [diagRow, setDiagRow] = useState<SlowSQLRow | null>(null)
 
   // 两时段对比弹窗
   const [cmpOpen, setCmpOpen] = useState(false)
@@ -133,6 +137,11 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
       render: (v: number) => <b style={{ color: (v || 0) > 1000 ? '#cf1322' : undefined }}>{v ?? '-'}</b> },
     { title: '最大(ms)', dataIndex: 'max_latency_ms', width: 100, render: (v: number) => v ?? '-' },
     { title: '命中规则/建议', width: 240, render: (_: unknown, r: SlowSQLRow) => renderSuggestions(r.suggestions, r) },
+    { title: '诊断', width: 110, fixed: 'right' as const,
+      render: (_: unknown, r: SlowSQLRow) => (
+        <Button size="small" type="link" icon={<ThunderboltOutlined />}
+          disabled={!r.digest} onClick={() => setDiagRow(r)}>AI 诊断</Button>
+      ) },
   ]
 
   const cmpColumns = [
@@ -175,6 +184,9 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
           : (loading ? <Table rowKey="id" size="small" dataSource={[]} columns={columns} loading pagination={false} />
              : <Empty description="暂无慢 SQL 采集数据" />)}
       </Card>
+
+      {/* 慢 SQL AI 诊断弹窗 */}
+      <SlowSqlDiagnoseModal connId={connId} row={diagRow} onClose={() => setDiagRow(null)} />
 
       {/* digest 趋势弹窗 */}
       <Modal open={!!trend} onCancel={() => setTrend(null)} footer={null} width={720}

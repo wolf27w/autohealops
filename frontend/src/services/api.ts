@@ -699,6 +699,36 @@ export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: st
   http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
+// ============ 慢 SQL 诊断（AI 优化建议）============
+export interface SlowSqlDiagnoseIssue { type: string; detail: string; severity: string }
+export interface SlowSqlDiagnoseSuggestion {
+  title: string; detail: string; sql_before: string; sql_after: string
+  index_ddl: string; impact: string; risk: string
+}
+export interface SlowSqlDiagnoseExplain {
+  available: boolean; db_type: string; mode: string
+  rows: Record<string, unknown>[] | null; text: string; error: string
+}
+export interface SlowSqlDiagnoseIndex { table: string; index: string; columns: string; unique: boolean }
+export interface SlowSqlDiagnoseStats {
+  avg_latency_ms: number; max_latency_ms: number; exec_count: number; schema_name: string
+}
+export interface SlowSqlDiagnoseData {
+  digest: string
+  verdict: 'optimizable' | 'maybe' | 'hard'
+  verdict_label: string
+  summary: string
+  risk_level: 'low' | 'medium' | 'high'
+  issues: SlowSqlDiagnoseIssue[]
+  suggestions: SlowSqlDiagnoseSuggestion[]
+  explain: SlowSqlDiagnoseExplain
+  indexes: SlowSqlDiagnoseIndex[]
+  stats: SlowSqlDiagnoseStats
+  model: string
+}
+export const diagnoseSlowSQL = (connId: number, digest: string, payload: { sql_text?: string; schema_name?: string }) =>
+  http.post<SlowSqlDiagnoseData>(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/optimize`, payload)
+
 // ============ SQL 终端（B11-b：库管理 / 导入 SQL / 备份）============
 // 建库
 interface DBNameResult { name?: string; created?: boolean }
