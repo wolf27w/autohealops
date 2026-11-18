@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent 运行轨迹（demo）</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e8eaee; --text:#1f2328; --muted:#8b919b;
+    --blue:#1677ff; --green:#52c41a; --orange:#fa8c16; --red:#ff4d4f; --purple:#722ed1; --cyan:#13c2c2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:13px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1560px;margin:0 auto;padding:20px 24px 40px}
+  h1{font-size:20px;margin:0 0 4px;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .k{color:var(--muted);font-size:12px}
+  .stat .v{font-size:22px;font-weight:650;letter-spacing:.3px;margin-top:2px}
+  .stat .v small{font-size:12px;font-weight:500;color:var(--muted);margin-left:4px}
+
+  .layout{display:grid;grid-template-columns:430px 1fr;gap:16px;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px}
+  .card-h{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .card-h .t{font-weight:600;font-size:13px}
+  .card-h .sp{margin-left:auto;display:flex;gap:6px}
+
+  .filters{display:flex;gap:6px;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:14px;padding:3px 10px;font-size:12px;color:#5b6472;cursor:pointer}
+  .chip.on{background:#e6f0ff;border-color:#b6d4fe;color:var(--blue);font-weight:600}
+
+  .list{max-height:calc(100vh - 300px);overflow:auto}
+  .item{padding:11px 14px;border-bottom:1px solid #f2f3f5;cursor:pointer;transition:background .12s}
+  .item:hover{background:#fafbfc}
+  .item.on{background:#f0f6ff;box-shadow:inset 3px 0 0 var(--blue)}
+  .item .l1{display:flex;align-items:center;gap:8px}
+  .item .name{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .time{margin-left:auto;color:var(--muted);font-size:11px;flex-shrink:0}
+  .item .l2{color:var(--muted);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .l3{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+
+  .tag{display:inline-flex;align-items:center;gap:4px;border-radius:4px;padding:1px 7px;font-size:11px;line-height:18px;
+    border:1px solid transparent;white-space:nowrap}
+  .tag.app{background:#e6f4ff;color:#0958d9;border-color:#bae0ff}
+  .tag.db{background:#f9f0ff;color:#531dab;border-color:#efdbff}
+  .tag.ok{background:#f6ffed;color:#389e0d;border-color:#b7eb8f}
+  .tag.warn{background:#fff7e6;color:#d46b08;border-color:#ffd591}
+  .tag.err{background:#fff1f0;color:#cf1322;border-color:#ffa39e}
+  .tag.info{background:#f5f5f5;color:#595959;border-color:#e5e5e5}
+  .tag.approve{background:#fff0f6;color:#c41d7f;border-color:#ffadd2}
+  .tag.auto{background:#e6fffb;color:#08979c;border-color:#87e8de}
+
+  .detail{min-height:640px}
+  .dhead{padding:14px 16px;border-bottom:1px solid var(--line)}
+  .dhead .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .dhead h2{font-size:16px;margin:0;font-weight:650}
+  .dhead .meta{color:var(--muted);font-size:12px;margin-top:6px;display:flex;gap:14px;flex-wrap:wrap}
+  .dhead .meta b{color:#3d4451;font-weight:600}
+  .actions{margin-left:auto;display:flex;gap:8px}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;color:#3d4451}
+  .btn:hover{border-color:#c9d0d9}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+
+  .summary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-bottom:1px solid var(--line)}
+  .sum{padding:12px 16px;border-right:1px solid var(--line)}
+  .sum:last-child{border-right:none}
+  .sum .k{color:var(--muted);font-size:11px;margin-bottom:2px}
+  .sum .v{font-weight:600}
+
+  .timeline{padding:16px 16px 8px}
+  .step{position:relative;padding:0 0 18px 30px}
+  .step:before{content:"";position:absolute;left:9px;top:20px;bottom:0;width:2px;background:#eef0f3}
+  .step:last-child:before{display:none}
+  .dot{position:absolute;left:2px;top:4px;width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid #d9dde3;
+    display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;line-height:1}
+  .dot.tool{border-color:var(--cyan);background:var(--cyan)}
+  .dot.think{border-color:#bfbfbf;background:#fff;color:#8c8c8c}
+  .dot.decide{border-color:var(--purple);background:var(--purple)}
+  .dot.exec{border-color:var(--blue);background:var(--blue)}
+  .dot.ok{border-color:var(--green);background:var(--green)}
+  .dot.err{border-color:var(--red);background:var(--red)}
+  .dot.approve{border-color:#eb2f96;background:#eb2f96}
+
+  .step .row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step .ts{color:#a8aeb8;font-size:11px;font-variant-numeric:tabular-nums}
+  .step .ttl{font-weight:600;font-size:13px}
+  .step .dur{color:var(--muted);font-size:11px;margin-left:auto}
+  .step .body{margin-top:6px;color:#3d4451}
+  .mono{font-family:"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;font-size:12px;
+    background:#f7f8fa;border:1px solid #eef0f3;border-radius:6px;padding:8px 10px;white-space:pre-wrap;word-break:break-all}
+  .mono .k{color:#8c8c8c}
+  .mono .s{color:#237804}
+  .mono .n{color:#0958d9}
+  .quote{border-left:3px solid #e8eaee;padding:2px 0 2px 10px;color:#5b6472;margin-top:6px}
+  .evidence{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .ev{border:1px dashed #d9dde3;border-radius:6px;padding:4px 10px;font-size:12px;color:#3d4451;background:#fcfcfd;cursor:pointer}
+  .ev:hover{border-color:#b6d4fe;color:var(--blue)}
+  .foot{padding:12px 16px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+  .legend{display:flex;gap:12px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .lg{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .note{margin-top:14px;color:var(--muted);font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Agent 运行轨迹</h1>
+  <div class="sub">诊断与自愈 · 推理过程 / 工具调用 / 审批 / 执行 / 验证（demo 数据）</div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">今日诊断</div><div class="v">42<small>次</small></div></div>
+    <div class="stat"><div class="k">自动闭环</div><div class="v" style="color:#389e0d">31<small>次 · 74%</small></div></div>
+    <div class="stat"><div class="k">走审批</div><div class="v" style="color:#c41d7f">5<small>单</small></div></div>
+    <div class="stat"><div class="k">平均轮数 / 耗时</div><div class="v">6.8<small>轮 · 48s</small></div></div>
+    <div class="stat"><div class="k">转人工工单</div><div class="v" style="color:#d46b08">6<small>单</small></div></div>
+  </div>
+
+  <div class="layout">
+    <!-- 左：轨迹列表 -->
+    <div class="card">
+      <div class="card-h">
+        <div class="t">轨迹列表</div>
+        <div class="sp"><span class="tag info">近 24 小时</span></div>
+      </div>
+      <div class="filters">
+        <span class="chip on" data-f="all">全部</span>
+        <span class="chip" data-f="app">应用层</span>
+        <span class="chip" data-f="db">数据库</span>
+        <span class="chip" data-f="approve">走审批</span>
+        <span class="chip" data-f="ticket">转工单</span>
+      </div>
+      <div class="list" id="list"></div>
+    </div>
+
+    <!-- 右：轨迹详情 -->
+    <div class="card detail">
+      <div class="dhead">
+        <div class="top">
+          <h2 id="d-title">—</h2>
+          <span id="d-badges"></span>
+          <div class="actions">
+            <button class="btn" onclick="alert('demo：按同参数重跑（可用于评估回归）')">重放</button>
+            <button class="btn" onclick="alert('demo：导出证据包（日志片段 / jstack / heapdump / 慢SQL明细）')">导出证据</button>
+            <button class="btn primary" onclick="alert('demo：跳转到关联工单 / 审批单')">查看关联单</button>
+          </div>
+        </div>
+        <div class="meta" id="d-meta"></div>
+      </div>
+      <div class="summary" id="d-summary"></div>
+      <div class="timeline" id="d-timeline"></div>
+      <div class="foot">
+        <div class="legend">
+          <span><i class="lg" style="background:#bfbfbf"></i>推理</span>
+          <span><i class="lg" style="background:#13c2c2"></i>工具调用</span>
+          <span><i class="lg" style="background:#722ed1"></i>决策</span>
+          <span><i class="lg" style="background:#1677ff"></i>执行</span>
+          <span><i class="lg" style="background:#eb2f96"></i>审批</span>
+          <span><i class="lg" style="background:#52c41a"></i>验证通过</span>
+        </div>
+        <span style="margin-left:auto">trace_id: <span class="mono" style="display:inline;padding:1px 6px" id="d-trace"></span></span>
+      </div>
+    </div>
+  </div>
+  <div class="note">demo 页面 · 数据全部为示例 · 正式页复用此结构，接 DiagnosisMessage + tool_steps</div>
+</div>
+
+<script>
+const DATA = [
+  {
+    id:'T-2401', type:'app', kind:'应用层', target:'prod-eft / efreight-cloud-ui-849d496d6f-7kgvl',
+    trigger:'告警触发（PodRestart）', time:'14:02:11', duration:'46s', rounds:7,
+    result:'ok', resultText:'已自愈', action:'自动执行', trace:'a3f9c1e0-77b2-4d10-9f3e-2b8c51d4e001',
+    summary:{ 判定:'OOMKilled（退出码 137）', 动作:'limit 1Gi → 2Gi + 重启', 结论:'Pod 就绪，30s 内无重启' },
+    steps:[
+      {t:'00:00.4', k:'think', title:'采集证据', body:'告警：Pod 连续 3 次重启，退出码 137。开始收集状态、事件与日志。', dur:'—'},
+      {t:'00:01.2', k:'tool', title:'describe_pod', body:'<div class="mono">{<span class="k">"phase"</span>: <span class="s">"Running"</span>, <span class="k">"restarts"</span>: <span class="n">3</span>, <span class="k">"lastState"</span>: {<span class="k">"reason"</span>: <span class="s">"OOMKilled"</span>, <span class="k">"exitCode"</span>: <span class="n">137</span>}}</div>', dur:'1.1s'},
+      {t:'00:02.6', k:'tool', title:'get_pod_metrics（近 15m）', body:'<div class="mono"><span class="k">mem</span>: 峰值 <span class="n">1012Mi</span> / limit <span class="n">1024Mi</span> · <span class="k">cpu</span>: 0.4 / 1.0</div>', dur:'0.9s'},
+      {t:'00:03.8', k:'tool', title:'search_logs（tail 200）', body:'<div class="mono">... <span class="s">java.lang.OutOfMemoryError: Java heap space</span> ...\n... Container killed on request. Exit code is 137 ...</div>', dur:'2.2s'},
+      {t:'00:04.6', k:'think', title:'推理', body:'内存峰值持续贴近 limit，且 JVM 堆未按容器 limit 设置（MaxRAMPercentage=60% → 仅 600Mi），其余扫描对象占满剩余内存 → 判定为资源/参数配置问题，非代码缺陷。', dur:'—'},
+      {t:'00:04.9', k:'decide', title:'决策：风险等级 3（免审）', body:'动作：requests 512Mi→1Gi，limits 1Gi→2Gi，并保留 MaxRAMPercentage=60% → 堆上限提到 1.2Gi。<div class="quote">依据：仅调整副本资源声明，可回滚，不涉及数据与业务语义。</div>', dur:'—'},
+      {t:'00:05.2', k:'exec', title:'patch deployment（滚动更新）', body:'<div class="mono">deployment/efreight-cloud-ui patched\nresources.limits.memory: 1Gi → 2Gi\nprogressing: 1/2 → 2/2</div>', dur:'18.4s'},
+      {t:'00:24.0', k:'ok', title:'验证通过', body:'新 Pod 就绪，15 分钟内重启 0 次，堆峰值 1.1Gi（占用 limit 55%）。<div class="evidence"><span class="ev">事件列表</span><span class="ev">指标曲线 15m</span><span class="ev">容器日志摘要</span></div>', dur:'21.6s'}
+    ]
+  },
+  {
+    id:'T-2402', type:'app', kind:'应用层', target:'prod-eft / cargo-api-6c8f9b7d5-x2mn4',
+    trigger:'告警触发（CrashLoopBackOff）', time:'13:47:30', duration:'38s', rounds:6,
+    result:'err', resultText:'转工单', action:'回滚 + 建单', trace:'b71e2a44-1c9d-4f88-9a0b-5d0f83c1e002',
+    summary:{ 判定:'代码缺陷（启动即 panic）', 动作:'回滚上一版本 + 摘流 + 建工单', 结论:'新版本已回滚，问题交研发' },
+    steps:[
+      {t:'00:00.3', k:'think', title:'采集证据', body:'新版本发布后 100% 失败重启，先对比上一版本行为。', dur:'—'},
+      {t:'00:01.5', k:'tool', title:'get_deployment（revision 对比）', body:'<div class="mono"><span class="k">current</span>: cargo-api:v2.31.0 (revision 12)\n<span class="k">previous</span>: cargo-api:v2.30.4 (revision 11, 健康 3 天)</div>', dur:'1.3s'},
+      {t:'00:03.0', k:'tool', title:'search_logs（previous=false）', body:'<div class="mono">panic: <span class="s">runtime error: invalid memory address or nil pointer dereference</span>\n  at service/router.go:{{line}} · goroutine 1 [running]</div>', dur:'1.9s'},
+      {t:'00:05.2', k:'think', title:'推理', body:'失败发生在新镜像首个进程启动阶段，栈指向业务代码初始化，配置与依赖均正常 → 判定代码/镜像缺陷，平台无法修复。', dur:'—'},
+      {t:'00:06.0', k:'decide', title:'决策：止血优先', body:'1) 回滚到 v2.30.4（保留现场）；2) 摘掉新版本流量；3) 生成工单并附栈与变更记录。<div class="quote">风险等级 4：回滚为可逆动作，按既有口径走双人审；本次由值班管理员一键确认。</div>', dur:'—'},
+      {t:'00:08.0', k:'approve', title:'审批通过（双人）', body:'王工（值班）· 李工（管理员）→ 同意回滚。', dur:'12s'},
+      {t:'00:20.2', k:'exec', title:'rollback deployment', body:'<div class="mono">deployment/cargo-api rolled back to revision 11\nimage: v2.31.0 → v2.30.4\nready: 2/2</div>', dur:'14.6s'},
+      {t:'00:35.0', k:'err', title:'结论：转人工工单', body:'已恢复服务（回滚），但根因需研发修复。<div class="evidence"><span class="ev">工单 #TK-2026-1188</span><span class="ev">panic 栈</span><span class="ev">变更 diff</span></div>', dur:'—'}
+    ]
+  },
+  {
+    id:'T-2403', type:'db', kind:'数据库', target:'prod-eft-mysql / autohealops',
+    trigger:'慢 SQL 巡检（定时）', time:'13:20:05', duration:'1m12s', rounds:9,
+    result:'ok', resultText:'已优化', action:'审批后执行 DDL', trace:'c9d4e873-5a1b-4a2e-8f61-7e2c9b0d3003',
+    summary:{ 判定:'可优化（缺联合索引 + filesort）', 动作:'CREATE INDEX (gmt_modified, id)', 结论:'平均耗时 5.9s → 8ms，扫描行数下降 99%' },
+    steps:[
+      {t:'00:00.6', k:'think', title:'定位慢 SQL', body:'近 1 小时按 avg 耗时排序 TopN，取第 1 条（digest 11936fa9）。', dur:'—'},
+      {t:'00:01.8', k:'tool', title:'slow_sql_top（1h）', body:'<div class="mono">digest 11936fa9 · exec <span class="n">546,283</span> · avg <span class="n">5889ms</span> · max <span class="n">10272ms</span>\nschema autohealops · table config_info</div>', dur:'0.8s'},
+      {t:'00:03.1', k:'tool', title:'explain', body:'<div class="mono"><span class="k">type</span>: ALL · <span class="k">key</span>: NULL · <span class="k">rows</span>: <span class="n">1,204,881</span>\n<span class="k">Extra</span>: Using where; Using temporary; Using filesort</div>', dur:'1.4s'},
+      {t:'00:05.0', k:'tool', title:'table_schema / 索引现状', body:'<div class="mono">PRIMARY (id)\nix_snapshot_time (snapshot_time)\n-- 缺 (gmt_modified, id) 联合索引</div>', dur:'0.7s'},
+      {t:'00:06.2', k:'tool', title:'index_usage（未用索引/写负载）', body:'<div class="mono">写速率 420/s · 表大小 6.8G · 现有索引 4 个\n评估：新增 1 个联合索引，写放大 +3%（可接受）</div>', dur:'1.2s'},
+      {t:'00:08.4', k:'think', title:'推理', body:'过滤列在联合索引前导、排序列与主键一致；扫描行数 120 万 → 加索引后可降为范围扫描。SQL 本身无需改写。', dur:'—'},
+      {t:'00:09.1', k:'decide', title:'决策：DDL 需审核', body:'动作：<div class="mono">CREATE INDEX idx_gmt_id ON config_info (gmt_modified, id), ALGORITHM=INPLACE, LOCK=NONE</div>窗口：低峰 02:00（定时执行）。回滚语句已预生成。', dur:'—'},
+      {t:'00:11.0', k:'approve', title:'审批通过', body:'DBA 张工 → 同意；类型 ddl / 风险等级 4。', dur:'38s'},
+      {t:'00:49.6', k:'exec', title:'执行 DDL（低峰窗口）', body:'<div class="mono">CREATE INDEX ... ALGORITHM=INPLACE, LOCK=NONE → OK\n耗时 21.4s · 锁等待 0</div>', dur:'21.4s'},
+      {t:'01:11.2', k:'ok', title:'验证：生效', body:'同一 digest 前后 30 分钟对比：平均 5889ms → <b>8ms</b>，最大 10272ms → 42ms，扫描行数 1,204,881 → 3,120。<div class="evidence"><span class="ev">前后对比</span><span class="ev">新执行计划</span><span class="ev">索引使用率</span><span class="ev">回滚脚本</span></div>', dur:'—'}
+    ]
+  },
+  {
+    id:'T-2404', type:'db', kind:'数据库', target:'stg-mysql / nacos_config',
+    trigger:'手动诊断', time:'12:58:44', duration:'34s', rounds:5,
+    result:'warn', resultText:'仅给方案', action:'未执行', trace:'d2c7b901-3f45-4c80-a7e2-91b6d4f8a004',
+    summary:{ 判定:'优化空间有限（主键点查仍慢 → IO）', 动作:'建议归档 + 扩容 IOPS', 结论:'需业务评估，未自动执行' },
+    steps:[
+      {t:'00:00.8', k:'tool', title:'slow_sql_top + explain', body:'<div class="mono"><span class="k">type</span>: const · <span class="k">key</span>: PRIMARY · rows: <span class="n">1</span>\n耗时 1.2s（单行）→ IO 等待占 87%</div>', dur:'1.6s'},
+      {t:'00:03.4', k:'think', title:'推理', body:'按主键点查且仅 1 行仍慢，索引侧无优化空间；瓶颈在存储 IO / 数据体量。', dur:'—'},
+      {t:'00:04.2', k:'decide', title:'决策：只给方案，不执行', body:'建议：① 历史数据归档（保留 90 天）② 评估磁盘 IOPS 与缓冲池命中率。<div class="quote">涉及数据生命周期与容量采购，超出平台自动执行边界。</div>', dur:'—'},
+      {t:'00:05.1', k:'ok', title:'输出报告', body:'已写入诊断报告，并推送给 DBA 与业务负责人。<div class="evidence"><span class="ev">诊断报告</span><span class="ev">容量趋势</span></div>', dur:'—'}
+    ]
+  },
+  {
+    id:'T-2405', type:'app', kind:'应用层', target:'uat / payment-gateway-7d9c5f8b6-9pqrs',
+    trigger:'告警触发（ReadinessProbe 失败）', time:'12:31:02', duration:'29s', rounds:4,
+    result:'ok', resultText:'已自愈', action:'自动执行', trace:'e5b8f022-6d31-4a77-b9c4-03f7a2e1b005',
+    summary:{ 判定:'探针路径配错', 动作:'readinessProbe.path 修正', 结论:'就绪恢复，流量恢复' },
+    steps:[
+      {t:'00:00.5', k:'tool', title:'describe_pod + probe 配置', body:'<div class="mono">readinessProbe: httpGet path=<span class="s">/healthz</span> port=8080 → 404\n应用实际健康路径：<span class="s">/actuator/health</span></div>', dur:'1.4s'},
+      {t:'00:02.6', k:'decide', title:'决策：低风险自愈（免审）', body:'修正探针路径，与同应用其它 Deployment 保持一致。', dur:'—'},
+      {t:'00:03.4', k:'exec', title:'patch probe', body:'<div class="mono">deployment/payment-gateway patched\nreadinessProbe.path: /healthz → /actuator/health</div>', dur:'9.2s'},
+      {t:'00:28.9', k:'ok', title:'验证通过', body:'Pod Ready，流量恢复，错误率回落到基线。', dur:'—'}
+    ]
+  },
+  {
+    id:'T-2406', type:'app', kind:'应用层', target:'prod-eft / order-service-5f8b7c6d9-abc12',
+    trigger:'告警触发（ImagePullBackOff）', time:'11:58:20', duration:'22s', rounds:4,
+    result:'ok', resultText:'已自愈', action:'自动执行', trace:'f1a2b3c4-5d6e-4f70-8a9b-0c1d2e3f4006',
+    summary:{ 判定:'私有仓库凭据缺失', 动作:'补 imagePullSecrets', 结论:'镜像拉取成功，Pod 就绪' },
+    steps:[
+      {t:'00:00.6', k:'tool', title:'describe_pod', body:'<div class="mono">Failed to pull image "harbor.efreight.cn/...": <span class="s">unauthorized</span>\nimagePullSecrets: []</div>', dur:'1.1s'},
+      {t:'00:02.0', k:'decide', title:'决策：低风险自愈（免审）', body:'补齐同 namespace 其它 Deployment 已使用的 imagePullSecrets。', dur:'—'},
+      {t:'00:02.9', k:'exec', title:'patch imagePullSecrets', body:'<div class="mono">deployment/order-service patched\nimagePullSecrets: [harbor-cred]</div>', dur:'7.8s'},
+      {t:'00:21.4', k:'ok', title:'验证通过', body:'镜像拉取成功，Pod 2/2 就绪。', dur:'—'}
+    ]
+  }
+];
+
+const listEl = document.getElementById('list');
+let current = DATA[0].id, filter = 'all';
+
+function badge(t){
+  if(t.type==='app') return '<span class="tag app">应用层</span>';
+  return '<span class="tag db">数据库</span>';
+}
+function resultTag(t){
+  if(t.result==='ok') return '<span class="tag ok">'+(t.action==='自动执行'?'已自愈':'已优化')+'</span>';
+  if(t.result==='warn') return '<span class="tag warn">仅给方案</span>';
+  return '<span class="tag err">转工单</span>';
+}
+function match(t){
+  if(filter==='all') return true;
+  if(filter==='app'||filter==='db') return t.type===filter;
+  if(filter==='approve') return t.steps.some(s=>s.k==='approve');
+  if(filter==='ticket') return t.result==='err';
+  return true;
+}
+
+function renderList(){
+  listEl.innerHTML = DATA.filter(match).map(t=>`
+    <div class="item ${t.id===current?'on':''}" data-id="${t.id}">
+      <div class="l1">
+        <span class="name">${t.target.split(' / ').pop()}</span>
+        <span class="time">${t.time}</span>
+      </div>
+      <div class="l2">${t.target.split(' / ')[0]} · ${t.trigger}</div>
+      <div class="l3">${badge(t)}${resultTag(t)}<span class="tag info">${t.rounds} 轮 · ${t.duration}</span></div>
+    </div>`).join('');
+  listEl.querySelectorAll('.item').forEach(el=>{
+    el.onclick = ()=>{ current = el.dataset.id; renderList(); renderDetail(); };
+  });
+}
+
+function renderDetail(){
+  const t = DATA.find(x=>x.id===current) || DATA[0];
+  document.getElementById('d-title').textContent = t.target;
+  document.getElementById('d-badges').innerHTML = badge(t) + resultTag(t) +
+    (t.action==='自动执行' ? '<span class="tag auto">自动执行</span>' : '<span class="tag approve">审批后执行</span>');
+  document.getElementById('d-meta').innerHTML =
+    `触发：<b>${t.trigger}</b> · 开始：<b>${t.time}</b> · 耗时：<b>${t.duration}</b> · 轮数：<b>${t.rounds}</b> · 动作：<b>${t.action}</b>`;
+  document.getElementById('d-summary').innerHTML = Object.entries(t.summary).map(([k,v])=>
+    `<div class="sum"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  document.getElementById('d-timeline').innerHTML = t.steps.map(s=>`
+    <div class="step">
+      <div class="dot ${s.k}">${s.k==='think'?'·':''}</div>
+      <div class="row1">
+        <span class="ts">${s.t}</span>
+        <span class="ttl">${s.title}</span>
+        <span class="dur">${s.dur}</span>
+      </div>
+      <div class="body">${s.body}</div>
+    </div>`).join('');
+  document.getElementById('d-trace').textContent = t.trace;
+}
+
+document.querySelectorAll('.chip').forEach(c=>{
+  c.onclick = ()=>{
+    document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+    c.classList.add('on'); filter = c.dataset.f;
+    const visible = DATA.filter(match);
+    if(visible.length && !visible.some(x=>x.id===current)) current = visible[0].id;
+    renderList(); renderDetail();
+  };
+});
+
+renderList(); renderDetail();
+</script>
+</body>
+</html>
