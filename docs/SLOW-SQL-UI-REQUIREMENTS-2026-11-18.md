@@ -1,102 +1,101 @@
 # 慢 SQL 页面改版需求（对齐阿里云慢日志）
 
-> 登记时间：2026-11-18 10:10
-> 状态：**仅登记需求，暂不开发**（老板 2026-11-18 明确）
+> 登记时间：2026-11-18 10:10 ｜ 更新：2026-11-18 10:13（老板给出阿里云列清单）
+> 状态：**仅登记需求，暂不开发**
 > 关联：R3.2 慢 SQL 时间维度（`d96cfad`）、R3.3 慢 SQL 优化建议、慢 SQL 逐条优化诊断（`7d6313d` / `0d3a269`）
 
-## 1. 问题（现状）
+## 1. 目标
 
-1. 现在的「慢 SQL」Tab 是一张**混合表**：一行 = 一个 digest（`exec_count` 求和、平均耗时按次数加权），字段是 digest / SQL / 库 / 次数 / 平均 / 最大 / 命中规则建议 / 诊断。
-2. **SQL 语句只显示一行**：`ellipsis: true` + Tooltip 悬浮才看全文，多行 SQL 被压成一行，读不了。
-3. 表格下方没有「明细」概念：看不到某一次具体执行（时间、耗时、扫描行数、客户端）。
-4. 老板目标形态：**和阿里云 RDS「慢日志」页一致**。
+把「慢 SQL」Tab 改成阿里云 RDS「慢日志」的样子：**一行 = 一次慢查询执行**（明细列表），列清单按老板 2026-11-18 10:13 的口径，并在末尾加「诊断」。
 
-## 2. 目标形态（阿里云慢日志页对照）
+现状问题：
+1. 现在的表是 **digest 聚合**（同一 SQL 只一行，次数累加），看不到「某一次执行」。
+2. SQL 语句被 `ellipsis: true` 压成一行，多行 SQL 读不了。
+3. 缺执行耗时/锁等待/返回行数/扫描行数/访问来源/用户/线程等阿里云已有字段。
 
-阿里云 RDS 的慢日志分两块，我们也按这个拆：
+## 2. 列清单（老板口径，顺序固定）
 
-### 2.1 慢日志统计（按 SQL 模板聚合）
+| # | 列 | 含义 | 数据来源（阿里云） | 我们现在有没有 |
+|---|---|---|---|---|
+| 1 | 执行开始时间 | 该次慢查询开始时刻 | 慢日志 `start_time` | 部分（只有 `sampled_at` 采集时间） |
+| 2 | SQL ID | SQL 模板唯一标识 | `DIGEST` / `DIGEST_TEXT` 摘要 | 有（我们叫 `digest`，展示前 16 位） |
+| 3 | SQL 展开 | 可展开看完整 SQL（**必须支持换行**） | `SQL_TEXT` | 有文本，但前端单行截断 |
+| 4 | 数据库 | 库名 | `CURRENT_SCHEMA` / 慢日志 `db` | 有（`schema_name`） |
+| 5 | 执行耗时(秒) | 单次执行耗时 | `TIMER_WAIT` / `Query_time` | **缺**（现在只有 digest 平均/最大） |
+| 6 | 锁等待耗时(秒) | 单次锁等待 | `LOCK_TIME` | **缺** |
+| 7 | 返回行数 | 返回给客户端的行数 | `ROWS_SENT` | **缺** |
+| 8 | 扫描行数 | 扫描的行数 | `ROWS_EXAMINED` | **缺** |
+| 9 | 访问来源 | 客户端 IP / 来源地址 | `HOST` | **缺** |
+| 10 | 用户 | 执行账号 | `USER` | **缺** |
+| 11 | 线程 | 会话线程 ID | `THREAD_ID` / `CONNECTION_ID` | **缺** |
+| 12 | 表名 | 涉及的表 | SQL 解析 | 可解析（现有 `_extract_tables`） |
+| 13 | 标签 | 自定义标签（如「核心链路」/「可忽略」） | 平台自定义 | **缺**（需要一张标签表 + 打标入口） |
+| 14 | 操作 | 阿里云是「查看详情/优化建议」；**我们加「诊断」** | — | 诊断已有（`/slow-sql/{digest}/optimize`） |
 
-字段（从左到右）：
+**操作列口径**：`详情` ｜ **`诊断`**（点开现有诊断抽屉：结论 + 执行计划 + 索引 + 建议，只读不执行）。
 
-| 列 | 来源 | 现状 |
-|---|---|---|
-| SQL 模板（含参数占位） | `slow_sql_records.sql_text` / `digest` | 已有（digest 列） |
-| 执行次数 | `SUM(exec_count)` | 已有 |
-| 平均耗时(ms) | 次数加权 | 已有 |
-| 最大耗时(ms) | `MAX(max_latency_ms)` | 已有 |
-| 平均扫描行数 | 需采集 `SUM_ROWS_EXAMINED / SUM_NO_INDEX_USED` 等 | **缺** |
-| 平均返回行数 | 需采集 `SUM_ROWS_SENT` | **缺** |
-| 平均锁等待时间 | `SUM_LOCK_TIME` | **缺** |
-| 操作 | 趋势 / 诊断 / 明细 | 部分有 |
+## 3. UI 细则
 
-### 2.2 慢日志明细（单条执行）
+### 3.1 SQL 展开（硬性）
 
-字段：
+- 第 3 列 `SQL` 禁止 `ellipsis` + Tooltip 单行截断。
+- 单元格 `<pre style="white-space: pre-wrap; word-break: break-all; margin: 0">`，保留原换行与缩进。
+- 默认最多显示 2 行，超出显示「展开」（点击后该行在表格内增高显示全文，不弹窗）；列宽建议 30~35%。
 
-| 列 | 来源 | 现状 |
-|---|---|---|
-| 执行开始时间 | 需采 `sampled_at` 精确到单次（或改为按次落库/仅保留 TOPN 明细） | **缺** |
-| 执行耗时(ms) | 单次 `query_time` | **缺** |
-| 执行状态 / 锁等待 | `events_statements_history*` | **缺** |
-| 扫描行数 / 返回行数 | 单次 `rows_examined` / `rows_sent` | **缺** |
-| 客户端 IP / 用户名 | `host` / `user` | **缺** |
-| 数据库 | `schema_name` | 已有 |
-| SQL 语句 | `sql_text`（**必须支持换行**） | 已有 |
+### 3.2 其它
 
-## 3. 本次要求的 UI 细则（老板明确的两点 + 推导）
+- 表格 `size="small"`、`scroll={{ x: 'max-content' }}`，操作列 `fixed: 'right'`。
+- 数值列右对齐；执行耗时 > 1s 标红（与现有口径一致）。
+- 顶部筛选条：时间范围（预设 5 分钟/1 小时/6 小时/24 小时/7 天 + 自定义）、数据库、关键字（SQL 文本）、最小执行耗时(秒)、访问来源、用户、排序（时间倒序 / 耗时倒序）、自动刷新开关。
+- 顶部右侧保留现有入口：`两时段对比`、`慢 SQL 趋势`。
+- 行点击或「详情」→ 右侧抽屉：完整 SQL、执行计划、索引、诊断结论（Tab 切换）。
+- 分页：默认 50 条/页，支持 20/50/100/200。
 
-### 3.1 SQL 语句支持换行（硬性）
+## 4. 数据采集缺口（开发前必须先定）
 
-- SQL 列 **禁止** `ellipsis: true` + Tooltip 单行截断。
-- 单元格用 `<pre>`/`white-space: pre-wrap; word-break: break-all; margin: 0`，保留原 SQL 的换行与缩进。
-- 默认最多显示 5 行，超出折叠为「展开全部（共 N 行）」，点开在表格内展开（不弹窗）。
-- 行高自适应；表格加 `size="small"` + `tableLayout="fixed"` 时给 SQL 列明确宽度（如 40%）。
+阿里云这些列本质来自 **MySQL 慢查询日志 / performance_schema 逐次执行记录**，我们现在只采了 `events_statements_summary_by_digest`（**只有聚合，没有单次**）。三条可选路径：
 
-### 3.2 列顺序（老板 2026-11-18 口径）
+| 方案 | 做法 | 优点 | 代价/风险 |
+|---|---|---|---|
+| **A. `performance_schema.events_statements_history_long`** | 打开 consumer：`performance_schema_consumer_events_statements_history_long=ON`，定时捞 `TIMER_WAIT > 阈值` 的行 | 不改库表结构，字段最全（TIMER_WAIT/LOCK_TIME/ROWS_SENT/ROWS_EXAMINED/HOST/USER/THREAD_ID/CURRENT_SCHEMA 全有） | 内存环形缓冲，重启丢；有性能开销（需老板拍板）；部分云托管实例可能不允许改参数 |
+| **B. `mysql.slow_log` 表** | `slow_query_log=ON` + `log_output=TABLE` + `long_query_time`，直接 `select * from mysql.slow_log` | 就是慢日志原文，字段含 `start_time / user_host / query_time / lock_time / rows_sent / rows_examined / db / sql_text / thread_id` | 需要 `SELECT` on `mysql.slow_log` 权限；写表有额外写入开销；托管实例可能禁用 |
+| **C. 只做聚合 + 采样** | 维持现状 digest 聚合，「执行开始时间」用采集时间近似，其余留空 | 零风险、零采集改动 | 达不到阿里云明细效果，等于只做 UI 换皮 |
 
-`慢 SQL（模板）` → `执行耗时` → `库名` → `平均耗时` → `最大耗时` → `连接/执行次数` → `SQL 语句` → `操作(详情/诊断)`
+> 结论口径：**要真做到老板给的列清单，必须走 A 或 B**（C 只能做出半成品）。建议**方案 A**（按阈值捞，内存表可控），先只在测试实例验证开销。
 
-> 注：现状列顺序是 digest/SQL/库/次数/平均/最大，与老板口径不一致，改版时按上面的顺序重排。
+### 4.1 落库设计（草案）
 
-### 3.3 筛选条（对齐阿里云）
+新增表 `slow_sql_events`（逐次执行）：
 
-顶部一行筛选：时间范围（预设：5 分钟/1 小时/6 小时/24 小时/7 天 + 自定义）｜ 数据库 ｜ 客户端 IP ｜ 关键字（SQL 文本模糊）｜ 最小耗时(ms) ｜ 排序（耗时/次数）｜ 刷新（自动刷新可关）。
+```
+id, db_connection_id, digest, sql_text, schema_name,
+start_time, exec_seconds, lock_seconds, rows_sent, rows_examined,
+client_host, db_user, thread_id, table_names, tag,
+created_at
+索引：(db_connection_id, start_time desc)
+```
 
-### 3.4 详情展现
-
-- 行点击/「详情」→ 右侧抽屉（Drawer，非居中弹窗）：
-  - 完整 SQL（可换行、可复制）
-  - 执行计划（复用现有 `explain` 数据，ALL 红色、filesort/临时表橙色）
-  - 索引现状
-  - 诊断结论（复用 `SlowSqlDiagnoseModal` 的内容，改成抽屉内 Tab：概览 / 执行计划 / 索引 / 建议）
-- 现有「两时段对比」「digest 趋势」保留，入口放到筛选条右侧。
-
-## 4. 后端补齐项（需要迁移/采集改动，评估后再做）
-
-| 项 | 说明 | 风险 |
-|---|---|---|
-| 扫描行数 / 返回行数 / 锁等待 | `performance_schema.events_statements_summary_by_digest`：`SUM_ROWS_EXAMINED`、`SUM_ROWS_SENT`、`SUM_LOCK_TIME`（按次平均） | 低，只读；需确认实例 `performance_schema` 权限（现有只读账号 `read_lch` 已出现 1142 拒绝案例） |
-| 客户端 IP / 用户名 | 同表 `HOST` / `USER` 字段 | 低，但需在 `slow_sql_records` 加列 |
-| 慢日志明细（单次执行） | 方案 A：`events_statements_history_long`（内存表，重启丢、默认关闭需开 `performance_schema_consumer_events_statements_history_long`）；方案 B：只做「聚合 + TOPN 采样」，不做逐次 | 中：开 consumer 有性能/内存代价，需老板拍板 |
-| Oracle / PG 对齐 | PG 用 `pg_stat_statements`（`rows`、`shared_blks_*`）；Oracle 走 AWR/`v$sql` | 中：字段口径不同，需要映射 |
+`tag`（标签）：平台侧打标，存 `slow_sql_tags(digest, tag, note, created_by)`，列表左连接展示；支持「忽略该 SQL」（诊断时提示为已知问题）。保留期：默认 7 天，超期清理任务（避免又一张几百万行表）。
 
 ## 5. 分阶段建议
 
 | 阶段 | 内容 | 依赖 | 工作量 |
 |---|---|---|---|
-| **P0 纯前端** | SQL 换行 + 列顺序按老板口径 + 筛选条重排 + 行展开 + 详情抽屉（复用已有接口与诊断数据） | 无 | 0.5~1d |
-| **P1 字段补齐** | `slow_sql_records` 加 `rows_examined/rows_sent/lock_time/client_host/user_name`；采集侧补 SQL；统计视图展示 | 迁移 + 采集改动 | 1~2d |
-| **P2 明细视图** | 「慢日志明细」二级 Tab（逐次执行），需要先定 `events_statements_history_long` 是否开启 | 老板拍板采集方案 | 1~3d |
+| **P0 前端** | 表结构按第 2 节列清单重排 + SQL 换行/展开 + 筛选条 + 详情抽屉（字段先用现有能给的，缺的显示 `-`） | 无 | 0.5~1d |
+| **P1 采集** | 方案 A 打通：采集 `events_statements_history_long` → `slow_sql_events` → 列表切到明细数据源（含清理任务） | 老板拍板方案 + 测试实例验证开销 | 2~3d |
+| **P2 标签** | 标签表 + 列表打标 + 「忽略」语义 | P1 | 1d |
+| **P3 其它库** | PG（`pg_stat_statements` 无逐次，需 `log_min_duration_statement` + 日志解析）、Oracle（AWR/`v$sql`） | 按需 | 各 1~2d |
 
 ## 6. 验收口径
 
-- P0：任一条多行 SQL 在表格里按原格式换行显示，超过 5 行折叠可展开；列顺序与第 3.2 节一致；无横向滚动条压住操作列；`npx tsc -b` + `npm run build` 通过。
-- P1：慢日志统计列表能显示平均扫描行数/返回行数，且与实例上 `performance_schema` 查询结果一致（抽样核对）。
-- P2：明细列表能按时间倒序显示单次执行记录，含客户端 IP、耗时、扫描/返回行数。
+- P0：列顺序与第 2 节完全一致（14 列），SQL 多行原样换行、可展开；诊断入口可用；`npx tsc -b` + `npm run build` 通过。
+- P1：明细列表按执行开始时间倒序，任取一条与实例 `performance_schema` 查询结果核对：耗时、锁等待、返回行数、扫描行数、用户、来源一致；日期范围筛选准确。
+- P2：给某 SQL 打标签后列表显示，可「忽略」。
 
 ## 7. 待老板确认
 
-1. 是否要「慢日志明细」（逐次执行）这一层？还是只做聚合统计 + 诊断就够（阿里云是两层都有）。
-2. 采集侧开启 `events_statements_history_long` 有内存/性能代价，是否接受（仅 MySQL 5.7/8.0）。
-3. P0 是否先做（纯前端，不动采集与库表）。
+1. **采集方案选 A 还是 B**（A = performance_schema 逐次记录，B = `mysql.slow_log` 表）。这决定能不能真做到阿里云这套列。
+2. `events_statements_history_long` 的性能开销能接受吗（仅 MySQL 5.7/8.0，环形缓冲，重启丢）。
+3. 明细保留期（建议 7 天）与采集阈值（建议沿用连接的 `slow_sql_threshold`，默认 1s）。
+4. 「标签」是纯人工打标，还是要自动打（如按库/按业务线）？
+5. P0（纯前端换皮）是否先做。
