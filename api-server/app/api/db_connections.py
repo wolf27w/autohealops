@@ -60,6 +60,9 @@ def _serialize(c: DBConnection, mask_secret: bool = True) -> dict:
         "collect_enabled": bool(c.collect_enabled),
         "inspect_enabled": bool(c.inspect_enabled),
         "inspect_cron": c.inspect_cron or "",
+        # R43 H5：结果集下载开关 / 下载是否需审批
+        "allow_result_download": bool(getattr(c, "allow_result_download", True)),
+        "require_download_approval": bool(getattr(c, "require_download_approval", False)),
         "group_name": getattr(c, "group_name", "") or "",
         "env_tag": getattr(c, "env_tag", "") or "",
         "status": c.status, "created_at": str(c.created_at),
@@ -1748,6 +1751,63 @@ async def collect_slow_sql(conn_id: int, user=Depends(require_operator)):
     from app.services import db_collector
     count = await db_collector.collect_connection_slow_sql(conn_id)
     return {"code": 200, "message": "success", "data": {"collected": count}}
+
+
+@router.post("/{conn_id}/export-result")
+async def export_query_result(conn_id: int, payload: dict, user=Depends(require_any_user)):
+    """R43 H5：查询结果集导出（CSV）。
+
+    body: {sql, database?, format?='csv', max_rows?=10000}
+    - 实例开关 allow_result_download=false → 403
+    - 实例 require_download_approval=true → 428（走数据库审核流，kind=export，payload.result_download）
+    - 否则直接返回 CSV 附件，并写审计（谁/哪个实例/多少行）
+    """
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限", "data": None}
+    if not bool(getattr(c, "allow_result_download", True)):
+        return {"code": 403, "message": "该实例已关闭「查询结果下载」", "data": None}
+
+    sql = (payload.get("sql") or "").strip()
+    if not sql:
+        return {"code": 400, "message": "sql 必填", "data": None}
+    from app.services.db_result_export_service import is_query_sql
+    if not is_query_sql(sql):
+        return {"code": 400, "message": "只支持导出查询（select/with/show/desc/explain）结果", "data": None}
+
+    # 需要审批：返回 428，前端按现有「提交审核」流程处理
+    if bool(getattr(c, "require_download_approval", False)):
+        from app.services import db_approval_service
+        async with async_session() as session:
+            need = await db_approval_service.needs_approval(session, conn_id, "export")
+        return {"code": 428, "message": "该实例的结果下载需要审核",
+                "data": {"need_approval": True, "kind": "export", "conn_id": conn_id,
+                         "payload": {"result_download": {
+                             "sql": sql, "database": payload.get("database") or "",
+                             "max_rows": int(payload.get("max_rows") or 10000)}}}}
+
+    import time as _time
+    from fastapi.responses import Response
+    from app.services.db_result_export_service import MAX_EXPORT_ROWS, export_result
+    started = _time.time()
+    try:
+        res = await export_result(c, sql, database=(payload.get("database") or None),
+                                  max_rows=int(payload.get("max_rows") or MAX_EXPORT_ROWS))
+    except Exception as e:  # noqa: BLE001
+        await _audit_sql(user, c, sql, round(_time.time() - started, 2), 0, False, str(e), "export_result")
+        return {"code": 500, "message": f"导出失败：{e}", "data": None}
+    await _audit_sql(user, c, sql, round(_time.time() - started, 2), int(res["rows"]), True, "", "export_result")
+    from urllib.parse import quote
+    disp = (f'attachment; filename="{res["filename"]}"; '
+            f"filename*=UTF-8''{quote(res.get('filename_utf8') or res['filename'])}")
+    return Response(
+        content=res["content"].encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": disp, "X-Exported-Rows": str(res["rows"])},
+    )
 
 
 @router.get("/{conn_id}/slow-sql-events")

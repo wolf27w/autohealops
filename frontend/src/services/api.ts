@@ -699,6 +699,10 @@ export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: st
   http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
+// ============ 查询结果集导出（R43 H5）============
+export const exportQueryResult = (connId: number, body: { sql: string; database?: string; format?: string; max_rows?: number }) =>
+  http.post<Blob>(`/db-connections/${connId}/export-result`, body, { responseType: 'blob' })
+
 // ============ 主机凭据库（R43 H2 私钥集中托管）============
 export interface HostCredentialItem {
   id: number

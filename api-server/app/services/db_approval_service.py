@@ -192,6 +192,29 @@ async def execute_request(req: DbApprovalRequest) -> None:
                     _req.result_summary = f"成功 {len(data.get('rows') or [])} 行"
                 else:
                     _req.result_summary = f"成功影响 {int(data.get('affected_rows') or 0)} 行"
+            elif _req.kind == "export" and (payload.get("result_download") or {}).get("sql"):
+                # R43 H5：查询结果集下载（审批通过后执行导出，一次性 token 下载）
+                from app.services.db_result_export_service import export_result
+                rd = payload["result_download"]
+                res = await export_result(c, rd.get("sql") or "", database=(rd.get("database") or None),
+                                          max_rows=int(rd.get("max_rows") or 10000))
+                _req.result_summary = f"成功导出查询结果 {res['rows']} 行 / {len(res['content'].encode('utf-8'))} 字节"
+                _req.download_token = secrets.token_urlsafe(24)
+                _req.download_expires_at = datetime.now() + timedelta(hours=24)
+                _req.download_used = False
+                text = res["content"]
+                if len(text.encode("utf-8")) <= 3 * 1024 * 1024:
+                    payload["result_sql"] = text
+                    payload.pop("result_sql_ref", None)
+                else:
+                    from app.core.redis_client import redis_pool
+                    await redis_pool.set(
+                        f"db_approval_dl:{_req.id}:{_req.download_token}", text, ex=24 * 3600
+                    )
+                    payload["result_sql"] = ""
+                    payload["result_sql_ref"] = "redis"
+                payload["result_sql_name"] = res["filename"]
+                _req.payload = json.dumps(payload, ensure_ascii=False)
             elif _req.kind == "export":
                 if (getattr(c, "source", "direct") or "direct") == "agent":
                     raise RuntimeError("agent 接入的库暂不支持平台侧导出")

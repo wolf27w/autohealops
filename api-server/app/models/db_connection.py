@@ -34,6 +34,9 @@ class DBConnection(Base):
     collect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 巡检开关（按库）：关闭后该库不参与巡检/报告生成
     inspect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # R43 H5：查询结果集下载开关 / 下载是否需审批
+    allow_result_download: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    require_download_approval: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # 定时巡检 cron（分 时 日 月 周；空=不定时，仅手动点击巡检）
     inspect_cron: Mapped[str] = mapped_column(String(100), default="")
     # 实例分组（空 = 未分组）

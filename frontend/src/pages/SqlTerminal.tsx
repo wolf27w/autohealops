@@ -17,6 +17,7 @@ import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
   importSqlScript, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
   createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase, testDBConnection, getTableSchema,
+  exportQueryResult,
 } from '../services/api'
 
 // ---------- 后端返回的连接行类型（getDBConnections 返回 unknown，这里按需断言） ----------
@@ -488,6 +489,25 @@ export default function SqlTerminal() {
     reader.readAsText(f)
   }
 
+  // ---------- R43 H5：查询结果集导出（CSV） ----------
+  const downloadResult = async (r: ResultItem) => {
+    if (!cur) return
+    try {
+      const blob = await exportQueryResult(cur.id, { sql: r.sql, database: currentDb || undefined })
+      const url = URL.createObjectURL(blob as Blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${cur.name}_${Date.now()}.csv`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 3000)
+      message.success('结果已导出')
+    } catch (e) {
+      const err = e as { needApproval?: boolean; message?: string }
+      if (err?.needApproval) { message.warning('该实例的结果下载需要审核，请走审批流程'); return }
+      message.error(err?.message || '导出失败')
+    }
+  }
+
   // ---------- 导出 ----------
   const doExport = async () => {
     if (!cur) return
@@ -784,6 +804,10 @@ export default function SqlTerminal() {
                           <div style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 12, color: '#595959', marginBottom: 4, wordBreak: 'break-all' }}>
                             {i + 1}. {r.sql.replace(/\s+/g, ' ').slice(0, 100)}{r.sql.length > 100 ? '…' : ''}
                             {r.elapsed != null ? `（${r.elapsed} ms）` : ''}
+                            {r.ok && (r.rows || []).length > 0 && (
+                              <Button size="small" type="link" style={{ marginLeft: 8, padding: 0 }}
+                                onClick={() => downloadResult(r)}>下载结果 CSV</Button>
+                            )}
                           </div>
                           {r.ok ? (
                             (r.rows || []).length === 0 ? (
