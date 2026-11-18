@@ -2616,13 +2616,14 @@ async def node_drain(cluster_id: int, node: str, payload: dict, user=Depends(req
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs/download")
 async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, container: str = "",
                             tail: int = 2000, previous: bool = False, all: bool = False,
-                            user=Depends(require_any_user)):
+                            gzip: int = 1, user=Depends(require_any_user)):
     """下载 Pod 容器日志（gzip，附件）。
 
     all=true：导出整个日志文件（不截断，走日志流 HTTP；失败回落 5000 行）。
     下载永远是「整份文件/整段」，不受页面上「最近 2 分钟」视图影响。
     """
-    import gzip
+    # 注意：形参名是 gzip（query 参数 gzip=0/1），这里必须用别名，不能 import gzip 覆盖它
+    import gzip as _gzip
     from fastapi.responses import Response
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
@@ -2638,7 +2639,12 @@ async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, cont
         r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name,
                                         container, tail, previous)
         text = r.get("logs", "") if r.get("success") else ""
-    body = gzip.compress(text.encode("utf-8"))
+    # gzip=0：返回纯文本（多容器合并下载时前端逐容器取文本再自己打包，避免拼接二进制）
+    if int(gzip if gzip is not None else 1) == 0:   # 0 是有效值，不能用 `or`
+        fn = f"{namespace}_{pod_name}_{'previous' if previous else 'current'}.log"
+        return Response(content=text.encode("utf-8"), media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+    body = _gzip.compress(text.encode("utf-8"))
     fn = f"{namespace}_{pod_name}_{'previous' if previous else 'current'}.log.gz"
     return Response(content=body, media_type="application/gzip",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
