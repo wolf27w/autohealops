@@ -66,6 +66,8 @@ export default function ServiceDetail() {
   const [imgTagErr, setImgTagErr] = useState('')
   const [wlContainers, setWlContainers] = useState<{ name: string; image: string }[]>([])
   const [aggLogsOpen, setAggLogsOpen] = useState(false)
+  const [aggKeyword, setAggKeyword] = useState('')      // 聚合日志关键字过滤（空格=同时包含）
+  const [aggOnlyErrors, setAggOnlyErrors] = useState(false)
   const [aggLogs, setAggLogs] = useState<AggLogPod[]>([])
   const [aggLogsLoading, setAggLogsLoading] = useState(false)
   const [scheduleModal, setScheduleModal] = useState(false)
@@ -535,14 +537,31 @@ export default function ServiceDetail() {
         )}
       </Modal>
       <Modal open={aggLogsOpen} title={`聚合日志：${name}（${aggLogs.length} Pod）`} footer={null} onCancel={() => setAggLogsOpen(false)} width={900}>
+        <Space wrap style={{ marginBottom: 8 }}>
+          <Input style={{ width: 240 }} allowClear value={aggKeyword} onChange={(e) => setAggKeyword(e.target.value)}
+            placeholder="关键字过滤（空格=同时包含）" />
+          <Space size={4}><span>只看错误</span><Switch size="small" checked={aggOnlyErrors} onChange={setAggOnlyErrors} /></Space>
+        </Space>
         <Spin spinning={aggLogsLoading}>
-          <Collapse size="small" items={aggLogs.map((p) => ({
-            key: p.pod,
-            label: <Space><b>{p.pod}</b><Tag color={p.phase === 'Running' ? 'green' : 'red'}>{p.phase}</Tag></Space>,
-            children: p.success
-              ? <pre style={{ maxHeight: 320, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{p.logs || '(无日志)'}</pre>
-              : <div style={{ color: '#cf1322' }}>{p.error}</div>,
-          }))} />
+          <Collapse size="small" items={aggLogs.map((p) => {
+            const kws = aggKeyword.trim().toLowerCase().split(/\s+/).filter(Boolean)
+            const rows = p.success
+              ? (p.logs || '').split('\n').filter((l) => {
+                if (aggOnlyErrors && !/\b(ERROR|ERR|FATAL|WARN|WARNING|Exception|panic)\b/i.test(l)) return false
+                if (!kws.length) return true
+                const low = l.toLowerCase()
+                return kws.every((k) => low.includes(k))
+              })
+              : []
+            return {
+              key: p.pod,
+              label: <Space><b>{p.pod}</b><Tag color={p.phase === 'Running' ? 'green' : 'red'}>{p.phase}</Tag>
+                {p.success && <span style={{ color: '#8c8c8c', fontSize: 12 }}>{rows.length} 行</span>}</Space>,
+              children: p.success
+                ? <pre style={{ maxHeight: 320, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{rows.length ? rows.join('\n') : '(无匹配日志)'}</pre>
+                : <div style={{ color: '#cf1322' }}>{p.error}</div>,
+            }
+          })} />
         </Spin>
       </Modal>
       <Modal title={`编辑探针：${name}`} open={probeModal} onOk={handleProbeSubmit} onCancel={() => setProbeModal(false)} width={560}>

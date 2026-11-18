@@ -52,6 +52,8 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const [autoScroll, setAutoScroll] = useState(true)
   const [lines, setLines] = useState<LogRow[]>([])
   const [podFilter, setPodFilter] = useState('')
+  const [keyword, setKeyword] = useState('')          // 关键字过滤（空格分隔=同时包含）
+  const [onlyErrors, setOnlyErrors] = useState(false) // 只看错误/异常
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [truncated, setTruncated] = useState(false)
 
@@ -166,15 +168,25 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       const body = await resp.json()
       if (body.code !== 200) { message.error(body.message || '下载失败'); return }
       const data = body.data as AggregateData
-      const text = (data.rows || []).map((r) => `[${r.pod}] ${r.line}`).join('\n') + '\n'
+      // 下载也只导当前筛选结果（关键字 / Pod / 只看错误），与页面上看到的一致
+      const rows = (data.rows || []).filter((r) => {
+        if (podFilter && r.pod !== podFilter) return false
+        if (onlyErrors && !/\b(ERROR|ERR|FATAL|WARN|WARNING|Exception|panic)\b/i.test(r.line)) return false
+        if (keywords.length) {
+          const low = r.line.toLowerCase()
+          if (!keywords.every((k) => low.includes(k))) return false
+        }
+        return true
+      })
+      const text = rows.map((r) => `[${r.pod}] ${r.line}`).join('\n') + '\n'
       let blob: Blob
       let filename: string
       try {
         blob = await gzipBlob(text)
-        filename = `${namespace}_${name}_${Date.now()}.log.gz`
+        filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}_${Date.now()}.log.gz`
       } catch {
         blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-        filename = `${namespace}_${name}_${Date.now()}.log`
+        filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}_${Date.now()}.log`
       }
       const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -187,11 +199,21 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     }
   }
 
+  // 关键字过滤：空格分隔多个关键字=同时命中（不区分大小写）
+  const keywords = useMemo(
+    () => keyword.trim().toLowerCase().split(/\s+/).filter(Boolean),
+    [keyword],
+  )
   const shown = useMemo(() => lines.filter((l) => {
     if (podFilter && l.pod !== podFilter) return false
     if (collapsed.has(l.pod)) return false
+    if (onlyErrors && !/\b(ERROR|ERR|FATAL|WARN|WARNING|Exception|panic)\b/i.test(l.line)) return false
+    if (keywords.length) {
+      const low = l.line.toLowerCase()
+      if (!keywords.every((k) => low.includes(k))) return false
+    }
     return true
-  }), [lines, podFilter, collapsed])
+  }), [lines, podFilter, collapsed, keywords, onlyErrors])
 
   const colorize = (l: string) => {
     if (/\bERROR\b/i.test(l)) return { color: '#ff7875' }
@@ -206,6 +228,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         <Tag color="default" style={{ fontSize: 11 }}>{kind}</Tag>
         <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>● {connected ? '已连接' : following ? '连接中…' : '未跟随'}</span>
         {truncated && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
+        <span style={{ color: '#8c8c8c', fontSize: 12 }}>{shown.length}/{lines.length} 行</span>
       </Space>}>
       <Space wrap style={{ marginBottom: 8 }}>
         <Select style={{ width: 170 }} allowClear placeholder="容器(默认=全部)" value={container || undefined}
@@ -215,6 +238,9 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
           options={TAIL_OPTIONS.map((t) => ({ value: t, label: `${t} 行` }))} />
         <Select style={{ width: 170 }} allowClear placeholder="过滤 Pod" value={podFilter || undefined}
           onChange={(v) => setPodFilter(v || '')} options={podNames.map((p) => ({ value: p, label: p }))} />
+        <Input style={{ width: 220 }} allowClear value={keyword} onChange={(e) => setKeyword(e.target.value)}
+          placeholder="关键字过滤（空格=同时包含）" />
+        <Space size={4}><span>只看错误</span><Switch checked={onlyErrors} onChange={setOnlyErrors} /></Space>
         <Button type="primary" icon={following ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
           onClick={() => (following ? closeStream() : startFollow())}>
           {following ? '停止跟随' : '开始跟随'}
