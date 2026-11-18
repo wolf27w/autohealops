@@ -92,6 +92,13 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
   const connect = useCallback(() => {
     const term = termRef.current
     if (!term) return
+    // 防重复连接：已有一条在建立/使用中就不再新建，避免服务端产生两条会话
+    const prev = wsRef.current
+    if (prev && (prev.readyState === WebSocket.CONNECTING || prev.readyState === WebSocket.OPEN)) {
+      const sameHost = (prev as WebSocket & { __hostId?: number }).__hostId === host.id
+      if (sameHost) return
+      try { prev.close() } catch { /* ignore */ }
+    }
     setError('')
     term.reset()
     term.writeln(`\x1b[90m正在连接 ${host.name}（${host.address}:${host.ssh_port}）...\x1b[0m`)
@@ -103,6 +110,7 @@ function TerminalPane({ host, fontSize, onStatus, onSessionId }: {
     everConnectedRef.current = false
     const ws = new WebSocket(buildHostTerminalWsUrl(host.id, { cols, rows }))
     ws.binaryType = 'arraybuffer'
+    ;(ws as WebSocket & { __hostId?: number }).__hostId = host.id
     wsRef.current = ws
 
     ws.onmessage = (ev) => {

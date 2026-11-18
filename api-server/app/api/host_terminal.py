@@ -352,6 +352,22 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
             await recorder.close(status, reason)
         if cast_recorder:
             await cast_recorder.close(status, reason)
+        # 噪声会话清理：连接即断开（≤2s）、无输入、无录像 → 多为前端重复连接产生，
+        # 留着会在「会话录制」列表出现同一时间同一用户的空记录（老板 2026-11-18 反馈）
+        try:
+            from sqlalchemy import delete
+            from app.core.database import async_session as _sess_factory
+            from app.models import HostSession
+            async with _sess_factory() as _s:
+                row = await _s.get(HostSession, sess.id)
+                # 判据：存活 ≤2 秒且没有任何输入（只有登录 banner）→ 认定为重复连接噪声。
+                # 不看 record_bytes：banner 本身也会进 cast，非 0 不代表有效会话。
+                if row and (row.duration_sec or 0) <= 2 and (row.bytes_in or 0) == 0:
+                    await _s.execute(delete(HostSession).where(HostSession.id == sess.id))
+                    await _s.commit()
+                    logger.info("清理空会话 %s（重复连接产生，无输入无录像）", sess.id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("清理空会话失败 %s: %s", sess.id, e)
         await _close_safe(websocket)
 
 
