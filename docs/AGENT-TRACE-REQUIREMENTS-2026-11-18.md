@@ -135,3 +135,29 @@ agent_trace_steps (
 | 2 | trace 保留期 | **全量 7 天 + 摘要 90 天**；大字段（日志片段/计划/栈）存文件只留引用 |
 | 3 | 数据库大表 DDL | 表 > **20GB** 只给方案不执行；执行窗口 **02:00–05:00**（后续可按 `slow_sql_events` 低峰自动选） |
 | 4 | 误判标注 | 在 trace 详情页直接点「判定正确 / 判定错误（选原因）」即可，不单独做标注任务 |
+
+## 7. P0 实现方案（已设计验证，未落地；排期后可直接按此开发）
+
+> 2026-11-18 曾开工 P0 并按老板口径回滚，代码不保留；以下为实现要点，避免后期重做设计。
+
+**表与索引**：`agent_traces`（`started_at` 单列索引 + `(domain, started_at)` 复合索引）、`agent_trace_steps`（`trace_id` 单列索引 + `(trace_id, seq)` 复合索引）。
+
+**服务层（`agent_trace_service.py`）**
+- `new_trace()`：uuid4 hex，支持复用外部传入 trace_id（与 ai-service / executor 的 trace_id 对齐）
+- `add_step()`：`seq` 用 Redis `agent_trace_seq:{tid}` 自增，`max(seq)+1` 兜底；`at_ms` = 距 started_at 的毫秒（时钟回拨钳位为 0）
+- `redact()`：覆盖 `password/passwd/pwd/secret/token/authorization`（JSON 键值与 `=`/`:` 两种写法）、`bearer xxx`、PEM 私钥块、`mysql://` / `postgres://` 连接串 → 值替换 `***`
+- `result_summary` 截断 4000 字符（全文进证据包）
+- `finish_trace()`：回填 `duration_ms/ended_at/summary_json`
+- `list_traces()`：筛选/分页/按 started_at 倒序；`target` 由 Cluster / DBConnection 名称拼，取不到回退 id
+- `purge_old_traces(days=90)`
+
+**API**
+- `GET /api/v1/agent-traces`（require_any_user；非 admin 按可见集群 + 可见数据库收敛）
+- `GET /api/v1/agent-traces/{trace_id}`
+- `POST /api/v1/internal/agent-traces`、`.../{trace_id}/steps`、`.../{trace_id}/finish`（`X-Internal-Token == settings.JWT_SECRET_KEY`）
+
+**接入点（启用时）**
+1. `main.py`：`from app.api import agent_traces` + `app.include_router(agent_traces.router)`
+2. 打点：ai-service 每轮 tool call / 决策；api-server 的执行动作（patch/scale/rollback/DDL）与审批动作
+
+**验证基线**：`py_compile` 6 文件通过；`unittest tests.test_agent_traces` **36 用例**（脱敏 12 条规则、seq/at_ms 递增、截断、finish 回填、列表筛选分页排序、详情顺序、内部令牌校验、purge）。
