@@ -11,8 +11,9 @@ import {
   getHostGroups, createHostGroup, updateHostGroup, deleteHostGroup,
   getHostGroupMembers, addHostGroupMember, removeHostGroupMember, getUsers,
   importHosts, getHostImportTemplate,
+  listHostCredentials, createHostCredential, deleteHostCredential,
 } from '../services/api'
-import type { HostItem, HostCheckResult, HostGroup, HostGroupMember, HostImportResult } from '../services/api'
+import type { HostItem, HostCheckResult, HostGroup, HostGroupMember, HostImportResult, HostCredentialItem } from '../services/api'
 import type { User } from '../types'
 import { HostCommandAuditPanel } from '../components/HostCommandAuditDrawer'
 import HostSessionListPanel from '../components/host/HostSessionListPanel'
@@ -47,6 +48,14 @@ export default function HostManagement() {
   const [checking, setChecking] = useState<number | null>(null)
   const [checkResult, setCheckResult] = useState<HostCheckResult | null>(null)
   const [form] = Form.useForm()
+
+  // R43 H2：凭据库（私钥集中托管）
+  const [credentials, setCredentials] = useState<HostCredentialItem[]>([])
+  const [credOpen, setCredOpen] = useState(false)
+  const [credForm] = Form.useForm()
+  const loadCredentials = () => {
+    listHostCredentials().then((d) => setCredentials((d as unknown as HostCredentialItem[]) || [])).catch(() => setCredentials([]))
+  }
 
   const [groupDrawer, setGroupDrawer] = useState(false)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
@@ -95,6 +104,7 @@ export default function HostManagement() {
   }, [kwInput])
 
   useEffect(() => { load() }, [groupFilter, sourceFilter, keyword])
+  useEffect(() => { loadCredentials() }, [])
 
   const openCreate = () => {
     setEditing(null)
@@ -105,7 +115,7 @@ export default function HostManagement() {
   const openEdit = (h: HostItem) => {
     setEditing(h)
     form.resetFields()
-    form.setFieldsValue({ ...h, auth_type: h.auth_type || 'password', process_paths: h.process_paths || [], group_id: h.group_id ?? undefined })
+    form.setFieldsValue({ ...h, auth_type: h.auth_type || 'password', process_paths: h.process_paths || [], group_id: h.group_id ?? undefined, credential_id: (h as unknown as { credential_id?: number }).credential_id ?? undefined })
     setModal(true)
   }
 
@@ -228,6 +238,7 @@ export default function HostManagement() {
       extra={<Space>
         {!noPerm && <Button icon={<CodeOutlined />} onClick={() => window.open('/terminal', '_blank', 'noopener')}>Web 终端</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
+        {isAdmin && <Button onClick={() => { setCredOpen(true); credForm.resetFields() }}>凭据管理</Button>}
         {isAdmin && <Button icon={<TeamOutlined />} onClick={() => setGroupDrawer(true)}>分组管理</Button>}
         {(isAdmin || createableGroups.length > 0) && <Button icon={<ImportOutlined />} onClick={openImport}>批量导入</Button>}
         {(isAdmin || createableGroups.length > 0) && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加主机</Button>}
@@ -326,6 +337,14 @@ export default function HostManagement() {
               </Form.Item>
               <Form.Item name="env_tag" label="环境标签" style={{ width: '32%' }}><Input placeholder="如 prod" /></Form.Item>
             </Space.Compact>
+            <Form.Item name="credential_id" label="凭据（可选）"
+              extra="从「凭据管理」里选一个已托管私钥后，下方密码/私钥可留空；不选则按内联方式填写">
+              <Select allowClear placeholder="选择已托管凭据" optionFilterProp="label"
+                options={credentials.map((c) => ({
+                  value: c.id,
+                  label: `${c.name}（${c.cred_type === 'key' ? '私钥' : '密码'}${c.username ? ' / ' + c.username : ''}）`,
+                }))} />
+            </Form.Item>
             {authType === 'password' && (
               <Form.Item name="ssh_password" label="SSH 密码" preserve={false}>
                 <Input.Password placeholder={editing ? '留空则不修改' : '留空则使用私钥认证'} autoComplete="new-password" />
@@ -361,6 +380,44 @@ export default function HostManagement() {
               </Form.List>
             </Form.Item>
           </Form>
+      </Modal>
+
+      {/* R43 H2：凭据管理（私钥集中托管，仅管理员） */}
+      <Modal title="凭据管理" open={credOpen} onCancel={() => setCredOpen(false)} width={760} footer={null} destroyOnClose>
+        <Form form={credForm} layout="inline" style={{ marginBottom: 12, rowGap: 8, flexWrap: 'wrap' }}
+          onFinish={async (v) => {
+            try {
+              await createHostCredential({ ...v })
+              message.success('已新增凭据')
+              credForm.resetFields(); loadCredentials()
+            } catch (e) { message.error(String((e as Error)?.message || '新增失败')) }
+          }}>
+          <Form.Item name="name" rules={[{ required: true, message: '名称必填' }]}><Input placeholder="凭据名称" style={{ width: 150 }} /></Form.Item>
+          <Form.Item name="cred_type" initialValue="key">
+            <Select style={{ width: 100 }} options={[{ value: 'key', label: '私钥' }, { value: 'password', label: '密码' }]} />
+          </Form.Item>
+          <Form.Item name="username"><Input placeholder="用户名(可选)" style={{ width: 130 }} /></Form.Item>
+          <Form.Item name="secret" rules={[{ required: true, message: '内容必填' }]}>
+            <Input.TextArea rows={3} placeholder="私钥内容或密码" style={{ width: 300, fontFamily: 'monospace' }} />
+          </Form.Item>
+          <Form.Item name="passphrase"><Input.Password placeholder="私钥口令(可选)" style={{ width: 150 }} autoComplete="new-password" /></Form.Item>
+          <Form.Item name="description"><Input placeholder="说明(可选)" style={{ width: 150 }} /></Form.Item>
+          <Form.Item><Button type="primary" htmlType="submit">新增</Button></Form.Item>
+        </Form>
+        <Table rowKey="id" size="small" dataSource={credentials}
+          columns={[
+            { title: '名称', dataIndex: 'name' },
+            { title: '类型', dataIndex: 'cred_type', width: 80, render: (v: string) => <Tag color={v === 'key' ? 'cyan' : 'default'}>{v === 'key' ? '私钥' : '密码'}</Tag> },
+            { title: '用户名', dataIndex: 'username', width: 120, render: (v: string) => v || '-' },
+            { title: '说明', dataIndex: 'description', render: (v: string) => v || '-' },
+            { title: '创建时间', dataIndex: 'created_at', width: 170, render: (v: string) => v || '-' },
+            { title: '操作', width: 80, render: (_: unknown, r: HostCredentialItem) => (
+              <Popconfirm title="删除该凭据？被主机引用时会拒绝" onConfirm={async () => {
+                try { await deleteHostCredential(r.id); message.success('已删除'); loadCredentials() }
+                catch (e) { message.error(String((e as Error)?.message || '删除失败')) }
+              }}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>
+            ) },
+          ]} pagination={false} />
       </Modal>
 
       {/* 批量导入 */}

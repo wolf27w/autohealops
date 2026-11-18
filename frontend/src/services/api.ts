@@ -699,6 +699,25 @@ export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: st
   http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
+// ============ 主机凭据库（R43 H2 私钥集中托管）============
+export interface HostCredentialItem {
+  id: number
+  name: string
+  cred_type: 'key' | 'password' | string
+  username?: string
+  has_secret?: boolean
+  has_passphrase?: boolean
+  description?: string
+  created_at?: string
+  updated_at?: string
+}
+export const listHostCredentials = () => http.get<HostCredentialItem[]>('/host-credentials')
+export const createHostCredential = (data: { name: string; cred_type: string; username?: string; secret: string; passphrase?: string; description?: string }) =>
+  http.post<HostCredentialItem>('/host-credentials', data)
+export const updateHostCredential = (id: number, data: { name?: string; cred_type?: string; username?: string; secret?: string; passphrase?: string; description?: string }) =>
+  http.put<HostCredentialItem>(`/host-credentials/${id}`, data)
+export const deleteHostCredential = (id: number) => http.delete(`/host-credentials/${id}`)
+
 // ============ 会话录制（R43 H4，asciinema cast v2）============
 export interface HostSessionItem {
   id: number
