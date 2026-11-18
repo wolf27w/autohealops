@@ -24,6 +24,7 @@ from app.services.command_guard import LineAssembler, check_command
 from app.services import host_group_service as hgs
 from app.services import host_session_service as hss
 from app.services import host_ssh
+from app.services import host_session_record_service as rec_svc
 from app.services.system_setting_service import get_setting, invalidate_setting_cache
 from app.api.terminal import _resolve_user
 from app.middleware.auth import get_current_active_user
@@ -178,6 +179,7 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
     sess = await hss.create_session(host.id, host.name, user.id, user.username,
                                     _client_ip(websocket), cols=cols, rows=rows, recorded=recorded)
     recorder = hss.SessionRecorder(sess.id) if recorded else None
+    cast_recorder = rec_svc.CastRecorder(sess.id, cols=cols, rows=rows) if recorded else None
     if recorder:
         ACTIVE[sess.id] = {"websocket": websocket, "user_id": user.id, "task": None}
 
@@ -233,8 +235,11 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                         j = None
                     if isinstance(j, dict) and j.get("type") == "resize":
                         try:
-                            proc.change_terminal_size(int(j.get("cols") or cols),
-                                                      int(j.get("rows") or rows))
+                            new_cols = int(j.get("cols") or cols)
+                            new_rows = int(j.get("rows") or rows)
+                            proc.change_terminal_size(new_cols, new_rows)
+                            if cast_recorder:
+                                cast_recorder.resize(new_cols, new_rows)
                         except Exception:  # noqa: BLE001
                             pass
                         continue
@@ -265,6 +270,8 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                     continue
                 if recorder:
                     recorder.add("input", data)
+                if cast_recorder:
+                    cast_recorder.add("input", data)
                 proc.stdin.write(data)
 
         async def pump_ssh_to_ws():
@@ -276,6 +283,8 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                 last_activity = time.monotonic()
                 if recorder:
                     recorder.add("output", chunk)
+                if cast_recorder:
+                    cast_recorder.add("output", chunk)
                 try:
                     await websocket.send_bytes(bytes(chunk))
                 except Exception:  # noqa: BLE001
@@ -300,6 +309,8 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                 await asyncio.sleep(hss.FLUSH_INTERVAL_SEC)
                 if recorder and recorder.should_flush():
                     await recorder.flush()
+                if cast_recorder and cast_recorder.should_flush():
+                    await cast_recorder.flush()
 
         tasks = [asyncio.create_task(pump_ws_to_ssh()),
                  asyncio.create_task(pump_ssh_to_ws()),
@@ -339,6 +350,8 @@ async def ws_host_terminal(websocket: WebSocket, host_id: int):
                 pass
         if recorder:
             await recorder.close(status, reason)
+        if cast_recorder:
+            await cast_recorder.close(status, reason)
         await _close_safe(websocket)
 
 
@@ -414,7 +427,10 @@ async def get_host_session(session_id: int, user: User = Depends(require_any_use
         "ended_at": str(sess.ended_at) if sess.ended_at else None,
         "duration_sec": sess.duration_sec, "bytes_in": sess.bytes_in, "bytes_out": sess.bytes_out,
         "cols": sess.cols, "rows": sess.rows, "recorded": bool(sess.recorded),
-        "close_reason": sess.close_reason, "active": sess.id in ACTIVE}}
+        "close_reason": sess.close_reason, "active": sess.id in ACTIVE,
+        "record_exists": rec_svc.cast_exists(sess.record_path),
+        "record_bytes": sess.record_bytes,
+        "cast_header": rec_svc.read_cast_header(sess.record_path)}}
 
 
 @router.get("/host-sessions/{session_id}/replay")

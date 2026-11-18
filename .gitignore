@@ -44,3 +44,4 @@ k8s/generated/
 
 # Agent 构建产物
 agent/build/
+api-server/data/

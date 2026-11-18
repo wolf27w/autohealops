@@ -14,7 +14,7 @@ from app.api import (
 
     workload_logs,
     oracle_clients,)
-from app.api import hosts, host_groups, jvm, host_terminal, host_audits, zombie, prompt_health
+from app.api import hosts, host_groups, jvm, host_terminal, host_audits, host_sessions, zombie, prompt_health
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -497,6 +497,19 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("堡垒机录制清理启动失败: %s", e)
 
+    # R43 H4 会话录像清理：cast 文件 + record_path 保留 30 天，每 12 小时扫一次
+    try:
+        from app.services.host_session_record_service import purge_old_recordings as _purge_cast
+        async def _purge_cast_job():
+            n = await _purge_cast(30)
+            if n:
+                logger.info("已清理过期会话录像 %s 条", n)
+        _background_tasks.append(asyncio.create_task(
+            _interval_worker("会话录像清理", 43200, _purge_cast_job, 300.0)))
+        logger.info("会话录像清理已启动（每 12 小时，保留 30 天）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("会话录像清理启动失败: %s", e)
+
     # D1 凭据到期主动通知（2026-10-29）：30/7/1 天三档提醒，每小时扫一次（Redis 去重）
     try:
         from app.services.credential_notice_service import check_credentials
@@ -693,6 +706,7 @@ app.include_router(terminal.router)
 app.include_router(hosts.router)
 app.include_router(host_terminal.router)
 app.include_router(host_audits.router)
+app.include_router(host_sessions.router)
 app.include_router(zombie.router)
 app.include_router(host_groups.router)
 app.include_router(mcp.router)

@@ -34,6 +34,10 @@ class HostSession(Base):
     rows: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
     recorded: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     close_reason: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    # asciinema cast 录像落盘路径（绝对路径，仅服务端使用，绝不返回前端）；无录像时为 NULL
+    record_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # cast 文件字节数（收盘时回填）
+    record_bytes: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 class HostSessionChunk(Base):
