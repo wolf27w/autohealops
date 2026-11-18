@@ -22,6 +22,7 @@
 | `MESSAGING.md` / `MIDDLEWARE-MONITORING.md` | 消息通道 / 中间件监控 |
 | `NEW-REQUIREMENTS-2026-10-19.md` | **新增需求 N12/N13**（监控无闪烁实时 + 容器级监控）—— ⏸ 已登记，暂不开发 |
 | `SLOW-SQL-UI-REQUIREMENTS-2026-11-18.md` | **慢 SQL 页面改版**（对齐阿里云慢日志：SQL 换行、列顺序、统计/明细两层）—— ⏸ 已登记，暂不开发 |
+| `POD-LOGS-MULTI-CONTAINER-2026-11-18.md` | **Pod 实时日志多容器 502**（默认容器规则/前端默认选中/错误提示）—— ✅ 已修复 |
 | `ENCRYPTION.md` | 跨语言加密约定（Python ⇄ Go，CI 有互测） |
 | `MIDDLEWARE-MONITORING.md` | 中间件监控 |
 
