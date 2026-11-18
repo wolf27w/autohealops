@@ -27,6 +27,7 @@ const ConfigsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ 
 const ConfigMapsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ConfigMapsRoute })))
 const SecretsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.SecretsRoute })))
 const StorageClassesRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.StorageClassesRoute })))
+const ClusterStatus = lazy(() => import('./pages/cluster/ClusterStatus'))
 const InspectionRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.InspectionRoute })))
 const GovernanceRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.GovernanceRoute })))
 const ServiceAccountsRoute = lazy(() => import('./pages/cluster/adapters').then(m => ({ default: m.ServiceAccountsRoute })))
@@ -205,6 +206,7 @@ export default function App() {
         }
       >
         <Route index element={<ClusterOverviewRoute />} />
+        <Route path="status" element={<ClusterStatus />} />
         <Route path="nodes" element={<NodesRoute />} />
         <Route path="workloads/:kind" element={<WorkloadsRoute />} />
         <Route path="workloads/:kind/:namespace/:name" element={<WorkloadDetail />} />

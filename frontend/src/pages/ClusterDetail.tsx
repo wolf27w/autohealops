@@ -808,6 +808,7 @@ export default function ClusterDetail() {
           }}>
           <Button size="small" danger>清理 Evicted</Button>
         </Popconfirm>
+        <Button size="small" onClick={() => navigate(`/clusters/${id}/status`)}>集群状态</Button>
         <Button size="small" onClick={() => navigate(`/clusters/${id}/nodes`)}>集群节点</Button>
         <Button size="small" onClick={() => navigate(`/resources/governance?cluster=${id}`)}>资源治理</Button>
         <Button size="small" onClick={() => setClusterHistoryOpen(true)}>发布历史</Button>
