@@ -9,7 +9,7 @@ from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.security import encrypt_aes256_gcm, generate_trace_id
 from app.middleware.permission import require_any_user
-from app.models import Host, HostGroup, User
+from app.models import Host, HostCredential, HostGroup, User
 from app.services import host_group_service as hgs
 from app.services import host_import_service as his
 from app.services.audit_service import create_audit_record
@@ -29,6 +29,7 @@ def _row(h: Host, group_name: str = "", can: dict | None = None) -> dict:
         "ssh_user": h.ssh_user, "has_password": bool(h.ssh_password_encrypted),
         "has_key": bool(getattr(h, "ssh_key_encrypted", None)),
         "has_key_passphrase": bool(getattr(h, "ssh_key_passphrase_encrypted", None)),
+        "credential_id": getattr(h, "credential_id", None),
         "auth_type": getattr(h, "auth_type", "password") or "password",
         "description": getattr(h, "description", "") or "",
         "ssh_key_path": h.ssh_key_path, "process_paths": paths,
@@ -155,10 +156,20 @@ async def create_host(payload: dict, user=Depends(require_any_user)):
     pwd = payload.get("ssh_password") or ""
     key = (payload.get("ssh_private_key") or "").strip()
     passphrase = payload.get("ssh_key_passphrase") or ""
-    auth_type = (payload.get("auth_type") or ("key" if key else "password")).strip().lower()
+    # R43 H2：绑定凭据库（私钥/密码集中托管）；有值则连接时优先用它解密，内联私钥可留空
+    credential_id = payload.get("credential_id")
+    if credential_id is not None:
+        credential_id = int(credential_id)
+    cred = None
+    if credential_id:
+        async with async_session() as s:
+            cred = await s.get(HostCredential, credential_id)
+        if not cred:
+            return {"code": 400, "message": "凭据不存在", "data": None}
+    auth_type = (payload.get("auth_type") or (cred.cred_type if cred else ("key" if key else "password"))).strip().lower()
     if auth_type not in ("password", "key"):
         return {"code": 400, "message": "auth_type 仅支持 password / key", "data": None}
-    if auth_type == "key" and not key and not (payload.get("ssh_key_path") or "").strip():
+    if auth_type == "key" and not key and not (payload.get("ssh_key_path") or "").strip() and not credential_id:
         return {"code": 400, "message": "认证方式为 key 时必须填写私钥", "data": None}
     key_err = _validate_private_key(key, passphrase)
     if key_err:
@@ -172,6 +183,7 @@ async def create_host(payload: dict, user=Depends(require_any_user)):
                  ssh_key_encrypted=encrypt_aes256_gcm(key) if key else None,
                  ssh_key_passphrase_encrypted=encrypt_aes256_gcm(passphrase) if passphrase else None,
                  ssh_key_path=(payload.get("ssh_key_path") or "").strip(),
+                 credential_id=credential_id,
                  description=(payload.get("description") or "")[:300],
                  process_paths=json.dumps(paths, ensure_ascii=False),
                  enabled=bool(payload.get("enabled", True)),
@@ -225,6 +237,14 @@ async def update_host(host_id: int, payload: dict, user=Depends(require_any_user
             if at not in ("password", "key"):
                 return {"code": 400, "message": "auth_type 仅支持 password / key", "data": None}
             h.auth_type = at
+        if "credential_id" in payload:
+            cid = payload.get("credential_id")
+            if cid is not None:
+                cid = int(cid)
+                cred = await s.get(HostCredential, cid)
+                if not cred:
+                    raise HTTPException(status_code=400, detail="凭据不存在")
+            h.credential_id = cid
         key = (payload.get("ssh_private_key") or "").strip()
         passphrase = payload.get("ssh_key_passphrase") or ""
         key_err = _validate_private_key(key, passphrase)

@@ -37,13 +37,47 @@ def _decrypt(value: str | None, host_name: str, what: str) -> str:
         return ""
 
 
-def resolve_credentials(host: Host) -> dict:
-    """解析主机凭据，返回 asyncssh.connect 所需 kwargs（不含 address/port/username）。"""
+async def load_credential(host: Host) -> dict | None:
+    """若主机绑定了凭据库（credential_id），取出并解密凭据（仅供连接，绝不下发）。"""
+    cred_id = getattr(host, "credential_id", None)
+    if not cred_id:
+        return None
+    from app.core.database import async_session
+    from app.models import HostCredential
+    async with async_session() as s:
+        cred = await s.get(HostCredential, int(cred_id))
+    if not cred:
+        return None
+    return {
+        "username": cred.username or "",
+        "cred_type": cred.cred_type,
+        "secret": _decrypt(cred.secret_encrypted, host.name, "凭据secret"),
+        "passphrase": _decrypt(cred.passphrase_encrypted, host.name, "凭据口令") or None,
+    }
+
+
+def resolve_credentials(host: Host, cred: dict | None = None) -> dict:
+    """解析主机凭据，返回 asyncssh.connect 所需 kwargs（不含 address/port/username）。
+
+    cred = load_credential() 的解密结果（可选）；存在时优先于内联私钥（R43 H2）。
+    """
+    kwargs: dict = {"known_hosts": None}
+    if cred:
+        secret = cred.get("secret") or ""
+        passphrase = cred.get("passphrase") or None
+        if cred.get("cred_type") == "key":
+            if secret:
+                kwargs["client_keys"] = [asyncssh.import_private_key(secret, passphrase=passphrase)]
+                if passphrase:
+                    kwargs["passphrase"] = passphrase
+        elif secret:
+            kwargs["password"] = secret
+        return kwargs
+
     password = _decrypt(getattr(host, "ssh_password_encrypted", ""), host.name, "密码")
     key_content = _decrypt(getattr(host, "ssh_key_encrypted", ""), host.name, "私钥")
     passphrase = _decrypt(getattr(host, "ssh_key_passphrase_encrypted", ""), host.name, "私钥口令") or None
 
-    kwargs: dict = {"known_hosts": None}
     if key_content:
         kwargs["client_keys"] = [asyncssh.import_private_key(key_content, passphrase=passphrase)]
         if passphrase:
@@ -58,12 +92,16 @@ def resolve_credentials(host: Host) -> dict:
 
 async def connect(host: Host, connect_timeout: int = 8, **extra):
     """建立 SSH 连接（调用方负责 close / wait_closed）。异常由调用方分类处理。"""
-    kwargs = resolve_credentials(host)
+    cred = await load_credential(host)
+    kwargs = resolve_credentials(host, cred=cred)
     kwargs.update(extra)
+    username = host.ssh_user or "root"
+    if cred and cred.get("username"):
+        username = cred["username"]
     return await asyncssh.connect(
         host.address,
         port=int(host.ssh_port or 22),
-        username=(host.ssh_user or "root"),
+        username=username,
         connect_timeout=connect_timeout,
         **kwargs,
     )

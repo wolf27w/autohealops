@@ -14,7 +14,7 @@ from app.api import (
 
     workload_logs,
     oracle_clients,)
-from app.api import hosts, host_groups, jvm, host_terminal, host_audits, host_sessions, zombie, prompt_health
+from app.api import hosts, host_groups, jvm, host_terminal, host_audits, host_sessions, host_credentials, zombie, prompt_health
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -707,6 +707,7 @@ app.include_router(hosts.router)
 app.include_router(host_terminal.router)
 app.include_router(host_audits.router)
 app.include_router(host_sessions.router)
+app.include_router(host_credentials.router)
 app.include_router(zombie.router)
 app.include_router(host_groups.router)
 app.include_router(mcp.router)
