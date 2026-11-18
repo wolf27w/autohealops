@@ -21,7 +21,7 @@
 
 1. **分类收敛为两层固定枚举**
    - **L1 域（5）**：`app` 应用 / `db` 数据库 / `node` 节点 / `network` 网络 / `release` 发布
-   - **L2 故障族（10）**：`resource` 资源不足 / `config` 配置错误 / `image` 镜像 / `schedule` 调度 / `probe` 探针 / `dependency` 下游依赖 / `code` 代码缺陷 / `capacity` 容量 / `lock` 锁与慢查询 / `network` 网络
+   - **L2 故障族（11）**：`resource` 资源不足 / `config` 配置错误 / `image` 镜像 / `schedule` 调度 / `probe` 探针 / `dependency` 下游依赖 / `code` 代码缺陷 / `capacity` 容量 / `lock` 锁与慢查询 / `network` 网络 / **`node_health` 节点健康**（老板 2026-11-18 15:09 定）
    - **L3 具体原因**（自由文本，不限）：由 agent 生成，写进 `root_cause`，**不进策略表**
 2. **`fault_type` 保留为「标签」**：继续用于统计报表、知识库检索过滤、通知路由、效果评估；**不再用于硬路由**（不再「识别成 A 类才走 A 流程」）。
 3. **自愈规则按 L2 族配「允许动作集」**：`self_heal_rules.fault_type_match` → `fault_family_match`（L2），具体动作由 Agent 在允许集内决策；高风险动作仍走审批与风险评分。
@@ -58,8 +58,8 @@
 | `code` 代码缺陷 | CrashLoopBackOff（栈/首启失败时归此类） |
 | `capacity` 容量 | DiskPressure、MemoryPressure |
 | `lock` 锁与慢查询 | （DB 域新增：慢 SQL / 锁等待） |
-| `network` 网络 | PodEvicted（网络类驱逐时归此类，或留 resource，见待确认） |
-| 待归类 | TerminatingStuck、NodeNotReady、NodeCordoned（节点域，建议 L1=node + L2=node_health 单列或并入 capacity） |
+| `network` 网络 | PodEvicted（网络类驱逐时归此类） |
+| **`node_health` 节点健康** | TerminatingStuck、NodeNotReady、NodeCordoned（L1=node） |
 
 ### 3.2 阈值与配置
 
@@ -82,10 +82,10 @@
 
 ## 5. 待确认（老板）
 
-1. L2 是否就这 10 类（多了应归 L3 自由文本）
-2. `TerminatingStuck` / `NodeNotReady` / `NodeCordoned` 归到 L1=node 的哪个 L2（建议单列 `node_health`，即 L2 变 11 类）
-3. `confidence` 阈值先用 0.6 还是要跑数据再定
-4. 诊断类提示词模板收敛后，旧的 12 条是停用（`is_active=0`）还是保留可回滚
+1. ✅ **已定（2026-11-18 15:09）**：L2 为 **11 类**，新增 `node_health`（TerminatingStuck / NodeNotReady / NodeCordoned 归此类，L1=node）
+2. `confidence` 阈值先用 0.6 还是要跑数据再定（建议先 0.6，两周后按分布调）
+3. 诊断类提示词模板收敛后，旧的 12 条是停用（`is_active=0`）还是保留可回滚
+4. 新增 L2 的门槛是否就按「必须驱动 统计/检索/路由/评估/审批 之一」执行
 
 ## 6. 分期建议（排期后执行）
 
