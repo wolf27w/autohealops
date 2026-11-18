@@ -51,6 +51,29 @@ const rangePresets = [
 const STATUS_LABEL: Record<string, string> = { up: '变慢', new: '新增', down: '变快', gone: '消失', same: '持平' }
 const STATUS_COLOR: Record<string, string> = { up: 'red', new: 'volcano', down: 'green', gone: 'blue', same: 'default' }
 
+// SQL 单元格：保留原换行（DIGEST_TEXT 常是超长单行），默认折 2 行可展开，避免省略号挡住后半段
+function SqlCell({ sql, maxLines = 2 }: { sql?: string; maxLines?: number }) {
+  const [open, setOpen] = useState(false)
+  if (!sql) return <>-</>
+  const long = sql.length > 120 || sql.split('\n').length > maxLines
+  const clamped = long && !open
+  return (
+    <div>
+      <pre style={{
+        margin: 0, fontFamily: 'inherit', fontSize: 12, lineHeight: '18px',
+        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        ...(clamped
+          ? { display: '-webkit-box', WebkitLineClamp: maxLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
+          : {}),
+      }}>{sql}</pre>
+      {long && (
+        <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
+          onClick={() => setOpen((v) => !v)}>{open ? '收起' : '展开'}</Button>
+      )}
+    </div>
+  )
+}
+
 export default function DbSlowSqlPanel({ connId }: { connId: number }) {
   const [rows, setRows] = useState<SlowSQLRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -129,8 +152,8 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
       render: (v: string, r: SlowSQLRow) => v
         ? <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openTrend(r)}>{v.slice(0, 16)}…</Button>
         : '-' },
-    { title: 'SQL', dataIndex: 'sql_text', ellipsis: true,
-      render: (v: string) => v ? <Tooltip title={<pre style={{ maxWidth: 700, whiteSpace: 'pre-wrap', margin: 0 }}>{v}</pre>}>{v}</Tooltip> : '-' },
+    { title: 'SQL', dataIndex: 'sql_text', width: 460,
+      render: (v: string) => <SqlCell sql={v} /> },
     { title: '库', dataIndex: 'schema_name', width: 110, render: (v: string) => v || '-' },
     { title: '次数', dataIndex: 'exec_count', width: 80, sorter: (a: SlowSQLRow, b: SlowSQLRow) => (a.exec_count || 0) - (b.exec_count || 0) },
     { title: '平均耗时(ms)', dataIndex: 'avg_latency_ms', width: 120, sorter: (a: SlowSQLRow, b: SlowSQLRow) => (a.avg_latency_ms || 0) - (b.avg_latency_ms || 0),
@@ -147,7 +170,7 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
   const cmpColumns = [
     { title: '状态', dataIndex: 'status', width: 80, render: (v: string) => (
       <Tag color={STATUS_COLOR[v] || 'default'}>{STATUS_LABEL[v] || v}</Tag>) },
-    { title: 'SQL', dataIndex: 'sql_text', ellipsis: true, render: (v: string) => v ? <Tooltip title={<pre style={{ maxWidth: 700, whiteSpace: 'pre-wrap', margin: 0 }}>{v}</pre>}>{v}</Tooltip> : '-' },
+    { title: 'SQL', dataIndex: 'sql_text', width: 460, render: (v: string) => <SqlCell sql={v} /> },
     { title: 'A 执行次数', dataIndex: 'a_exec', width: 100 },
     { title: 'B 执行次数', dataIndex: 'b_exec', width: 100 },
     { title: '次数变化', dataIndex: 'exec_delta', width: 90, render: (v: number) => (
