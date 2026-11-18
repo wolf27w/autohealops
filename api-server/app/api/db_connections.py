@@ -1748,3 +1748,64 @@ async def collect_slow_sql(conn_id: int, user=Depends(require_operator)):
     from app.services import db_collector
     count = await db_collector.collect_connection_slow_sql(conn_id)
     return {"code": 200, "message": "success", "data": {"collected": count}}
+
+
+@router.get("/{conn_id}/slow-sql-events")
+async def list_slow_sql_events(
+    conn_id: int,
+    start: str = "",
+    end: str = "",
+    schema: str = "",
+    host: str = "",
+    user: str = "",
+    keyword: str = "",
+    min_seconds: float | None = None,
+    order: str = "time",
+    digest: str = "",
+    page: int = 1,
+    page_size: int = 50,
+    current_user=Depends(require_any_user),
+):
+    """慢 SQL 明细列表（一次执行一行，对齐阿里云慢日志）；非 MySQL 返回 supported=false"""
+    if current_user.role != "admin" and not await user_permission_service.check_db_permission(
+        current_user, conn_id
+    ):
+        return {"code": 403, "message": "无权限", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    start_dt, bad = _parse_ts(start)
+    if bad:
+        return {"code": 400, "message": f"start 格式不正确：{bad}", "data": None}
+    end_dt, bad = _parse_ts(end)
+    if bad:
+        return {"code": 400, "message": f"end 格式不正确：{bad}", "data": None}
+    from app.services import db_slow_event_service
+    data = await db_slow_event_service.query_slow_events(
+        c,
+        start=start_dt,
+        end=end_dt,
+        schema=schema,
+        host=host,
+        user=user,
+        keyword=keyword,
+        min_seconds=min_seconds,
+        order=order,
+        digest=digest,
+        page=page,
+        page_size=page_size,
+    )
+    return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/{conn_id}/slow-sql-events/collect")
+async def collect_slow_sql_events(conn_id: int, current_user=Depends(require_operator)):
+    """手动触发慢 SQL 明细采集（performance_schema.events_statements_history_long）"""
+    if current_user.role != "admin" and not await user_permission_service.check_db_permission(
+        current_user, conn_id, "manage"
+    ):
+        return {"code": 403, "message": "无权限", "data": None}
+    from app.services import db_slow_event_service
+    count = await db_slow_event_service.collect_connection_slow_events(conn_id)
+    return {"code": 200, "message": "success", "data": {"collected": count}}

@@ -369,6 +369,12 @@ async def startup_tasks() -> None:
     from app.services.prompt_health_service import sweep as prompt_health_sweep
     _background_tasks.append(asyncio.create_task(
         _interval_worker("提示词模板体检", 3600, prompt_health_sweep, 180.0)))
+    # 慢 SQL 明细（逐次执行）采集：每 30 秒一轮，只采 MySQL 直连库；每天清理 7 天前明细
+    from app.services import db_slow_event_service as _slow_evt
+    _background_tasks.append(asyncio.create_task(
+        _interval_worker("慢SQL明细采集", 30, _slow_evt.collect_all_slow_events, 180.0)))
+    _background_tasks.append(asyncio.create_task(
+        _interval_worker("慢SQL明细清理", 86400, _slow_evt.purge_old_events, 300.0)))
     _background_tasks.append(asyncio.create_task(_maintenance_loop()))
     _background_tasks.append(asyncio.create_task(_agent_cluster_health_loop()))
     # R14：pull 模式集群直连目标刷新（每 30s）
