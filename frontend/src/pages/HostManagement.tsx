@@ -15,6 +15,7 @@ import {
 import type { HostItem, HostCheckResult, HostGroup, HostGroupMember, HostImportResult } from '../services/api'
 import type { User } from '../types'
 import { HostCommandAuditPanel } from '../components/HostCommandAuditDrawer'
+import HostSessionListPanel from '../components/host/HostSessionListPanel'
 
 const STATUS: Record<string, { color: string; label: string }> = {
   online: { color: 'green', label: '在线' }, offline: { color: 'red', label: '离线' }, unknown: { color: 'default', label: '未知' },
@@ -39,7 +40,7 @@ export default function HostManagement() {
   const [keyword, setKeyword] = useState('')
   const [kwInput, setKwInput] = useState('')  // 输入框即时值；300ms 防抖后写 keyword 触发查询
   // 页面两个 Tab：主机列表 / 命令审计（R36 §八）
-  const [tab, setTab] = useState<'list' | 'audit'>('list')
+  const [tab, setTab] = useState<'list' | 'audit' | 'sessions'>('list')
 
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<HostItem | null>(null)
@@ -233,7 +234,7 @@ export default function HostManagement() {
       </Space>}>
       <Tabs
         activeKey={tab}
-        onChange={(k) => setTab(k as 'list' | 'audit')}
+        onChange={(k) => setTab(k as 'list' | 'audit' | 'sessions')}
         items={[
           {
             key: 'list',
@@ -294,6 +295,11 @@ export default function HostManagement() {
             key: 'audit',
             label: '命令审计',
             children: <HostCommandAuditPanel active={tab === 'audit'} />,
+          },
+          {
+            key: 'sessions',
+            label: '会话录制',
+            children: <HostSessionListPanel />,
           },
         ]}
       />
