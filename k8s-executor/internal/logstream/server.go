@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/autohealops/k8s-executor/internal/jvm"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
@@ -81,6 +82,33 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(jvm.ArtifactDir, name))
 }
 
+// logSidecarNames 常见 sidecar 容器名（默认日志不选它们）
+var logSidecarNames = map[string]bool{
+	"filebeat": true, "fluent-bit": true, "fluentd": true, "logstash": true,
+	"istio-proxy": true, "envoy": true, "linkerd-proxy": true, "sidecar": true,
+	"logtail": true, "vector": true, "prometheus": true, "node-exporter": true,
+}
+
+// pickLogContainer 选默认日志容器：default-container 注解 → 第一个非 sidecar → 第一个容器
+func pickLogContainer(ctx context.Context, cc *k8sclient.ClusterClient, ns, pod string, logger *zap.Logger) string {
+	p, err := cc.Clientset.CoreV1().Pods(ns).Get(ctx, pod, metav1.GetOptions{})
+	if err != nil || p == nil || len(p.Spec.Containers) == 0 {
+		if err != nil && logger != nil {
+			logger.Debug("日志流：读取 Pod 选默认容器失败", zap.String("pod", ns+"/"+pod), zap.Error(err))
+		}
+		return ""
+	}
+	if v := p.Annotations["kubectl.kubernetes.io/default-container"]; v != "" {
+		return v
+	}
+	for _, c := range p.Spec.Containers {
+		if !logSidecarNames[strings.ToLower(c.Name)] {
+			return c.Name
+		}
+	}
+	return p.Spec.Containers[0].Name
+}
+
 // handleLogs GET /logs?cluster_id=&namespace=&pod=&container=&tail=&previous=&follow=
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -106,6 +134,13 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "集群客户端不可用: "+err.Error(), http.StatusBadGateway)
 		return
+	}
+
+	// 容器名为空时自动选一个：多容器 Pod（应用 + filebeat 等 sidecar）不指定容器
+	// API Server 会直接拒绝（"a container name must be specified for pod ..."），
+	// 实时日志页就会 502「取日志失败」。默认策略同 ExecInPod/GetPodLogs。
+	if container == "" {
+		container = pickLogContainer(r.Context(), cc, ns, pod, s.logger)
 	}
 
 	opts := &corev1.PodLogOptions{

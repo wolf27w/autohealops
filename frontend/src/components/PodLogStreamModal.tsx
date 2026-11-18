@@ -16,6 +16,15 @@ function buildWsUrl(clusterId: number, ns: string, pod: string, container: strin
 
 const MAX_LINES = 5000
 
+// 多容器 Pod（应用 + filebeat 等 sidecar）必须指定容器才能取日志；
+// 默认选第一个非 sidecar，避免后端报 "a container name must be specified"。
+const SIDECAR_NAMES = ['filebeat', 'fluent-bit', 'fluentd', 'logstash', 'istio-proxy', 'envoy',
+  'linkerd-proxy', 'sidecar', 'logtail', 'vector']
+function pickDefaultContainer(list: string[]): string {
+  return list.find((c) => !SIDECAR_NAMES.includes(c.toLowerCase())) || list[0] || ''
+}
+
+
 export default function PodLogStreamModal({ pod, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [container, setContainer] = useState('')
@@ -65,7 +74,12 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     if (!pod) return
     setContainer(''); setLines([]); setKeyword(''); bufRef.current = ''
     getPodContainers(pod.clusterId, pod.namespace, pod.name)
-      .then((d) => setContainers((d as unknown as { containers?: string[] }).containers || [])).catch(() => {})
+      .then((d) => {
+        const list = (d as unknown as { containers?: string[] }).containers || []
+        setContainers(list)
+        // 多容器时给个默认容器（否则后端 502「取日志失败」）
+        setContainer(pickDefaultContainer(list))
+      }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod])
 
