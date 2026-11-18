@@ -411,6 +411,8 @@ async def update_terminal_security(payload: dict, user: User = Depends(require_a
 
 @router.get("/hosts/{host_id}/sessions")
 async def list_host_sessions(host_id: int, limit: int = 50, user: User = Depends(require_any_user)):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="会话录制仅平台管理员可见")
     host = await _load_host(host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="主机不存在")
@@ -451,7 +453,9 @@ async def get_host_session(session_id: int, user: User = Depends(require_any_use
 
 @router.get("/host-sessions/{session_id}/replay")
 async def replay_host_session(session_id: int, user: User = Depends(require_any_user)):
-    """回放数据：块列表（按 seq 排序，text 已解压）。"""
+    """回放数据：块列表（按 seq 排序，text 已解压）。仅平台管理员。"""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="会话回放仅平台管理员可用")
     sess = await hss.load_session(session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="会话不存在")

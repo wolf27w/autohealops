@@ -9,7 +9,7 @@ import csv
 import io
 from datetime import datetime, time as dtime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select
 
@@ -82,9 +82,9 @@ async def list_host_command_audits(
 ):
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
-    # 非 admin 只能看自己
+    # 命令审计仅平台管理员可见（老板 2026-11-18 口径：项目管理员/普通用户一律不可看）
     if user.role != "admin":
-        user_id = user.id
+        raise HTTPException(status_code=403, detail="命令审计仅平台管理员可见")
 
     base = select(HostCommandAudit)
     base = _apply_filters(base, host_id, user_id, keyword, action, start, end)
@@ -111,7 +111,7 @@ async def export_host_command_audits(
     user: User = Depends(require_any_user),
 ):
     if user.role != "admin":
-        user_id = user.id
+        raise HTTPException(status_code=403, detail="命令审计导出仅平台管理员可用")
 
     base = select(HostCommandAudit)
     base = _apply_filters(base, host_id, user_id, keyword, action, start, end)

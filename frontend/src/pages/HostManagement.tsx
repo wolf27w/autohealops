@@ -302,16 +302,19 @@ export default function HostManagement() {
       </>
             ),
           },
-          {
-            key: 'audit',
-            label: '命令审计',
-            children: <HostCommandAuditPanel active={tab === 'audit'} />,
-          },
-          {
-            key: 'sessions',
-            label: '会话录制',
-            children: <HostSessionListPanel />,
-          },
+          // 命令审计 / 会话录制：仅平台管理员可见（老板 2026-11-18 口径）
+          ...(isAdmin ? [
+            {
+              key: 'audit',
+              label: '命令审计',
+              children: <HostCommandAuditPanel active={tab === 'audit'} />,
+            },
+            {
+              key: 'sessions',
+              label: '会话录制',
+              children: <HostSessionListPanel />,
+            },
+          ] : []),
         ]}
       />
 

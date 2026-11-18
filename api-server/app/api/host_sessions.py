@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.middleware.permission import require_any_user
+from fastapi import HTTPException
 from app.models import Host, HostSession, User
 from app.services import host_group_service as hgs
 from app.services import host_session_service as hss
@@ -76,6 +77,8 @@ async def list_host_sessions(
     page_size: int = 20,
     user: User = Depends(require_any_user),
 ):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="会话录制仅平台管理员可见")
     """会话录像列表：admin 全量；其它用户只看有 view 权限主机的会话。"""
     page = max(1, page)
     page_size = max(1, min(page_size, 200))
@@ -114,7 +117,9 @@ async def list_host_sessions(
 
 @router.get("/host-sessions/{session_id}/cast")
 async def download_host_session_cast(session_id: int, user: User = Depends(require_any_user)):
-    """返回 asciinema cast v2 文件内容（text/plain，流式）；文件不存在 → 404。"""
+    """返回 asciinema cast v2 文件内容（text/plain，流式）；文件不存在 → 404。仅平台管理员。"""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="会话录像仅平台管理员可下载")
     sess = await hss.load_session(session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="会话不存在")
