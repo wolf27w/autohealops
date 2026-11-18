@@ -69,6 +69,10 @@ export default function HostSessionReplay() {
             m = { ...m, cols: parsed.cols, rows: parsed.rows }
           }
         } catch { /* 404 / 无录像 → 用块回放 */ }
+        // 录屏里 input 事件的文字在 pty 回显里已经作为 output 出现过；
+        // 回放时再写一遍就会出现「cdcd」这种重复，所以只播 output。
+        // （input 事件仍保留在 cast 文件里，供审计/后续做「命令列表」用）
+        list = list.filter((c) => c.direction !== 'input')
         setChunks(list)
         setMeta(m)
       } catch (e) {
