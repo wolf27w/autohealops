@@ -11,7 +11,6 @@ import StatusTag from '../components/StatusTag'
 
 export default function ApprovalList() {
   // react-query：待审批（服务端分页，不再一次拉 500 被 clamp 静默截断）+ 已处理（分页）+ 意见模板（一次性）
-  const [handledPage, setHandledPage] = useState(1)
   const [pendingPage, setPendingPage] = useState(1)
   const PENDING_PAGE_SIZE = 20
   const [pageSize] = useState(20)
@@ -20,16 +19,11 @@ export default function ApprovalList() {
     queryFn: () => getApprovals({ status: 'pending', page: pendingPage, page_size: PENDING_PAGE_SIZE }),
     refetchInterval: 15000,
   })
-  const { data: handledData, refetch: refetchHandled } = useQuery({
-    queryKey: ['approvals', 'handled', handledPage],
-    queryFn: () => getApprovals({ status: 'handled', page: handledPage, page_size: pageSize }),
-    refetchInterval: 15000,
-  })
   const { data: templates = [] } = useQuery({
     queryKey: ['approval-comment-templates'],
     queryFn: () => getApprovalCommentTemplates(),
   })
-  const refetch = () => { refetchPending(); refetchHandled() }
+  const refetch = () => { refetchPending() }
   const [modalOpen, setModalOpen] = useState(false)
   const [current, setCurrent] = useState<Approval | null>(null)
   const [comment, setComment] = useState('')
@@ -93,8 +87,6 @@ export default function ApprovalList() {
 
   const pending = pendingData?.items ?? []
   const pendingTotal = pendingData?.total ?? 0
-  const handled = handledData?.items ?? []
-  const handledTotal = handledData?.total ?? 0
   const manualPending = pending.filter((a) => a.kind === 'manual_assist')
   const riskPending = pending.filter((a) => a.kind !== 'manual_assist')
 
@@ -144,25 +136,12 @@ export default function ApprovalList() {
     </div>
   )
 
-  const renderHandled = () => (
-    <Table rowKey="id" dataSource={handled}
-      pagination={{ current: handledPage, pageSize, total: handledTotal, showSizeChanger: false, onChange: setHandledPage }}
-      columns={[
-        { title: 'ID', dataIndex: 'id' },
-        { title: '计划', dataIndex: 'plan_id' },
-        { title: '状态', dataIndex: 'status', render: (s) => <StatusTag status={s} label={s === 'cancelled' ? '解除' : undefined} /> },
-        { title: '审批人', dataIndex: 'approved_by', render: (v) => formatApprovers(v) },
-        { title: '决定时间', dataIndex: 'decided_at' },
-      ]} />
-  )
-
   return (
     <div>
       <Tabs
         items={[
           { key: 'manual', label: '人工协助', children: renderPendingList(manualPending) },
           { key: 'risk', label: '风险审批', children: renderPendingList(riskPending) },
-          { key: 'handled', label: '已处理', children: renderHandled() },
           { key: 'db-approvals', label: '数据库审核', children: <DbApprovalsTab /> },
         ]}
       />
