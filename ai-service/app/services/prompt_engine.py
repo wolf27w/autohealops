@@ -11,6 +11,10 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.models import PromptFragment, PromptTemplate, PromptVersion
+from app.services.sql_optimize_prompt import (
+    DEFAULT_SQL_OPTIMIZE_SYSTEM,
+    DEFAULT_SQL_OPTIMIZE_USER_TEMPLATE,
+)
 
 logger = logging.getLogger("ai-service.prompt-engine")
 
@@ -155,6 +159,12 @@ DEFAULT_TEMPLATES = [
         "category": "diagnosis",
         "system_prompt": "你是一个数据库性能优化专家。请分析慢SQL并给出优化建议，返回JSON格式。JSON必须包含字段：root_cause（慢SQL原因）、suggestions（优化建议数组，如加索引/SQL改写/参数调优/分页优化）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",
         "user_prompt_template": "请分析以下慢SQL并给出优化建议：\nSQL语句：\n{sql_text}\n执行信息（执行次数/平均耗时/最大耗时）：\n{exec_output}",
+    },
+    {
+        "name": "sql_optimize",
+        "category": "db_diagnose",
+        "system_prompt": DEFAULT_SQL_OPTIMIZE_SYSTEM,
+        "user_prompt_template": DEFAULT_SQL_OPTIMIZE_USER_TEMPLATE,
     },
     {
         "name": "default_diagnosis",

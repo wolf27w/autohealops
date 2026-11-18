@@ -102,6 +102,10 @@ class AIClient:
             "context": context, "evidence": evidence, "severity": severity,
         }, trace_id)
 
+    async def sql_optimize(self, payload: dict, trace_id: str = "") -> dict:
+        """慢 SQL 逐条优化判定（结合执行计划 + 索引 + 静态规则，返回是否可优化）"""
+        return await self._post("/api/v1/ai/sql-optimize", payload, trace_id)
+
 
 # 全局单例
 ai_client = AIClient()

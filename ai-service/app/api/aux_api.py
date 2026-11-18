@@ -258,6 +258,119 @@ async def db_diagnose(payload: dict):
     return {"code": 200, "message": "success", "data": data}
 
 
+@router.post("/sql-optimize")
+async def sql_optimize(payload: dict):
+    """单条慢 SQL 优化诊断：基于 SQL 文本 + 可选执行计划/索引/规则，输出可优化点与建议（只给方案，不执行）"""
+    from app.services.model_adapter import call_with_fallback
+    import json as _json
+
+    # 提示词优先用「提示词模板」页里的 sql_optimize（可前端编辑），取不到才用内置默认
+    system = None
+    user_tpl = None
+    try:
+        from sqlalchemy import select
+        from app.core.database import async_session
+        from app.models import PromptTemplate
+        async with async_session() as _s:
+            _r = await _s.execute(select(PromptTemplate).where(
+                PromptTemplate.name == "sql_optimize", PromptTemplate.is_active.is_(True)))
+            _tpl = _r.scalar_one_or_none()
+        if _tpl:
+            system = _tpl.system_prompt
+            user_tpl = _tpl.user_prompt_template
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not system:
+        from app.services.sql_optimize_prompt import (
+            DEFAULT_SQL_OPTIMIZE_SYSTEM,
+            DEFAULT_SQL_OPTIMIZE_USER_TEMPLATE,
+        )
+        system = DEFAULT_SQL_OPTIMIZE_SYSTEM
+        user_tpl = DEFAULT_SQL_OPTIMIZE_USER_TEMPLATE
+
+    def _dumps(v):
+        try:
+            return _json.dumps(v, ensure_ascii=False, indent=2, default=str)
+        except Exception:  # noqa: BLE001
+            return str(v)
+
+    stats = payload.get("stats") or {}
+    explain = payload.get("explain") or {}
+    from app.services.prompt_engine import render_template
+    user = render_template(user_tpl, {
+        "db_type": payload.get("db_type", ""),
+        "db_name": payload.get("db_name", ""),
+        "schema_name": payload.get("schema_name", ""),
+        "sql_text": payload.get("sql_text", ""),
+        "stats": _dumps(stats),
+        "explain": _dumps(explain),
+        "indexes": _dumps(payload.get("indexes") or []),
+        "rules": _dumps(payload.get("rules") or []),
+    })
+    try:
+        resp, model = await call_with_fallback(system, user, "sql_optimize", payload.get("severity", "medium"))
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"AI 诊断失败: {e}", "data": None}
+
+    data = {"verdict": "maybe", "summary": "", "issues": [], "suggestions": [], "risk_level": "medium"}
+    parsed = _extract_json_dict(resp.content)
+    if parsed:
+        data["verdict"] = parsed.get("verdict", "maybe")
+        data["summary"] = parsed.get("summary", "")
+        data["issues"] = parsed.get("issues") or []
+        data["suggestions"] = parsed.get("suggestions") or []
+        data["risk_level"] = parsed.get("risk_level", "medium")
+    else:
+        data["summary"] = (resp.content or "")[:2000]
+
+    # verdict 非法兜底 maybe
+    if data["verdict"] not in ("optimizable", "maybe", "hard"):
+        data["verdict"] = "maybe"
+    # risk_level 非法兜底 medium
+    if data["risk_level"] not in ("low", "medium", "high"):
+        data["risk_level"] = "medium"
+    data["summary"] = str(data["summary"] or "")
+
+    # 归一化 issues：兼容字符串/对象；统一为对象（type/detail/severity）
+    norm_issues = []
+    for it in (data["issues"] or []):
+        if isinstance(it, str):
+            norm_issues.append({"type": it, "detail": "", "severity": "medium"})
+        elif isinstance(it, dict):
+            sev = str(it.get("severity", "medium"))
+            if sev not in ("high", "medium", "low"):
+                sev = "medium"
+            norm_issues.append({
+                "type": str(it.get("type", "")),
+                "detail": str(it.get("detail", "") or ""),
+                "severity": sev,
+            })
+    data["issues"] = norm_issues
+
+    # 归一化 suggestions：兼容字符串/对象；统一为对象（title/detail/sql_before/sql_after/index_ddl/impact/risk）
+    norm_sug = []
+    for s in (data["suggestions"] or []):
+        if isinstance(s, str):
+            norm_sug.append({"title": s, "detail": "", "sql_before": "", "sql_after": "",
+                             "index_ddl": "", "impact": "", "risk": ""})
+        elif isinstance(s, dict):
+            norm_sug.append({
+                "title": str(s.get("title", "")),
+                "detail": str(s.get("detail", "") or ""),
+                "sql_before": str(s.get("sql_before", "") or ""),
+                "sql_after": str(s.get("sql_after", "") or ""),
+                "index_ddl": str(s.get("index_ddl", "") or ""),
+                "impact": str(s.get("impact", "") or ""),
+                "risk": str(s.get("risk", "") or ""),
+            })
+    data["suggestions"] = norm_sug
+
+    data["model"] = model
+    data["raw"] = resp.content
+    return {"code": 200, "message": "success", "data": data}
+
+
 @router.post("/logs/search")
 async def search_logs(payload: dict):
     es = ESClient()

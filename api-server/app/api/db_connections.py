@@ -1714,6 +1714,32 @@ async def slow_sql_digest_trend(conn_id: int, digest: str, hours: int = 24, user
     ]}
 
 
+@router.post("/{conn_id}/slow-sql/{digest}/optimize")
+async def optimize_slow_sql(conn_id: int, digest: str, payload: dict, user=Depends(require_any_user)):
+    """R3.3+：慢 SQL 逐条优化诊断（读执行计划 + 查索引 + AI 判定是否可优化，全程只读）。
+
+    body: {sql_text: 可选（空则按 digest 查 SlowSQLRecord）, schema_name: 可选}
+    返回 code=200 时 data 为 {digest, verdict, verdict_label, summary, risk_level,
+    issues, suggestions, explain, indexes, stats, model}。
+    """
+    if user.role != "admin" and not await user_permission_service.check_db_permission(user, conn_id):
+        return {"code": 403, "message": "无权限", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    from app.services import sql_optimize_service
+    result = await sql_optimize_service.optimize(
+        c,
+        digest,
+        (payload.get("sql_text") or "").strip(),
+        (payload.get("schema_name") or "").strip(),
+    )
+    if result is None:
+        return {"code": 404, "message": "未找到该 digest 对应的慢 SQL 记录，且未提供 sql_text", "data": None}
+    return {"code": 200, "message": "success", "data": result}
+
+
 @router.post("/{conn_id}/collect")
 async def collect_slow_sql(conn_id: int, user=Depends(require_operator)):
     """手动触发慢 SQL 采集"""
