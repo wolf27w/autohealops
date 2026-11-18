@@ -1171,7 +1171,7 @@ export const drainNode = (clusterId: number, node: string) =>
   http.post<{ success: boolean; output: string; error: string }>(`/resources/clusters/${clusterId}/nodes/${node}/drain`, { confirm: true })
 // 日志增强（P1-R5 收尾）：Pod 日志下载(gzip)
 export const downloadPodLogs = (clusterId: number, ns: string, pod: string,
-  params?: { container?: string; tail?: number; previous?: boolean }) =>
+  params?: { container?: string; tail?: number; previous?: boolean; all?: boolean }) =>
   http.get<Blob>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/logs/download`, { params, responseType: 'blob' })
 export const batchNodes = (clusterId: number, op: 'cordon' | 'uncordon', names: string[]) =>
   http.post<{ results: { node: string; success: boolean; message: string }[] }>(`/resources/clusters/${clusterId}/nodes/batch`, { op, names })

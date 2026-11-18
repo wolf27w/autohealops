@@ -76,6 +76,7 @@ async def ws_pod_logs(websocket: WebSocket, cluster_id: int, namespace: str, pod
         "cluster_id": cluster_id, "namespace": namespace, "pod": pod_name,
         "container": websocket.query_params.get("container", ""),
         "tail": websocket.query_params.get("tail", "200"),
+        "since_seconds": websocket.query_params.get("since_seconds", ""),
         "previous": websocket.query_params.get("previous", "false"),
         "follow": websocket.query_params.get("follow", "true"),
     }

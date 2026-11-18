@@ -21,7 +21,6 @@ interface LogRow { pod: string; line: string }
 interface AggregateData { columns: string[]; rows: LogRow[]; truncated: boolean; pods: number; errors: { pod: string; error: string }[] }
 
 const MAX_LINES = 5000
-const TAIL_OPTIONS = [100, 200, 500, 1000]
 const DOWNLOAD_TAIL = 5000
 const PALETTE = ['#4ec9b0', '#569cd6', '#dcdcaa', '#c586c0', '#ce9178', '#9cdcfe', '#b5cea8', '#e5c07b', '#f44747', '#7fdbca']
 
@@ -46,8 +45,10 @@ async function gzipBlob(text: string): Promise<Blob> {
 export default function WorkloadLogsModal({ clusterId, namespace, kind, name, open, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [container, setContainer] = useState('')
-  const [tail, setTail] = useState(200)
   const [following, setFollowing] = useState(false)
+  const [paused, setPaused] = useState(false)          // 暂停=停渲染但后台继续收
+  const pausedRef = useRef(false)
+  const pendingRows = useRef<LogRow[]>([])
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
   const [lines, setLines] = useState<LogRow[]>([])
@@ -57,12 +58,12 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [truncated, setTruncated] = useState(false)
 
+  useEffect(() => { pausedRef.current = paused }, [paused])
+
   const esRef = useRef<EventSource | null>(null)
   const boxRef = useRef<HTMLPreElement | null>(null)
   const containerRef = useRef(container)
-  const tailRef = useRef(tail)
   useEffect(() => { containerRef.current = container }, [container])
-  useEffect(() => { tailRef.current = tail }, [tail])
 
   const closeStream = useCallback(() => {
     const es = esRef.current
@@ -80,9 +81,11 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   }, [])
 
   // 快照加载（非跟随态）
-  const loadSnapshot = useCallback(async (c: string, t: number) => {
+  const DEFAULT_WINDOW_SECONDS = 120
+
+  const loadSnapshot = useCallback(async (c: string) => {
     const token = localStorage.getItem('token') || ''
-    const p = new URLSearchParams({ container: c, tail: String(t) })
+    const p = new URLSearchParams({ container: c, since_seconds: String(DEFAULT_WINDOW_SECONDS), tail: String(200) })
     const url = `/api/v1/resources/clusters/${clusterId}/namespaces/${encodeURIComponent(namespace)}/workloads/${kind}/${name}/logs?${p.toString()}`
     try {
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
@@ -110,7 +113,10 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     es.addEventListener('log', (ev) => {
       try {
         const j = JSON.parse((ev as MessageEvent).data as string) as LogRow
-        if (j && typeof j.pod === 'string' && typeof j.line === 'string') appendRows([j])
+        if (j && typeof j.pod === 'string' && typeof j.line === 'string') {
+          if (pausedRef.current) pendingRows.current.push(j)
+          else appendRows([j])
+        }
       } catch { /* 忽略坏帧 */ }
     })
     es.addEventListener('error', (ev) => {
@@ -140,8 +146,8 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   useEffect(() => {
     if (!open) return
     if (following) return
-    loadSnapshot(container, tail)
-  }, [open, container, tail, following, loadSnapshot])
+    loadSnapshot(container)
+  }, [open, container, following, loadSnapshot])
 
   // 卸载 / 关闭：关闭 SSE
   useEffect(() => () => closeStream(), [closeStream])
@@ -161,7 +167,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const download = async () => {
     const token = localStorage.getItem('token') || ''
     const c = containerRef.current
-    const p = new URLSearchParams({ container: c, tail: String(DOWNLOAD_TAIL) })
+    const p = new URLSearchParams({ container: c, all: 'true', tail: String(DOWNLOAD_TAIL) })
     const url = `/api/v1/resources/clusters/${clusterId}/namespaces/${encodeURIComponent(namespace)}/workloads/${kind}/${name}/logs?${p.toString()}`
     try {
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
@@ -226,25 +232,30 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     <Modal open={open} onCancel={onClose} footer={null} width={1100} destroyOnClose
       title={<Space>聚合日志：{name}
         <Tag color="default" style={{ fontSize: 11 }}>{kind}</Tag>
-        <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>● {connected ? '已连接' : following ? '连接中…' : '未跟随'}</span>
+        <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
+          ● {following ? (paused ? '已暂停（后台继续接收）' : (connected ? '实时' : '连接中…')) : '已暂停（最近 2 分钟）'}
+        </span>
         {truncated && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
         <span style={{ color: '#8c8c8c', fontSize: 12 }}>{shown.length}/{lines.length} 行</span>
       </Space>}>
       <Space wrap style={{ marginBottom: 8 }}>
         <Select style={{ width: 170 }} allowClear placeholder="容器(默认=全部)" value={container || undefined}
           onChange={(v) => setContainer(v || '')} options={containers.map((c) => ({ value: c, label: c }))} />
-        <Select style={{ width: 110 }} value={tail}
-          onChange={(v) => setTail(Number(v))}
-          options={TAIL_OPTIONS.map((t) => ({ value: t, label: `${t} 行` }))} />
         <Select style={{ width: 170 }} allowClear placeholder="过滤 Pod" value={podFilter || undefined}
           onChange={(v) => setPodFilter(v || '')} options={podNames.map((p) => ({ value: p, label: p }))} />
         <Input style={{ width: 220 }} allowClear value={keyword} onChange={(e) => setKeyword(e.target.value)}
           placeholder="关键字过滤（空格=同时包含）" />
         <Space size={4}><span>只看错误</span><Switch checked={onlyErrors} onChange={setOnlyErrors} /></Space>
-        <Button type="primary" icon={following ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-          onClick={() => (following ? closeStream() : startFollow())}>
-          {following ? '停止跟随' : '开始跟随'}
-        </Button>
+        {(!following || paused)
+          ? <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => {
+            if (!following) { setPaused(false); pausedRef.current = false; startFollow() }
+            else {
+              setPaused(false); pausedRef.current = false
+              const rest = pendingRows.current; pendingRows.current = []
+              if (rest.length) appendRows(rest)
+            }
+          }}>{following ? '恢复' : '实时日志'}</Button>
+          : <Button icon={<PauseCircleOutlined />} onClick={() => setPaused(true)}>暂停</Button>}
         <Space size={4}><span>自动滚动</span><Switch checked={autoScroll} onChange={setAutoScroll} /></Space>
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>贴底</Button>
         <Button icon={<DownloadOutlined />} onClick={download}>下载(gzip)</Button>

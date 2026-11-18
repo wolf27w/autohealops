@@ -7,10 +7,17 @@ import { getPodContainers, downloadPodLogs } from '../services/api'
 interface LogPod { clusterId: number; namespace: string; name: string }
 interface Props { pod: LogPod | null; onClose: () => void }
 
-function buildWsUrl(clusterId: number, ns: string, pod: string, container: string, tail: number, follow: boolean, previous: boolean) {
+// 默认窗口：最近 2 分钟（点「实时日志」才持续跟随）
+const DEFAULT_WINDOW_SECONDS = 120
+
+function buildWsUrl(clusterId: number, ns: string, pod: string, container: string, follow: boolean,
+  previous: boolean, sinceSeconds: number) {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token') || ''
-  const p = new URLSearchParams({ token, container, tail: String(tail), follow: String(follow), previous: String(previous) })
+  const p = new URLSearchParams({
+    token, container, follow: String(follow), previous: String(previous),
+    since_seconds: String(sinceSeconds),
+  })
   return `${proto}//${window.location.host}/api/v1/logs/ws/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/logs?${p.toString()}`
 }
 
@@ -28,8 +35,7 @@ function pickDefaultContainer(list: string[]): string {
 export default function PodLogStreamModal({ pod, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [container, setContainer] = useState('')
-  const [tail, setTail] = useState(200)
-  const [follow, setFollow] = useState(true)
+  const [live, setLive] = useState(false)   // false=最近 2 分钟快照(暂停) / true=实时跟随
   const [previous, setPrevious] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [lines, setLines] = useState<string[]>([])
@@ -40,6 +46,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   const boxRef = useRef<HTMLPreElement>(null)
   const bufRef = useRef('')
   const pausedRef = useRef(false)
+  const pendingRef = useRef<string>('')   // 暂停期间后台继续收的内容（恢复时一次性补齐）
   useEffect(() => { pausedRef.current = paused }, [paused])
 
   const closeWs = () => {
@@ -56,7 +63,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   const connect = () => {
     if (!pod) return
     closeWs(); setLines([]); bufRef.current = ''
-    const ws = new WebSocket(buildWsUrl(pod.clusterId, pod.namespace, pod.name, container, tail, follow, previous))
+    const ws = new WebSocket(buildWsUrl(pod.clusterId, pod.namespace, pod.name, container, live, previous, DEFAULT_WINDOW_SECONDS))
     wsRef.current = ws
     ws.onopen = () => setConnected(true)
     ws.onclose = () => setConnected(false)
@@ -65,7 +72,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
       const text = typeof ev.data === 'string' ? ev.data : ''
       if (!text) return
       if (text.startsWith('{"type"')) { try { const j = JSON.parse(text); if (j.message) { setLines((l) => [...l, `[错误] ${j.message}`]); return } } catch { /* ignore */ } }
-      if (pausedRef.current) { bufRef.current += text; return }
+      if (pausedRef.current) { pendingRef.current += text; return }
       appendText(text)
     }
   }
@@ -85,7 +92,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
 
   // pod / 容器 / 行数 / 跟随 / 重启前 变化 → 重连
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (pod) connect(); return () => closeWs() }, [pod, container, tail, follow, previous])
+  useEffect(() => { if (pod) connect(); return () => closeWs() }, [pod, container, live, previous])
 
   useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [lines, autoScroll])
 
@@ -99,23 +106,35 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   }
   return (
     <Modal open title={<Space>实时日志：{pod.name}
-      <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>● {connected ? '已连接' : '未连接'}</span>
+      <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
+        ● {live ? (connected ? '实时' : '连接中…') : '已暂停（最近 2 分钟）'}
+      </span>
     </Space>} footer={null} onCancel={onClose} width={1000} destroyOnClose>
       <Space wrap style={{ marginBottom: 8 }}>
         <Select style={{ width: 170 }} allowClear placeholder="容器(默认)" value={container || undefined}
           onChange={(v) => setContainer(v || '')} options={containers.map((c) => ({ value: c, label: c }))} />
-        <Input type="number" value={tail} onChange={(e) => setTail(Number(e.target.value) || 200)} style={{ width: 96 }} addonBefore="行数" />
-        <Space size={4}><span>跟随</span><Switch checked={follow} onChange={setFollow} /></Space>
         <Space size={4}><span>重启前</span><Switch checked={previous} onChange={setPrevious} /></Space>
         <Input placeholder="关键字过滤" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: 150 }} allowClear />
         <Button icon={<ClearOutlined />} onClick={() => { setLines([]); bufRef.current = '' }}>清空</Button>
-        <Button icon={paused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
-          onClick={() => { if (paused) { appendText(''); setPaused(false) } else setPaused(true) }}>{paused ? '继续' : '暂停'}</Button>
+        {(!live || paused)
+          ? <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => {
+            // 进入/恢复实时：暂停期间的缓冲一次性补齐，再继续渲染
+            setPaused(false)
+            pausedRef.current = false
+            if (!live) setLive(true)
+            const rest = pendingRef.current
+            pendingRef.current = ''
+            if (rest) appendText(rest)
+          }}>{live ? '恢复' : '实时日志'}</Button>
+          : <Button icon={<PauseCircleOutlined />} onClick={() => {
+            // 暂停 = 停渲染但后台继续收（socket 不断开）
+            setPaused(true)
+          }}>暂停</Button>}
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>{autoScroll ? '取消贴底' : '自动贴底'}</Button>
         <Button icon={<DownloadOutlined />} onClick={async () => {
           if (!pod) return
           try {
-            const blob = await downloadPodLogs(pod.clusterId, pod.namespace, pod.name, { container, tail, previous })
+            const blob = await downloadPodLogs(pod.clusterId, pod.namespace, pod.name, { container, previous, all: true })
             const url = URL.createObjectURL(blob)
             const a = document.createElement('a'); a.href = url; a.download = `${pod.namespace}_${pod.name}.log.gz`; a.click()
             setTimeout(() => URL.revokeObjectURL(url), 3000)

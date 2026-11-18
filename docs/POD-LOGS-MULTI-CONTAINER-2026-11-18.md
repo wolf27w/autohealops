@@ -77,7 +77,7 @@ choose one of: [efreight-cloud-ui filebeat]
 3. 「只看错误」匹配 `ERROR|ERR|FATAL|WARN|WARNING|Exception|panic`。
 4. 下载（gzip）导出的是 **当前筛选结果**，文件名带 `_filtered` 便于区分。
 
-## 7. 追加需求：日志页改成「最近 2 分钟 + 实时/暂停」两态（2026-11-18 11:20，待开发）
+## 7. 追加需求：日志页改成「最近 2 分钟 + 实时/暂停」两态（2026-11-18 11:20，**已实现**）
 
 老板口径：**不要「行数」这种长短选择**；要么实时、要么暂停；点开日志默认给**最近 2 分钟**，点「实时日志」才开始动态跟随。
 
@@ -108,8 +108,31 @@ choose one of: [efreight-cloud-ui filebeat]
 - 聚合日志同样规则，容器选择仍保留。
 - 最近 2 分钟为空时提示「最近 2 分钟无日志，可点实时日志继续观察」。
 
-### 7.4 待确认
+### 7.4 老板拍板（2026-11-18 11:23）
 
-1. 暂停语义：**停渲染但后台继续收**（恢复即补齐）还是**彻底断开**（恢复重新拉最近 2 分钟 + 跟随）？我建议前者。
-2. 是否保留「重启前（previous）」开关（崩溃排查常用，建议保留）。
-3. 后端走方案 A（改 proto）还是 B（统一走 logstream HTTP）？我建议 B，不动 proto，风险最低。
+1. 暂停语义 = **停渲染、后台继续收、恢复即补齐** ✅ 已按此实现
+2. **保留**「重启前（previous）」开关 ✅
+3. 后端走 **方案 B**（统一走 logstream HTTP，不改 proto）✅ 已按此实现
+4. 服务详情不做实时/暂停改造；**下载一律导出整份文件**（不是当前视图片段）✅ 已按此实现
+
+### 7.5 实现落点
+
+| 层 | 文件 | 说明 |
+|---|---|---|
+| 执行器 | `k8s-executor/internal/logstream/server.go` | 新增 `since_seconds`（优先于 tail，上限 7 天）与 `all=true`（不设 TailLines = 整个文件） |
+| api-server | `app/services/logstream_client.py`（新） | 直连 9099 取日志，剥行首时间戳；agent 集群无 kubeconfig 时返回错误由调用方回落 gRPC |
+| api-server | `app/api/resources.py` | `pod_logs` / `workload_aggregated_logs` 加 `since_seconds`（并发拉取）与 `all`；`logs/download` 加 `all=true`（回退 5000 行） |
+| api-server | `app/api/logs.py` | WS 透传 `since_seconds` |
+| 前端 | `PodLogStreamModal.tsx` | 去掉行数下拉；默认最近 2 分钟；主按钮「实时日志 / 暂停 / 恢复」；暂停缓冲后台继续收 |
+| 前端 | `WorkloadLogsModal.tsx` | 同上；快照改 `since_seconds=120`；下载带 `all=true` |
+
+### 7.6 实测（2026-11-18 11:30 生产集群 prod-eft）
+
+- Pod 快照最近 2 分钟：`since_seconds=120` → 200，2367 行，`window=最近 120 秒`，`fallback=false`
+- 聚合快照：2 个 Pod → 6041 行，0 错误，无 Pod 回落
+- 下载：`tail=200` → 6196 字节；`all=true` → 72640 字节（2639 行，整份文件）
+- `tsc -b` 0 错、`npm run build` 4.01s
+
+### 7.7 运维注意
+
+重启 api-server 时若进程卡住不退出（历史问题：隧道/后台任务），用 `--timeout-graceful-shutdown 8` 兜底；`start.sh` 与 `scripts/dev-reload.sh` 已加上该参数。

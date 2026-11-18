@@ -500,14 +500,25 @@ async def pod_metrics(cluster_id: int, namespace: str, pod_name: str, range: str
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs")
 async def pod_logs(cluster_id: int, namespace: str, pod_name: str, container: str = "",
-                   tail: int = 200, previous: bool = False, user=Depends(require_any_user)):
+                   tail: int = 200, previous: bool = False, since_seconds: int = 0,
+                   user=Depends(require_any_user)):
     """查看 Pod 容器日志（只读）
 
-    tail 限幅 1~2000：前端「实时查看 stdout」开关打开后会每 2 秒按 tail 拉一次。
+    since_seconds > 0：取最近 N 秒（默认前端传 120 = 最近 2 分钟），走 executor 日志流 HTTP；
+    日志流不可用（如 agent 集群无平台 kubeconfig）时回落 gRPC tail 行数口径。
     """
     tail = max(1, min(int(tail or 200), 2000))
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
+    since_seconds = max(0, min(int(since_seconds or 0), 7 * 24 * 3600))
+    if since_seconds:
+        from app.services.logstream_client import fetch_logs
+        text, err = await fetch_logs(cluster_id, namespace, pod_name, container,
+                                     since_seconds=since_seconds, previous=previous, timeout=30.0)
+        if not err:
+            return {"code": 200, "message": "success",
+                    "data": {"logs": text, "window": f"最近 {since_seconds} 秒", "fallback": False}}
+        logger.debug("Pod 日志按时间窗口获取失败，回落 gRPC tail: %s", err)
     r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name, container, tail, previous)
     if not r.get("success"):
         err = str(r.get("error", "") or "")
@@ -2072,21 +2083,46 @@ async def list_isolated(cluster_id: int, namespace: str, user=Depends(require_an
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/logs")
 async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, name: str,
                                    container: str = "", tail: int = 200, previous: bool = False,
+                                   since_seconds: int = 0, all: bool = False,
                                    user=Depends(require_any_user)):
-    """聚合日志（R5）：拉取 Deployment 下所有 Pod 的日志（最多 60 个，tail 截断）"""
+    """聚合日志（R5）：拉取 Deployment 下所有 Pod 的日志（最多 60 个）
+
+    since_seconds > 0：按「最近 N 秒」窗口取（走 executor 日志流 HTTP，并发拉取）；
+    日志流不可用的 Pod 回落 gRPC tail 行数口径（result 里 fallback=True 标记）。
+    """
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
     tail = max(1, min(int(tail or 200), 2000))
+    since_seconds = max(0, min(int(since_seconds or 0), 7 * 24 * 3600))
     pods_r = await executor_client.acall(executor_client.list_deployment_pods, cluster_id, namespace, name)
     if not pods_r.get("success"):
         return {"code": 500, "message": pods_r.get("message") or "列 Pod 失败", "data": None}
     pods = pods_r.get("pods", [])[:60]
-    results = []
-    for p in pods:
-        r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, p.get("name"),
+
+    async def _one(p: dict) -> dict:
+        pname = p.get("name")
+        base = {"pod": pname, "phase": p.get("phase")}
+        if since_seconds or all:
+            from app.services.logstream_client import fetch_logs
+            text, err = await fetch_logs(cluster_id, namespace, pname, container,
+                                         since_seconds=since_seconds, all_lines=all,
+                                         previous=previous, timeout=60.0 if all else 30.0)
+            if not err:
+                return {**base, "success": True, "logs": text, "error": "", "fallback": False}
+        r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pname,
                                         container, tail, previous)
-        results.append({"pod": p.get("name"), "phase": p.get("phase"),
-                        "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
+        return {**base, "success": r.get("success"), "logs": r.get("logs", ""),
+                "error": r.get("error", ""), "fallback": bool(since_seconds)}
+
+    if since_seconds or all:
+        results = list(await asyncio.gather(*[_one(p) for p in pods]))
+    else:
+        results = []
+        for p in pods:
+            r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, p.get("name"),
+                                            container, tail, previous)
+            results.append({"pod": p.get("name"), "phase": p.get("phase"),
+                            "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
     # 2026-11-16（R5）：额外返回合并后的列式 rows（前端聚合日志弹窗用），pods 保持兼容
     try:
         from app.api.workload_logs import merge_log_lines
@@ -2579,15 +2615,29 @@ async def node_drain(cluster_id: int, node: str, payload: dict, user=Depends(req
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs/download")
 async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, container: str = "",
-                            tail: int = 2000, previous: bool = False, user=Depends(require_any_user)):
-    """下载 Pod 容器日志（gzip，附件）。"""
+                            tail: int = 2000, previous: bool = False, all: bool = False,
+                            user=Depends(require_any_user)):
+    """下载 Pod 容器日志（gzip，附件）。
+
+    all=true：导出整个日志文件（不截断，走日志流 HTTP；失败回落 5000 行）。
+    下载永远是「整份文件/整段」，不受页面上「最近 2 分钟」视图影响。
+    """
     import gzip
     from fastapi.responses import Response
-    tail = max(1, min(int(tail or 2000), 5000))
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
-    r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name, container, tail, previous)
-    text = r.get("logs", "") if r.get("success") else ""
+    text = ""
+    if all:
+        from app.services.logstream_client import fetch_logs
+        text, err = await fetch_logs(cluster_id, namespace, pod_name, container,
+                                     all_lines=True, previous=previous, timeout=120.0)
+        if err:
+            logger.debug("整份日志下载失败，回落 gRPC 5000 行: %s", err)
+    if not text:
+        tail = max(1, min(int(tail or 2000), 5000))
+        r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name,
+                                        container, tail, previous)
+        text = r.get("logs", "") if r.get("success") else ""
     body = gzip.compress(text.encode("utf-8"))
     fn = f"{namespace}_{pod_name}_{'previous' if previous else 'current'}.log.gz"
     return Response(content=body, media_type="application/gzip",

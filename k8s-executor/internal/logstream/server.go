@@ -127,6 +127,16 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if v, e := strconv.ParseInt(q.Get("tail"), 10, 64); e == nil && v > 0 {
 		tail = v
 	}
+	// since_seconds > 0：只取最近 N 秒（默认 2 分钟由调用方传 120），优先于 tail
+	var since *int64
+	if v, e := strconv.ParseInt(q.Get("since_seconds"), 10, 64); e == nil && v > 0 {
+		if v > 7*24*3600 {
+			v = 7 * 24 * 3600
+		}
+		since = &v
+	}
+	// all=true：不截断，返回完整日志文件（仅支持 follow=false，下载场景用）
+	all := q.Get("all") == "true"
 	previous := q.Get("previous") == "true"
 	follow := q.Get("follow") != "false" // 默认跟随
 
@@ -144,8 +154,16 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := &corev1.PodLogOptions{
-		Container: container, TailLines: &tail, Previous: previous,
+		Container: container, Previous: previous,
 		Timestamps: true, Follow: follow,
+	}
+	switch {
+	case since != nil:
+		opts.SinceSeconds = since
+	case all:
+		// 不设 TailLines = 取整个文件
+	default:
+		opts.TailLines = &tail
 	}
 	rc, err := cc.Clientset.CoreV1().Pods(ns).GetLogs(pod, opts).Stream(r.Context())
 	if err != nil {

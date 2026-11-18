@@ -64,7 +64,7 @@ echo "== 3) 重启 api-server（只杀监听） =="
 pids=$(lsof -tiTCP:8080 -sTCP:LISTEN -n -P 2>/dev/null)
 if [ -n "$pids" ]; then kill $pids 2>/dev/null; echo "  停 api-server ($pids)"; fi
 wait_port_free 8080 || { echo "  ✗ 8080 未释放"; exit 1; }
-( cd "$ROOT/api-server" && nohup ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 >> "$LOG_DIR/api-server.log" 2>&1 & )
+( cd "$ROOT/api-server" && nohup ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 --timeout-graceful-shutdown 8 >> "$LOG_DIR/api-server.log" 2>&1 & )
 wait_port_up 8080 && echo "  ✓ api-server :8080 UP" || { echo "  ✗ api-server 启动失败（见 logs/api-server.log）"; exit 1; }
 
 if [ "$DO_FE" = 1 ]; then

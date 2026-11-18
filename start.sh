@@ -94,7 +94,8 @@ start_api_server() {
     echo "             先执行 ./start.sh stop（避免双进程劈端口导致 agent 隧道失效）"
     return 1
   fi
-  nohup sh -c "cd '$ROOT/api-server' && exec ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080" >> "$LOG_DIR/api-server.log" 2>&1 < /dev/null &
+  # --timeout-graceful-shutdown 8：避免隧道/后台任务卡住导致进程退不掉却占着 9095（2026-11-18）
+  nohup sh -c "cd '$ROOT/api-server' && exec ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 --timeout-graceful-shutdown 8" >> "$LOG_DIR/api-server.log" 2>&1 < /dev/null &
   echo "  [启动] api-server -> :8080 (+:9095)"
 
   # 启动后校验：同一个 PID 必须同时持有 8080 与 9095
