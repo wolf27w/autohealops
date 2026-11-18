@@ -1,6 +1,7 @@
 # Agent 运行轨迹 + 诊断/自愈 Agent 开发需求（2026-11-18 定稿）
 
 > 老板 2026-11-18 14:16：「使用这个 demo，并把 agent 的开发需求加入到需求里」
+> **状态：仅登记需求，暂不开发**（老板 2026-11-18 14:19：「写入到需求里，不开发」）——P0 起的代码开发一律不启动，等排期。
 > Demo：`frontend/public/agent-trace-demo.html`（可访问 `/agent-trace-demo.html`；6 条示例轨迹：应用层 OOM 自愈 / 代码 panic 回滚转单 / 慢 SQL 加索引审批闭环 / 点查 IO 只给方案 / 探针配错自愈 / 镜像 401 自愈）
 > 关联：R41 三域 Agent 架构、R42 Agent trace 可视化、慢 SQL 优化诊断（`sql_optimize_service`）、数据库审核（`db_approvals`）
 
