@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Card, Drawer, Form, Input, InputNumber, List, Menu, Modal, Popconfirm,
-  Radio, Select, Space, Steps, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
+  Select, Space, Switch, Table, Tabs, Tag, Tooltip, Upload, message,
 } from 'antd'
 import { CodeOutlined, DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
 import {
@@ -43,8 +43,6 @@ export default function HostManagement() {
 
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<HostItem | null>(null)
-  const [step, setStep] = useState(0)
-  const [wizardKind, setWizardKind] = useState<'host' | 'vm'>('host')
   const [checking, setChecking] = useState<number | null>(null)
   const [checkResult, setCheckResult] = useState<HostCheckResult | null>(null)
   const [form] = Form.useForm()
@@ -98,13 +96,13 @@ export default function HostManagement() {
   useEffect(() => { load() }, [groupFilter, sourceFilter, keyword])
 
   const openCreate = () => {
-    setEditing(null); setStep(0); setWizardKind('host')
+    setEditing(null)
     form.resetFields()
     form.setFieldsValue({ ssh_port: 22, ssh_user: 'root', enabled: true, auth_type: 'password', process_paths: [] })
     setModal(true)
   }
   const openEdit = (h: HostItem) => {
-    setEditing(h); setStep(1)
+    setEditing(h)
     form.resetFields()
     form.setFieldsValue({ ...h, auth_type: h.auth_type || 'password', process_paths: h.process_paths || [], group_id: h.group_id ?? undefined })
     setModal(true)
@@ -116,7 +114,6 @@ export default function HostManagement() {
       ...v,
       process_paths: (v.process_paths || []).map((p: { name?: string; path?: string }) => ({ name: (p.name || p.path || '').trim(), path: (p.path || '').trim() })).filter((p: { path: string }) => p.path),
     }
-    if (!editing) payload.kind = wizardKind
     if (editing) { await updateHost(editing.id, payload); message.success('已更新') }
     else { await createHost(payload); message.success('已添加') }
     setModal(false); load(); loadGroups()
@@ -188,11 +185,17 @@ export default function HostManagement() {
 
   const groupOptions = createableGroups.map((g) => ({ value: g.id, label: g.name }))
 
+  // H3：编辑态是否可改组（平台管理员或具备该主机 manage 权限）
+  const canManage = isAdmin || (editing?.can.manage ?? false)
+
   const columns = [
     { title: '名称', render: (_: unknown, r: HostItem) => r.description ? <Tooltip title={r.description}>{r.name}</Tooltip> : <>{r.name}</> },
     { title: '分组', width: 110, render: (_: unknown, r: HostItem) => r.group_name
       ? <Tag>{r.group_name}</Tag> : <Tag color="warning">未分组</Tag> },
-    { title: '类型', width: 90, render: (_: unknown, r: HostItem) => <Tag color={KIND[r.kind]?.color}>{KIND[r.kind]?.label || r.kind}</Tag> },
+    { title: '类型', width: 90, render: (_: unknown, r: HostItem) => {
+      const k = KIND[r.kind]
+      return k ? <Tag color={k.color}>{k.label}</Tag> : <Tag color="default">-</Tag>
+    } },
     { title: '来源', width: 90, render: (_: unknown, r: HostItem) => r.source === 'agent' ? <Tag color="cyan">agent</Tag> : <Tag>直连</Tag> },
     { title: '地址', render: (_: unknown, r: HostItem) => `${r.address}:${r.ssh_port}` },
     { title: '凭据', width: 100, render: (_: unknown, r: HostItem) => (
@@ -210,7 +213,6 @@ export default function HostManagement() {
     { title: '操作', width: 170, render: (_: unknown, r: HostItem) => (
       <Space size="small">
         {r.can.operate && r.source === 'agent' && <Button size="small" type="link" onClick={() => setCheckResult({ online: r.last_metrics?.online ?? false, error: '', paths: r.last_metrics?.paths || [] })}>指标</Button>}
-        {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" onClick={() => window.open(`/terminal?host=${r.id}`, '_blank', 'noopener')}>终端</Button>}
         {r.can.operate && r.source !== 'agent' && <Button size="small" type="link" loading={checking === r.id} icon={<SyncOutlined />} onClick={() => doCheck(r.id)}>检测</Button>}
         {r.can.operate && <Button size="small" type="link" onClick={() => openEdit(r)}>编辑</Button>}
         {r.can.delete && <Popconfirm title="删除该主机？" onConfirm={() => del(r.id)}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>}
@@ -296,36 +298,19 @@ export default function HostManagement() {
         ]}
       />
 
-      {/* 新建（两步向导）/ 编辑 */}
+      {/* 新建 / 编辑 */}
       <Modal title={editing ? '编辑主机' : '添加主机'} open={modal} onCancel={() => setModal(false)} width={640} destroyOnClose
-        footer={editing ? undefined : step === 0
-          ? [<Button key="c" onClick={() => setModal(false)}>取消</Button>, <Button key="n" type="primary" onClick={() => setStep(1)}>下一步</Button>]
-          : [<Button key="b" onClick={() => setStep(0)}>上一步</Button>, <Button key="c" onClick={() => setModal(false)}>取消</Button>, <Button key="s" type="primary" onClick={save}>保存</Button>]}>
-        {!editing && <Steps size="small" current={step} style={{ marginBottom: 16 }} items={[{ title: '选类型' }, { title: '填信息' }]} />}
-
-        {!editing && step === 0 && (
-          <div style={{ padding: '12px 0' }}>
-            <div style={{ marginBottom: 8, color: '#666' }}>请选择要纳管的设备类型：</div>
-            <Radio.Group value={wizardKind} onChange={(e) => setWizardKind(e.target.value)}>
-              <Radio.Button value="host">主机（物理机）</Radio.Button>
-              <Radio.Button value="vm">虚拟机</Radio.Button>
-            </Radio.Group>
-            <div style={{ marginTop: 12, color: '#888', fontSize: 12 }}>虚拟机创建后必须先归属某个分组；物理机可暂不分组。</div>
-          </div>
-        )}
-
-        {(editing || step === 1) && (
+        footer={[
+          <Button key="c" onClick={() => setModal(false)}>取消</Button>,
+          <Button key="s" type="primary" onClick={save}>保存</Button>,
+        ]}>
           <Form form={form} layout="vertical">
-            {!editing && wizardKind === 'vm' && createableGroups.length === 0 && (
-              <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="无可用分组" description="你还没有可管理的分组，请联系管理员建组并分配权限后再添加虚拟机。" />
-            )}
             <Space.Compact block style={{ width: '100%' }}>
               <Form.Item name="name" label="名称" style={{ width: '34%' }} rules={[{ required: true }]}><Input placeholder="如 db-192.168.6.99" /></Form.Item>
               <Form.Item name="address" label="IP / 主机名" style={{ width: '34%' }} rules={[{ required: true }]}><Input placeholder="192.168.6.99" /></Form.Item>
               <Form.Item name="ssh_port" label="端口" style={{ width: '12%' }}><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item>
-              <Form.Item name="group_id" label="分组" style={{ width: '20%' }}
-                rules={!editing && wizardKind === 'vm' ? [{ required: true, message: '虚拟机必须选分组' }] : []}>
-                <Select allowClear={editing ? false : wizardKind === 'host'} placeholder="选择分组" options={groupOptions} disabled={editing ? (!isAdmin && !editing.can.manage) : false} />
+              <Form.Item name="group_id" label="分组" style={{ width: '20%' }}>
+                <Select allowClear placeholder="选择分组" options={groupOptions} disabled={editing ? !canManage : false} />
               </Form.Item>
             </Space.Compact>
             <Space.Compact block style={{ width: '100%' }}>
@@ -370,7 +355,6 @@ export default function HostManagement() {
               </Form.List>
             </Form.Item>
           </Form>
-        )}
       </Modal>
 
       {/* 批量导入 */}
