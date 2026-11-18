@@ -1,11 +1,12 @@
 // 实时日志跟随弹窗（P1-R5）：浏览器 ↔ api-server(WS) ↔ executor 日志流 HTTP（apiserver follow）
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, Space, Input, Button, Select, Switch, message } from 'antd'
 import { PauseCircleOutlined, PlayCircleOutlined, ClearOutlined, VerticalAlignBottomOutlined, DownloadOutlined } from '@ant-design/icons'
 import { getPodContainers, downloadPodLogs } from '../services/api'
 
 interface LogPod { clusterId: number; namespace: string; name: string }
 interface Props { pod: LogPod | null; onClose: () => void }
+interface LogRow { container: string; line: string }
 
 // 默认窗口：最近 2 分钟（点「实时日志」才持续跟随）
 const DEFAULT_WINDOW_SECONDS = 120
@@ -31,78 +32,156 @@ function pickDefaultContainer(list: string[]): string {
   return list.find((c) => !SIDECAR_NAMES.includes(c.toLowerCase())) || list[0] || ''
 }
 
+// 容器前缀配色（与工作负载聚合日志 pod 配色同一思路：名字哈希 → 调色板）
+const PALETTE = ['#4ec9b0', '#569cd6', '#dcdcaa', '#c586c0', '#ce9178', '#9cdcfe', '#b5cea8', '#e5c07b', '#f44747', '#7fdbca']
+function containerColor(name: string): string {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return PALETTE[h % PALETTE.length]
+}
+
+async function gzipBlob(text: string): Promise<Blob> {
+  const input = new Blob([text]).stream()
+  const compressed = input.pipeThrough(new CompressionStream('gzip'))
+  return new Response(compressed).blob()
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 3000)
+}
 
 export default function PodLogStreamModal({ pod, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
-  const [container, setContainer] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
   const [live, setLive] = useState(false)   // false=最近 2 分钟快照(暂停) / true=实时跟随
   const [previous, setPrevious] = useState(false)
   const [keyword, setKeyword] = useState('')
-  const [lines, setLines] = useState<string[]>([])
+  const [rows, setRows] = useState<LogRow[]>([])
   const [paused, setPaused] = useState(false)
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
-  const wsRef = useRef<WebSocket | null>(null)
+  const wsMapRef = useRef<Map<string, WebSocket>>(new Map())
   const boxRef = useRef<HTMLPreElement>(null)
-  const bufRef = useRef('')
+  const bufRef = useRef<Map<string, string>>(new Map())       // 每容器未完成行的缓冲
+  const pendingRef = useRef<Map<string, string>>(new Map())   // 每容器暂停期间后台继续收的缓冲
   const pausedRef = useRef(false)
-  const pendingRef = useRef<string>('')   // 暂停期间后台继续收的内容（恢复时一次性补齐）
+  const openCountRef = useRef(0)
   useEffect(() => { pausedRef.current = paused }, [paused])
 
-  const closeWs = () => {
-    const w = wsRef.current
-    if (w) { w.onclose = null; try { w.close() } catch { /* ignore */ } wsRef.current = null }
+  // 留空 = 全部容器
+  const effectiveContainers = useMemo(
+    () => (selected.length ? selected : containers),
+    [selected, containers],
+  )
+
+  const closeAllWs = () => {
+    wsMapRef.current.forEach((w) => { w.onclose = null; w.onerror = null; try { w.close() } catch { /* ignore */ } })
+    wsMapRef.current.clear()
+    openCountRef.current = 0
     setConnected(false)
   }
-  const appendText = (text: string) => {
-    bufRef.current += text
-    const arr = bufRef.current.split('\n')
-    bufRef.current = arr.pop() || ''
-    if (arr.length) setLines((l) => { const n = [...l, ...arr]; return n.length > MAX_LINES ? n.slice(n.length - MAX_LINES) : n })
+
+  const appendContainerText = (c: string, text: string) => {
+    const prev = bufRef.current.get(c) || ''
+    const arr = (prev + text).split('\n')
+    bufRef.current.set(c, arr.pop() || '')
+    if (!arr.length) return
+    const newRows: LogRow[] = arr.map((line) => ({ container: c, line }))
+    setRows((r) => { const n = [...r, ...newRows]; return n.length > MAX_LINES ? n.slice(n.length - MAX_LINES) : n })
   }
+
+  const flushPending = () => {
+    pendingRef.current.forEach((text, c) => { if (text) appendContainerText(c, text) })
+    pendingRef.current.clear()
+  }
+
   const connect = () => {
     if (!pod) return
-    closeWs(); setLines([]); bufRef.current = ''
-    const ws = new WebSocket(buildWsUrl(pod.clusterId, pod.namespace, pod.name, container, live, previous, DEFAULT_WINDOW_SECONDS))
-    wsRef.current = ws
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onerror = () => setConnected(false)
-    ws.onmessage = (ev) => {
-      const text = typeof ev.data === 'string' ? ev.data : ''
-      if (!text) return
-      if (text.startsWith('{"type"')) { try { const j = JSON.parse(text); if (j.message) { setLines((l) => [...l, `[错误] ${j.message}`]); return } } catch { /* ignore */ } }
-      if (pausedRef.current) { pendingRef.current += text; return }
-      appendText(text)
+    closeAllWs()
+    setRows([])
+    bufRef.current.clear()
+    pendingRef.current.clear()
+    const targets = effectiveContainers
+    for (const c of targets) {
+      const ws = new WebSocket(buildWsUrl(pod.clusterId, pod.namespace, pod.name, c, live, previous, DEFAULT_WINDOW_SECONDS))
+      wsMapRef.current.set(c, ws)
+      ws.onopen = () => { openCountRef.current++; setConnected(true) }
+      ws.onclose = () => {
+        wsMapRef.current.delete(c)
+        openCountRef.current = Math.max(0, openCountRef.current - 1)
+        if (openCountRef.current === 0) setConnected(false)
+      }
+      ws.onerror = () => { /* 断连由 onclose 兜底 */ }
+      ws.onmessage = (ev) => {
+        const text = typeof ev.data === 'string' ? ev.data : ''
+        if (!text) return
+        if (text.startsWith('{"type"')) {
+          try {
+            const j = JSON.parse(text)
+            if (j.message) {
+              const errText = `[错误] ${j.message}\n`
+              if (pausedRef.current) pendingRef.current.set(c, (pendingRef.current.get(c) || '') + errText)
+              else appendContainerText(c, errText)
+            }
+          } catch { /* ignore */ }
+          return
+        }
+        if (pausedRef.current) { pendingRef.current.set(c, (pendingRef.current.get(c) || '') + text); return }
+        appendContainerText(c, text)
+      }
     }
   }
 
   useEffect(() => {
     if (!pod) return
-    setContainer(''); setLines([]); setKeyword(''); bufRef.current = ''
+    setContainers([]); setSelected([]); setRows([]); setKeyword(''); bufRef.current.clear(); pendingRef.current.clear()
     getPodContainers(pod.clusterId, pod.namespace, pod.name)
       .then((d) => {
         const list = (d as unknown as { containers?: string[] }).containers || []
         setContainers(list)
-        // 多容器时给个默认容器（否则后端 502「取日志失败」）
-        setContainer(pickDefaultContainer(list))
+        const def = pickDefaultContainer(list)
+        setSelected(def ? [def] : [])
       }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod])
 
-  // pod / 容器 / 行数 / 跟随 / 重启前 变化 → 重连
+  // pod / 容器 / 跟随 / 重启前 变化 → 重连
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (pod) connect(); return () => closeWs() }, [pod, container, live, previous])
+  useEffect(() => { if (pod && effectiveContainers.length) connect(); return () => closeAllWs() }, [pod, effectiveContainers, live, previous])
 
-  useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [lines, autoScroll])
+  useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [rows, autoScroll])
 
   if (!pod) return null
-  const shown = keyword ? lines.filter((l) => l.includes(keyword)) : lines
+  const multi = effectiveContainers.length > 1
+  const shown = keyword ? rows.filter((r) => r.line.includes(keyword)) : rows
   const colorize = (l: string) => {
     if (/\bERROR\b/i.test(l)) return { color: '#ff7875' }
     if (/\bWARN(ING)?\b/i.test(l)) return { color: '#ffc069' }
     if (/\bINFO\b/i.test(l)) return { color: '#95de64' }
     return undefined
+  }
+  const download = async () => {
+    if (!pod) return
+    try {
+      const targets = effectiveContainers
+      if (targets.length === 1) {
+        // 单容器：沿用原有整包 gzip 下载
+        const blob = await downloadPodLogs(pod.clusterId, pod.namespace, pod.name, { container: targets[0], previous, all: true })
+        saveBlob(blob, `${pod.namespace}_${pod.name}.log.gz`)
+      } else {
+        // 多容器：逐容器取纯文本，按 [容器名] 分段拼接后再客户端 gzip
+        const parts: string[] = []
+        for (const c of targets) {
+          const blob = await downloadPodLogs(pod.clusterId, pod.namespace, pod.name, { container: c, gzip: 0 })
+          const text = await blob.text()
+          parts.push(`========== [${c}] ==========\n${text.replace(/\n+$/, '')}`)
+        }
+        const gz = await gzipBlob(parts.join('\n') + '\n')
+        saveBlob(gz, `${pod.namespace}_${pod.name}.log.gz`)
+      }
+    } catch (e) { message.error(String((e as Error)?.message || e)) }
   }
   return (
     <Modal open title={<Space>实时日志：{pod.name}
@@ -111,41 +190,39 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
       </span>
     </Space>} footer={null} onCancel={onClose} width={1000} destroyOnClose>
       <Space wrap style={{ marginBottom: 8 }}>
-        <Select style={{ width: 170 }} allowClear placeholder="容器(默认)" value={container || undefined}
-          onChange={(v) => setContainer(v || '')} options={containers.map((c) => ({ value: c, label: c }))} />
+        <Select mode="multiple" style={{ width: 240 }} allowClear placeholder="容器(留空=全部)"
+          value={selected.length ? selected : undefined}
+          onChange={(v) => setSelected(v as string[])}
+          options={containers.map((c) => ({ value: c, label: c }))} maxTagCount="responsive" />
         <Space size={4}><span>重启前</span><Switch checked={previous} onChange={setPrevious} /></Space>
         <Input placeholder="关键字过滤" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: 150 }} allowClear />
-        <Button icon={<ClearOutlined />} onClick={() => { setLines([]); bufRef.current = '' }}>清空</Button>
+        <Button icon={<ClearOutlined />} onClick={() => { setRows([]); bufRef.current.clear(); pendingRef.current.clear() }}>清空</Button>
         {(!live || paused)
           ? <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => {
             // 进入/恢复实时：暂停期间的缓冲一次性补齐，再继续渲染
             setPaused(false)
             pausedRef.current = false
             if (!live) setLive(true)
-            const rest = pendingRef.current
-            pendingRef.current = ''
-            if (rest) appendText(rest)
+            flushPending()
           }}>{live ? '恢复' : '实时日志'}</Button>
           : <Button icon={<PauseCircleOutlined />} onClick={() => {
             // 暂停 = 停渲染但后台继续收（socket 不断开）
+            pausedRef.current = true
             setPaused(true)
           }}>暂停</Button>}
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>{autoScroll ? '取消贴底' : '自动贴底'}</Button>
-        <Button icon={<DownloadOutlined />} onClick={async () => {
-          if (!pod) return
-          try {
-            const blob = await downloadPodLogs(pod.clusterId, pod.namespace, pod.name, { container, previous, all: true })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a'); a.href = url; a.download = `${pod.namespace}_${pod.name}.log.gz`; a.click()
-            setTimeout(() => URL.revokeObjectURL(url), 3000)
-          } catch (e) { message.error(String((e as Error)?.message || e)) }
-        }}>下载</Button>
+        <Button icon={<DownloadOutlined />} onClick={download}>下载</Button>
         <Button type="primary" onClick={connect}>重连</Button>
       </Space>
       <pre ref={boxRef} style={{ maxHeight: '66vh', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'monospace' }}>
         {shown.length === 0
           ? <span style={{ color: '#888' }}>{connected ? '(等待日志…)' : '(未连接)'}</span>
-          : shown.map((l, i) => <div key={i} style={colorize(l)}>{l}</div>)}
+          : shown.map((r, i) => (
+            <div key={i} style={colorize(r.line)}>
+              {multi && <span style={{ color: containerColor(r.container), marginRight: 4 }}>[{r.container}]</span>}
+              {r.line}
+            </div>
+          ))}
       </pre>
     </Modal>
   )

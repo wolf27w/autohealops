@@ -40,8 +40,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => {
     const body = response.data
-    // 文件下载（blob）：不做业务码解包
-    if (response.config.responseType === 'blob') return body
+    // 文件下载（blob）/ 纯文本（cast 录像等）：不做业务码解包
+    if (response.config.responseType === 'blob' || response.config.responseType === 'text') return body
     if (body && body.code !== 200) {
       // 428 = 需要审核（数据库操作审核机制）：不弹全局错误，交给调用方弹「提交审核」
       if (body.code === 428) {
@@ -699,6 +699,27 @@ export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: st
   http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
+// ============ 会话录制（R43 H4，asciinema cast v2）============
+export interface HostSessionItem {
+  id: number
+  host_id: number
+  host_name?: string
+  username?: string
+  source_ip?: string
+  status?: string
+  started_at?: string
+  ended_at?: string
+  duration_sec?: number
+  bytes_out?: number
+  record_bytes?: number
+  record_exists?: boolean
+  recorded?: boolean
+}
+export const listHostSessions = (params?: { host_id?: number; username?: string; status?: string; start?: string; end?: string; page?: number; page_size?: number }) =>
+  http.get<{ items: HostSessionItem[]; total: number }>('/host-sessions', { params })
+export const getHostSessionCast = (id: number) =>
+  http.get<string>(`/host-sessions/${id}/cast`, { responseType: 'text' })
+
 // ============ 慢 SQL 执行明细（逐次执行，阿里云慢日志样式）============
 export interface SlowSqlEventItem {
   id: number
@@ -1213,7 +1234,7 @@ export const drainNode = (clusterId: number, node: string) =>
   http.post<{ success: boolean; output: string; error: string }>(`/resources/clusters/${clusterId}/nodes/${node}/drain`, { confirm: true })
 // 日志增强（P1-R5 收尾）：Pod 日志下载(gzip)
 export const downloadPodLogs = (clusterId: number, ns: string, pod: string,
-  params?: { container?: string; tail?: number; previous?: boolean; all?: boolean }) =>
+  params?: { container?: string; tail?: number; previous?: boolean; all?: boolean; gzip?: number }) =>
   http.get<Blob>(`/resources/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/logs/download`, { params, responseType: 'blob' })
 export const batchNodes = (clusterId: number, op: 'cordon' | 'uncordon', names: string[]) =>
   http.post<{ results: { node: string; success: boolean; message: string }[] }>(`/resources/clusters/${clusterId}/nodes/batch`, { op, names })
