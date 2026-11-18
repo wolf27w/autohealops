@@ -24,6 +24,7 @@
 | `SLOW-SQL-UI-REQUIREMENTS-2026-11-18.md` | **慢 SQL 页面改版**（对齐阿里云慢日志：SQL 换行、列顺序、统计/明细两层）—— ⏸ 已登记，暂不开发 |
 | `POD-LOGS-MULTI-CONTAINER-2026-11-18.md` | **Pod 实时日志多容器 502**（默认容器规则/前端默认选中/错误提示）—— ✅ 已修复 |
 | `AGENT-TRACE-REQUIREMENTS-2026-11-18.md` | **Agent 运行轨迹 + 诊断/自愈 Agent 需求**（demo 定稿：列表+时间轴+证据包；动作矩阵；P0-P3 分期） |
+| `FAULT-CLASSIFICATION-CONVERGENCE-2026-11-18.md` | **故障分类收敛 + Agent 输出契约**（L1 域/L2 族/L3 自由文本；fault_type 降级为标签；confidence<0.6 转人工）—— ⏸ 已登记，暂不开发 |
 | `ENCRYPTION.md` | 跨语言加密约定（Python ⇄ Go，CI 有互测） |
 | `MIDDLEWARE-MONITORING.md` | 中间件监控 |
 
