@@ -699,6 +699,48 @@ export const compareSlowSQL = (connId: number, p: { a_start?: string; a_end?: st
   http.get(`/db-connections/${connId}/slow-sql-compare`, { params: p })
 export const collectSlowSQL = (connId: number) => http.post(`/db-connections/${connId}/collect`)
 
+// ============ 慢 SQL 执行明细（逐次执行，阿里云慢日志样式）============
+export interface SlowSqlEventItem {
+  id: number
+  digest?: string
+  sql_text?: string
+  schema_name?: string
+  start_time?: string
+  exec_seconds?: number
+  lock_seconds?: number
+  rows_sent?: number
+  rows_examined?: number
+  client_host?: string
+  db_user?: string
+  thread_id?: number
+  tables?: string
+  tag?: string
+}
+export interface SlowSqlEventsResult {
+  total: number
+  supported: boolean
+  note: string
+  items: SlowSqlEventItem[]
+}
+export type SlowSqlEventOrder = 'time' | 'exec' | 'rows_examined'
+export interface SlowSqlEventsQuery {
+  start?: string
+  end?: string
+  schema?: string
+  host?: string
+  user?: string
+  keyword?: string
+  min_seconds?: number
+  order?: SlowSqlEventOrder
+  digest?: string
+  page?: number
+  page_size?: number
+}
+export const getSlowSqlEvents = (connId: number, params: SlowSqlEventsQuery = {}) =>
+  http.get<SlowSqlEventsResult>(`/db-connections/${connId}/slow-sql-events`, { params })
+export const collectSlowSqlEvents = (connId: number) =>
+  http.post<{ collected: number }>(`/db-connections/${connId}/slow-sql-events/collect`)
+
 // ============ 慢 SQL 诊断（AI 优化建议）============
 export interface SlowSqlDiagnoseIssue { type: string; detail: string; severity: string }
 export interface SlowSqlDiagnoseSuggestion {

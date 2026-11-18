@@ -1,13 +1,24 @@
-// 慢 SQL 面板（详情页 Tab）：时间范围筛选 + 慢 SQL 表格 + digest 趋势 + 两时段对比
+// 慢 SQL 面板（详情页 Tab）：优先展示执行明细（阿里云慢日志样式：一行 = 一次执行），
+// 新接口不可用（404 / supported=false）时自动回退到旧的 digest 聚合视图。
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag, Button, Space, DatePicker, Modal, Tooltip, message, Empty } from 'antd'
-import { ReloadOutlined, BarChartOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import {
+  Card, Table, Tag, Button, Space, DatePicker, Modal, Tooltip, message, Empty,
+  Input, InputNumber, Select, Switch,
+} from 'antd'
+import {
+  ReloadOutlined, BarChartOutlined, ThunderboltOutlined, SyncOutlined, LineChartOutlined,
+} from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { Line } from '@ant-design/charts'
-import { getSlowSQL, getSlowSQLDigestTrend, compareSlowSQL } from '../../services/api'
+import {
+  getSlowSQL, getSlowSQLDigestTrend, compareSlowSQL, getSlowSQLTrend,
+  getSlowSqlEvents, collectSlowSqlEvents, collectSlowSQL, type SlowSqlEventItem,
+} from '../../services/api'
 import SlowSqlDiagnoseModal from './SlowSqlDiagnoseModal'
+import SlowSqlEventTable, { SqlCell } from './SlowSqlEventTable'
+import SlowSqlDetailDrawer from './SlowSqlDetailDrawer'
 
-// 慢 SQL 单条记录（后端字段，可选容错）
+// 慢 SQL 单条记录（聚合视图，后端字段可选容错）
 interface SlowSQLRow {
   id: number
   digest?: string
@@ -38,9 +49,32 @@ interface CmpDiffRow {
 }
 
 type RangeVal = [Dayjs | null, Dayjs | null] | null
+type OrderVal = 'time' | 'exec' | 'rows_examined'
 
-// 时间段预设（对比弹窗复用）
-const rangePresets = [
+// 明细筛选条件（时间范围 + 明细专属过滤）
+interface EventFilter {
+  range: RangeVal
+  schema: string
+  host: string
+  user: string
+  keyword: string
+  minSeconds: number | null
+  order: OrderVal
+}
+
+const FALLBACK_NOTE = '该实例暂不支持执行明细，已回退到按 SQL 聚合视图'
+
+// 明细时间范围预设（5 分钟/1 小时/6 小时/24 小时/7 天）
+const eventRangePresets = [
+  { label: '近 5 分钟', value: [dayjs().subtract(5, 'minute'), dayjs()] as [Dayjs, Dayjs] },
+  { label: '近 1 小时', value: [dayjs().subtract(1, 'hour'), dayjs()] as [Dayjs, Dayjs] },
+  { label: '近 6 小时', value: [dayjs().subtract(6, 'hour'), dayjs()] as [Dayjs, Dayjs] },
+  { label: '近 24 小时', value: [dayjs().subtract(24, 'hour'), dayjs()] as [Dayjs, Dayjs] },
+  { label: '近 7 天', value: [dayjs().subtract(7, 'day'), dayjs()] as [Dayjs, Dayjs] },
+]
+
+// 两时段对比的时间预设（沿用旧口径）
+const cmpRangePresets = [
   { label: '今天', value: [dayjs().startOf('day'), dayjs()] as [Dayjs, Dayjs] },
   { label: '昨天', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().startOf('day')] as [Dayjs, Dayjs] },
   { label: '近 1 小时', value: [dayjs().subtract(1, 'hour'), dayjs()] as [Dayjs, Dayjs] },
@@ -48,74 +82,181 @@ const rangePresets = [
   { label: '近 7 天', value: [dayjs().subtract(7, 'day'), dayjs()] as [Dayjs, Dayjs] },
 ]
 
+const ORDER_OPTIONS = [
+  { value: 'time', label: '时间倒序' },
+  { value: 'exec', label: '耗时倒序' },
+  { value: 'rows_examined', label: '扫描行数倒序' },
+]
+
 const STATUS_LABEL: Record<string, string> = { up: '变慢', new: '新增', down: '变快', gone: '消失', same: '持平' }
 const STATUS_COLOR: Record<string, string> = { up: 'red', new: 'volcano', down: 'green', gone: 'blue', same: 'default' }
 
-// SQL 单元格：保留原换行（DIGEST_TEXT 常是超长单行），默认折 2 行可展开，避免省略号挡住后半段
-function SqlCell({ sql, maxLines = 2 }: { sql?: string; maxLines?: number }) {
-  const [open, setOpen] = useState(false)
-  if (!sql) return <>-</>
-  const long = sql.length > 120 || sql.split('\n').length > maxLines
-  const clamped = long && !open
-  return (
-    <div>
-      <pre style={{
-        margin: 0, fontFamily: 'inherit', fontSize: 12, lineHeight: '18px',
-        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-        ...(clamped
-          ? { display: '-webkit-box', WebkitLineClamp: maxLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
-          : {}),
-      }}>{sql}</pre>
-      {long && (
-        <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
-          onClick={() => setOpen((v) => !v)}>{open ? '收起' : '展开'}</Button>
-      )}
-    </div>
-  )
-}
-
 export default function DbSlowSqlPanel({ connId }: { connId: number }) {
+  // 明细模式 vs 聚合回退
+  const [mode, setMode] = useState<'events' | 'aggregate'>('events')
+  const [fallback, setFallback] = useState<string | null>(null)
+
+  // 筛选条件
+  const [f, setF] = useState<EventFilter>(() => ({
+    range: [dayjs().subtract(1, 'hour'), dayjs()],
+    schema: '', host: '', user: '', keyword: '',
+    minSeconds: null, order: 'time',
+  }))
+  // 文本类筛选（schema/host/user/keyword）先存草稿，回车/查询时提交
+  const [textDraft, setTextDraft] = useState({ schema: '', host: '', user: '', keyword: '' })
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [reloadTick, setReloadTick] = useState(0)
+
+  // 明细分页
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+
+  // 明细数据
+  const [eventItems, setEventItems] = useState<SlowSqlEventItem[]>([])
+  const [eventTotal, setEventTotal] = useState(0)
+  const [eventLoading, setEventLoading] = useState(false)
+  const [collecting, setCollecting] = useState(false)
+
+  // 聚合数据
   const [rows, setRows] = useState<SlowSQLRow[]>([])
-  const [loading, setLoading] = useState(false)
-  const [range, setRange] = useState<RangeVal>(null)
+  const [aggLoading, setAggLoading] = useState(false)
 
-  // digest 趋势弹窗
+  // 弹窗：digest 趋势 / 整体趋势 / 诊断 / 详情抽屉 / 两时段对比
   const [trend, setTrend] = useState<{ digest: string; data: TrendPoint[] } | null>(null)
-
-  // 慢 SQL 诊断弹窗（被诊断的行）
-  const [diagRow, setDiagRow] = useState<SlowSQLRow | null>(null)
-
-  // 两时段对比弹窗
+  const [overallTrendOpen, setOverallTrendOpen] = useState(false)
+  const [overallTrend, setOverallTrend] = useState<TrendPoint[]>([])
+  const [diagRow, setDiagRow] = useState<{ digest?: string; sql_text?: string; schema_name?: string } | null>(null)
+  const [detailRow, setDetailRow] = useState<SlowSqlEventItem | null>(null)
   const [cmpOpen, setCmpOpen] = useState(false)
   const [cmpA, setCmpA] = useState<RangeVal>([dayjs().subtract(1, 'day').startOf('day'), dayjs().startOf('day')])
   const [cmpB, setCmpB] = useState<RangeVal>([dayjs().startOf('day'), dayjs()])
   const [cmpLoading, setCmpLoading] = useState(false)
   const [cmpData, setCmpData] = useState<{ diff: CmpDiffRow[]; summary: Record<string, number> } | null>(null)
 
-  // 拉取慢 SQL 列表
-  const loadSlow = (r?: RangeVal) => {
+  // 拉取执行明细（不支持/404 时回退聚合）
+  const loadEvents = async () => {
     if (!connId) return
-    const pair = r ?? range
-    const s = pair?.[0]
-    const e = pair?.[1]
-    setLoading(true)
-    getSlowSQL(connId, 200, s?.toISOString(), e?.toISOString())
-      .then((d) => setRows((d || []) as SlowSQLRow[]))
-      .catch(() => { setRows([]); message.error('慢 SQL 查询失败') })
-      .finally(() => setLoading(false))
+    setEventLoading(true)
+    try {
+      const d = await getSlowSqlEvents(connId, {
+        start: f.range?.[0]?.toISOString(),
+        end: f.range?.[1]?.toISOString(),
+        schema: f.schema || undefined,
+        host: f.host || undefined,
+        user: f.user || undefined,
+        keyword: f.keyword || undefined,
+        min_seconds: f.minSeconds ?? undefined,
+        order: f.order,
+        page,
+        page_size: pageSize,
+      })
+      if (d?.supported === false) {
+        setMode('aggregate')
+        setFallback(d.note || FALLBACK_NOTE)
+      } else {
+        setMode('events')
+        setFallback(null)
+        setEventItems(d?.items || [])
+        setEventTotal(d?.total || 0)
+      }
+    } catch {
+      setMode('aggregate')
+      setFallback(FALLBACK_NOTE)
+    } finally {
+      setEventLoading(false)
+    }
   }
 
-  useEffect(() => { loadSlow(null) }, [connId])
+  // 拉取聚合列表（回退视图）
+  const loadAggregate = async () => {
+    if (!connId) return
+    setAggLoading(true)
+    try {
+      const d = await getSlowSQL(connId, 200, f.range?.[0]?.toISOString(), f.range?.[1]?.toISOString())
+      setRows((d || []) as SlowSQLRow[])
+    } catch {
+      setRows([])
+    } finally {
+      setAggLoading(false)
+    }
+  }
 
-  // 点 digest 看趋势
-  const openTrend = (r: SlowSQLRow) => {
-    if (!r.digest) return
-    getSlowSQLDigestTrend(connId, r.digest, 24)
+  // 首载/筛选/分页变化：按当前模式拉对应数据源
+  useEffect(() => {
+    if (!connId) return
+    if (mode === 'aggregate') loadAggregate()
+    else loadEvents()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connId, mode, f, page, pageSize, reloadTick])
+
+  // 自动刷新（默认关；开启后 15s，页面隐藏时跳过）
+  useEffect(() => {
+    if (!autoRefresh) return
+    const t = setInterval(() => {
+      if (document.hidden) return
+      setReloadTick((x) => x + 1)
+    }, 15000)
+    return () => clearInterval(t)
+  }, [autoRefresh])
+
+  // 提交文本筛选（回车 / 查询按钮）
+  const commitText = () => {
+    setF((prev) => ({ ...prev, schema: textDraft.schema, host: textDraft.host, user: textDraft.user, keyword: textDraft.keyword }))
+    setPage(1)
+  }
+  // 文本输入变化：草稿即时更新；清空（allowClear）立即生效
+  const textChange = (key: 'schema' | 'host' | 'user' | 'keyword') =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.value
+      setTextDraft((d) => ({ ...d, [key]: v }))
+      if (v === '') {
+        setF((prev) => ({ ...prev, [key]: '' }))
+        setPage(1)
+      }
+    }
+
+  // 点 digest 看趋势（明细 / 聚合共用）
+  const openTrend = (digest: string) => {
+    if (!digest) return
+    getSlowSQLDigestTrend(connId, digest, 24)
       .then((d) => {
         const pts = ((d || []) as { bucket: string; avg_latency_ms: number; max_latency_ms: number; exec_count: number }[])
-        setTrend({ digest: r.digest!, data: pts.map((x) => ({ metric_name: 'avg', series: '平均耗时(ms)', value: x.avg_latency_ms, sampled_at: x.bucket })) })
+        setTrend({ digest, data: pts.map((x) => ({ metric_name: 'avg', series: '平均耗时(ms)', value: x.avg_latency_ms, sampled_at: x.bucket })) })
       })
       .catch(() => message.error('趋势查询失败'))
+  }
+
+  // 整体慢 SQL 趋势
+  const openOverallTrend = () => {
+    if (!connId) return
+    setOverallTrendOpen(true)
+    setOverallTrend([])
+    getSlowSQLTrend(connId, 24)
+      .then((d) => {
+        const pts: TrendPoint[] = []
+        for (const r of (d || []) as { bucket: string; avg_latency_ms: number; max_latency_ms: number }[]) {
+          pts.push({ metric_name: 'avg', series: '平均耗时(ms)', value: r.avg_latency_ms, sampled_at: r.bucket })
+          pts.push({ metric_name: 'max', series: '最大耗时(ms)', value: r.max_latency_ms, sampled_at: r.bucket })
+        }
+        setOverallTrend(pts)
+      })
+      .catch(() => { setOverallTrend([]); message.error('趋势查询失败') })
+  }
+
+  // 立即采集：明细模式走新 collect，聚合回退走旧 collect
+  const onCollect = async () => {
+    if (!connId) return
+    setCollecting(true)
+    try {
+      if (mode === 'aggregate') await collectSlowSQL(connId)
+      else await collectSlowSqlEvents(connId)
+      message.success('采集完成')
+      setReloadTick((x) => x + 1)
+    } catch {
+      /* 拦截器已提示 */
+    } finally {
+      setCollecting(false)
+    }
   }
 
   // 两时段对比
@@ -130,7 +271,7 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     }).then((d) => setCmpData(d as never)).catch(() => setCmpData(null)).finally(() => setCmpLoading(false))
   }
 
-  // 建议渲染（命中规则 + 优化建议标签，Tooltip 展示详情）
+  // 建议渲染（命中规则 + 优化建议标签，Tooltip 展示详情）——聚合视图用
   const renderSuggestions = (v: SlowSQLRow['suggestions'], r: SlowSQLRow) => {
     const rules = r.hit_rules || []
     if ((!v || !v.length) && !rules.length) return '-'
@@ -147,10 +288,11 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     )
   }
 
-  const columns = [
+  // 聚合视图列（回退用，保留原有字段与交互）
+  const aggColumns = [
     { title: 'digest', dataIndex: 'digest', width: 150, ellipsis: true,
-      render: (v: string, r: SlowSQLRow) => v
-        ? <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openTrend(r)}>{v.slice(0, 16)}…</Button>
+      render: (v: string) => v
+        ? <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openTrend(v)}>{v.slice(0, 16)}…</Button>
         : '-' },
     { title: 'SQL', dataIndex: 'sql_text', width: 460,
       render: (v: string) => <SqlCell sql={v} /> },
@@ -185,31 +327,81 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     <div>
       <Card size="small" title="慢 SQL" extra={
         <Space>
+          <Button size="small" icon={<SyncOutlined />} loading={collecting} onClick={onCollect}>立即采集</Button>
+          <Button size="small" icon={<BarChartOutlined />} onClick={() => { setCmpOpen(true); setCmpData(null) }}>两时段对比</Button>
+          <Button size="small" icon={<LineChartOutlined />} onClick={openOverallTrend}>慢 SQL 趋势</Button>
+        </Space>
+      }>
+        {/* 筛选条 */}
+        <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <DatePicker.RangePicker
             showTime={{ format: 'HH:mm' }}
             format="YYYY-MM-DD HH:mm"
             allowClear
-            value={range}
+            value={f.range}
             placeholder={['开始时间', '结束时间']}
-            presets={rangePresets}
-            onChange={(v) => setRange(v as RangeVal)}
+            presets={eventRangePresets}
+            onChange={(v) => { setF((prev) => ({ ...prev, range: v as RangeVal })); setPage(1) }}
             style={{ width: 340 }}
           />
-          <Button size="small" onClick={() => loadSlow(null)}>筛选</Button>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => loadSlow(null)}>刷新</Button>
-          <Button size="small" icon={<BarChartOutlined />} onClick={() => { setCmpOpen(true); setCmpData(null) }}>两时段对比</Button>
-        </Space>
-      }>
-        {rows.length
-          ? <Table rowKey="id" size="small" dataSource={rows} columns={columns} loading={loading}
-              pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
-              scroll={{ x: 'max-content' }} />
-          : (loading ? <Table rowKey="id" size="small" dataSource={[]} columns={columns} loading pagination={false} />
-             : <Empty description="暂无慢 SQL 采集数据" />)}
+          {mode === 'events' && (
+            <>
+              <Input allowClear placeholder="数据库(schema)" style={{ width: 140 }} value={textDraft.schema}
+                onChange={textChange('schema')} onPressEnter={commitText} />
+              <Input allowClear placeholder="访问来源(host)" style={{ width: 140 }} value={textDraft.host}
+                onChange={textChange('host')} onPressEnter={commitText} />
+              <Input allowClear placeholder="用户" style={{ width: 110 }} value={textDraft.user}
+                onChange={textChange('user')} onPressEnter={commitText} />
+              <Input allowClear placeholder="关键字(SQL)" style={{ width: 180 }} value={textDraft.keyword}
+                onChange={textChange('keyword')} onPressEnter={commitText} />
+              <InputNumber placeholder="最小耗时(秒)" style={{ width: 120 }} min={0}
+                value={f.minSeconds} onChange={(v) => { setF((prev) => ({ ...prev, minSeconds: v ?? null })); setPage(1) }} />
+              <Select value={f.order} options={ORDER_OPTIONS} style={{ width: 140 }}
+                onChange={(v) => { setF((prev) => ({ ...prev, order: v })); setPage(1) }} />
+              <Space size={4}>
+                <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} />
+                <span style={{ fontSize: 12, color: '#8c8c8c' }}>自动刷新</span>
+              </Space>
+              <Button size="small" type="primary" onClick={commitText}>查询</Button>
+            </>
+          )}
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => setReloadTick((x) => x + 1)}>刷新</Button>
+        </div>
+
+        {/* 回退提示 */}
+        {fallback && (
+          <div style={{
+            marginBottom: 12, padding: '6px 12px', background: '#fafafa',
+            border: '1px solid #eee', borderRadius: 4, color: '#8c8c8c', fontSize: 12,
+          }}>{fallback}</div>
+        )}
+
+        {/* 明细 / 聚合 双视图 */}
+        {mode === 'events' ? (
+          eventItems.length || eventLoading
+            ? <SlowSqlEventTable
+                items={eventItems} loading={eventLoading} total={eventTotal} page={page} pageSize={pageSize}
+                onPageChange={(p, ps) => { setPage(p); setPageSize(ps) }}
+                onOpenTrend={(r) => openTrend(r.digest || '')}
+                onOpenDetail={(r) => setDetailRow(r)}
+                onDiagnose={(r) => setDiagRow(r)}
+              />
+            : <Empty description="暂无慢 SQL 执行明细" />
+        ) : (
+          rows.length
+            ? <Table rowKey="id" size="small" dataSource={rows} columns={aggColumns} loading={aggLoading}
+                pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
+                scroll={{ x: 'max-content' }} />
+            : (aggLoading ? <Table rowKey="id" size="small" dataSource={[]} columns={aggColumns} loading pagination={false} />
+               : <Empty description="暂无慢 SQL 采集数据" />)
+        )}
       </Card>
 
       {/* 慢 SQL AI 诊断弹窗 */}
       <SlowSqlDiagnoseModal connId={connId} row={diagRow} onClose={() => setDiagRow(null)} />
+
+      {/* 慢 SQL 执行详情抽屉 */}
+      <SlowSqlDetailDrawer connId={connId} row={detailRow} onClose={() => setDetailRow(null)} />
 
       {/* digest 趋势弹窗 */}
       <Modal open={!!trend} onCancel={() => setTrend(null)} footer={null} width={720}
@@ -219,16 +411,24 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
           : <Empty description="该 digest 无趋势数据（多次采集后形成）" />)}
       </Modal>
 
+      {/* 整体慢 SQL 趋势弹窗 */}
+      <Modal open={overallTrendOpen} onCancel={() => setOverallTrendOpen(false)} footer={null} width={720}
+        title="慢 SQL 趋势（近 24 小时 · 按小时聚合）">
+        {overallTrend.length
+          ? <Line data={overallTrend} xField="sampled_at" yField="value" seriesField="series" height={300} smooth />
+          : <Empty description="暂无趋势数据" />}
+      </Modal>
+
       {/* 两时段对比弹窗 */}
       <Modal open={cmpOpen} onCancel={() => setCmpOpen(false)} footer={null} width={1000}
         title="慢 SQL 两时段对比（TopN）">
         <Space style={{ marginBottom: 12 }} wrap>
           <span>基准 A：</span>
           <DatePicker.RangePicker size="small" showTime={{ format: 'HH:mm' }} format="MM-DD HH:mm" allowClear={false}
-            value={cmpA} presets={rangePresets} onChange={(v) => setCmpA(v as RangeVal)} />
+            value={cmpA} presets={cmpRangePresets} onChange={(v) => setCmpA(v as RangeVal)} />
           <span>对比 B：</span>
           <DatePicker.RangePicker size="small" showTime={{ format: 'HH:mm' }} format="MM-DD HH:mm" allowClear={false}
-            value={cmpB} presets={rangePresets} onChange={(v) => setCmpB(v as RangeVal)} />
+            value={cmpB} presets={cmpRangePresets} onChange={(v) => setCmpB(v as RangeVal)} />
           <Button size="small" type="primary" loading={cmpLoading} onClick={runCompare}>对比</Button>
           <span style={{ color: '#8c8c8c', fontSize: 12 }}>变慢 &gt;20% / 变快 &lt;20% / 新增 / 消失</span>
         </Space>
