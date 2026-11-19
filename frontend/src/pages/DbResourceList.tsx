@@ -1,18 +1,19 @@
 // 数据库资源列表页（资源中心 → 数据库）：纳管实例的列表 + 筛选 + 增删改 + 采集/巡检状态
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type Key, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DBConnection } from '../types'
 import {
   Card, Button, Table, Modal, Form, Input, Select, AutoComplete, InputNumber,
   Space, Tag, message, Popconfirm, Dropdown, Empty, Switch, Tooltip, Spin,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined, CodeOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, SearchOutlined, MoreOutlined, CodeOutlined, ExperimentOutlined } from '@ant-design/icons'
 import {
   getDBConnections, createDBConnection, updateDBConnection,
   deleteDBConnection, testDBConnection, collectSlowSQL, listDbGroups,
 } from '../services/api'
 import { isAdmin } from '../utils/auth'
 import { ENV_OPTIONS } from '../utils/env'
+import DbBatchDiagnoseModal, { type BatchDiagTarget } from '../components/db/DbBatchDiagnoseModal'
 
 // 本地行类型：后端返回字段（types.ts 里的 DBConnection 未覆盖这些，这里补全）
 interface DbRow extends DBConnection {
@@ -54,6 +55,10 @@ export default function DbResourceList() {
   const [groups, setGroups] = useState<{ id: number; name: string }[]>([])
   const [loading, setLoading] = useState(false)
 
+  // 批量诊断：多选实例 + 结果弹窗
+  const [selectedKeys, setSelectedKeys] = useState<Key[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+
   // 筛选状态
   const [kwInput, setKwInput] = useState('')   // 输入框即时值，300ms 防抖写 keyword
   const [keyword, setKeyword] = useState('')
@@ -86,6 +91,12 @@ export default function DbResourceList() {
     const t = setTimeout(() => setKeyword(kwInput.trim()), 300)
     return () => clearTimeout(t)
   }, [kwInput])
+
+  // ===== 批量诊断 =====
+  const selectedTargets: BatchDiagTarget[] = useMemo(() => {
+    const ids = new Set(selectedKeys.map(Number))
+    return conns.filter((c) => ids.has(c.id)).map((c) => ({ id: c.id, name: c.name || `#${c.id}` }))
+  }, [conns, selectedKeys])
 
   // ===== 表单逻辑（从 DiagnosticCenter 的 DBConnections 搬，不改原文件） =====
   const onTypeChange = (t: string) => {
@@ -270,6 +281,11 @@ export default function DbResourceList() {
     <Card size="small" title="数据库管理"
       extra={<Space>
         <Button icon={<CodeOutlined />} onClick={() => window.open('/sql-terminal', '_blank', 'noopener')}>数据库连接</Button>
+        <Button
+          icon={<ExperimentOutlined />} disabled={selectedKeys.length === 0} onClick={() => setBatchOpen(true)}
+        >
+          批量诊断{selectedKeys.length > 0 ? `（${selectedKeys.length}）` : ''}
+        </Button>
         {admin && <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>添加数据库</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
       </Space>}>
@@ -307,7 +323,15 @@ export default function DbResourceList() {
               rowKey="id" size="small" loading={loading} dataSource={filtered}
               pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
               columns={columns}
-              onRow={(r) => ({ onClick: () => navigate(`/resources/databases/${r.id}?from=list`), style: { cursor: 'pointer' } })}
+              rowSelection={{ selectedRowKeys: selectedKeys, onChange: setSelectedKeys, preserveSelectedRowKeys: true }}
+              onRow={(r) => ({
+                onClick: (e) => {
+                  const t = e.target as HTMLElement
+                  if (t.closest('.ant-table-selection-column')) return
+                  navigate(`/resources/databases/${r.id}?from=list`)
+                },
+                style: { cursor: 'pointer' },
+              })}
             />
           )}
         </>
@@ -417,6 +441,13 @@ export default function DbResourceList() {
           </Form.Item>
         </Form>
       </Modal>
+      {/* 批量诊断结果弹窗 */}
+      <DbBatchDiagnoseModal
+        open={batchOpen}
+        targets={selectedTargets}
+        onClose={() => { setBatchOpen(false); setSelectedKeys([]) }}
+        onDone={() => load()}
+      />
     </Card>
   )
 }

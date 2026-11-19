@@ -287,6 +287,23 @@ export const createResourceAlertRule = (data: Payload) => http.post('/resource-a
 export const updateResourceAlertRule = (id: number, data: Payload) => http.put(`/resource-alert-rules/${id}`, data)
 export const deleteResourceAlertRule = (id: number) => http.delete(`/resource-alert-rules/${id}`)
 export const runDbDiagnosis = (connId: number) => http.post(`/db-diagnosis/${connId}/run`)
+
+// ============ 跨库批量诊断（M2）============
+export interface DbBatchDiagnoseItem {
+  conn_id: number
+  status: 'success' | 'failed' | 'skipped'
+  message: string
+  report_id?: number | null
+}
+export interface DbBatchDiagnoseResult {
+  total: number
+  success: number
+  failed: number
+  skipped: number
+  results: DbBatchDiagnoseItem[]
+}
+export const runDbDiagnoseBatch = (connIds: number[]) =>
+  http.post<DbBatchDiagnoseResult>('/db-diagnosis/batch', { conn_ids: connIds })
 // connId 可选：传了只返回该实例的报告（后端 /db-diagnosis/reports 支持 conn_id 过滤）
 export const getDbDiagnosisReports = (page = 1, pageSize = 20, connId?: number) =>
   http.get<PageResult<{ id: number; conclusion: string; root_cause: string; suggestion: string; created_at: string; db_name?: string; db_type?: string }>>(
