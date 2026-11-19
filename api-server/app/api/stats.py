@@ -15,9 +15,10 @@ from app.core.redis_client import (acquire_lock, get_dashboard_generation, redis
                                    release_lock)
 from app.core.security import decode_jwt
 from app.middleware.permission import require_any_user
-from app.models import (AICallLog, AIModelConfig, Alert, Approval, Cluster, DBMetricSnapshot,
-                        DBConnection, ExecutionLog, KnowledgeEntry, PodMetric, ProjectClusterNS,
-                        ProjectDBConnection, QuotaSnapshot, RepairPlan, ResourceSnapshot, User)
+from app.models import (AICallLog, AIDiagnosisResult, AIModelConfig, Alert, Approval, Cluster,
+                        DBMetricSnapshot, DBConnection, DiagnosticReport, ExecutionLog, K8sEvent,
+                        KnowledgeEntry, PodMetric, ProjectClusterNS, ProjectDBConnection,
+                        QuotaSnapshot, RepairPlan, ResourceSnapshot, User)
 
 router = APIRouter(prefix="/api/v1/stats")
 
@@ -132,6 +133,84 @@ def _classify_action(command: str, status: str) -> str:
     if "scale" in cmd:
         return "scale"
     return "self_heal"
+
+
+# ============ R40.4 大屏数据口径：纯函数（供聚合 + 单测复用） ============
+# 级别映射（大屏展示用 P0/P1/P2/P3，与平台 severity 语义保持一致）
+_SEVERITY_LEVEL = {"critical": "P0", "high": "P1", "medium": "P2", "low": "P3"}
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+# 处置状态映射（告警 status → 大屏 chips 文案）
+_DISPOSAL_LABEL = {"pending": "待处理", "awaiting_approval": "待审批", "ticketed": "已转工单"}
+# 节省人工估算：每起成功自动处置按节省 30 分钟人工估算（无历史工时基准，行业常用值）
+_LABOR_MINUTES_PER_HEAL = 30
+
+
+def _severity_level(severity: str) -> str:
+    """severity → 大屏级别（P0/P1/P2/P3）"""
+    return _SEVERITY_LEVEL.get((severity or "").lower(), "P2")
+
+
+def _disposal_label(status: str) -> str:
+    """告警 status → 处置状态文案（待处理/待审批/已转工单）"""
+    return _DISPOSAL_LABEL.get((status or "").lower(), "待处理")
+
+
+def _duration_seconds(detected_at, now) -> int:
+    """detected_at → now 的持续秒数（非负）"""
+    if detected_at is None:
+        return 0
+    try:
+        return max(0, int((now - detected_at).total_seconds()))
+    except TypeError:
+        return 0
+
+
+def _title_for(message: str, fault_type: str, resource_name: str) -> str:
+    """告警标题：优先 message 摘要，其次 fault_type · resource_name"""
+    msg = (message or "").strip()
+    if msg:
+        return msg[:120]
+    ft = (fault_type or "").strip()
+    rn = (resource_name or "").strip()
+    if ft and rn:
+        return f"{ft} · {rn}"
+    return ft or rn or "未知故障"
+
+
+def _parse_diagnosis_json(raw: str) -> dict:
+    """解析 AIDiagnosisResult.diagnosis_json → dict；空/非法 → 空 dict"""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _diagnosis_summary(diag_json: str) -> dict | str:
+    """诊断结论摘要（根因 + 影响判断 + 建议）；无结论 → 空串
+
+    影响判断：优先 diagnosis_json 的 impact 字段，其次 root_cause_layer（A/B/C/D 层级即影响范围）。
+    suggestions 取前 2 条作为处置 chips。
+    """
+    data = _parse_diagnosis_json(diag_json)
+    root_cause = str(data.get("root_cause", "") or "").strip()
+    impact = str(data.get("impact", "") or "").strip()
+    if not impact:
+        impact = str(data.get("root_cause_layer", "") or "").strip()
+    suggestions = data.get("suggestions") or []
+    if isinstance(suggestions, str):
+        suggestions = [suggestions]
+    suggestions = [str(s).strip() for s in suggestions if str(s).strip()][:2]
+    if not root_cause and not impact and not suggestions:
+        return ""
+    return {"root_cause": root_cause[:200], "impact": impact[:100], "suggestions": suggestions}
+
+
+def _labor_saved_minutes(success_count: int) -> int:
+    """节省人工（分钟）：成功自动处置数 × 30 分钟/起"""
+    return max(0, int(success_count or 0)) * _LABOR_MINUTES_PER_HEAL
 
 
 # ============ 仪表盘缓存 / 单飞 / 预热（2026-09-24 性能修复） ============
@@ -633,11 +712,23 @@ async def _compute_dashboard(
             {"key": "open", "count": int(ai_dist.open or 0)},
         ]
 
-        # --- realtime_alerts（pending/awaiting 倒序 Top15，字段同 recent_alerts） ---
+        # --- realtime_alerts（pending/awaiting 倒序 Top15，字段同 recent_alerts；R40.4 补 diagnosis/duration/disposal/level/title） ---
         realtime_rows = (await session.execute(
             _filter(select(Alert).where(Alert.status.in_(["pending", "awaiting_approval", "ticketed"]))
                     .order_by(Alert.detected_at.desc()).limit(15))
         )).scalars().all()
+        # 单次批量取诊断结论（按 alert_id 取最近一条，避免 N+1）
+        diag_map: dict[int, str] = {}
+        realtime_ids = [a.id for a in realtime_rows]
+        if realtime_ids:
+            diag_rows = (await session.execute(
+                select(AIDiagnosisResult.alert_id, AIDiagnosisResult.diagnosis_json)
+                .where(AIDiagnosisResult.alert_id.in_(realtime_ids))
+                .order_by(AIDiagnosisResult.id.desc())
+            )).all()
+            for alert_id, dj in diag_rows:
+                if alert_id not in diag_map and dj:
+                    diag_map[alert_id] = dj  # id desc 首条即最新
         realtime_alerts = [{
             "id": a.id, "cluster_name": cluster_names.get(a.cluster_id, ""),
             "cluster_id": a.cluster_id,
@@ -646,7 +737,56 @@ async def _compute_dashboard(
             "resource_name": a.resource_name, "namespace": a.namespace,
             "fault_type": a.fault_type, "severity": a.severity,
             "status": a.status, "detected_at": str(a.detected_at),
+            "title": _title_for(a.message, a.fault_type, a.resource_name),
+            "level": _severity_level(a.severity),
+            "duration_seconds": _duration_seconds(a.detected_at, now),
+            "disposal": _disposal_label(a.status),
+            "diagnosis": _diagnosis_summary(diag_map.get(a.id, "")),
         } for a in realtime_rows]
+
+        # --- priority_todos（R40.4 优先处理：P0/P1 未解决告警，按 级别+时长 降序取前 3） ---
+        priority_rows = (await session.execute(
+            _filter(select(Alert).where(
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
+                Alert.severity.in_(["critical", "high"]),
+            ).order_by(Alert.detected_at.asc()).limit(200))
+        )).scalars().all()
+        priority_todos = [{
+            "id": a.id, "severity": a.severity, "level": _severity_level(a.severity),
+            "title": _title_for(a.message, a.fault_type, a.resource_name),
+            "env": (getattr(a, "env", "") or cluster_envs.get(a.cluster_id, "")),
+            "cluster_name": cluster_names.get(a.cluster_id, ""),
+            "namespace": a.namespace,
+            "duration_seconds": _duration_seconds(a.detected_at, now),
+            "disposal": _disposal_label(a.status),
+        } for a in sorted(
+            priority_rows,
+            key=lambda a: (_SEVERITY_ORDER.get(a.severity, 9), -_duration_seconds(a.detected_at, now)),
+        )[:3]]
+
+        # --- latest_events（R40.4 最新事件：采集/巡检/恢复流水，最近 4 条） ---
+        # 来源：k8s_events（采集事件）+ diagnostic_reports（集群巡检）+ alerts（恢复 resolved/self_healed）
+        _events: list[tuple[datetime, str, str]] = []
+        _k8e_stmt = select(K8sEvent).order_by(K8sEvent.last_seen.desc()).limit(10)
+        _heal_stmt = (select(Alert).where(Alert.status.in_(["resolved", "self_healed"]),
+                                         Alert.resolved_at.isnot(None))
+                      .order_by(Alert.resolved_at.desc()).limit(10))
+        if filter_cluster_ids is not None:
+            _k8e_stmt = _k8e_stmt.where(K8sEvent.cluster_id.in_(filter_cluster_ids))
+            _heal_stmt = _heal_stmt.where(Alert.cluster_id.in_(filter_cluster_ids))
+        for e in (await session.execute(_k8e_stmt)).scalars().all():
+            _ts = e.last_seen or e.created_at
+            if _ts:
+                _text = " ".join(x for x in [e.reason, e.resource_name, (e.message or "")[:80]] if x)
+                _events.append((_ts, "采集" if e.type != "Warning" else "采集·告警", _text))
+        _insp_stmt = (select(DiagnosticReport).where(DiagnosticReport.task_type == "cluster")
+                      .order_by(DiagnosticReport.created_at.desc()).limit(5))
+        for d in (await session.execute(_insp_stmt)).scalars().all():
+            _events.append((d.created_at, "巡检", (d.conclusion or d.raw_output or "集群巡检完成")[:80]))
+        for a in (await session.execute(_heal_stmt)).scalars().all():
+            _events.append((a.resolved_at, "恢复", f"{a.fault_type} · {a.resource_name}"))
+        latest_events = [{"type": t, "text": tx, "at": str(ts)}
+                         for ts, t, tx in sorted(_events, key=lambda x: x[0], reverse=True)[:4]]
 
         # --- abnormal_pods（历史告警最多的 Pod Top20） ---
         # 按历史累计告警次数排行（含已处理/自愈），全量不受时间窗影响；仍受集群/项目筛选
@@ -729,6 +869,24 @@ async def _compute_dashboard(
         auto_processed_with_action = len(acted_alert_ids)
         auto_healed_without_action = len(set(healed_1y_ids) - acted_alert_ids)
 
+        # --- self_heal_effect（R40.4 自愈效果：成功率/成功/失败/总次数/节省人工/动作分布） ---
+        # 口径：动作级（来源 = 执行记录 ExecutionLog，与 action_stat 同源）：
+        #   success = 成功执行的自愈动作数（self_heal+restart+scale+rollback 成功数之和）
+        #   failed  = 执行失败的动作数（status in failed/rolled_back）
+        #   节省人工 = success × 30 分钟/起（无历史工时基准，行业常用估算值，见 _labor_saved_minutes）
+        _sh_success = sum(action_stat.values())
+        _sh_failed = action_failed
+        _sh_total = _sh_success + _sh_failed
+        self_heal_effect = {
+            "success": _sh_success,
+            "failed": _sh_failed,
+            "total": _sh_total,
+            "success_rate": round(_sh_success / _sh_total, 4) if _sh_total else 0.0,
+            "incidents_healed": auto_processed_24h,
+            "labor_saved_minutes": _labor_saved_minutes(_sh_success),
+            "action_dist": dict(action_stat),
+        }
+
         timeline_rows = (await session.execute(
             _filter(exec_join.order_by(ExecutionLog.id.desc()).limit(6))
         )).all()
@@ -768,6 +926,7 @@ async def _compute_dashboard(
             "db_abnormal": db_abnormal,
             "heal_rate": kpi_heal_rate,
             "heal_count": kpi_heal_total,
+            "self_heal_rate": self_heal_effect["success_rate"],
             "mttr_minutes": kpi_mttr,
             "mttr_count": kpi_mttr_count,
             "approval_pending": approval_pending_v2,
@@ -862,6 +1021,20 @@ async def _compute_dashboard(
                 _agg[rt] = _agg.get(rt, 0) + c
         res_rows = list(_agg.items())
         ns_count = sum(_cur_ns.values())
+        # R40.4 KPI「容器」：最新一批 Pod 快照的 container_count 之和（复用 _latest 精确 JOIN，避免全表）
+        _cont_stmt = (
+            select(func.coalesce(func.sum(ResourceSnapshot.container_count), 0))
+            .select_from(ResourceSnapshot)
+            .join(_latest, and_(
+                _latest.c.cid == ResourceSnapshot.cluster_id,
+                _latest.c.rt == ResourceSnapshot.resource_type,
+                _latest.c.mt == ResourceSnapshot.snapshot_time,
+            ))
+            .where(_latest.c.rt == "pod")
+        )
+        if filter_cluster_ids is not None:
+            _cont_stmt = _cont_stmt.where(_latest.c.cid.in_(filter_cluster_ids))
+        container_total = int((await session.execute(_cont_stmt)).scalar() or 0)
         # 7 天趋势（告警 + AI）
         since_7d = now - timedelta(days=7)
         tr_rows = (await session.execute(
@@ -1047,6 +1220,14 @@ async def _compute_dashboard(
             "last_snapshot": snap_map.get(c.id, ""),
         })
 
+    # R40.4 KPI 补齐：节点数 / Pod / 容器 / 24h 自愈（集群数=cluster_total、未恢复告警=alert_pending、
+    # 成功率=heal_rate、MTTR=mttr_minutes 已存在于 kpi）。节点/Pod 汇总自 cluster_details（与 cluster_total 同口径过滤）。
+    _scope_details = [c for c in cluster_details if filter_cluster_ids is None or c["id"] in filter_cluster_ids]
+    kpi["node_total"] = sum(int(c["node_total"] or 0) for c in _scope_details)
+    kpi["pod_total"] = sum(int(c["pods"] or 0) for c in _scope_details)
+    kpi["container_total"] = int(container_total or 0)
+    kpi["self_healed_24h"] = len(healed_1y_ids)
+
     # v2 集群资源水位 Top（由 cluster_details 派生，按 CPU 水位降序；None 置底）
     _wl_src = cluster_details if filter_cluster_ids is None else [c for c in cluster_details if c["id"] in filter_cluster_ids]
     cluster_waterline = sorted(
@@ -1121,6 +1302,9 @@ async def _compute_dashboard(
         "ai_result_dist": ai_result_dist,
         "ai_result_window": ai_window,
         "realtime_alerts": realtime_alerts,
+        "priority_todos": priority_todos,
+        "latest_events": latest_events,
+        "self_heal_effect": self_heal_effect,
         "abnormal_pods": abnormal_pods,
         "db_health": db_health,
         "action_stat": action_stat,
