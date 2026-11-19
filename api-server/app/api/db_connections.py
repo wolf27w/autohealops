@@ -837,8 +837,11 @@ async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin
                             "table": table, "format": fmt, "content": content}).encode(),
                 180.0,
             )
+            # 2026-11-19 修复：agent 分支原来没有 else，执行成功后继续落进直连分支
+            # （_db_supports 判否 → 400，或 import_content 用空密码重试 → 恒 500），
+            # 造成「agent 已真实导入 + 接口报失败」的双执行假失败。
             result = json.loads(raw)
-        if not _db_supports(c, "import"):
+        elif not _db_supports(c, "import"):
             return {"code": 400, "message": f"直连执行暂不支持 {c.db_type} 的导入（当前支持 mysql）", "data": None}
         else:
             from app.services import db_direct_service
