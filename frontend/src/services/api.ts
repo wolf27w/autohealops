@@ -874,11 +874,19 @@ export interface DbImportChunkBody {
   mode: 'stop' | 'skip'
   confirm: boolean
   db?: string
+  /** R50：分片导入格式（sql 默认；csv 时需传 table，首片 has_header） */
+  format?: 'sql' | 'csv'
+  table?: string
+  /** CSV 首片解析出的列名（后续片沿用） */
+  columns?: string[]
+  has_header?: boolean
 }
 export interface DbImportChunkResult {
   executed?: number
   failed?: number
   skipped?: number
+  /** 后端实际把逐片结果放在 chunk_result 里（扁平字段仅作兼容） */
+  chunk_result?: { executed?: number; failed?: number; skipped?: number; errors?: SqlImportErrorRow[] }
   duplicate?: boolean
   errors?: SqlImportErrorRow[]
   stopped?: boolean

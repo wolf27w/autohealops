@@ -33,16 +33,17 @@ class TestCompareTableSchema(unittest.TestCase):
         a = _schema([_col("id"), _col("name")], [_idx("PRIMARY", ["id"])], engine="InnoDB")
         b = _schema([_col("id"), _col("name")], [_idx("PRIMARY", ["id"])], engine="InnoDB")
         d = compare_table_schema(a, b)
-        self.assertEqual(d["columns"], {"added": [], "removed": [], "modified": []})
+        self.assertEqual(d["columns"], {"added": [], "removed": [], "modified": [], "renamed": []})
         self.assertEqual(d["indexes"], {"added": [], "removed": [], "modified": []})
         self.assertEqual(d["options"]["modified"], [])
 
     def test_column_add_remove_modify(self):
-        a = _schema([_col("id"), _col("old"), _col("chg", typ="INT", nullable=True, comment="x")])
-        b = _schema([_col("id"), _col("new"), _col("chg", typ="BIGINT", nullable=False, comment="y")])
+        a = _schema([_col("id"), _col("old", typ="VARCHAR(10)"), _col("chg", typ="INT", nullable=True, comment="x")])
+        b = _schema([_col("id"), _col("new", typ="INT"), _col("chg", typ="BIGINT", nullable=False, comment="y")])
         d = compare_table_schema(a, b)
         self.assertEqual([c["name"] for c in d["columns"]["added"]], ["new"])
         self.assertEqual([c["name"] for c in d["columns"]["removed"]], ["old"])
+        self.assertEqual(d["columns"]["renamed"], [])
         self.assertEqual([m["key"] for m in d["columns"]["modified"]], ["chg"])
         self.assertEqual(d["columns"]["modified"][0]["after"]["type"], "BIGINT")
 
@@ -73,7 +74,7 @@ class TestCompareTableSchema(unittest.TestCase):
 class TestDiffToChanges(unittest.TestCase):
     def test_maps_to_alter_changes(self):
         a = _schema(
-            [_col("id", default=None), _col("old"), _col("chg", typ="INT", nullable=True, comment="x")],
+            [_col("id", default=None), _col("old", typ="VARCHAR(10)"), _col("chg", typ="INT", nullable=True, comment="x")],
             [_idx("idx_a", ["old"]), _idx("idx_b", ["chg"], unique=True)],
             engine="InnoDB", charset="utf8mb4", collation="utf8mb4_general_ci",
         )

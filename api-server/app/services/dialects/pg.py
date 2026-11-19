@@ -17,6 +17,7 @@ list_databases / probe。导出 / 导入 / 备份 / 建库 / 删库 暂不支持
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -25,7 +26,14 @@ from urllib.parse import quote
 from app.core.logging import get_logger
 from app.core.security import decrypt_aes256_gcm
 
-from .base import Dialect
+from .base import (
+    Dialect,
+    UnsupportedError,
+    check_ident,
+    check_type_spec,
+    default_value_sql,
+    sql_literal,
+)
 
 try:
     import asyncpg
@@ -262,16 +270,91 @@ class PGDialect(Dialect):
         finally:
             await conn.close()
 
-    # ---- DDL 生成（表结构设计器，R37）：PG 本批不实现（与 Oracle 的 R18 能力对齐）----
+    # ---- DDL 生成（表结构设计器，R48）----
+
+    def build_table_alter(self, database: str, table: str, changes: dict) -> list[str]:
+        return _build_table_alter_pg(database, table, changes)
 
     def build_database_alter(self, name: str, payload: dict) -> str:
         # PG 无「ALTER DATABASE 改字符集/排序规则」的等价轻量语句（需转储重建），明确不支持
-        from .base import UnsupportedError
         raise UnsupportedError("PostgreSQL 不支持编辑库字符集/排序规则")
+
+    async def table_schema(self, c, db: str, table: str) -> dict:
+        """表结构详情：字段/索引/表注释/行数估计，与 MySQL 同形（extra/key/charset/collation 恒空）。
+
+        PG 中 `db` = schema；列注释/表注释从 pg_description（col_description/obj_description）取，
+        索引从 pg_index + pg_attribute 取（按 indkey 顺序展开列，unique/method 同形映射）。
+        """
+        conn = await self.connect(c, readonly=True)
+        try:
+            col_rows = await conn.fetch(
+                "SELECT column_name, data_type, udt_name, character_maximum_length, "
+                "numeric_precision, numeric_scale, is_nullable, column_default "
+                "FROM information_schema.columns "
+                "WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position", db, table)
+            comment_rows = await conn.fetch(
+                "SELECT a.attname, col_description(c.oid, a.attnum) AS comment "
+                "FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
+                "  AND a.attnum > 0 AND NOT a.attisdropped "
+                "WHERE n.nspname = $1 AND c.relname = $2", db, table)
+            tinfo_row = await conn.fetchrow(
+                "SELECT obj_description(c.oid, 'pg_class') AS comment, "
+                "c.reltuples::bigint AS rows "
+                "FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'", db, table)
+            idx_rows = await conn.fetch(
+                "SELECT i.relname AS index_name, ix.indisunique AS is_unique, "
+                "am.amname AS access_method, a.attname AS column_name "
+                "FROM pg_catalog.pg_class t "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace "
+                "JOIN pg_catalog.pg_index ix ON ix.indrelid = t.oid "
+                "JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid "
+                "JOIN pg_catalog.pg_am am ON am.oid = i.relam "
+                "JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid "
+                "  AND a.attnum = ANY(ix.indkey) "
+                "WHERE n.nspname = $1 AND t.relname = $2 AND t.relkind = 'r' "
+                "ORDER BY i.relname, array_position(ix.indkey::int2[], a.attnum)", db, table)
+        finally:
+            await conn.close()
+
+        comments = {r["attname"]: (r["comment"] or "") for r in comment_rows}
+        columns = [{
+            "name": r["column_name"],
+            "type": _fmt_pg_type(r),
+            "nullable": (r["is_nullable"] or "YES") == "YES",
+            "default": _norm_pg_default(r["column_default"]),
+            "extra": "",
+            "comment": comments.get(r["column_name"], ""),
+            "key": "",
+            "charset": "",
+            "collation": "",
+        } for r in col_rows]
+
+        idx_map: dict[str, dict] = {}
+        for r in idx_rows:
+            name = r["index_name"]
+            item = idx_map.setdefault(name, {
+                "name": name,
+                "unique": bool(r["is_unique"]),
+                "type": (r["access_method"] or "btree").upper(),
+                "columns": [],
+            })
+            item["columns"].append(r["column_name"])
+
+        return {
+            "database": db, "table": table,
+            "engine": "", "charset": "", "collation": "",
+            "comment": (tinfo_row["comment"] if tinfo_row else "") or "",
+            "rows": int(tinfo_row["rows"] or 0) if tinfo_row else 0,
+            "columns": columns, "indexes": list(idx_map.values()),
+        }
 
 
 def _fmt_pg_type(r) -> str:
-    """information_schema.columns 一行 → 可读类型串（用于重建 CREATE TABLE）。"""
+    """information_schema.columns 一行 → 可读类型串（用于重建 CREATE TABLE / 回填设计器）。"""
     dt = (r["data_type"] or "").lower()
     if dt == "character varying":
         n = r["character_maximum_length"]
@@ -287,3 +370,170 @@ def _fmt_pg_type(r) -> str:
     if dt == "user-defined":
         return f'"{r["udt_name"]}"'
     return r["data_type"] or r["udt_name"] or "text"
+
+
+def _norm_pg_default(d):
+    """information_schema.columns.column_default → 与 MySQL COLUMN_DEFAULT 同形（去 ::类型 后缀/引号）。
+
+    PG 默认值常带类型后缀（`'foo'::character varying`、`0::integer`、`nextval('seq'::regclass)`），
+    这里去掉 `::类型` 后缀并把字符串引号剥掉，使设计器回填可读、且能经 default_value_sql 往返。
+    """
+    if d is None:
+        return None
+    d = str(d).strip()
+    if d.upper() == "NULL":
+        return None
+    # 去类型后缀：::character varying / ::integer / ::regclass / ::double precision 等
+    d = re.sub(r"::[A-Za-z0-9_\" ]+(\[\])?$", "", d)
+    if len(d) >= 2 and d[0] == "'" and d[-1] == "'":
+        return d[1:-1].replace("''", "'")
+    return d
+
+
+# ============ DDL 生成（表结构设计器，R48） ============
+
+# MySQL 类型 → PG 类型（PG 无 tinyint/mediumint/longtext/datetime/double/blob，映射到最近等价）
+_PG_TYPE_MAP = {
+    "tinyint": "smallint", "mediumint": "integer",
+    "tinytext": "text", "mediumtext": "text", "longtext": "text",
+    "datetime": "timestamp",
+    "double": "double precision",
+    "tinyblob": "bytea", "mediumblob": "bytea", "longblob": "bytea", "blob": "bytea",
+    "bool": "boolean",
+}
+
+
+def _pg_type(t: str) -> str:
+    """类型映射：MySQL 类型 → PG 类型；已是 PG 类型（含空格/参数）原样返回。
+
+    int/bigint/smallint/varchar/char/text/numeric/decimal/float/json/boolean 等 PG 直接支持，
+    原样返回（类型串已过 check_type_spec 白名单，无注入面）。
+    """
+    t = check_type_spec(t)
+    m = re.match(r"^([A-Za-z][A-Za-z0-9_]*)\s*(?:\(.*\))?$", t)
+    if not m:
+        return t  # 多词类型（timestamp without time zone / double precision / character varying 等）
+    base = m.group(1).lower()
+    mapped = _PG_TYPE_MAP.get(base)
+    return mapped if mapped else t
+
+
+def _pg_default_sql(dv):
+    """默认值 → DEFAULT 片段；PG 不接受 CURRENT_TIMESTAMP()（MySQL 写法），规整为 CURRENT_TIMESTAMP。"""
+    if dv is None or str(dv) == "":
+        return None
+    s = str(dv)
+    if s.upper() == "CURRENT_TIMESTAMP()":
+        s = "CURRENT_TIMESTAMP"
+    return default_value_sql(s)
+
+
+def _pg_column_def(col: dict) -> str:
+    """单列定义（ADD COLUMN 用）：`"name" type [NOT NULL] [DEFAULT ...]`"""
+    name = check_ident(col.get("name") or "", "字段名")
+    typ = _pg_type(col.get("type") or "")
+    parts = [f'"{name}" {typ}']
+    if not bool(col.get("nullable", True)):
+        parts.append("NOT NULL")
+    d = _pg_default_sql(col.get("default"))
+    if d:
+        parts.append(d)
+    return " ".join(parts)
+
+
+def _pg_modify_clauses(qual: str, name: str, col: dict) -> list[str]:
+    """修改列 → 多条语句（PG 无 MODIFY COLUMN，TYPE/NOT NULL/DEFAULT/COMMENT 逐项拆开）。"""
+    name = check_ident(name or "", "字段名")
+    stmts: list[str] = []
+    typ = (col.get("type") or "").strip()
+    if typ:
+        stmts.append(f'ALTER TABLE {qual} ALTER COLUMN "{name}" TYPE {_pg_type(typ)}')
+    if col.get("nullable") is not None:
+        stmts.append(
+            f'ALTER TABLE {qual} ALTER COLUMN "{name}" '
+            f'{"DROP" if col.get("nullable") else "SET"} NOT NULL')
+    if col.get("default") is not None:
+        d = _pg_default_sql(col.get("default"))
+        if d:
+            stmts.append(f'ALTER TABLE {qual} ALTER COLUMN "{name}" SET {d}')
+        else:
+            stmts.append(f'ALTER TABLE {qual} ALTER COLUMN "{name}" DROP DEFAULT')
+    comment = (col.get("comment") or "").strip()
+    if comment:
+        stmts.append(f'COMMENT ON COLUMN {qual}."{name}" IS {sql_literal(comment)}')
+    return stmts
+
+
+def _build_table_alter_pg(database: str, table: str, ch: dict) -> list[str]:
+    """结构化改动 → PG DDL 语句列表（一次一条，按顺序执行/预览）。
+
+    - 类型映射见 `_pg_type`；改名 → `RENAME COLUMN`；注释 → `COMMENT ON COLUMN/TABLE`
+    - 修改列拆成 TYPE / SET|DROP NOT NULL / SET|DROP DEFAULT 多条
+    - 不支持：存储引擎 / 表级字符集 / 排序规则 / AFTER 列位置（明确报错，不静默）
+    """
+    check_ident(database, "库名")  # PG 中 database=schema
+    check_ident(table, "表名")
+    ch = ch or {}
+    stmts: list[str] = []
+    qual = f'"{database}"."{table}"'
+
+    if (ch.get("engine") or "").strip():
+        raise UnsupportedError("PostgreSQL 无存储引擎概念，不支持 ENGINE")
+    if (ch.get("charset") or "").strip() or (ch.get("collation") or "").strip():
+        raise UnsupportedError("PostgreSQL 无表级字符集/排序规则概念（可在建库/建列时指定）")
+
+    # 1) 新增列（含列注释）
+    for c in ch.get("add_columns") or []:
+        if (c.get("after") or "").strip():
+            raise UnsupportedError("PostgreSQL 不支持 AFTER 指定列位置（列顺序由新增顺序决定）")
+        stmts.append(f"ALTER TABLE {qual} ADD COLUMN {_pg_column_def(c)}")
+        comment = (c.get("comment") or "").strip()
+        if comment:
+            name = check_ident(c.get("name") or "", "字段名")
+            stmts.append(f'COMMENT ON COLUMN {qual}."{name}" IS {sql_literal(comment)}')
+
+    # 2) 修改列
+    for c in ch.get("modify_columns") or []:
+        stmts.extend(_pg_modify_clauses(qual, c.get("name") or "", c))
+
+    # 3) 改列名（RENAME COLUMN）→ 再按新名走修改
+    for c in ch.get("change_columns") or []:
+        old = check_ident(c.get("from") or "", "字段名")
+        new = check_ident(c.get("name") or "", "字段名")
+        if old != new:
+            stmts.append(f'ALTER TABLE {qual} RENAME COLUMN "{old}" TO "{new}"')
+        stmts.extend(_pg_modify_clauses(qual, new, c))
+
+    # 4) 删列
+    for n in ch.get("drop_columns") or []:
+        stmts.append(f'ALTER TABLE {qual} DROP COLUMN "{check_ident(n, "字段名")}"')
+
+    # 5) 加索引
+    for i in ch.get("add_indexes") or []:
+        cols = [check_ident(x, "索引字段") for x in (i.get("columns") or [])]
+        if not cols:
+            raise ValueError("索引至少需要一个字段")
+        uniq = "UNIQUE " if i.get("unique") else ""
+        idx_name = (i.get("name") or "").strip()
+        if not idx_name:
+            idx_name = f"idx_{table}_{'_'.join(cols)}"
+        check_ident(idx_name, "索引名")
+        collist = ", ".join(f'"{x}"' for x in cols)
+        stmts.append(f"CREATE {uniq}INDEX \"{idx_name}\" ON {qual} ({collist})")
+
+    # 6) 删索引（PG 索引名在 schema 内唯一，DROP INDEX 带 schema 前缀避免歧义）
+    for n in ch.get("drop_indexes") or []:
+        stmts.append(f'DROP INDEX "{database}"."{check_ident(n, "索引名")}"')
+
+    # 7) 表注释
+    if ch.get("comment") is not None:
+        stmts.append(f"COMMENT ON TABLE {qual} IS {sql_literal(ch.get('comment') or '')}")
+
+    # 8) 重命名表
+    new_name = (ch.get("rename_table") or "").strip()
+    if new_name:
+        stmts.append(f'ALTER TABLE {qual} RENAME TO "{check_ident(new_name, "新表名")}"')
+
+    if not stmts:
+        raise ValueError("没有任何改动")
+    return stmts

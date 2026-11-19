@@ -28,7 +28,7 @@ MYSQL_SNAPSHOT = (
     "  DROP INDEX `idx_old`,\n"
     "  COMMENT='主表',\n"
     "  ENGINE=InnoDB,\n"
-    "  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,\n"
+    "  DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci,\n"
     "  RENAME TO `t2`"
 )
 

@@ -1141,6 +1141,21 @@ async def import_chunk(conn_id: int, payload: dict, user=Depends(require_admin))
     mode = (payload.get("mode") or "stop").lower()
     if mode not in ("stop", "skip"):
         return {"code": 400, "message": "mode 仅支持 stop / skip", "data": None}
+    fmt = (payload.get("format") or "sql").lower()
+    if fmt not in ("sql", "csv"):
+        return {"code": 400, "message": "format 仅支持 sql / csv", "data": None}
+    table = (payload.get("table") or "").strip()
+    columns = payload.get("columns") or []
+    has_header = bool(payload.get("has_header"))
+    if fmt == "csv":
+        if not table:
+            return {"code": 400, "message": "CSV 分片导入必须指定表名（table）", "data": None}
+        try:
+            columns = [check_ident(x, "字段名") for x in columns]
+        except ValueError as e:
+            return {"code": 400, "message": str(e), "data": None}
+        if not columns:
+            return {"code": 400, "message": "CSV 分片导入必须指定列名（columns）", "data": None}
 
     async with async_session() as session:
         c = await session.get(DBConnection, conn_id)
@@ -1167,20 +1182,27 @@ async def import_chunk(conn_id: int, payload: dict, user=Depends(require_admin))
         started = time.time()
         try:
             if (getattr(c, "source", "direct") or "direct") == "agent":
-                chunk_result, err, unsupported = await _agent_call(
-                    int(c.cluster_id), "ImportSqlRaw",
-                    {"key": c.agent_db_key, "db": db or "", "sql": content, "mode": mode},
-                    180.0,
-                )
+                if fmt == "csv":
+                    err = "agent 库暂不支持 CSV 分片导入（需 agent 侧新增方法）"
+                else:
+                    chunk_result, err, unsupported = await _agent_call(
+                        int(c.cluster_id), "ImportSqlRaw",
+                        {"key": c.agent_db_key, "db": db or "", "sql": content, "mode": mode},
+                        180.0,
+                    )
             elif not _db_supports(c, "import"):
                 err = f"直连执行暂不支持 {c.db_type} 的导入（当前支持 mysql）"
             else:
                 from app.services import db_direct_service
-                chunk_result = await db_direct_service.import_sql(c, db, content, mode)
+                if fmt == "csv":
+                    chunk_result = await db_direct_service.import_csv_chunk(
+                        c, db, table, columns, content, has_header)
+                else:
+                    chunk_result = await db_direct_service.import_sql(c, db, content, mode)
         except Exception as e:  # noqa: BLE001
             err = str(e)
         elapsed = round(time.time() - started, 2)
-        await _audit_sql(user, c, f"IMPORT-CHUNK job={job_id} #{chunk_index}/{total_chunks} ({len(content)} bytes)",
+        await _audit_sql(user, c, f"IMPORT-CHUNK {fmt} job={job_id} #{chunk_index}/{total_chunks} ({len(content)} bytes)",
                          elapsed, 0, not err and not unsupported, err, "db_import_chunk",
                          int((chunk_result or {}).get("executed") or 0))
         if unsupported:

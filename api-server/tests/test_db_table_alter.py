@@ -50,7 +50,7 @@ class TestTableAlterDDL(unittest.TestCase):
             "engine": "InnoDB", "charset": "utf8mb4", "collation": "utf8mb4_unicode_ci",
         })
         self.assertIn("ENGINE=InnoDB", sql)
-        self.assertIn("CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", sql)
+        self.assertIn("DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci", sql)
 
     def test_default_value_escaping(self):
         sql = _build_table_alter("db1", "t1", {

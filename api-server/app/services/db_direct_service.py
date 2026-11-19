@@ -41,6 +41,11 @@ async def import_content(c, db: str, table: str, fmt: str, content: str) -> dict
     return await _dialect(c).import_content(c, db, table, fmt, content)
 
 
+async def import_csv_chunk(c, db: str, table: str, columns: list[str], content: str,
+                           has_header: bool = False) -> dict:
+    return await _dialect(c).import_csv_chunk(c, db, table, columns, content, has_header)
+
+
 async def import_sql(c, db: str, sql: str, mode: str = "stop") -> dict:
     return await _dialect(c).import_sql(c, db, sql, mode)
 

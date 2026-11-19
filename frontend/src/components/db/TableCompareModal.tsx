@@ -21,7 +21,7 @@ export interface TableCompareModalProps {
   onApplied: (newTable: string) => void
 }
 
-type DiffRow = { key: string; kind: 'added' | 'removed' | 'modified'; name: string; detail: string }
+type DiffRow = { key: string; kind: 'added' | 'removed' | 'modified' | 'renamed'; name: string; detail: string }
 
 const colSummary = (c: DbTableColumn) =>
   [
@@ -38,6 +38,7 @@ const idxSummary = (i: DbTableIndex) =>
 const kindTag = (kind: DiffRow['kind']) => {
   if (kind === 'added') return <Tag color="green">新增</Tag>
   if (kind === 'removed') return <Tag color="red">删除</Tag>
+  if (kind === 'renamed') return <Tag color="blue">疑似改名</Tag>
   return <Tag color="orange">修改</Tag>
 }
 
@@ -114,6 +115,10 @@ export default function TableCompareModal({
     const rows: DiffRow[] = []
     diff.columns.added.forEach((c, i) => rows.push({ key: `ca${i}`, kind: 'added', name: c.name, detail: colSummary(c) }))
     diff.columns.removed.forEach((c, i) => rows.push({ key: `cr${i}`, kind: 'removed', name: c.name, detail: colSummary(c) }))
+    diff.columns.renamed.forEach((r, i) => rows.push({
+      key: `cn${i}`, kind: 'renamed', name: `${r.from} → ${r.to}`,
+      detail: `疑似改名：${colSummary(r.after)}（类型/位置/默认值一致，按改名同步而非删+增）`,
+    }))
     diff.columns.modified.forEach((m, i) => rows.push({
       key: `cm${i}`, kind: 'modified', name: m.key,
       detail: `${colSummary(m.before)} → ${colSummary(m.after)}`,

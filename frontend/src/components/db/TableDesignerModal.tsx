@@ -59,6 +59,12 @@ const ORACLE_TYPES = [
   'DATE', 'TIMESTAMP', 'CLOB', 'BLOB', 'RAW(16)', 'FLOAT',
 ]
 
+// PG 类型提示（方言层会映射 MySQL 类型 → PG 类型；PG 无 tinyint/datetime/double/blob）
+const PG_TYPES = [
+  'integer', 'bigint', 'smallint', 'numeric(10,2)', 'varchar(64)', 'varchar(255)', 'char(36)',
+  'text', 'boolean', 'timestamp', 'date', 'jsonb', 'bytea', 'uuid', 'double precision',
+]
+
 function toColRow(c: DbTableColumn): ColRow {
   return {
     key: nextKey(), orig: c, name: c.name, type: c.type || '', nullable: !!c.nullable,
@@ -90,9 +96,10 @@ export default function TableDesignerModal({
   const [executing, setExecuting] = useState(false)
   const [compareOpen, setCompareOpen] = useState(false)
 
-  // 按方言切换：Oracle 下隐藏自增/引擎/字符集/排序规则，类型下拉换 Oracle 类型集
+  // 按方言切换：Oracle/PG 下隐藏自增/引擎/字符集/排序规则，类型下拉换对应类型集
   const isOracle = (schema?.db_type || 'mysql').toLowerCase() === 'oracle'
-  const typeHints = isOracle ? ORACLE_TYPES : TYPE_HINTS
+  const isPg = (schema?.db_type || 'mysql').toLowerCase() === 'pg'
+  const typeHints = isOracle ? ORACLE_TYPES : isPg ? PG_TYPES : TYPE_HINTS
 
   const reset = useCallback((s: DbTableSchema) => {
     setSchema(s)
@@ -133,7 +140,7 @@ export default function TableDesignerModal({
 
   const addCol = () => {
     setCols((prev) => [...prev, {
-      key: nextKey(), name: '', type: isOracle ? 'VARCHAR2(255)' : 'VARCHAR(255)', nullable: true, def: '', comment: '', autoInc: false, keyFlag: '',
+      key: nextKey(), name: '', type: isOracle ? 'VARCHAR2(255)' : isPg ? 'varchar(255)' : 'VARCHAR(255)', nullable: true, def: '', comment: '', autoInc: false, keyFlag: '',
     }])
   }
   const removeCol = (row: ColRow) => {
@@ -290,7 +297,7 @@ export default function TableDesignerModal({
       render: (_: unknown, r: ColRow) => (
         <Space size={4} wrap>
           {r.orig ? <Tag color={r.keyFlag === 'PRI' ? 'gold' : 'default'}>{r.keyFlag || '普通'}</Tag> : <Tag color="blue">新增</Tag>}
-          {!isOracle && (
+          {!isOracle && !isPg && (
             <Tag color={r.autoInc ? 'green' : 'default'} style={{ cursor: 'pointer' }}
               onClick={() => patchCol(r.key, { autoInc: !r.autoInc })}>
               {r.autoInc ? 'AUTO_INC' : '自增关'}
@@ -372,6 +379,8 @@ export default function TableDesignerModal({
           <Space size={8} wrap style={{ marginBottom: 10, fontSize: 12, color: '#8c8c8c' }}>
             {isOracle ? (
               <Tag color="blue">Oracle</Tag>
+            ) : isPg ? (
+              <Tag color="blue">PostgreSQL</Tag>
             ) : (
               <>
                 <Tag color="blue">{schema.engine || '-'}</Tag>
@@ -418,7 +427,7 @@ export default function TableDesignerModal({
                       <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>表注释</span>
                       <Input value={comment} onChange={(e) => setComment(e.target.value)} style={{ width: 420 }} />
                     </Space>
-                    {!isOracle && (
+                    {!isOracle && !isPg && (
                       <>
                         <Space>
                           <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>存储引擎</span>
@@ -427,7 +436,7 @@ export default function TableDesignerModal({
                         <Space>
                           <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>字符集</span>
                           <Input value={charset} onChange={(e) => setCharset(e.target.value)} style={{ width: 200 }}
-                            placeholder="留空不改（CONVERT TO 会转换已有数据）" />
+                            placeholder="留空不改（DEFAULT CHARSET 仅改默认字符集，不转换已有数据）" />
                         </Space>
                         <Space>
                           <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>排序规则</span>

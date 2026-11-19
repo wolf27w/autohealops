@@ -14,6 +14,7 @@ import TableDesignerModal from '../components/db/TableDesignerModal'
 import ResultGrid from '../components/db/ResultGrid'
 import { useSqlSuggest, keywordsFor, referencedTables, MIRROR_STYLE } from '../components/useSqlSuggest'
 import { supportsCapability, type DbCapability } from '../utils/dbCapabilities'
+import type { DbImportChunkBody } from '../services/api'
 import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
@@ -105,6 +106,63 @@ const errMsg = (e: unknown) => {
   const x = e as { response?: { data?: { message?: string } }; message?: string }
   return x?.response?.data?.message || x?.message || '执行失败'
 }
+
+// ---------- CSV 分片导入（R50）：按行边界切，不把一行切成两半；表头只在第一片带 ----------
+// 按 CSV 行边界拆分（尊重双引号包裹的字段内嵌换行/逗号/转义引号 ""），返回逻辑行（原始文本）。
+function splitCsvRows(text: string): string[] {
+  let s = text
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1)
+  const rows: string[] = []
+  let cur = ''
+  let inQuotes = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (inQuotes) {
+      cur += ch
+      if (ch === '"') {
+        if (s[i + 1] === '"') { cur += '"'; i++ } else inQuotes = false
+      }
+      continue
+    }
+    if (ch === '"') { inQuotes = true; cur += ch; continue }
+    if (ch === '\r') {
+      if (s[i + 1] === '\n') i++
+      rows.push(cur); cur = ''
+      continue
+    }
+    if (ch === '\n') { rows.push(cur); cur = ''; continue }
+    cur += ch
+  }
+  if (cur) rows.push(cur)
+  return rows
+}
+
+// 解析单个逻辑行（可能含引号内嵌换行）为字段数组。
+function parseCsvRow(line: string): string[] {
+  const fields: string[] = []
+  let field = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { field += '"'; i++ } else inQuotes = false
+      } else field += ch
+      continue
+    }
+    if (ch === '"') { inQuotes = true; continue }
+    if (ch === ',') { fields.push(field); field = ''; continue }
+    field += ch
+  }
+  fields.push(field)
+  return fields
+}
+
+// import-chunk 真实返回（data 内含 chunk_result / progress，与 api.ts 的 DbImportChunkResult 有出入）
+interface ChunkResp {
+  duplicate?: boolean
+  chunk_result?: { executed?: number; failed?: number; skipped?: number; errors?: SqlImportResult['errors']; stopped?: boolean }
+}
 // 导出文件下载（blob + 触发 a 标签下载）
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -148,9 +206,11 @@ export default function SqlTerminal() {
   // 库列表（导出/备份多选用）
   const [dbList, setDbList] = useState<string[]>([])
 
-  // 导入 SQL 弹窗
+  // 导入 SQL / CSV 弹窗
   const [importOpen, setImportOpen] = useState(false)
   const [importMode, setImportMode] = useState<'stop' | 'skip'>('stop')
+  const [importFormat, setImportFormat] = useState<'sql' | 'csv'>('sql')
+  const [importTable, setImportTable] = useState('')
   const [importText, setImportText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [importResult, setImportResult] = useState<SqlImportResult | null>(null)
@@ -485,25 +545,66 @@ export default function SqlTerminal() {
     } catch { /* 拦截器已提示 */ }
   }
 
-  // ---------- 导入 SQL ----------
+  // ---------- 导入 SQL / CSV ----------
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const doImport = async () => {
     if (!cur) return
     const text = importText.trim()
-    if (!text) { message.error('请选择文件或粘贴 SQL 内容'); return }
+    if (!text) { message.error('请选择文件或粘贴内容'); return }
+    if (importFormat === 'csv' && !importTable.trim()) { message.error('CSV 导入必须填写表名'); return }
     if (!window.confirm('导入会真实写库且无法自动回滚，确定继续？')) return
     setImportLoading(true)
     setImportResult(null)
     setImportProgress(null)
     try {
       const SINGLE_LIMIT = 5 * 1024 * 1024
+      const CHUNK_LIMIT = 4 * 1024 * 1024
+      const jobId = `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      let executed = 0, failed = 0, skipped = 0
+      const errors: SqlImportResult['errors'] = []
+
+      // ---- CSV：按行边界切（不把一行切成两半），表头只在第一片带 ----
+      if (importFormat === 'csv') {
+        const rows = splitCsvRows(text)
+        if (rows.length < 2) { message.error('CSV 至少需要表头 + 1 行数据'); return }
+        const columns = parseCsvRow(rows[0]).map((h) => h.trim()).filter(Boolean)
+        if (!columns.length) { message.error('CSV 表头为空，无法确定列名'); return }
+        const chunks: Array<{ content: string; hasHeader: boolean }> = []
+        let buf = ''
+        for (const r of rows.slice(1)) {
+          const line = r + '\n'
+          if (buf && buf.length + line.length > CHUNK_LIMIT) { chunks.push({ content: buf, hasHeader: false }); buf = '' }
+          buf += line
+        }
+        if (buf) chunks.push({ content: buf, hasHeader: false })
+        if (!chunks.length) { message.error('CSV 没有数据行'); return }
+        // 表头只加到第一片
+        chunks[0] = { content: rows[0] + '\n' + chunks[0].content, hasHeader: true }
+
+        setImportProgress({ done: 0, total: chunks.length })
+        for (let i = 0; i < chunks.length; i++) {
+          const body: DbImportChunkBody = {
+            job_id: jobId, chunk_index: i, total_chunks: chunks.length,
+            content: chunks[i].content, mode: importMode, confirm: true, db: currentDb || undefined,
+            format: 'csv', table: importTable.trim(), columns, has_header: chunks[i].hasHeader,
+          }
+          const r = (await importChunk(cur.id, body)) as unknown as ChunkResp
+          executed += r?.chunk_result?.executed || 0
+          skipped += r?.chunk_result?.skipped || 0
+          setImportProgress({ done: i + 1, total: chunks.length })
+        }
+        setImportResult({ executed, failed, skipped, errors, stopped: false })
+        message.success(`CSV 分片导入完成：${chunks.length} 片 / ${executed} 行`)
+        return
+      }
+
+      // ---- SQL ----
       if (text.length <= SINGLE_LIMIT) {
         const r = await importSqlScript(cur.id, text, importMode)
         setImportResult(r)
         return
       }
       // >5MB：按语句边界切成 ≤4MB 的分片顺序上送（不拆语句，DELIMITER 已由后端处理）
-      const CHUNK_LIMIT = 4 * 1024 * 1024
       const { list } = splitStatements(text, cur.db_type)
       const chunks: string[] = []
       let buf = ''
@@ -515,19 +616,16 @@ export default function SqlTerminal() {
       if (buf.trim()) chunks.push(buf)
       if (chunks.length === 0) { message.warning('没有可执行的语句'); return }
 
-      const jobId = `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      let executed = 0, failed = 0, skipped = 0
-      const errors: SqlImportResult['errors'] = []
       setImportProgress({ done: 0, total: chunks.length })
       for (let i = 0; i < chunks.length; i++) {
-        const r = await importChunk(cur.id, {
+        const r = (await importChunk(cur.id, {
           job_id: jobId, chunk_index: i, total_chunks: chunks.length,
           content: chunks[i], mode: importMode, confirm: true, db: currentDb || undefined,
-        })
-        executed += r?.executed || 0
-        failed += r?.failed || 0
-        skipped += r?.skipped || 0
-        if (r?.errors?.length) errors.push(...r.errors)
+        })) as unknown as ChunkResp
+        executed += r?.chunk_result?.executed || 0
+        failed += r?.chunk_result?.failed || 0
+        skipped += r?.chunk_result?.skipped || 0
+        if (r?.chunk_result?.errors?.length) errors.push(...r.chunk_result.errors)
         setImportProgress({ done: i + 1, total: chunks.length })
       }
       setImportResult({ executed, failed, skipped, errors: errors.slice(0, 50), stopped: false })
@@ -704,7 +802,7 @@ export default function SqlTerminal() {
         {can('create_database') && <Button disabled={!connected} onClick={createDb}>新建库</Button>}
         {can('create_database') && <Button disabled={!connected || !currentDb} onClick={openDbEdit}>编辑库</Button>}
         {can('drop_database') && <Button danger disabled={!connected || !currentDb} onClick={dropDb}>删除库</Button>}
-        {can('import') && <Button icon={<ImportOutlined />} disabled={!connected} onClick={() => { setImportResult(null); setImportOpen(true) }}>导入 SQL</Button>}
+        {can('import') && <Button icon={<ImportOutlined />} disabled={!connected} onClick={() => { setImportResult(null); setImportFormat('sql'); setImportTable(''); setImportText(''); setImportOpen(true) }}>导入</Button>}
         {can('export') && <Button icon={<ExportOutlined />} disabled={!connected} onClick={() => { setExportDbs(currentDb ? [currentDb] : []); setExportOpen(true) }}>导出</Button>}
         {can('backup') && <Button icon={<CloudDownloadOutlined />} disabled={!connected} onClick={() => { setBackupDbs(currentDb ? [currentDb] : []); setBackupOpen(true) }}>备份</Button>}
       </div>
@@ -891,9 +989,9 @@ export default function SqlTerminal() {
         </div>
       </div>
 
-      {/* 导入 SQL 弹窗 */}
+      {/* 导入 SQL / CSV 弹窗 */}
       <Modal
-        title="导入 SQL"
+        title="导入 SQL / CSV"
         open={importOpen}
         onOk={doImport}
         onCancel={() => setImportOpen(false)}
@@ -904,23 +1002,39 @@ export default function SqlTerminal() {
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <div>
-            <div style={{ marginBottom: 6, fontSize: 13 }}>执行模式</div>
-            <Radio.Group value={importMode} onChange={(e) => setImportMode(e.target.value)}>
-              <Radio.Button value="stop">遇错即停</Radio.Button>
-              <Radio.Button value="skip">跳过继续</Radio.Button>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>格式</div>
+            <Radio.Group value={importFormat} onChange={(e) => setImportFormat(e.target.value)}>
+              <Radio.Button value="sql">SQL 脚本</Radio.Button>
+              <Radio.Button value="csv">CSV</Radio.Button>
             </Radio.Group>
           </div>
+          {importFormat === 'csv' && (
+            <div>
+              <div style={{ marginBottom: 6, fontSize: 13 }}>目标表名（CSV 导入必填）</div>
+              <Input value={importTable} placeholder="table_name（列名取 CSV 表头）"
+                onChange={(e) => setImportTable(e.target.value)} />
+            </div>
+          )}
+          {importFormat === 'sql' && (
+            <div>
+              <div style={{ marginBottom: 6, fontSize: 13 }}>执行模式</div>
+              <Radio.Group value={importMode} onChange={(e) => setImportMode(e.target.value)}>
+                <Radio.Button value="stop">遇错即停</Radio.Button>
+                <Radio.Button value="skip">跳过继续</Radio.Button>
+              </Radio.Group>
+            </div>
+          )}
           <div>
-            <div style={{ marginBottom: 6, fontSize: 13 }}>SQL 内容（选择文件或直接粘贴）</div>
+            <div style={{ marginBottom: 6, fontSize: 13 }}>{importFormat === 'csv' ? 'CSV 内容' : 'SQL 内容'}（选择文件或直接粘贴）</div>
             <Space style={{ marginBottom: 6 }}>
-              <Button onClick={() => fileInputRef.current?.click()}>选择 .sql 文件</Button>
+              <Button onClick={() => fileInputRef.current?.click()}>选择文件</Button>
               {importText && <Button size="small" onClick={() => setImportText('')}>清空</Button>}
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>{importText ? `已载入 ${importText.length} 字符${importText.length > 5 * 1024 * 1024 ? '（超过 5MB，将自动分片上传）' : ''}` : '不限大小'}</span>
             </Space>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".sql,text/plain"
+              accept={importFormat === 'csv' ? '.csv,text/plain' : '.sql,text/plain'}
               style={{ display: 'none' }}
               onChange={(e) => { onImportFile(e.target.files?.[0]); e.currentTarget.value = '' }}
             />
@@ -928,7 +1042,7 @@ export default function SqlTerminal() {
               rows={8}
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              placeholder="粘贴 SQL 脚本（多条用分号分隔）"
+              placeholder={importFormat === 'csv' ? '粘贴 CSV（首行表头 + 数据行）' : '粘贴 SQL 脚本（多条用分号分隔）'}
               style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 12 }}
             />
           </div>

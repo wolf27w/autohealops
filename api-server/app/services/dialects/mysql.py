@@ -272,16 +272,22 @@ def _build_table_alter(database: str, table: str, ch: dict) -> str:
             raise ValueError(f"存储引擎不合法：{eng}")
         clauses.append(f"ENGINE={eng}")
     charset = (ch.get("charset") or "").strip()
-    if charset:
-        if not re.match(r"^[A-Za-z0-9_]{1,32}$", charset):
-            raise ValueError(f"字符集不合法：{charset}")
-        clause = f"CONVERT TO CHARACTER SET {charset}"
-        collation = (ch.get("collation") or "").strip()
+    collation = (ch.get("collation") or "").strip()
+    if charset or collation:
+        # R51：解耦 charset 与 collation（此前 collation 只在 charset 分支内拼接，
+        # 纯 collation 变化会被静默丢弃 → 报「没有任何改动」）。
+        # DEFAULT CHARSET / COLLATE 只改表默认值，不转换已有数据（比 CONVERT TO 更安全，
+        # 结构对比场景无需重写数据）。
+        parts = []
+        if charset:
+            if not re.match(r"^[A-Za-z0-9_]{1,32}$", charset):
+                raise ValueError(f"字符集不合法：{charset}")
+            parts.append(f"DEFAULT CHARSET={charset}")
         if collation:
             if not re.match(r"^[A-Za-z0-9_]{1,64}$", collation):
                 raise ValueError(f"排序规则不合法：{collation}")
-            clause += f" COLLATE {collation}"
-        clauses.append(clause)
+            parts.append(f"COLLATE={collation}")
+        clauses.append(" ".join(parts))
     if not clauses:
         raise ValueError("没有任何改动")
     new_name = (ch.get("rename_table") or "").strip()
@@ -577,6 +583,44 @@ class MySQLDialect(Dialect):
                         await cur.execute(s)
                     executed += 1
             return {"format": fmt, "executed": executed, "skipped": skipped, "bytes": len(content.encode("utf-8"))}
+        finally:
+            conn.close()
+
+    async def import_csv_chunk(self, c, db: str, table: str, columns: list[str],
+                               content: str, has_header: bool = False) -> dict:
+        """CSV 分片导入（R50）：content 为一片 CSV 文本，columns 为显式列名（表头仅第一片带）。
+
+        - 列名/表名过 check_ident 白名单；行按 csv.reader 解析（支持引号包裹/内嵌换行）。
+        - has_header=True（第一片）时跳过表头行；空行跳过。
+        - 幂等由上层（import-chunk 的 Redis done set）保证，本方法只负责执行一片。
+        """
+        table = check_ident(table or "", "表名")
+        columns = [check_ident(x, "字段名") for x in (columns or [])]
+        if not columns:
+            raise RuntimeError("CSV 分片导入需要指定列名")
+        db = db or c.database
+        conn = await self.connect(c, readonly=False)
+        try:
+            if db:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"USE `{db}`")
+            cols = ",".join(f"`{h}`" for h in columns)
+            ph = ",".join(["%s"] * len(columns))
+            stmt = f"INSERT INTO `{table}` ({cols}) VALUES ({ph})"
+            executed, skipped = 0, 0
+            rd = csv.reader(io.StringIO(content.lstrip("\ufeff")))
+            async with conn.cursor() as cur:
+                for idx, rec in enumerate(rd):
+                    if has_header and idx == 0:
+                        continue  # 表头行（列名已由 columns 提供）
+                    if not rec or all((v or "").strip() == "" for v in rec):
+                        skipped += 1
+                        continue
+                    args = [rec[i] if i < len(rec) else "" for i in range(len(columns))]
+                    await cur.execute(stmt, args)
+                    executed += 1
+            return {"format": "csv", "executed": executed, "skipped": skipped,
+                    "bytes": len(content.encode("utf-8"))}
         finally:
             conn.close()
 
