@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""直连库执行方言注册表（mysql / oracle）。
+"""直连库执行方言注册表（mysql / pg / oracle）。
 
 `db_direct_service` 只做分派，SQL 语义在各方言模块内实现。
 新增一种数据库时：实现 `Dialect` 子类并在此注册即可。
@@ -7,9 +7,12 @@
 from .base import Dialect, UnsupportedError, split_sql_statements
 from .mysql import MySQLDialect
 from .oracle import OracleDialect
+from .pg import PGDialect
 
 _REGISTRY: dict[str, type[Dialect]] = {
     "mysql": MySQLDialect,
+    "pg": PGDialect,
+    "postgres": PGDialect,
     "oracle": OracleDialect,
 }
 
@@ -20,7 +23,7 @@ def get_dialect(db_type: str) -> Dialect:
     cls = _REGISTRY.get(key)
     if cls is None:
         raise UnsupportedError(
-            f"直连执行暂不支持 {db_type or '未知'}（当前支持 mysql/oracle）"
+            f"直连执行暂不支持 {db_type or '未知'}（当前支持 mysql/pg/oracle）"
         )
     return cls()
 
@@ -41,5 +44,6 @@ __all__ = [
     "get_dialect",
     "supports",
     "MySQLDialect",
+    "PGDialect",
     "OracleDialect",
 ]

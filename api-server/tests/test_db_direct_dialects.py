@@ -36,13 +36,14 @@ def _conn(db_type="oracle", **kw):
 
 
 class TestDialectRegistry(unittest.TestCase):
-    def test_get_dialect_mysql_oracle(self):
+    def test_get_dialect_mysql_pg_oracle(self):
         self.assertEqual(get_dialect("mysql").db_type, "mysql")
+        self.assertEqual(get_dialect("pg").db_type, "pg")
         self.assertEqual(get_dialect("oracle").db_type, "oracle")
 
     def test_get_dialect_unknown_raises(self):
         with self.assertRaises(UnsupportedError):
-            get_dialect("pg")
+            get_dialect("sqlite")
 
     def test_supports(self):
         self.assertTrue(supports("mysql", "query"))
@@ -51,7 +52,10 @@ class TestDialectRegistry(unittest.TestCase):
         self.assertTrue(supports("oracle", "schema"))
         self.assertFalse(supports("oracle", "export"))
         self.assertFalse(supports("oracle", "backup"))
-        self.assertFalse(supports("pg", "query"))
+        self.assertTrue(supports("pg", "query"))
+        self.assertTrue(supports("pg", "schema"))
+        self.assertFalse(supports("pg", "export"))
+        self.assertFalse(supports("pg", "backup"))
         self.assertTrue(supports("", "query"))  # 空类型回退 mysql（与原口径一致）
 
 

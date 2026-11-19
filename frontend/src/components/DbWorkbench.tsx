@@ -5,6 +5,8 @@ import type React from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message, Tabs, Alert } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined, TableOutlined, EyeOutlined, FunctionOutlined, FieldTimeOutlined, ExportOutlined, ImportOutlined } from '@ant-design/icons'
 import { useSqlSuggest, keywordsFor, MIRROR_STYLE } from './useSqlSuggest'
+import { quoteIdent, supportsCapability } from '../utils/dbCapabilities'
+import ResultGrid from './db/ResultGrid'
 import { testDBConnection, listDbGroups, createDbGroup, renameDbGroup, deleteDbGroup, type DbGroupRow, execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
@@ -65,8 +67,8 @@ export default function DbWorkbench({
   const [results, setResults] = useState<Array<{ sql: string; ok: boolean; err?: string; columns?: string[]; rows?: unknown[][]; affected?: number; truncated?: boolean }>>([])
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
   const isAgent = (cur?.source || 'direct') === 'agent'
-  // 直连库也支持平台执行（平台存账密，直接连库）；支持 mysql / oracle（pg 待后端开启）
-  const canSql = !!cur && (isAgent || ['mysql', 'oracle'].includes((cur.db_type || 'mysql').toLowerCase()))
+  // 直连库也支持平台执行（平台存账密，直接连库）；支持 mysql / pg / oracle
+  const canSql = !!cur && (isAgent || ['mysql', 'pg', 'oracle'].includes((cur.db_type || 'mysql').toLowerCase()))
   const head = useMemo(() => (sql.trim().split(/\s+/)[0] || '').toLowerCase(), [sql])
   const isRead = READ_HEADS.has(head)
   const filtered = useMemo(() => {
@@ -312,14 +314,16 @@ export default function DbWorkbench({
   }, [autoConnect, cur?.id])
 
   // ---------- 对象 / 导入导出 ----------
-  const openObject = async (kind: string, name: string) => {
+  const openObject = async (kind: string, name: string, db?: string) => {
     if (!cur) return
     if (kind === 'table' || kind === 'view') {
-      setSql(`select * from \`${name}\` limit 100;`)
+      // 2026-11-19：标识符引号按方言（PG/Oracle 用双引号，反引号会语法错）
+      setSql(`select * from ${quoteIdent(cur.db_type, name)} limit 100;`)
       return
     }
     try {
-      const r = await getObjectDDL(cur.id, kind, name, cur.database)
+      // PG 的第 4 参是 schema（对象树 item.db），MySQL 是库名
+      const r = await getObjectDDL(cur.id, kind, name, db || cur.database)
       if (r?.ddl) setSql(r.ddl)
       else message.warning('未获取到 DDL')
     } catch { /* ignore */ }
@@ -566,7 +570,7 @@ export default function DbWorkbench({
                 {openGroups[g.key] && g.items.map((it) => (
                   <div
                     key={`${g.key}-${it.name}`}
-                    onClick={() => openObject(g.kind, it.name)}
+                    onClick={() => openObject(g.kind, it.name, (it as { db?: string }).db)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
                       fontSize: 12, padding: '2px 4px 2px 12px', borderRadius: 4, color: '#262626',
@@ -719,16 +723,7 @@ export default function DbWorkbench({
                           <div style={{ padding: '4px 2px', fontSize: 12, color: '#8c8c8c' }}>
                             返回 {(r.rows || []).length} 行{r.truncated ? '（已截断）' : ''}
                           </div>
-                          <Table
-                            size="small"
-                            rowKey={(_, idx) => String(idx)}
-                            dataSource={(r.rows || []).map((row, idx) => ({ __i: idx, row }))}
-                            columns={(r.columns || []).map((c, ci) => ({
-                              title: c, dataIndex: ['row', ci], render: (v: unknown) => (v === null ? 'NULL' : String(v)),
-                            }))}
-                            pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
-                            scroll={{ x: 'max-content' }}
-                          />
+                          <ResultGrid columns={r.columns || []} rows={r.rows || []} />
                         </div>
                       )
                     ) : (

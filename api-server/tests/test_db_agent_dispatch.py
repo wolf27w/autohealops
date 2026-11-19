@@ -12,7 +12,7 @@ B20 四个能力（对照 docs/BACKLOG-2026-11-13.md:303）：
   通用错误 / 超时 → (None, msg, False)；成功 → (data, "", False)
 - _run_sql：source=agent 走隧道 QueryDatabaseByKey（allow_write 透传），
   source=direct 走 db_direct_service.query / exec_sql
-- _db_ready / _db_supports：agent 缺 key/cluster_id 拒绝、直连缺密码拒绝、pg 不支持
+- _db_ready / _db_supports：agent 缺 key/cluster_id 拒绝、直连缺密码拒绝、未知 db_type 拒绝（pg 已支持）
 - 端点返回：create_database / drop_database / export_objects / import_sql_file / backup_database
   对「agent 版本过低」返回 400（不落 500 静默失败），通用失败返回 500
 
@@ -171,15 +171,22 @@ class TestDbReadyAndSupports(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("密码", why)
 
-    def test_direct_pg_unsupported(self):
+    def test_direct_pg_ready(self):
         ok, why = db_connections._db_ready(_conn(db_type="pg", password_encrypted="enc"))
+        self.assertTrue(ok)
+
+    def test_direct_unknown_type_unsupported(self):
+        ok, why = db_connections._db_ready(_conn(db_type="sqlite", password_encrypted="enc"))
         self.assertFalse(ok)
-        self.assertIn("pg", why)
+        self.assertIn("sqlite", why)
 
     def test_db_supports(self):
         self.assertTrue(db_connections._db_supports(_conn(db_type="mysql"), "query"))
         self.assertTrue(db_connections._db_supports(_conn(db_type="oracle"), "query"))
-        self.assertFalse(db_connections._db_supports(_conn(db_type="pg"), "query"))
+        self.assertTrue(db_connections._db_supports(_conn(db_type="pg"), "query"))
+        self.assertTrue(db_connections._db_supports(_conn(db_type="pg"), "schema"))
+        self.assertFalse(db_connections._db_supports(_conn(db_type="pg"), "export"))
+        self.assertFalse(db_connections._db_supports(_conn(db_type="pg"), "backup"))
         self.assertFalse(db_connections._db_supports(_conn(db_type="oracle"), "export"))
         self.assertFalse(db_connections._db_supports(_conn(db_type="oracle"), "backup"))
 

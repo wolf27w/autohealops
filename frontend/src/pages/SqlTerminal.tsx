@@ -13,6 +13,7 @@ import DbInstanceTree, { type DbTreeConn, type DbTreeSelectNode } from '../compo
 import TableDesignerModal from '../components/db/TableDesignerModal'
 import ResultGrid from '../components/db/ResultGrid'
 import { useSqlSuggest, keywordsFor, referencedTables, MIRROR_STYLE } from '../components/useSqlSuggest'
+import { supportsCapability, type DbCapability } from '../utils/dbCapabilities'
 import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
@@ -191,6 +192,9 @@ export default function SqlTerminal() {
   const approvalPayloadRef = useRef<ApprovalSubmitPayload | null>(null)
 
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
+  // 能力门控（2026-11-19）：Oracle/PG 直连只开放查询/结构/DDL，导入导出备份建删库的入口直接隐藏，
+  // 避免点了才到后端报 400/500。agent 库能力由 agent 侧决定，不受此限制。
+  const can = (cap: DbCapability) => supportsCapability(cur?.db_type, cap)
   const connected = !!cur && connState[cur.id] === 'on'
   // 候选词：关键字（按库类型）+ 库名 + 当前库的表/视图 + 已加载字段
   const candidates = useMemo(() => {
@@ -660,12 +664,12 @@ export default function SqlTerminal() {
         )}
         <span style={{ flex: 1 }} />
         <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>
-        <Button disabled={!connected} onClick={createDb}>新建库</Button>
-        <Button disabled={!connected || !currentDb} onClick={openDbEdit}>编辑库</Button>
-        <Button danger disabled={!connected || !currentDb} onClick={dropDb}>删除库</Button>
-        <Button icon={<ImportOutlined />} disabled={!connected} onClick={() => { setImportResult(null); setImportOpen(true) }}>导入 SQL</Button>
-        <Button icon={<ExportOutlined />} disabled={!connected} onClick={() => { setExportDbs(currentDb ? [currentDb] : []); setExportOpen(true) }}>导出</Button>
-        <Button icon={<CloudDownloadOutlined />} disabled={!connected} onClick={() => { setBackupDbs(currentDb ? [currentDb] : []); setBackupOpen(true) }}>备份</Button>
+        {can('create_database') && <Button disabled={!connected} onClick={createDb}>新建库</Button>}
+        {can('create_database') && <Button disabled={!connected || !currentDb} onClick={openDbEdit}>编辑库</Button>}
+        {can('drop_database') && <Button danger disabled={!connected || !currentDb} onClick={dropDb}>删除库</Button>}
+        {can('import') && <Button icon={<ImportOutlined />} disabled={!connected} onClick={() => { setImportResult(null); setImportOpen(true) }}>导入 SQL</Button>}
+        {can('export') && <Button icon={<ExportOutlined />} disabled={!connected} onClick={() => { setExportDbs(currentDb ? [currentDb] : []); setExportOpen(true) }}>导出</Button>}
+        {can('backup') && <Button icon={<CloudDownloadOutlined />} disabled={!connected} onClick={() => { setBackupDbs(currentDb ? [currentDb] : []); setBackupOpen(true) }}>备份</Button>}
       </div>
 
       {/* 主体 */}
