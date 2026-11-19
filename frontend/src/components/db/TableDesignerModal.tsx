@@ -3,7 +3,7 @@
 // 安全：提交前先走后端 dry_run 拿 DDL 预览；命中审核策略（428）时把 SQL 交给父组件的审核弹窗。
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Alert, Button, Empty, Input, Modal, Popconfirm, Space, Switch, Table, Tabs, Tag, message,
+  Alert, AutoComplete, Button, Empty, Input, Modal, Popconfirm, Space, Switch, Table, Tabs, Tag, message,
 } from 'antd'
 import { DeleteOutlined } from '@ant-design/icons'
 import {
@@ -52,6 +52,12 @@ const TYPE_HINTS = [
   'DATETIME', 'TIMESTAMP', 'DATE', 'DECIMAL(10,2)', 'CHAR(36)', 'JSON', 'BOOLEAN',
 ]
 
+// Oracle 只给这些类型（方言层亦会映射 MySQL 类型 → Oracle 类型，此处只做提示/下拉）
+const ORACLE_TYPES = [
+  'NUMBER', 'NUMBER(10)', 'NUMBER(19)', 'VARCHAR2(64)', 'VARCHAR2(255)', 'CHAR(36)',
+  'DATE', 'TIMESTAMP', 'CLOB', 'BLOB', 'RAW(16)', 'FLOAT',
+]
+
 function toColRow(c: DbTableColumn): ColRow {
   return {
     key: nextKey(), orig: c, name: c.name, type: c.type || '', nullable: !!c.nullable,
@@ -81,6 +87,10 @@ export default function TableDesignerModal({
   const [statements, setStatements] = useState<string[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [executing, setExecuting] = useState(false)
+
+  // 按方言切换：Oracle 下隐藏自增/引擎/字符集/排序规则，类型下拉换 Oracle 类型集
+  const isOracle = (schema?.db_type || 'mysql').toLowerCase() === 'oracle'
+  const typeHints = isOracle ? ORACLE_TYPES : TYPE_HINTS
 
   const reset = useCallback((s: DbTableSchema) => {
     setSchema(s)
@@ -121,7 +131,7 @@ export default function TableDesignerModal({
 
   const addCol = () => {
     setCols((prev) => [...prev, {
-      key: nextKey(), name: '', type: 'VARCHAR(255)', nullable: true, def: '', comment: '', autoInc: false, keyFlag: '',
+      key: nextKey(), name: '', type: isOracle ? 'VARCHAR2(255)' : 'VARCHAR(255)', nullable: true, def: '', comment: '', autoInc: false, keyFlag: '',
     }])
   }
   const removeCol = (row: ColRow) => {
@@ -244,8 +254,14 @@ export default function TableDesignerModal({
     {
       title: '类型', dataIndex: 'type', width: 170,
       render: (_: unknown, r: ColRow) => (
-        <Input size="small" value={r.type} placeholder="VARCHAR(255)"
-          onChange={(e) => patchCol(r.key, { type: e.target.value })} />
+        <AutoComplete
+          size="small"
+          value={r.type}
+          placeholder={isOracle ? 'VARCHAR2(255)' : 'VARCHAR(255)'}
+          options={typeHints.map((t) => ({ value: t }))}
+          onChange={(v) => patchCol(r.key, { type: v })}
+          style={{ width: '100%' }}
+        />
       ),
     },
     {
@@ -272,10 +288,12 @@ export default function TableDesignerModal({
       render: (_: unknown, r: ColRow) => (
         <Space size={4} wrap>
           {r.orig ? <Tag color={r.keyFlag === 'PRI' ? 'gold' : 'default'}>{r.keyFlag || '普通'}</Tag> : <Tag color="blue">新增</Tag>}
-          <Tag color={r.autoInc ? 'green' : 'default'} style={{ cursor: 'pointer' }}
-            onClick={() => patchCol(r.key, { autoInc: !r.autoInc })}>
-            {r.autoInc ? 'AUTO_INC' : '自增关'}
-          </Tag>
+          {!isOracle && (
+            <Tag color={r.autoInc ? 'green' : 'default'} style={{ cursor: 'pointer' }}
+              onClick={() => patchCol(r.key, { autoInc: !r.autoInc })}>
+              {r.autoInc ? 'AUTO_INC' : '自增关'}
+            </Tag>
+          )}
         </Space>
       ),
     },
@@ -340,9 +358,15 @@ export default function TableDesignerModal({
       ) : (
         <>
           <Space size={8} wrap style={{ marginBottom: 10, fontSize: 12, color: '#8c8c8c' }}>
-            <Tag color="blue">{schema.engine || '-'}</Tag>
-            <Tag>{schema.charset || '-'}</Tag>
-            <Tag>{schema.collation || '-'}</Tag>
+            {isOracle ? (
+              <Tag color="blue">Oracle</Tag>
+            ) : (
+              <>
+                <Tag color="blue">{schema.engine || '-'}</Tag>
+                <Tag>{schema.charset || '-'}</Tag>
+                <Tag>{schema.collation || '-'}</Tag>
+              </>
+            )}
             <span>约 {schema.rows ?? 0} 行</span>
           </Space>
           <Tabs
@@ -382,27 +406,31 @@ export default function TableDesignerModal({
                       <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>表注释</span>
                       <Input value={comment} onChange={(e) => setComment(e.target.value)} style={{ width: 420 }} />
                     </Space>
-                    <Space>
-                      <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>存储引擎</span>
-                      <Input value={engine} onChange={(e) => setEngine(e.target.value)} style={{ width: 200 }} placeholder="InnoDB" />
-                    </Space>
-                    <Space>
-                      <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>字符集</span>
-                      <Input value={charset} onChange={(e) => setCharset(e.target.value)} style={{ width: 200 }}
-                        placeholder="留空不改（CONVERT TO 会转换已有数据）" />
-                    </Space>
-                    <Space>
-                      <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>排序规则</span>
-                      <Input value={collation} onChange={(e) => setCollation(e.target.value)} style={{ width: 240 }}
-                        placeholder="如 utf8mb4_unicode_ci" />
-                    </Space>
+                    {!isOracle && (
+                      <>
+                        <Space>
+                          <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>存储引擎</span>
+                          <Input value={engine} onChange={(e) => setEngine(e.target.value)} style={{ width: 200 }} placeholder="InnoDB" />
+                        </Space>
+                        <Space>
+                          <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>字符集</span>
+                          <Input value={charset} onChange={(e) => setCharset(e.target.value)} style={{ width: 200 }}
+                            placeholder="留空不改（CONVERT TO 会转换已有数据）" />
+                        </Space>
+                        <Space>
+                          <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>排序规则</span>
+                          <Input value={collation} onChange={(e) => setCollation(e.target.value)} style={{ width: 240 }}
+                            placeholder="如 utf8mb4_unicode_ci" />
+                        </Space>
+                      </>
+                    )}
                     <Space>
                       <span style={{ width: 110, display: 'inline-block', color: '#595959' }}>重命名表</span>
                       <Input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} style={{ width: 240 }}
                         placeholder={table} />
                     </Space>
                     <div style={{ fontSize: 12, color: '#8c8c8c' }}>
-                      类型提示：{TYPE_HINTS.join(' / ')}
+                      类型提示：{typeHints.join(' / ')}
                     </div>
                   </Space>
                 ),

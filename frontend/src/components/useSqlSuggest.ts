@@ -19,13 +19,35 @@ export const BASE_KEYWORDS = [
   'with', 'asc', 'desc', 'null', 'default', 'if', 'coalesce', 'cast',
 ]
 
+// Oracle 方言关键字：自包含（不混入 MySQL 的 limit/show tables/describe/backtick 等专属词），
+// 由标准 SQL 公共词 + Oracle 专属（ROWNUM/FETCH FIRST/NVL/DECODE/层次查询/PL-SQL 等）组成。
+export const ORACLE_KEYWORDS = [
+  'select', 'from', 'where', 'and', 'or', 'not', 'in', 'exists', 'between', 'like', 'is null', 'is not null',
+  'group by', 'order by', 'having', 'join', 'left join', 'right join', 'inner join', 'outer join', 'full outer join',
+  'on', 'as', 'distinct', 'union', 'union all', 'intersect', 'minus',
+  'insert into', 'values', 'update', 'set', 'delete from', 'merge into',
+  'create table', 'alter table', 'drop table', 'truncate table', 'create view', 'drop view',
+  'create index', 'drop index', 'primary key', 'foreign key', 'unique', 'constraint', 'default', 'not null',
+  'count', 'sum', 'avg', 'min', 'max', 'case when', 'then', 'else', 'end', 'case', 'when',
+  'begin', 'end', 'declare', 'commit', 'rollback', 'savepoint',
+  'with', 'asc', 'desc', 'cast', 'coalesce',
+  'rownum', 'rowid', 'fetch first', 'offset rows', 'dual',
+  'nvl', 'nvl2', 'decode', 'to_char', 'to_date', 'to_number', 'substr', 'instr', 'length', 'trim',
+  'upper', 'lower', 'round', 'trunc', 'add_months', 'months_between',
+  'sysdate', 'systimestamp', 'current_date', 'current_timestamp',
+  'connect by', 'start with', 'level', 'prior',
+  'varchar2', 'number', 'date', 'clob', 'blob', 'timestamp',
+  'dbms_output', 'dbms_output.put_line',
+  'sequence', 'nextval', 'currval', 'synonym', 'package', 'procedure', 'function', 'trigger',
+  'pivot', 'unpivot', 'flashback',
+]
+
 export const DIALECT_KEYWORDS: Record<string, string[]> = {
   mysql: [...BASE_KEYWORDS, 'auto_increment', 'engine', 'charset', 'collate', 'use', 'database', 'table',
     'view', 'grant', 'revoke', 'replace into', 'on duplicate key update', 'straight_join', 'force index'],
   pg: [...BASE_KEYWORDS, 'returning', 'ilike', 'schema', 'sequence', 'materialized view', 'vacuum', 'analyze',
     'on conflict', 'do update', 'do nothing', 'lateral', 'serial', 'jsonb', 'array'],
-  oracle: [...BASE_KEYWORDS, 'rownum', 'dual', 'nvl', 'nvl2', 'decode', 'varchar2', 'number', 'merge into',
-    'connect by', 'start with', 'sysdate', 'sequence.nextval'],
+  oracle: ORACLE_KEYWORDS,
 }
 
 export function keywordsFor(dbType?: string): string[] {

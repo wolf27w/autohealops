@@ -1,8 +1,10 @@
 // 数据库管理面板（Navicat 式）：左侧实例列表，右上 SQL 编辑，右下结果。
 // 直接嵌在「诊断中心 → 数据库管理」tab 里，不再是弹窗。
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
 import { Button, Input, List, Tag, Space, Table, Empty, Popconfirm, Tooltip, Switch, Modal, Form, message, Tabs, Alert } from 'antd'
 import { PlusOutlined, PlayCircleOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ThunderboltOutlined, ClockCircleOutlined, TableOutlined, EyeOutlined, FunctionOutlined, FieldTimeOutlined, ExportOutlined, ImportOutlined } from '@ant-design/icons'
+import { useSqlSuggest, keywordsFor, MIRROR_STYLE } from './useSqlSuggest'
 import { testDBConnection, listDbGroups, createDbGroup, renameDbGroup, deleteDbGroup, type DbGroupRow, execDBConnection, queryDBConnection, downloadDBQuery, getDBSchema, listSqlTasks, createSqlTask, updateSqlTask, deleteSqlTask, runSqlTask, getSqlTaskCounts, getObjectDDL, exportDBObjects, importDBObjects, type SqlTaskRow } from '../services/api'
 
 export interface ConsoleConn {
@@ -40,25 +42,6 @@ interface Props {
 
 type Result = { columns?: string[]; rows?: unknown[][]; truncated?: boolean; affected_rows?: number }
 
-// SQL 关键字补全（按数据库类型）
-const BASE_KEYWORDS = [
-  'select', 'from', 'where', 'and', 'or', 'not', 'in', 'exists', 'between', 'like', 'is null', 'is not null',
-  'group by', 'order by', 'having', 'limit', 'offset', 'join', 'left join', 'right join', 'inner join',
-  'outer join', 'on', 'as', 'distinct', 'union', 'union all', 'insert into', 'values', 'update', 'set',
-  'delete from', 'create table', 'alter table', 'drop table', 'truncate table', 'create index', 'drop index',
-  'primary key', 'foreign key', 'show tables', 'show databases', 'show create table', 'describe', 'explain',
-  'count', 'sum', 'avg', 'min', 'max', 'case when', 'then', 'else', 'end', 'begin', 'commit', 'rollback',
-  'with', 'asc', 'desc', 'null', 'default', 'if', 'coalesce', 'cast',
-]
-const DIALECT_KEYWORDS: Record<string, string[]> = {
-  mysql: [...BASE_KEYWORDS, 'auto_increment', 'engine', 'charset', 'collate', 'use', 'database', 'table',
-    'view', 'grant', 'revoke', 'replace into', 'on duplicate key update', 'straight_join', 'force index'],
-  pg: [...BASE_KEYWORDS, 'returning', 'ilike', 'schema', 'sequence', 'materialized view', 'vacuum', 'analyze',
-    'on conflict', 'do update', 'do nothing', 'lateral', 'serial', 'jsonb', 'array'],
-  oracle: [...BASE_KEYWORDS, 'rownum', 'dual', 'nvl', 'nvl2', 'decode', 'varchar2', 'number', 'merge into',
-    'connect by', 'start with', 'sysdate', 'sequence.nextval'],
-}
-
 interface SchemaData {
   databases: string[]
   tables: { db: string; name: string }[]
@@ -82,8 +65,8 @@ export default function DbWorkbench({
   const [results, setResults] = useState<Array<{ sql: string; ok: boolean; err?: string; columns?: string[]; rows?: unknown[][]; affected?: number; truncated?: boolean }>>([])
   const cur = useMemo(() => conns.find((c) => c.id === selectedId) || null, [conns, selectedId])
   const isAgent = (cur?.source || 'direct') === 'agent'
-  // 直连库也支持平台执行（平台存账密，直接连库）；目前直连仅 mysql
-  const canSql = !!cur && (isAgent || (cur.db_type || 'mysql').toLowerCase() === 'mysql')
+  // 直连库也支持平台执行（平台存账密，直接连库）；支持 mysql / oracle（pg 待后端开启）
+  const canSql = !!cur && (isAgent || ['mysql', 'oracle'].includes((cur.db_type || 'mysql').toLowerCase()))
   const head = useMemo(() => (sql.trim().split(/\s+/)[0] || '').toLowerCase(), [sql])
   const isRead = READ_HEADS.has(head)
   const filtered = useMemo(() => {
@@ -92,10 +75,7 @@ export default function DbWorkbench({
   }, [conns, kw])
 
   const [schema, setSchema] = useState<SchemaData>(EMPTY_SCHEMA)
-  const [sugg, setSugg] = useState<{ items: string[]; start: number; end: number; idx: number } | null>(null)
   const taRef = useRef<{ resizableTextArea?: { textArea: HTMLTextAreaElement } } | null>(null)
-  const mirrorRef = useRef<HTMLDivElement | null>(null)
-  const [caretPos, setCaretPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
   // 定时任务
   const [tasksOpen, setTasksOpen] = useState(false)
   const [tasks, setTasks] = useState<SqlTaskRow[]>([])
@@ -135,7 +115,7 @@ export default function DbWorkbench({
   }, [cur?.id, cur?.source, connState[cur?.id ?? -1]])
 
   const candidates = useMemo(() => {
-    const kws = DIALECT_KEYWORDS[(cur?.db_type || 'mysql').toLowerCase()] || BASE_KEYWORDS
+    const kws = keywordsFor(cur?.db_type)
     const set = new Set<string>()
     kws.forEach((k) => set.add(k))
     schema.databases.forEach((x) => set.add(x))
@@ -143,30 +123,11 @@ export default function DbWorkbench({
     return [...set]
   }, [cur?.db_type, schema])
 
-  // 用镜像 div 量光标坐标 → 候选框贴在输入框里的光标下方
-  const measureCaret = (text: string, caret: number) => {
-    const ta = taRef.current?.resizableTextArea?.textArea
-    const mirror = mirrorRef.current
-    if (!ta || !mirror) return
-    const cs = window.getComputedStyle(ta)
-    mirror.style.font = cs.font
-    mirror.style.lineHeight = cs.lineHeight
-    mirror.style.letterSpacing = cs.letterSpacing
-    mirror.style.padding = cs.padding
-    mirror.style.width = `${ta.clientWidth}px`
-    mirror.textContent = text.slice(0, caret)
-    const marker = document.createElement('span')
-    marker.textContent = '\u200b'
-    mirror.appendChild(marker)
-    const lineH = parseFloat(cs.lineHeight || '19') || 19
-    const top = marker.offsetTop - ta.scrollTop + lineH
-    const left = marker.offsetLeft - ta.scrollLeft
-    setCaretPos({
-      top: Math.max(0, Math.min(top, ta.clientHeight - 24)),
-      left: Math.max(0, Math.min(left, Math.max(0, ta.clientWidth - 220))),
-    })
-    mirror.textContent = ''
-  }
+  // SQL 自动补全（复用公共 hook：光标镜像定位 + ↑↓/Enter/Tab/Esc + 候选过滤）
+  const suggest = useSqlSuggest(
+    () => candidates,
+    () => taRef.current?.resizableTextArea?.textArea ?? null,
+  )
 
   // 实例分组（空 = 未分组，排最后）
   const groupedConns = useMemo(() => {
@@ -198,34 +159,13 @@ export default function DbWorkbench({
     { key: 'event', label: '事件', kind: 'event', items: schema.events.map((e) => ({ name: e.name })) },
   ]), [schema])
 
-  const syncSuggest = (text: string, caret: number) => {
-    const before = text.slice(0, caret)
-    const m = before.match(/[A-Za-z0-9_$.]+$/)
-    const word = m ? m[0] : ''
-    if (!word) { setSugg(null); return }
-    const low = word.toLowerCase()
-    const items = candidates.filter((c) => c.toLowerCase().startsWith(low) && c.toLowerCase() !== low).slice(0, 20)
-    if (!items.length) { setSugg(null); return }
-    measureCaret(text, caret)
-    setSugg({ items, start: caret - word.length, end: caret, idx: 0 })
-  }
-
-  const applySugg = (item: string) => {
-    // 用「当前 textarea 的真实值与光标」重算替换区间，避免状态滞后导致插成 "selects"
-    const el = taRef.current?.resizableTextArea?.textArea
-    const value = el ? el.value : sql
-    const caret = el ? (el.selectionStart ?? value.length) : value.length
-    const before = value.slice(0, caret)
-    const m = before.match(/[A-Za-z0-9_$.]+$/)
-    const start = caret - (m ? m[0].length : 0)
-    const next = value.slice(0, start) + item + value.slice(caret)
+  // 补全应用后的回填：更新 SQL + 光标 + 清选中提示
+  const appliedSugg = (next: string, caret: number) => {
     setSql(next)
-    setSugg(null)
     setSelLen(0)
-    const pos = start + item.length
     requestAnimationFrame(() => {
       const ta = taRef.current?.resizableTextArea?.textArea
-      if (ta) { ta.focus(); ta.setSelectionRange(pos, pos) }
+      if (ta) { ta.focus(); ta.setSelectionRange(caret, caret) }
     })
   }
 
@@ -242,8 +182,9 @@ export default function DbWorkbench({
     return { text: sql, selected: false }
   }
 
-  // 按分号拆分（忽略引号/反引号内的分号）；没有以分号结尾的尾巴视为缺少结尾
-  const splitStatements = (text: string): { list: string[]; missingEnd: boolean } => {
+  // 按分号拆分（忽略引号/反引号内的分号）；没有以分号结尾的尾巴视为缺少结尾。
+  // Oracle：`/` 单独成行也是语句结束符（SQL*Plus），结尾单独一个 `/` 不算「缺结尾」。
+  const splitStatements = (text: string, dbType?: string): { list: string[]; missingEnd: boolean } => {
     const list: string[] = []
     let cur = ''
     let quote: string | null = null
@@ -258,7 +199,8 @@ export default function DbWorkbench({
       if (ch === ';') { if (cur.trim()) list.push(cur.trim()); cur = ''; continue }
       cur += ch
     }
-    const rest = cur.trim()
+    let rest = cur.trim()
+    if ((dbType || '').toLowerCase() === 'oracle' && rest === '/') rest = ''
     return { list, missingEnd: !!rest }
   }
 
@@ -268,7 +210,7 @@ export default function DbWorkbench({
   const run = async () => {
     if (!cur) return
     const { text } = pickSql()
-    const { list, missingEnd } = splitStatements(text)
+    const { list, missingEnd } = splitStatements(text, cur?.db_type)
     if (missingEnd) { setErr('SQL 语句必须以分号结尾（;）'); return }
     if (!list.length) { setErr('SQL 不能为空'); return }
 
@@ -296,7 +238,7 @@ export default function DbWorkbench({
   const download = async () => {
     if (!cur) return
     const { text } = pickSql()
-    const { list, missingEnd } = splitStatements(text)
+    const { list, missingEnd } = splitStatements(text, cur?.db_type)
     if (missingEnd) { setErr('SQL 语句必须以分号结尾（;）'); return }
     if (list.length !== 1) { setErr('导出 CSV 一次只能一条只读语句（请选中一条）'); return }
     try {
@@ -469,7 +411,7 @@ export default function DbWorkbench({
 
   const saveTask = async () => {
     if (!cur) return
-    const { list, missingEnd } = splitStatements(sql)
+    const { list, missingEnd } = splitStatements(sql, cur?.db_type)
     if (missingEnd) { message.error('SQL 语句必须以分号结尾（;）'); return }
     if (list.length === 0) { message.error('SQL 不能为空'); return }
     const v = await taskForm.validateFields()
@@ -686,53 +628,41 @@ export default function DbWorkbench({
               <Input.TextArea
                 ref={taRef as never}
                 value={sql}
-                onChange={(e) => { setSql(e.target.value); syncSuggest(e.target.value, e.target.selectionStart ?? 0) }}
+                onChange={(e) => { setSql(e.target.value); suggest.syncSuggest(e.target.value, e.target.selectionStart ?? 0) }}
                 onSelect={(e) => {
                   const el = e.target as HTMLTextAreaElement
                   setSelLen(Math.max(0, (el.selectionEnd ?? 0) - (el.selectionStart ?? 0)))
                 }}
-                onBlur={() => setTimeout(() => setSugg(null), 120)}
+                onBlur={() => setTimeout(() => suggest.close(), 120)}
                 disabled={!canSql}
                 placeholder={'select * from information_schema.tables limit 10\n-- 或 update t set c=1 where id=1'}
                 style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 13, resize: 'none', height: 130 }}
                 onKeyDown={(e) => {
-                  if (sugg) {
-                    if (e.key === 'ArrowDown') { e.preventDefault(); setSugg({ ...sugg, idx: (sugg.idx + 1) % sugg.items.length }); return }
-                    if (e.key === 'ArrowUp') { e.preventDefault(); setSugg({ ...sugg, idx: (sugg.idx - 1 + sugg.items.length) % sugg.items.length }); return }
-                    if (e.key === 'Enter' || e.key === 'Tab') {
-                      e.preventDefault(); e.stopPropagation()
-                      applySugg(sugg.items[sugg.idx]); return
-                    }
-                    if (e.key === 'Escape') { e.preventDefault(); setSugg(null); return }
-                  }
+                  if (suggest.handleKey(e, sql, appliedSugg)) return
                   if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
                     e.preventDefault()
                     const el = e.target as HTMLTextAreaElement
-                    syncSuggest(sql, el.selectionStart ?? 0)
+                    suggest.syncSuggest(el.value, el.selectionStart ?? 0)
                     return
                   }
                   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canSql && sql.trim() && isRead) run()
                 }}
               />
-              <div ref={mirrorRef} style={{
-                position: 'absolute', left: -99999, top: 0, visibility: 'hidden',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'Menlo, Consolas, monospace',
-                fontSize: 13, pointerEvents: 'none',
-              }} />
-              {sugg && (
+              <div ref={suggest.mirrorRef as unknown as React.Ref<HTMLDivElement>} style={MIRROR_STYLE} />
+              {suggest.sugg && (
                 <div style={{
-                  position: 'absolute', top: caretPos.top, left: caretPos.left, zIndex: 20, width: 320,
+                  position: 'absolute', top: suggest.caretPos.top, left: suggest.caretPos.left, zIndex: 20, width: 320,
                   background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6,
                   boxShadow: '0 6px 16px rgba(0,0,0,.12)', maxHeight: 220, overflow: 'auto',
                 }}>
-                  {sugg.items.map((it, i) => (
+                  {suggest.sugg.items.map((it, i) => (
                     <div
                       key={it}
-                      onMouseDown={(e) => { e.preventDefault(); applySugg(it) }}
+                      onMouseDown={(e) => { e.preventDefault(); suggest.applySugg(sql, it, appliedSugg) }}
                       style={{
                         padding: '4px 10px', fontSize: 12, cursor: 'pointer',
                         fontFamily: 'Menlo, Consolas, monospace',
-                        background: i === sugg.idx ? '#e6f4ff' : 'transparent',
+                        background: i === suggest.sugg!.idx ? '#e6f4ff' : 'transparent',
                       }}
                     >{it}</div>
                   ))}
@@ -758,7 +688,7 @@ export default function DbWorkbench({
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) doImport(f); e.currentTarget.value = '' }} />
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
                 {selLen > 0 ? `将执行选中内容（${selLen} 字符）` : '将执行全部语句（多条分别出结果）'}
-                {' · '}每条必须以分号结尾
+                {' · '}{(cur?.db_type || '').toLowerCase() === 'oracle' ? '以 ; 结尾（PL/SQL 块后需 / 结束符）' : '每条必须以分号结尾'}
                 {!isRead ? ' · 含写操作需确认' : ''}
               </span>
             </Space>

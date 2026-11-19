@@ -74,8 +74,9 @@ const DDL_KIND: Record<SelectedObj['kind'], string> = {
   table: 'table', view: 'view', routine: 'function', event: 'event',
 }
 
-// 按分号拆分（忽略引号/反引号内的分号）；尾巴无分号视为缺结尾
-function splitStatements(text: string): { list: string[]; tail: string } {
+// 按分号拆分（忽略引号/反引号内的分号）；尾巴无分号视为缺结尾。
+// Oracle：`/` 单独成行也是语句结束符（SQL*Plus），结尾单独一个 `/` 不算「缺结尾」（不误报）。
+function splitStatements(text: string, dbType?: string): { list: string[]; tail: string } {
   const list: string[] = []
   let cur = ''
   let quote: string | null = null
@@ -91,7 +92,10 @@ function splitStatements(text: string): { list: string[]; tail: string } {
     cur += ch
   }
   // 口径（老板 2026-11-16）：只有以 ; 结尾的才算一条 SQL；末尾没写分号的单独返回，不混进 list
-  return { list, tail: cur.trim() }
+  let tail = cur.trim()
+  // Oracle：尾部孤立的 `/`（如 `BEGIN ... END;\n/`）是结束符，不当作缺结尾
+  if ((dbType || '').toLowerCase() === 'oracle' && tail === '/') tail = ''
+  return { list, tail }
 }
 
 const isReadStmt = (st: string) => READ_HEADS.has((st.trim().split(/\s+/)[0] || '').toLowerCase())
@@ -203,17 +207,24 @@ export default function SqlTerminal() {
     if (!cur || !connected) return
     const tables = referencedTables(sql).slice(0, 2)
     if (!tables.length) return
-    const db = currentDb || cur.database || ''
-    if (!db) return
+    // 当前库（Oracle 下即 schema）：未选库时先取连接默认库；仍为空则反查表所属 schema 降级
+    let db = currentDb || cur.database || ''
     const timer = setTimeout(() => {
       for (const t of tables) {
-        const key = `${cur.id}:${db}:${t}`
+        let dbFor = db
+        if (!dbFor) {
+          // Oracle 无「当前库」概念时，从已加载的 schema 表/视图里反查该表所属 schema
+          const found = schemaTables.find((x) => x.name === t) || schemaViews.find((x) => x.name === t)
+          dbFor = found?.db || ''
+        }
+        if (!dbFor) continue
+        const key = `${cur.id}:${dbFor}:${t}`
         if (colCacheRef.current.has(key)) {
           const cols = colCacheRef.current.get(key)!
           setTableCols((prev) => (prev[key] ? prev : { ...prev, [key]: cols }))
           continue
         }
-        getTableSchema(cur.id, db, t)
+        getTableSchema(cur.id, dbFor, t)
           .then((sch) => {
             const cols = (sch.columns || []).map((c) => c.name)
             if (!cols.length) return
@@ -224,7 +235,7 @@ export default function SqlTerminal() {
       }
     }, 400)
     return () => clearTimeout(timer)
-  }, [sql, cur?.id, connected, currentDb])
+  }, [sql, cur?.id, connected, currentDb, schemaTables, schemaViews])
 
   const suggest = useSqlSuggest(
     () => candidates,
@@ -346,7 +357,7 @@ export default function SqlTerminal() {
     if (!connected) { message.warning('请先连接数据库'); return }
     if (!cur) return
     const { text } = pickSql()
-    const { list, tail } = splitStatements(text)
+    const { list, tail } = splitStatements(text, cur?.db_type)
     const stmts = [...list]
     if (!stmts.length && tail) {
       // 整段只有一条且没写分号：仍然执行这一条（避免单条 SQL 完全跑不了）
