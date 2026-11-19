@@ -13,12 +13,21 @@ import type { Alert, AlertComment } from '../types'
 // 容器故障（无需看服务日志，看 describe + 诊断结果）
 const CONTAINER_FAULTS = ['CrashLoopBackOff', 'OOMKilled', 'ImagePullBackOff', 'ErrImagePull', 'PendingTimeout']
 
+// R44：L2 故障族（与后端 fault_taxonomy.L2_FAMILIES 保持一致）
+const FAULT_FAMILIES: Array<[string, string]> = [
+  ['resource', '资源不足'], ['config', '配置错误'], ['image', '镜像'], ['schedule', '调度'],
+  ['probe', '探针'], ['dependency', '下游依赖'], ['code', '代码缺陷'], ['capacity', '容量'],
+  ['lock', '锁与慢查询'], ['network', '网络'], ['node_health', '节点健康'], ['unknown', '未分类'],
+]
+const FAMILY_LABEL: Record<string, string> = Object.fromEntries(FAULT_FAMILIES)
+
 export default function AlertList() {
   const [severity, setSeverity] = useState<string>()
   const [status, setStatus] = useState<string>()
   const [env, setEnv] = useState<string>()
   const [manualOnly, setManualOnly] = useState<boolean | undefined>()
   const [faultType, setFaultType] = useState<string>()
+  const [faultFamily, setFaultFamily] = useState<string>()
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
   const writable = canWrite()
@@ -38,8 +47,8 @@ export default function AlertList() {
 
   // react-query：告警列表查询（5s 轮询 + 缓存 + 筛选变化自动重查；服务端分页）
   const { data: alertsData, isLoading: loading, refetch } = useQuery({
-    queryKey: ['alerts', severity, status, env, manualOnly, faultType, page],
-    queryFn: () => getAlertsPaged({ severity, status, env_tag: env, manual_required: manualOnly, fault_type: faultType, page, page_size: PAGE_SIZE }),
+    queryKey: ['alerts', severity, status, env, manualOnly, faultType, faultFamily, page],
+    queryFn: () => getAlertsPaged({ severity, status, env_tag: env, manual_required: manualOnly, fault_type: faultType, fault_family: faultFamily, page, page_size: PAGE_SIZE }),
     refetchInterval: 5000,
   })
   const alerts = alertsData?.items ?? []
@@ -149,6 +158,8 @@ export default function AlertList() {
           options={[{ value: 'qa', label: 'qa' }, { value: 'release', label: 'release' }, { value: 'prod', label: 'prod' }]} />
         <Select placeholder="严重级别" allowClear style={{ width: 140 }} onChange={(v) => { setSeverity(v); setPage(1) }}
           options={['critical', 'high', 'medium', 'low'].map((s) => ({ value: s, label: s }))} />
+        <Select placeholder="故障族（L2）" allowClear style={{ width: 150 }} onChange={(v) => { setFaultFamily(v); setPage(1) }}
+          options={FAULT_FAMILIES.map(([value, label]) => ({ value, label }))} />
         <Select placeholder="故障类型" allowClear showSearch style={{ width: 180 }} onChange={(v) => { setFaultType(v); setPage(1) }}
           options={[
             { value: 'AppOOM', label: 'AppOOM 内存溢出' },
@@ -197,6 +208,8 @@ export default function AlertList() {
           { title: '类型', dataIndex: 'resource_type' },
           { title: '命名空间', dataIndex: 'namespace' },
           { title: '故障类型', dataIndex: 'fault_type' },
+          { title: '故障族', dataIndex: 'fault_family', width: 110,
+            render: (v: string | undefined) => v ? <Tag color={v === 'unknown' ? 'default' : 'blue'}>{FAMILY_LABEL[v] || v}</Tag> : '-' },
           { title: '级别', dataIndex: 'severity', render: (s) => <SeverityTag severity={s} /> },
           { title: '状态', dataIndex: 'status', render: (s, r: Alert) => (
             <Space size={4}>

@@ -1297,6 +1297,8 @@ async def _process_one(alert: Alert) -> bool:
         "pod_name": alert.resource_name if alert.resource_type == "pod" else "",
         "node_name": alert.resource_name if alert.resource_type == "node" else "",
         "fault_type": alert.fault_type,
+        "fault_family": alert.fault_family,
+        "fault_domain": alert.fault_domain,
         "severity": alert.severity,
         "status_info": alert.message,
     }
@@ -1356,6 +1358,7 @@ async def _process_one(alert: Alert) -> bool:
         await audit_service.create_audit_record(trace_id, trigger_snapshot=json.dumps({
             "alert_id": alert.id, "cluster_id": alert.cluster_id,
             "fault_type": alert.fault_type,
+            "fault_family": alert.fault_family,
             "resource": alert.resource_name, "resource_type": alert.resource_type,
             "namespace": alert.namespace,
             "severity": alert.severity, "message": (alert.message or "")[:200],

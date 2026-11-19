@@ -58,7 +58,8 @@ async def _page_group_ids(session, page_rows, limit: int = 20000) -> dict[int, l
 
 @router.get("")
 async def list_alerts(cluster_id: int | None = None, severity: str | None = None, status: str | None = None,
-                      fault_type: str | None = None, manual_required: bool | None = None,
+                      fault_type: str | None = None, fault_family: str | None = None,
+                      manual_required: bool | None = None,
                       env_tag: str | None = None,
                       page: int = 1, page_size: int = 20, with_total: bool = False,
                       group: bool = True,
@@ -87,6 +88,18 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             conditions.append(Alert.status == "pending")
         if fault_type:
             conditions.append(Alert.fault_type == fault_type)
+        if fault_family:
+            # R44：L2 故障族筛选（存量 fault_type 是自由文本，按映射表反查同族集合）
+            from app.core.fault_taxonomy import FAULT_TYPE_TO_FAMILY, UNKNOWN, fault_types_of, is_known_family
+            fam = (fault_family or "").strip()
+            if fam == UNKNOWN:
+                # 未分类 = 不在映射表里的自由文本（含空值）
+                known = list(FAULT_TYPE_TO_FAMILY)
+                conditions.append(or_(Alert.fault_type.is_(None), Alert.fault_type == "",
+                                      ~Alert.fault_type.in_(known)))
+            elif is_known_family(fam):
+                types = list(fault_types_of(fam))
+                conditions.append(Alert.fault_type.in_(types) if types else Alert.fault_type == "\x00")
         if env_tag:
             # 环境维度（R24）：集群告警按 clusters.env_tag，DB 告警按 alerts.env
             env_ids = [c.id for c in (await session.execute(
@@ -181,6 +194,8 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
          "source": (cluster_names.get(a.cluster_id, "") if a.cluster_id else a.resource_name),
          "resource_type": a.resource_type, "resource_name": a.resource_name,
          "namespace": a.namespace, "fault_type": a.fault_type, "severity": a.severity, "status": a.status,
+         # R44：读时派生的 L2 故障族 / L1 域（不落库，存量数据不用迁移）
+         "fault_family": a.fault_family, "fault_domain": a.fault_domain,
          "approval_status": ap_status_by_alert.get(a.id, ""),
          "message": a.message, "event_count": a.event_count,
          "manual_required": bool(a.manual_required), "manual_reason": a.manual_reason or "",

@@ -63,6 +63,10 @@ export interface Alert {
   deployment_name?: string
   namespace: string
   fault_type: string
+  /** R44：L2 故障族（后端读时派生，unknown=未分类） */
+  fault_family?: string
+  /** R44：L1 域（cluster / app / db） */
+  fault_domain?: string
   severity: string // critical / high / medium / low
   status: string // pending / awaiting_approval / ticketed / resolved / self_healed
   message: string

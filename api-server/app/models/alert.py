@@ -54,6 +54,19 @@ class Alert(Base):
     # 同样禁止 ORM 写入；过滤/统计时可直接用 Alert.diag_category
     diag_category: Mapped[str | None] = mapped_column(String(10), server_default=FetchedValue(), index=True, nullable=True)
 
+    # ===== 故障分类收敛（L2 故障族）：读时派生，不落库（存量 fault_type 不迁移） =====
+    # fault_family：L2 故障族（11 类，见 app/core/fault_taxonomy.py），未登记归 unknown
+    # fault_domain：L1 域（cluster/app/db），等价 diag_category（未落库时回退实时推导）
+    @property
+    def fault_family(self) -> str:
+        from app.core.fault_taxonomy import family_of
+        return family_of(self.fault_type, self.resource_type)
+
+    @property
+    def fault_domain(self) -> str:
+        from app.core.fault_taxonomy import l1_of
+        return self.diag_category or l1_of(self.fault_type, self.resource_type)
+
 
 class AlertComment(Base):
     """告警备注/协作记录（谁在什么时候说了什么）"""
