@@ -164,7 +164,6 @@ export default function App() {
         <Route path="alerts/tickets" element={<Tickets />} />
         <Route path="alerts/policies" element={guard('/alerts/policies', <AlertPolicies />)} />
         <Route path="alerts/silences" element={guard('/alerts/silences', <AlertSilences />)} />
-        <Route path="alerts/notifications" element={guard('/alerts/notifications', <NotificationCenter />)} />
         <Route path="alerts/on-duty" element={<OnDuty />} />
         <Route path="alerts/sources" element={guard('/alerts/sources', <LogSources />)} />
 
@@ -180,6 +179,7 @@ export default function App() {
         {/* ===== 平台 ===== */}
         <Route path="platform/users" element={guard('/platform/users', <UserPermission />)} />
         <Route path="platform/ai" element={guard('/platform/ai', <PlatformAI />)} />
+        <Route path="platform/notifications" element={guard('/platform/notifications', <NotificationCenter />)} />
         <Route path="platform/audit" element={<AuditTrace />} />
         <Route path="platform/reports" element={<Reports />} />
         <Route path="platform/settings" element={guard('/platform/settings', <PlatformSettings />)} />
