@@ -11,6 +11,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"golang.org/x/sync/singleflight"
 )
 
 // ServiceInfo 服务简况
@@ -102,36 +103,85 @@ func cloneSnapshotCapability(provisioner string) (clone, snapshot bool) {
 
 // 杂项资源短缓存：这些对象（服务/路由/配置/密钥/PVC）变动不频繁，
 // 而一次全命名空间 list 在远端集群上要 3~9s，来回切页会反复挨这一刀。
-const miscCacheTTL = 15 * time.Second
+// 冷路径用 stale-while-revalidate：过期后立即返回旧值，后台单飞刷新，用户不再等。
+const (
+	miscCacheTTL              = 15 * time.Second // 缓存新鲜窗口
+	miscKeepaliveInterval     = 60 * time.Second // 后台保活刷新间隔
+	miscKeepaliveRecentWindow = 10 * time.Minute // 仅刷新最近访问过的 key
+)
 
 type miscCacheEntry struct {
-	at   time.Time
-	data *MiscResources
+	at         time.Time     // 数据抓取时间
+	lastAccess time.Time     // 最近一次返回给用户的时间
+	namespace  string        // 抓取时的 namespace（后台刷新用）
+	ex         *Executor     // 抓取所用的 executor（clientset 共享，后台刷新用）
+	data       *MiscResources
+	refreshing bool // 后台刷新是否进行中（单飞标记，避免并发重复刷）
 }
 
 var (
 	miscCacheMu sync.Mutex
-	miscCache   = map[string]miscCacheEntry{}
-	_           = fmt.Sprintf
+	miscCache   = map[string]*miscCacheEntry{}
+	miscSF      singleflight.Group
 )
 
 // ListMiscResources 列出 namespace（空=全部）下的 服务/路由/ConfigMap/Secret/PVC/StorageClass
 //
-// 性能：6 类资源改为**并行**拉取。原先串行时每类单次 list 在真实集群上 0.3~1.2s，
-// 累计 5~8s（集群 API server 单次 list 延迟高时更久），是「点进集群特别慢」的主因。
+// 性能（stale-while-revalidate）：命中新鲜缓存直接返回；命中过期缓存立即返回旧值并后台单飞刷新；
+// 完全冷启动（无缓存）才同步拉取一次。用户侧不再吃到 5~6s 的冷查询。
 func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*MiscResources, error) {
 	if namespace == "" {
 		namespace = metav1.NamespaceAll
 	}
 
-	cacheKey := fmt.Sprintf("%d|%s", e.clusterID, namespace)
+	key := fmt.Sprintf("%d|%s", e.clusterID, namespace)
+	now := time.Now()
+
 	miscCacheMu.Lock()
-	if hit, ok := miscCache[cacheKey]; ok && time.Since(hit.at) < miscCacheTTL {
+	ent, ok := miscCache[key]
+	if ok && now.Sub(ent.at) < miscCacheTTL {
+		// 新鲜命中
+		ent.lastAccess = now
 		miscCacheMu.Unlock()
-		return hit.data, nil
+		return ent.data, nil
+	}
+	if ok {
+		// 过期命中：立即返回旧值，后台单飞刷新，用户不再等冷查询
+		ent.lastAccess = now
+		data := ent.data
+		ent.ex = e
+		ent.namespace = namespace
+		needRefresh := !ent.refreshing
+		ent.refreshing = true
+		miscCacheMu.Unlock()
+
+		if needRefresh {
+			go e.refreshMiscBackground(context.Background(), key, namespace)
+		}
+		return data, nil
 	}
 	miscCacheMu.Unlock()
 
+	// 完全冷启动：没有旧值可返回，只能同步拉取（单飞去重并发冷启动）
+	v, err, _ := miscSF.Do(key, func() (interface{}, error) {
+		data, err := e.fetchMiscResources(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		miscCacheMu.Lock()
+		miscCache[key] = &miscCacheEntry{at: time.Now(), lastAccess: time.Now(), namespace: namespace, ex: e, data: data}
+		miscCacheMu.Unlock()
+		return data, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*MiscResources), nil
+}
+
+// fetchMiscResources 实际拉取（冷路径）：6 类资源并行 list + Pod 挂载反查。
+// 只负责返回数据，不写缓存（缓存由 ListMiscResources / 后台刷新统一管理）。
+func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*MiscResources, error) {
 	t0 := time.Now()
 	cost := map[string]time.Duration{}
 	var costMu sync.Mutex
@@ -406,8 +456,8 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 	wg.Wait()
 	// 慢调用留痕（>2s 才打，避免刷日志）：用于定位「点进集群慢」是哪一类 list 拖的
 	if el := time.Since(t0); el > 2*time.Second {
-		log.Printf("[misc] cluster=%v ns=%q total=%v services=%v ingresses=%v configmaps=%v secrets=%v pvcs=%v storageclasses=%v",
-			e.clusterID, namespace, el, cost["services"], cost["ingresses"], cost["configmaps"], cost["secrets"], cost["pvcs"], cost["storageclasses"])
+		log.Printf("[misc] cluster=%v ns=%q total=%v services=%v ingresses=%v configmaps=%v secrets=%v pvcs=%v storageclasses=%v pods=%v",
+			e.clusterID, namespace, el, cost["services"], cost["ingresses"], cost["configmaps"], cost["secrets"], cost["pvcs"], cost["storageclasses"], cost["pods"])
 	}
 	if firstErr != nil {
 		return nil, firstErr
@@ -456,8 +506,80 @@ func (e *Executor) ListMiscResources(ctx context.Context, namespace string) (*Mi
 		PVCs:           pvcs,
 		StorageClasses: storageClasses,
 	}
-	miscCacheMu.Lock()
-	miscCache[cacheKey] = miscCacheEntry{at: time.Now(), data: res}
-	miscCacheMu.Unlock()
 	return res, nil
+}
+
+// refreshMiscBackground 后台刷新指定 key（singleflight 去重，避免并发重复刷）。
+// 成功则更新缓存；失败保留旧值并打日志，绝不清空缓存把用户打回冷路径。
+func (e *Executor) refreshMiscBackground(parent context.Context, key, namespace string) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+
+	_, err, _ := miscSF.Do(key, func() (interface{}, error) {
+		data, err := e.fetchMiscResources(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		miscCacheMu.Lock()
+		if ent, ok := miscCache[key]; ok {
+			ent.at = time.Now()
+			ent.data = data
+			ent.refreshing = false
+		}
+		miscCacheMu.Unlock()
+		return data, nil
+	})
+	if err != nil {
+		// 刷新失败：保留旧值，清 refreshing 标记以便下次重试
+		miscCacheMu.Lock()
+		if ent, ok := miscCache[key]; ok {
+			ent.refreshing = false
+		}
+		miscCacheMu.Unlock()
+		log.Printf("[misc] 后台刷新失败（保留旧值）cluster=%v ns=%q: %v", e.clusterID, namespace, err)
+	}
+}
+
+// StartMiscCacheKeepalive 后台保活刷新：定期刷新「最近访问过」且已过期的 key，
+// 让用户点进来时大概率命中新鲜缓存，同时避免对全集群无脑轮询打爆 apiserver。
+// 随 ctx 取消优雅退出，与 main 生命周期一致。
+func StartMiscCacheKeepalive(ctx context.Context) {
+	ticker := time.NewTicker(miscKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refreshRecentMiscKeys(ctx)
+		}
+	}
+}
+
+// refreshRecentMiscKeys 挑出「10 分钟内访问过」且「已过期」的 key 逐个后台刷新。
+func refreshRecentMiscKeys(ctx context.Context) {
+	now := time.Now()
+	type job struct {
+		ex  *Executor
+		key string
+		ns  string
+	}
+	var jobs []job
+	miscCacheMu.Lock()
+	for key, ent := range miscCache {
+		if now.Sub(ent.lastAccess) <= miscKeepaliveRecentWindow && now.Sub(ent.at) >= miscCacheTTL {
+			jobs = append(jobs, job{ex: ent.ex, key: key, ns: ent.namespace})
+		}
+	}
+	miscCacheMu.Unlock()
+
+	for _, j := range jobs {
+		if j.ex == nil {
+			continue
+		}
+		// 每个 key 独立 goroutine + 独立超时，慢 key 不拖累整轮；singleflight 去重并发重复
+		go func(j job) {
+			j.ex.refreshMiscBackground(ctx, j.key, j.ns)
+		}(j)
+	}
 }

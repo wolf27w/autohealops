@@ -14,6 +14,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/config"
 	"github.com/autohealops/k8s-executor/internal/database"
 	"github.com/autohealops/k8s-executor/internal/eventstore"
+	"github.com/autohealops/k8s-executor/internal/executor"
 	execgrpc "github.com/autohealops/k8s-executor/internal/grpc"
 	"github.com/autohealops/k8s-executor/internal/health"
 	"github.com/autohealops/k8s-executor/internal/k8sclient"
@@ -83,6 +84,9 @@ func main() {
 
 	// k8s 事件历史（k8s 默认只留 1h，这里自存 7 天）
 	eventstore.NewCollector(manager, logger).StartScheduler(ctx)
+
+	// 杂项资源缓存保活刷新（SWR 后台刷新最近访问过的 key）
+	go executor.StartMiscCacheKeepalive(ctx)
 
 	// 8. 脚本执行器
 	scriptRunner := script.NewRunner(manager, logger)
