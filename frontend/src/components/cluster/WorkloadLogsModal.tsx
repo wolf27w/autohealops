@@ -24,7 +24,26 @@ interface Props {
 
 interface LogRow { pod: string; container: string; line: string }
 interface ApiLogRow { pod: string; line: string }
-interface AggregateData { columns: string[]; rows: ApiLogRow[]; truncated: boolean; pods: number; errors: { pod: string; error: string }[] }
+interface AggregatePodResult { pod: string; phase?: string; success?: boolean; logs?: string; error?: string; fallback?: boolean }
+interface AggregateData {
+  columns: string[]
+  rows: ApiLogRow[]
+  truncated: boolean
+  pods: AggregatePodResult[] | number
+  errors?: { pod: string; error: string }[]
+}
+
+/** 汇总逐 Pod 的错误（后端把失败原因放在 pods[].error，errors 数组可能为空） */
+function aggregateErrors(d: AggregateData): string[] {
+  const out: string[] = []
+  if (d.errors?.length) d.errors.forEach((e) => out.push(`[${e.pod}] ${e.error}`))
+  if (Array.isArray(d.pods)) {
+    d.pods.forEach((p) => {
+      if (p.error && p.success !== true) out.push(`[${p.pod}] ${p.error}`)
+    })
+  }
+  return out
+}
 
 const MAX_LINES = 5000
 const DOWNLOAD_TAIL = 5000
@@ -120,9 +139,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         const data = body.data as AggregateData
         allRows.push(...(data.rows || []).map((r) => ({ pod: r.pod, container: c, line: r.line })))
         if (data.truncated) anyTruncated = true
-        if (data.errors && data.errors.length) {
-          data.errors.forEach((e) => message.error(`[${e.pod}] ${e.error}`))
-        }
+        aggregateErrors(data).forEach((msg) => message.error(msg))
       } catch (e) {
         message.error(String((e as Error)?.message || e))
       }
@@ -246,6 +263,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         if (body.code !== 200) { message.error(body.message || '下载失败'); continue }
         const data = body.data as AggregateData
         if (data.errors && data.errors.length) data.errors.forEach((e) => message.warning(`[${e.pod}] ${e.error}`))
+        aggregateErrors(data).forEach((msg) => message.warning(msg))
         // 下载也只导当前筛选结果（关键字 / Pod / 只看错误），与页面上看到的一致
         const rows = (data.rows || []).filter((r) => {
           if (podFilter && r.pod !== podFilter) return false
