@@ -15,6 +15,7 @@ from app.services.sql_optimize_prompt import (
     DEFAULT_SQL_OPTIMIZE_SYSTEM,
     DEFAULT_SQL_OPTIMIZE_USER_TEMPLATE,
 )
+from app.services.diagnosis_impact_prompt import IMPACT_FIELD_SPEC
 
 logger = logging.getLogger("ai-service.prompt-engine")
 
@@ -117,19 +118,19 @@ DEFAULT_TEMPLATES = [
     {
         "name": "pod_crash_diagnosis",
         "category": "diagnosis",
-        "system_prompt": "你是一个Kubernetes故障诊断专家。请分析以下Pod崩溃问题并返回JSON格式的诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",
+        "system_prompt": "你是一个Kubernetes故障诊断专家。请分析以下Pod崩溃问题并返回JSON格式的诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。" + IMPACT_FIELD_SPEC,
         "user_prompt_template": "请诊断以下Pod崩溃问题：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n重启次数：{restart_count}\n状态信息：{status_info}\n最近事件（describe events）：\n{recent_events}\n最近日志（容器日志，含上次崩溃实例）：\n{recent_logs}",
     },
     {
         "name": "node_pressure_diagnosis",
         "category": "diagnosis",
-        "system_prompt": "你是一个Kubernetes节点故障诊断专家。请分析以下节点异常并返回JSON格式的诊断结果。JSON必须包含字段：root_cause、suggestions、risk_level、confidence。",
+        "system_prompt": "你是一个Kubernetes节点故障诊断专家。请分析以下节点异常并返回JSON格式的诊断结果。JSON必须包含字段：root_cause、suggestions、risk_level、confidence。" + IMPACT_FIELD_SPEC,
         "user_prompt_template": "请诊断以下节点异常：\n集群名称：{cluster_name}\n节点名称：{node_name}\n异常类型：{fault_type}\n节点Conditions：{conditions}\n最近事件：{recent_events}\n指标趋势：\n{metrics_trend}",
     },
     {
         "name": "application_diagnosis",
         "category": "diagnosis",
-        "system_prompt": "你是一个应用性能与故障诊断专家。请基于容器内采集的信息分析应用状态（资源使用/进程/配置/日志），返回JSON格式诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",
+        "system_prompt": "你是一个应用性能与故障诊断专家。请基于容器内采集的信息分析应用状态（资源使用/进程/配置/日志），返回JSON格式诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。" + IMPACT_FIELD_SPEC,
         "user_prompt_template": "请诊断以下应用状态：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n状态信息：{status_info}\n容器内采集信息（进程/环境变量/磁盘/内存/端口）：\n{exec_output}\n最近事件（describe events）：\n{recent_events}",
     },
     {
@@ -169,13 +170,13 @@ DEFAULT_TEMPLATES = [
     {
         "name": "default_diagnosis",
         "category": "diagnosis",
-        "system_prompt": "你是一个Kubernetes/云原生通用排障专家。请分析以下故障信息并返回JSON格式的诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。",
+        "system_prompt": "你是一个Kubernetes/云原生通用排障专家。请分析以下故障信息并返回JSON格式的诊断结果。JSON必须包含字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high）、confidence（0到1之间的小数）。" + IMPACT_FIELD_SPEC,
         "user_prompt_template": "请诊断以下故障：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n节点名称：{node_name}\n故障类型：{fault_type}\n重启次数：{restart_count}\n状态信息：{status_info}\n节点Conditions：{conditions}\n最近事件：{recent_events}\n最近日志：{recent_logs}\n指标趋势：\n{metrics_trend}\n探针配置与实测：\n{probe_evidence}",
     },
     {
         "name": "diagnosis_uncertain",
         "category": "diagnosis",
-        "system_prompt": "你是Kubernetes/云原生排障专家，当前证据不足以给出确定结论。请给出**最可能的候选原因**（按可能性排序）+ 每个候选需要的**补充证据** + **下一步排查步骤**，并明确建议是否需要人工介入。严格只输出JSON：{\"root_cause\": string(最可能原因或\"证据不足，无法确定\"), \"suggestions\": [string 排查/验证步骤], \"risk_level\": \"low|medium|high\", \"confidence\": number(0-1，如实，证据不足应偏低)}。",
+        "system_prompt": "你是Kubernetes/云原生排障专家，当前证据不足以给出确定结论。请给出**最可能的候选原因**（按可能性排序）+ 每个候选需要的**补充证据** + **下一步排查步骤**，并明确建议是否需要人工介入。严格只输出JSON：{\"root_cause\": string(最可能原因或\"证据不足，无法确定\"), \"suggestions\": [string 排查/验证步骤], \"risk_level\": \"low|medium|high\", \"confidence\": number(0-1，如实，证据不足应偏低)}。" + IMPACT_FIELD_SPEC,
         "user_prompt_template": "请诊断以下故障（证据可能不足，请如实给出候选原因与排查方向）：\n集群名称：{cluster_name}\n命名空间：{namespace}\nPod名称：{pod_name}\n节点名称：{node_name}\n故障类型：{fault_type}\n状态信息：{status_info}\n最近事件：{recent_events}\n最近日志：{recent_logs}\n指标趋势：{metrics_trend}\n应用错误日志样例：{log_snippet}",
     },
     {
@@ -235,7 +236,8 @@ DEFAULT_FRAGMENTS = [
         "key": "output_json", "name": "输出 JSON 约定", "category": "common",
         "content": ("【输出格式】严格只输出一个 JSON 对象，不要 markdown 代码块、不要额外解释。"
                     "字段：root_cause（字符串）、suggestions（字符串数组）、risk_level（low/medium/high/critical）、"
-                    "confidence（0~1 小数）。证据不足时 confidence 要如实偏低，并在 root_cause 里说明缺什么证据。"),
+                    "confidence（0~1 小数）。证据不足时 confidence 要如实偏低，并在 root_cause 里说明缺什么证据。"
+                    + IMPACT_FIELD_SPEC),
     },
     {
         "key": "red_lines", "name": "红线（只给方案不执行）", "category": "common",

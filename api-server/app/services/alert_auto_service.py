@@ -19,6 +19,7 @@ from app.core.redis_client import acquire_lock, redis_pool, release_lock
 from app.core.security import generate_trace_id
 from app.models import AIDiagnosisResult, Alert, Approval, Cluster, SelfHealRule
 from app.services import audit_service, knowledge_service
+from app.services.diagnosis_impact import extract_impact
 from app.services.screen_bus import screen_bus
 
 logger = get_logger("api-server.alert_auto")
@@ -1309,6 +1310,7 @@ async def _process_one(alert: Alert) -> bool:
     root_cause = ""
     repair_steps_text = ""
     root_cause_layer = ""
+    impact = {}  # R52：诊断「影响范围判断」（结构化；缺失回退根因层级）
     diag_cached = bool(diag_row and diag_row.diagnosis_json)
     # 探针专项（2026-10-29）：只对 Pod 类故障采一次，供给「AI 诊断上下文」和「探针调参方案」两处用
     probe_result: dict = {"text": "", "findings": []}
@@ -1340,6 +1342,7 @@ async def _process_one(alert: Alert) -> bool:
             root_cause = diag_data.get("root_cause", "")
             repair_steps_text = "; ".join(diag_data.get("suggestions", []))
             root_cause_layer = diag_data.get("root_cause_layer", "")
+            impact = extract_impact(diag_data)
         except json.JSONDecodeError:
             root_cause, repair_steps_text = "", ""
     else:
@@ -1457,6 +1460,7 @@ async def _process_one(alert: Alert) -> bool:
             root_cause = diagnosis.get("root_cause", "")
             repair_steps_text = "; ".join(diagnosis.get("suggestions", []))
             root_cause_layer = diagnosis.get("root_cause_layer", "")
+            impact = extract_impact(diagnosis)
             # C2：AI 返回空结论（无根因且无建议）→ 单独记录 empty_result + 转人工（不静默当成功）
             if not (root_cause or "").strip() and not diagnosis.get("suggestions"):
                 try:
@@ -1547,7 +1551,7 @@ async def _process_one(alert: Alert) -> bool:
         steps = kb_hit_steps
     else:
         try:
-            diagnosis_data = diagnosis or {"root_cause": root_cause, "suggestions": repair_steps_text.split(";")}
+            diagnosis_data = diagnosis or {"root_cause": root_cause, "suggestions": repair_steps_text.split(";"), "impact": impact}
             plan = await ai_client.generate_plan(
                 diagnosis.get("diagnosis_id") if diagnosis else 0, alert_data, diagnosis_data, trace_id
             )

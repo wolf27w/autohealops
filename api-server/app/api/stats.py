@@ -196,7 +196,14 @@ def _diagnosis_summary(diag_json: str) -> dict | str:
     """
     data = _parse_diagnosis_json(diag_json)
     root_cause = str(data.get("root_cause", "") or "").strip()
-    impact = str(data.get("impact", "") or "").strip()
+    # R52：impact 可能是结构化 dict（affected_objects/scope/perceptibility），
+    # 大屏需要人类可读摘要，不能把 dict 原文塞出去；旧数据/字符串仍按原文处理。
+    raw_impact = data.get("impact")
+    if isinstance(raw_impact, dict):
+        from app.services.diagnosis_impact import summarize_impact
+        impact = summarize_impact(raw_impact)
+    else:
+        impact = str(raw_impact or "").strip()
     if not impact:
         impact = str(data.get("root_cause_layer", "") or "").strip()
     suggestions = data.get("suggestions") or []

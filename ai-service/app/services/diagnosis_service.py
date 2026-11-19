@@ -212,6 +212,7 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "risk_level": parsed.get("risk_level", "low"),
         "confidence": parsed.get("confidence", 0.0),
         "root_cause_layer": parsed.get("root_cause_layer", "A"),
+        "impact": parsed.get("impact", {}),
         "model_used": model_used,
         "template_name": template_name,
         "template_missed": not matched,
@@ -283,6 +284,7 @@ async def multi_diagnose(alert_data: dict, context_data: dict | None = None) -> 
             "root_cause": parsed.get("root_cause", ""),
             "confidence": parsed.get("confidence", 0.0),
             "root_cause_layer": layer,
+            "impact": parsed.get("impact", {}),
         })
 
     # 共识：出现次数最多的根因
@@ -353,6 +355,70 @@ def _normalize_confidence(v) -> float:
     return 0.0
 
 
+# ---- R52：诊断「影响范围判断」impact 字段归一化 ----
+_IMPACT_SCOPES = {"single_instance", "whole_service", "cross_service"}
+_IMPACT_PERCEPTIBILITY = {"none", "slight", "partial", "full"}
+
+_SCOPE_ALIASES = {
+    "single": "single_instance", "instance": "single_instance",
+    "单实例": "single_instance", "单副本": "single_instance",
+    "whole": "whole_service", "service": "whole_service", "entire_service": "whole_service",
+    "整个服务": "whole_service", "整服务": "whole_service",
+    "cross": "cross_service",
+    "跨服务": "cross_service", "跨": "cross_service",
+}
+_PERCEPT_ALIASES = {
+    "无": "none", "无感知": "none", "不影响": "none",
+    "轻微": "slight", "轻微影响": "slight",
+    "部分不可用": "partial", "部分": "partial", "部分受影响": "partial",
+    "全不可用": "full", "全部不可用": "full", "全": "full",
+}
+
+
+def _pick_scope(value) -> str:
+    s = str(value or "").strip().lower()
+    if s in _IMPACT_SCOPES:
+        return s
+    return _SCOPE_ALIASES.get(s, "unknown")
+
+
+def _pick_perceptibility(value) -> str:
+    s = str(value or "").strip().lower()
+    if s in _IMPACT_PERCEPTIBILITY:
+        return s
+    return _PERCEPT_ALIASES.get(s, "unknown")
+
+
+def _normalize_impact(value) -> dict:
+    """归一化诊断 impact 字段为结构化 dict（affected_objects/scope/perceptibility）。
+
+    - dict → 逐键校验，非法枚举归 "unknown"
+    - 非空字符串 → 老式/自由文本，塞进 affected_objects，其余 unknown
+    - None/空/非法 → {}（空 dict = 缺失信号，调用方据此走 root_cause_layer 回退）
+    """
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        objs = value.get("affected_objects")
+        if isinstance(objs, list):
+            objs = [str(x).strip() for x in objs if str(x).strip()]
+        elif isinstance(objs, str) and objs.strip():
+            objs = [objs.strip()]
+        else:
+            objs = []
+        return {
+            "affected_objects": objs,
+            "scope": _pick_scope(value.get("scope")),
+            "perceptibility": _pick_perceptibility(value.get("perceptibility")),
+        }
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return {}
+        return {"affected_objects": [s], "scope": "unknown", "perceptibility": "unknown"}
+    return {}
+
+
 def _normalize_layer(value) -> str:
     """归一化根因层：A资源/编排层 B应用代码/配置层 C数据库层 D基础设施层；非法/缺失默认 A"""
     v = str(value or "").strip().upper()
@@ -377,6 +443,8 @@ def _parse_diagnosis_json(content: str) -> dict:
     parsed["confidence"] = _normalize_confidence(parsed.get("confidence"))
     # 归一化根因层（A/B/C/D）
     parsed["root_cause_layer"] = _normalize_layer(parsed.get("root_cause_layer"))
+    # R52：归一化影响范围判断（独立 impact 字段；缺失为 {}，由 api-server 回退根因层级）
+    parsed["impact"] = _normalize_impact(parsed.get("impact"))
     return parsed
 
 
