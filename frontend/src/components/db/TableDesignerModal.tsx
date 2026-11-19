@@ -10,6 +10,7 @@ import {
   alterTable, getTableSchema,
   type DbTableChanges, type DbTableColumn, type DbTableSchema, type DbTableIndex,
 } from '../../services/api'
+import TableCompareModal from './TableCompareModal'
 
 export interface TableDesignerModalProps {
   open: boolean
@@ -87,6 +88,7 @@ export default function TableDesignerModal({
   const [statements, setStatements] = useState<string[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [executing, setExecuting] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
 
   // 按方言切换：Oracle 下隐藏自增/引擎/字符集/排序规则，类型下拉换 Oracle 类型集
   const isOracle = (schema?.db_type || 'mysql').toLowerCase() === 'oracle'
@@ -348,11 +350,21 @@ export default function TableDesignerModal({
       maskClosable={false}
       title={`表结构 · ${database}.${table}`}
       footer={[
+        <Button key="compare" onClick={() => setCompareOpen(true)}>对比</Button>,
         <Button key="preview" onClick={preview} loading={previewing}>预览 DDL</Button>,
         <Button key="cancel" onClick={onClose}>取消</Button>,
         <Button key="submit" type="primary" loading={executing} disabled={!schema} onClick={submit}>执行</Button>,
       ]}
     >
+      <TableCompareModal
+        open={compareOpen}
+        connId={connId}
+        database={database}
+        table={table}
+        onClose={() => setCompareOpen(false)}
+        onNeedApproval={onNeedApproval}
+        onApplied={onApplied}
+      />
       {!schema ? (
         <div style={{ padding: 24 }}><Empty description={loading ? '加载表结构…' : '未获取到表结构'} /></div>
       ) : (

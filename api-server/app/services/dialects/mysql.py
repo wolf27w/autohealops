@@ -66,7 +66,14 @@ def _q(v) -> str:
     return f"'{s}'"
 
 
+_DELIM_LINE_RE = re.compile(r"[ \t]*DELIMITER[ \t]+(\S+)", re.IGNORECASE)
+
+
 def _split_sql(s: str) -> list[str]:
+    """遗留的简单 `;` 切分器（不处理 DELIMITER，不 strip 语句）。
+
+    已被 `split_sql_delimited` 取代（导入路径已切换），保留仅为兼容旧测试/旧调用方。
+    """
     out, cur, quote = [], [], None
     for ch in s:
         if quote:
@@ -84,6 +91,103 @@ def _split_sql(s: str) -> list[str]:
     if "".join(cur).strip():
         out.append("".join(cur))
     return out
+
+
+def split_sql_delimited(text: str) -> list[str]:
+    """DELIMITER 感知的 MySQL 语句切分（纯函数，不连库）。
+
+    识别行首 `DELIMITER xxx` 指令（大小写不敏感、可带前导空白）并切换语句分隔符
+    （默认 `;`），指令行本身不进入任何语句；`DELIMITER ;` 切回分号。
+
+    分隔符只在字符串 / 行注释 / 块注释之外生效：字符串、注释里的分隔符与
+    `DELIMITER` 关键字均不识别（避免误拆存储过程体 / 误判注释里的指令）。
+    """
+    stmts: list[str] = []
+    cur: list[str] = []
+    i, n = 0, len(text)
+    delim = ";"
+
+    def _at_line_start(idx: int) -> bool:
+        return idx == 0 or text[idx - 1] in "\r\n"
+
+    def _flush() -> None:
+        s = "".join(cur).strip()
+        if s:
+            stmts.append(s)
+        cur.clear()
+
+    while i < n:
+        # 行首 DELIMITER 指令（仅顶层：字符串/注释在各自分支里已原子吞掉，不会落在行首）
+        if _at_line_start(i):
+            m = _DELIM_LINE_RE.match(text, i)
+            if m:
+                delim = m.group(1)
+                j = text.find("\n", i)
+                i = (j + 1) if j != -1 else n
+                continue
+
+        ch = text[i]
+
+        # 字符串 ' " `（含反斜杠转义、双写转义）
+        if ch in ("'", '"', "`"):
+            quote = ch
+            cur.append(ch)
+            i += 1
+            while i < n:
+                cur.append(text[i])
+                if text[i] == "\\" and quote != "`" and i + 1 < n:
+                    cur.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    if i + 1 < n and text[i + 1] == quote:
+                        cur.append(text[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        # 行注释 #
+        if ch == "#":
+            while i < n and text[i] not in "\r\n":
+                cur.append(text[i])
+                i += 1
+            continue
+
+        # 行注释 --（后跟空白才视为注释）
+        if ch == "-" and i + 1 < n and text[i + 1] == "-" and (i + 2 >= n or text[i + 2] in " \t\r\n"):
+            while i < n and text[i] not in "\r\n":
+                cur.append(text[i])
+                i += 1
+            continue
+
+        # 块注释 /* */
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            cur.append(ch)
+            cur.append(text[i + 1])
+            i += 2
+            while i < n:
+                cur.append(text[i])
+                if text[i] == "*" and i + 1 < n and text[i + 1] == "/":
+                    cur.append(text[i + 1])
+                    i += 2
+                    break
+                i += 1
+            continue
+
+        # 当前分隔符（在字符串/注释之外才切分）
+        if text.startswith(delim, i):
+            _flush()
+            i += len(delim)
+            continue
+
+        cur.append(ch)
+        i += 1
+
+    _flush()
+    return stmts
 
 
 def _sql_blank(s: str) -> bool:
@@ -123,7 +227,8 @@ def _column_def(col: dict) -> str:
     d = default_value_sql(col.get("default"))
     if d:
         parts.append(d)
-    if col.get("auto_increment"):
+    # 自增：兼容布尔 `auto_increment` 与字符串 `extra='auto_increment'` 两种入参
+    if col.get("auto_increment") or "auto_increment" in ((col.get("extra") or "").lower()):
         parts.append("AUTO_INCREMENT")
     if (col.get("comment") or "") != "":
         parts.append(f"COMMENT {sql_literal(col.get('comment'))}")
@@ -463,9 +568,9 @@ class MySQLDialect(Dialect):
                         await cur.execute(stmt, args)
                         executed += 1
             else:
-                for stmt in _split_sql(content):
+                for stmt in split_sql_delimited(content):
                     s = stmt.strip()
-                    if not s or s.startswith("--"):
+                    if not s or _sql_blank(s):
                         skipped += 1
                         continue
                     async with conn.cursor() as cur:
@@ -515,7 +620,7 @@ class MySQLDialect(Dialect):
             if db:
                 async with conn.cursor() as cur:
                     await cur.execute(f"USE `{db}`")
-            stmts = split_sql_statements(sql or "")
+            stmts = split_sql_delimited(sql or "")
             executed = skipped = 0
             errors: list[dict] = []
             stopped = False

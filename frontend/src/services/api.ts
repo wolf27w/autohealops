@@ -864,6 +864,37 @@ export interface SqlImportResult {
 }
 export const importSqlScript = (id: number, sql: string, mode: 'stop' | 'skip') =>
   http.post<SqlImportResult>(`/db-connections/${id}/import-sql`, { sql, mode })
+
+// ============ 大文件分片导入（R16§16.8 A2-2）：>5MB SQL 前端切片顺序上传 ============
+export interface DbImportChunkBody {
+  job_id: string
+  chunk_index: number
+  total_chunks: number
+  content: string
+  mode: 'stop' | 'skip'
+  confirm: boolean
+  db?: string
+}
+export interface DbImportChunkResult {
+  executed?: number
+  failed?: number
+  skipped?: number
+  duplicate?: boolean
+  errors?: SqlImportErrorRow[]
+  stopped?: boolean
+}
+export interface DbImportJobProgress {
+  total_chunks: number
+  done_chunks: number
+  executed: number
+  skipped: number
+  failed: number
+  complete: boolean
+}
+export const importChunk = (id: number, body: DbImportChunkBody) =>
+  http.post<DbImportChunkResult>(`/db-connections/${id}/import-chunk`, body)
+export const getImportJob = (id: number, jobId: string) =>
+  http.get<DbImportJobProgress>(`/db-connections/${id}/import-job/${encodeURIComponent(jobId)}`)
 // ============ R37 §6.6 表结构设计器 / 编辑库（2026-11-16） ============
 export interface DbTableColumn {
   name: string

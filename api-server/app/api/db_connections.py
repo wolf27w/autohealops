@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.core.database import async_session
+from app.core.redis_client import redis_pool
 from app.core.security import decrypt_aes256_gcm, encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_any_user, require_operator
 from app.models import DBConnection
@@ -408,7 +409,7 @@ def _db_ready(c: DBConnection):
             return False, "该库缺少 agent 归属信息（cluster_id/key）"
         return True, ""
     if not _db_supports(c, "query"):
-        return False, f"直连执行暂不支持 {c.db_type}（当前支持 mysql/oracle）"
+        return False, f"直连执行暂不支持 {c.db_type}（当前支持 mysql/pg/oracle）"
     if not c.password_encrypted and not c.readonly_password_encrypted:
         return False, "直连库缺少密码（无法连接）"
     return True, ""
@@ -598,6 +599,29 @@ async def _rows(c: DBConnection, sql: str, limit: int = 500) -> list[dict]:
     return [dict(zip(cols, r)) for r in (data.get("rows") or [])]
 
 
+async def _fetch_table_schema(c: DBConnection, db: str, table: str) -> dict:
+    """读取单张表的归一化结构 dict（字段/索引/表选项），与 table-schema 接口同形。
+
+    agent 库走隧道查 information_schema，直连库走方言 table_schema。
+    """
+    if (getattr(c, "source", "direct") or "direct") == "agent":
+        # agent 库为 MySQL，经隧道用 information_schema 查询（与直连 MySQL 同形）
+        from app.services.dialects.mysql import _mysql_schema_to_dict
+        cols = await _rows(c, (
+            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT, "
+            "CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_KEY FROM information_schema.COLUMNS "
+            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{table}' ORDER BY ORDINAL_POSITION"))
+        idx_rows = await _rows(c, (
+            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE "
+            "FROM information_schema.STATISTICS "
+            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{table}' ORDER BY INDEX_NAME, SEQ_IN_INDEX"))
+        meta = await _rows(c, (
+            "SELECT ENGINE, TABLE_COLLATION, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES "
+            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{table}'"))
+        return _mysql_schema_to_dict(db, table, cols, idx_rows, meta)
+    return await get_dialect((c.db_type or "mysql").lower()).table_schema(c, db, table)
+
+
 @router.get("/{conn_id}/table-schema")
 async def get_table_schema(conn_id: int, database: str = "", table: str = "",
                            user=Depends(require_any_user)):
@@ -620,29 +644,72 @@ async def get_table_schema(conn_id: int, database: str = "", table: str = "",
     except ValueError as e:
         return {"code": 400, "message": str(e), "data": None}
     try:
-        if (getattr(c, "source", "direct") or "direct") == "agent":
-            # agent 库为 MySQL，经隧道用 information_schema 查询（与直连 MySQL 同形）
-            from app.services.dialects.mysql import _mysql_schema_to_dict
-            cols = await _rows(c, (
-                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT, "
-                "CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_KEY FROM information_schema.COLUMNS "
-                f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY ORDINAL_POSITION"))
-            idx_rows = await _rows(c, (
-                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE "
-                "FROM information_schema.STATISTICS "
-                f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY INDEX_NAME, SEQ_IN_INDEX"))
-            meta = await _rows(c, (
-                "SELECT ENGINE, TABLE_COLLATION, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES "
-                f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}'"))
-            data = _mysql_schema_to_dict(db, tbl, cols, idx_rows, meta)
-        else:
-            data = await get_dialect((c.db_type or "mysql").lower()).table_schema(c, db, tbl)
+        data = await _fetch_table_schema(c, db, tbl)
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"获取表结构失败：{e}", "data": None}
     if not data.get("columns"):
         return {"code": 404, "message": f"表 {db}.{tbl} 不存在或无权限", "data": None}
     data["db_type"] = (c.db_type or "mysql").lower()
     return {"code": 200, "message": "success", "data": data}
+
+
+@router.post("/{conn_id}/table-compare")
+async def compare_table(conn_id: int, payload: dict, user=Depends(require_any_user)):
+    """对比两张表结构（同库或跨实例），返回字段/索引/表选项的三态 diff + 可落库的 changes。
+
+    body: {
+        database, table,                    # 源（当前上下文）
+        target_conn_id?,                     # 目标连接 id，缺省 = 当前连接（跨实例时传另一个）
+        target_database, target_table,       # 目标表
+    }
+    """
+    from app.services.db_schema_diff import compare_table_schema, diff_to_changes
+
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+
+    target_conn_id = _safe_int(payload.get("target_conn_id"), conn_id)
+    target_c = c
+    if target_conn_id != conn_id:
+        async with async_session() as session:
+            target_c = await session.get(DBConnection, target_conn_id)
+        if not target_c:
+            return {"code": 404, "message": "目标连接不存在", "data": None}
+
+    for cc, cid in ((c, conn_id), (target_c, target_conn_id)):
+        if user.role != "admin" and not await user_permission_service.check_db_permission(user, cid):
+            return {"code": 403, "message": f"无权限访问连接 {cid}", "data": None}
+        ok, why = _db_ready(cc)
+        if not ok:
+            return {"code": 400, "message": f"连接 {cid}：{why}", "data": None}
+
+    try:
+        src_db = _check_ident(payload.get("database") or c.database or "", "库名")
+        src_tbl = _check_ident(payload.get("table"), "表名")
+        tgt_db = _check_ident(payload.get("target_database") or target_c.database or "", "库名")
+        tgt_tbl = _check_ident(payload.get("target_table"), "表名")
+    except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+
+    try:
+        src_schema = await _fetch_table_schema(c, src_db, src_tbl)
+        tgt_schema = await _fetch_table_schema(target_c, tgt_db, tgt_tbl)
+    except Exception as e:  # noqa: BLE001
+        return {"code": 500, "message": f"获取表结构失败：{e}", "data": None}
+    if not src_schema.get("columns"):
+        return {"code": 404, "message": f"源表 {src_db}.{src_tbl} 不存在或无权限", "data": None}
+    if not tgt_schema.get("columns"):
+        return {"code": 404, "message": f"目标表 {tgt_db}.{tgt_tbl} 不存在或无权限", "data": None}
+
+    diff = compare_table_schema(src_schema, tgt_schema)
+    return {"code": 200, "message": "success", "data": {
+        "source": {"conn_id": conn_id, "database": src_db, "table": src_tbl, "schema": src_schema},
+        "target": {"conn_id": target_conn_id, "database": tgt_db, "table": tgt_tbl, "schema": tgt_schema},
+        "diff": diff,
+        "changes": diff_to_changes(diff),
+    }}
 
 
 @router.post("/{conn_id}/table-alter")
@@ -1001,6 +1068,151 @@ async def import_sql_file(conn_id: int, payload: dict, user=Depends(require_oper
     if err:
         return {"code": 500, "message": f"导入失败：{err}", "data": None}
     return {"code": 200, "message": "success", "data": result}
+
+
+# ============ 大文件分片导入（R16 §16.8，Redis 记录进度 + 幂等/续传） ============
+_IMPORT_JOB_TTL = 86400  # job 进度在 Redis 的生命期：24h（逾期自动回收）
+
+
+def _import_job_keys(conn_id: int, job_id: str) -> tuple[str, str]:
+    """分片导入 job 的 Redis 键：返回 (meta_hash_key, done_set_key)。"""
+    base = f"db:import:job:{conn_id}:{job_id}"
+    return base, f"{base}:done"
+
+
+async def _import_job_progress(meta_key: str, done_key: str) -> dict:
+    """读取 job 聚合进度（幂等/续传查询用）。"""
+    try:
+        meta = await redis_pool.hgetall(meta_key)
+    except Exception:  # noqa: BLE001
+        meta = {}
+    try:
+        done = await redis_pool.scard(done_key)
+    except Exception:  # noqa: BLE001
+        done = 0
+    return {
+        "total_chunks": _safe_int(meta.get("total_chunks"), 0),
+        "done_chunks": done,
+        "executed": _safe_int(meta.get("executed"), 0),
+        "skipped": _safe_int(meta.get("skipped"), 0),
+        "failed": _safe_int(meta.get("failed"), 0),
+        "complete": bool(_safe_int(meta.get("total_chunks"), 0) and done >= _safe_int(meta.get("total_chunks"), 0)),
+    }
+
+
+@router.get("/{conn_id}/import-job/{job_id}")
+async def import_job_status(conn_id: int, job_id: str, user=Depends(require_admin)):
+    """查询分片导入 job 的进度（用于断点续传：前端据此找到未完成的分片）。"""
+    if not (job_id or "").strip():
+        return {"code": 400, "message": "job_id 不能为空", "data": None}
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    meta_key, done_key = _import_job_keys(conn_id, job_id)
+    return {"code": 200, "message": "success",
+            "data": await _import_job_progress(meta_key, done_key)}
+
+
+@router.post("/{conn_id}/import-chunk")
+async def import_chunk(conn_id: int, payload: dict, user=Depends(require_admin)):
+    """分片导入 SQL 的一片（>5MB 大文件前端切片后顺序上传，逐片执行）。
+
+    body: {job_id, chunk_index, total_chunks, content, confirm,
+           format: "sql", db?, mode: "stop"|"skip"}
+    - 每片带 job_id/chunk_index/total_chunks；同一 job 重复提交同一片不重复执行（幂等）。
+    - 进度存 Redis（meta hash + done set），TTL 24h；失败后重传未完成分片即可续传。
+    """
+    if not payload.get("confirm"):
+        return {"code": 400, "message": "导入会真实写库，需要显式确认（confirm=true）", "data": None}
+    job_id = (payload.get("job_id") or "").strip()
+    if not job_id:
+        return {"code": 400, "message": "job_id 不能为空", "data": None}
+    try:
+        chunk_index = int(payload.get("chunk_index"))
+        total_chunks = int(payload.get("total_chunks"))
+    except (TypeError, ValueError):
+        return {"code": 400, "message": "chunk_index / total_chunks 必须是整数", "data": None}
+    if total_chunks <= 0 or not (0 <= chunk_index < total_chunks):
+        return {"code": 400, "message": "chunk_index 必须在 [0, total_chunks) 区间内", "data": None}
+    content = payload.get("content") or ""
+    if not content.strip():
+        return {"code": 400, "message": "content 不能为空", "data": None}
+    mode = (payload.get("mode") or "stop").lower()
+    if mode not in ("stop", "skip"):
+        return {"code": 400, "message": "mode 仅支持 stop / skip", "data": None}
+
+    async with async_session() as session:
+        c = await session.get(DBConnection, conn_id)
+    if not c:
+        return {"code": 404, "message": "连接不存在", "data": None}
+    ok, why = _db_ready(c)
+    if not ok:
+        return {"code": 400, "message": why, "data": None}
+
+    meta_key, done_key = _import_job_keys(conn_id, job_id)
+
+    # 幂等：SADD 已完成的 chunk；返回 0 = 已执行过 → 不重复执行
+    try:
+        added = await redis_pool.sadd(done_key, str(chunk_index))
+    except Exception:  # noqa: BLE001
+        added = 1  # Redis 不可用时退化为「直接执行」，不因进度存储失败阻断导入
+    duplicate = (added == 0)
+
+    chunk_result: dict = {}
+    err = ""
+    unsupported = False
+    if not duplicate:
+        db = payload.get("db") or c.database
+        started = time.time()
+        try:
+            if (getattr(c, "source", "direct") or "direct") == "agent":
+                chunk_result, err, unsupported = await _agent_call(
+                    int(c.cluster_id), "ImportSqlRaw",
+                    {"key": c.agent_db_key, "db": db or "", "sql": content, "mode": mode},
+                    180.0,
+                )
+            elif not _db_supports(c, "import"):
+                err = f"直连执行暂不支持 {c.db_type} 的导入（当前支持 mysql）"
+            else:
+                from app.services import db_direct_service
+                chunk_result = await db_direct_service.import_sql(c, db, content, mode)
+        except Exception as e:  # noqa: BLE001
+            err = str(e)
+        elapsed = round(time.time() - started, 2)
+        await _audit_sql(user, c, f"IMPORT-CHUNK job={job_id} #{chunk_index}/{total_chunks} ({len(content)} bytes)",
+                         elapsed, 0, not err and not unsupported, err, "db_import_chunk",
+                         int((chunk_result or {}).get("executed") or 0))
+        if unsupported:
+            try:
+                await redis_pool.srem(done_key, str(chunk_index))
+            except Exception:  # noqa: BLE001
+                pass
+            return {"code": 400, "message": "agent 版本过低，请升级到支持该操作的版本", "data": None}
+        if err:
+            # 执行失败：回滚 done 标记，允许重试该片
+            try:
+                await redis_pool.srem(done_key, str(chunk_index))
+            except Exception:  # noqa: BLE001
+                pass
+            return {"code": 500, "message": f"第 {chunk_index + 1} 片执行失败：{err}", "data": None}
+
+        # 累计到 meta hash（HINCRBY 原子累加，幂等重放不会重复累加）
+        try:
+            await redis_pool.hsetnx(meta_key, "total_chunks", str(total_chunks))
+            await redis_pool.hincrby(meta_key, "executed", int((chunk_result or {}).get("executed") or 0))
+            await redis_pool.hincrby(meta_key, "skipped", int((chunk_result or {}).get("skipped") or 0))
+            await redis_pool.hincrby(meta_key, "failed", int((chunk_result or {}).get("failed") or 0))
+            await redis_pool.expire(meta_key, _IMPORT_JOB_TTL)
+            await redis_pool.expire(done_key, _IMPORT_JOB_TTL)
+        except Exception:  # noqa: BLE001
+            pass  # 进度存储失败不影响导入本身，仅影响续传/幂等
+
+    progress = await _import_job_progress(meta_key, done_key)
+    return {"code": 200, "message": "success", "data": {
+        "job_id": job_id, "chunk_index": chunk_index, "total_chunks": total_chunks,
+        "duplicate": duplicate, "chunk_result": chunk_result, "progress": progress,
+    }}
 
 
 @router.get("/{conn_id}/backup")

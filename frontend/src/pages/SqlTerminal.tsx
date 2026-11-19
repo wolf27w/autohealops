@@ -17,7 +17,7 @@ import { supportsCapability, type DbCapability } from '../utils/dbCapabilities'
 import type { Dayjs } from 'dayjs'
 import {
   getDBConnections, queryDBConnection, execDBConnection, getObjectDDL, exportDBObjects,
-  importSqlScript, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
+  importSqlScript, importChunk, downloadDBBackup, getDBSchema, createDatabase, dropDatabase, type SqlImportResult,
   createDbApproval, type DbApprovalKind, getDatabaseInfo, alterDatabase, testDBConnection, getTableSchema,
   exportQueryResult,
 } from '../services/api'
@@ -154,6 +154,8 @@ export default function SqlTerminal() {
   const [importText, setImportText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [importResult, setImportResult] = useState<SqlImportResult | null>(null)
+  // 大文件分片导入进度（>5MB 走 import-chunk，每片 4MB、按语句边界切）
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
 
   // 导出弹窗
   const [exportOpen, setExportOpen] = useState(false)
@@ -492,11 +494,46 @@ export default function SqlTerminal() {
     if (!window.confirm('导入会真实写库且无法自动回滚，确定继续？')) return
     setImportLoading(true)
     setImportResult(null)
+    setImportProgress(null)
     try {
-      const r = await importSqlScript(cur.id, text, importMode)
-      setImportResult(r)
+      const SINGLE_LIMIT = 5 * 1024 * 1024
+      if (text.length <= SINGLE_LIMIT) {
+        const r = await importSqlScript(cur.id, text, importMode)
+        setImportResult(r)
+        return
+      }
+      // >5MB：按语句边界切成 ≤4MB 的分片顺序上送（不拆语句，DELIMITER 已由后端处理）
+      const CHUNK_LIMIT = 4 * 1024 * 1024
+      const { list } = splitStatements(text, cur.db_type)
+      const chunks: string[] = []
+      let buf = ''
+      for (const st of list) {
+        if (buf && buf.length + st.length + 2 > CHUNK_LIMIT) { chunks.push(buf); buf = '' }
+        buf += `${st};\n`
+        if (buf.length >= CHUNK_LIMIT) { chunks.push(buf); buf = '' }
+      }
+      if (buf.trim()) chunks.push(buf)
+      if (chunks.length === 0) { message.warning('没有可执行的语句'); return }
+
+      const jobId = `imp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      let executed = 0, failed = 0, skipped = 0
+      const errors: SqlImportResult['errors'] = []
+      setImportProgress({ done: 0, total: chunks.length })
+      for (let i = 0; i < chunks.length; i++) {
+        const r = await importChunk(cur.id, {
+          job_id: jobId, chunk_index: i, total_chunks: chunks.length,
+          content: chunks[i], mode: importMode, confirm: true, db: currentDb || undefined,
+        })
+        executed += r?.executed || 0
+        failed += r?.failed || 0
+        skipped += r?.skipped || 0
+        if (r?.errors?.length) errors.push(...r.errors)
+        setImportProgress({ done: i + 1, total: chunks.length })
+      }
+      setImportResult({ executed, failed, skipped, errors: errors.slice(0, 50), stopped: false })
+      message.success(`分片导入完成：${chunks.length} 片`)
     } catch { /* 拦截器已提示 */ }
-    finally { setImportLoading(false) }
+    finally { setImportLoading(false); setImportProgress(null) }
   }
   const onImportFile = (f: File | undefined) => {
     if (!f) return
@@ -878,7 +915,7 @@ export default function SqlTerminal() {
             <Space style={{ marginBottom: 6 }}>
               <Button onClick={() => fileInputRef.current?.click()}>选择 .sql 文件</Button>
               {importText && <Button size="small" onClick={() => setImportText('')}>清空</Button>}
-              <span style={{ fontSize: 12, color: '#8c8c8c' }}>{importText ? `已载入 ${importText.length} 字符` : '不限大小'}</span>
+              <span style={{ fontSize: 12, color: '#8c8c8c' }}>{importText ? `已载入 ${importText.length} 字符${importText.length > 5 * 1024 * 1024 ? '（超过 5MB，将自动分片上传）' : ''}` : '不限大小'}</span>
             </Space>
             <input
               ref={fileInputRef}
@@ -895,6 +932,11 @@ export default function SqlTerminal() {
               style={{ fontFamily: 'Menlo, Consolas, monospace', fontSize: 12 }}
             />
           </div>
+          {importProgress && (
+            <div style={{ fontSize: 12, color: '#1677ff' }}>
+              分片导入中：{importProgress.done} / {importProgress.total} 片
+            </div>
+          )}
           {importResult && (
             <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: 10 }}>
               <Space wrap>
