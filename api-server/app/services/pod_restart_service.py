@@ -76,6 +76,18 @@ def _oom_container_names(pod: dict) -> list[str]:
             if (c.get("last_terminated_reason") or "") == "OOMKilled"]
 
 
+async def _describe_pod(cluster_id: int, namespace: str, pod_name: str) -> str:
+    """拉取 Pod describe（含事件）作为探针失败判定 + 诊断上下文
+
+    2026-11-19 修复：906453b 重构宽限期逻辑时误删了本函数定义，但 _process_increment
+    仍在调用，导致「Pod 重启原因诊断」长期抛 NameError 静默失效（日志实证 2026-11-18 起）。
+    """
+    r = await executor_client.acall(
+        executor_client.execute_command, cluster_id, namespace, f"describe pod {pod_name}"
+    )
+    return r.get("output", "") if r.get("success") else ""
+
+
 def _probe_evidence(events_text: str) -> str:
     """从 describe pod 事件文本中提取探针失败证据行（无则空串）"""
     if not events_text:
@@ -137,6 +149,140 @@ def _streak_key(cluster_id: int, field: str) -> str:
 
 def _grace_key(cluster_id: int, field: str) -> str:
     return f"podrestart:grace:{cluster_id}:{field}"
+
+
+async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
+                        restart: int, prev_r: int, extra: str = "") -> int:
+    """建单/聚合：同 Deployment 同 fault_type 在途不重复建单；返回新建告警 id（0=在途聚合未新建）
+
+    按 deployment_name 维度聚合（与 alerts.dedup_key 唯一索引 + watcher 去重口径一致，
+    避免同服务多 Pod 同时 OOM 时撞 1062 唯一索引）；聚合时把 resource_name 更新为最新出问题的 Pod。
+    """
+    now = datetime.now()
+    dep = infer_deployment_name(pod["name"])
+    async with async_session() as session:
+        # 合并（2026-10-29）：活跃告警 → 计数；窗口内已解决的同故障 → 复用 reopen，
+        # 避免「每轮重启一条告警」（实测同一 Pod 7 天 24 条，全是秒关秒开）
+        from app.services import alert_merge
+        row, reopen = await alert_merge.find_merge_target(
+            session, cluster_id=cluster_id, resource_type="pod", fault_type=fault_type,
+            namespace=pod["namespace"], deployment_name=dep, resource_name=pod["name"])
+        if row:
+            alert_merge.apply_merge(row, message=_build_message(pod, fault_type, prev_r, restart, extra),
+                                    resource_name=pod["name"], reopen=reopen, now=now)
+            await session.commit()
+            if reopen:
+                logger.info("Pod 重启告警复发合并：%s %s 复用 #%d（累计 %d 次）",
+                            dep, fault_type, row.id, row.event_count)
+            return 0
+        alert = Alert(
+            cluster_id=cluster_id,
+            resource_type="pod",
+            resource_name=pod["name"],
+            deployment_name=dep,
+            namespace=pod["namespace"],
+            fault_type=fault_type,
+            severity="high",
+            status="pending",
+            message=_build_message(pod, fault_type, prev_r, restart, extra),
+            event_count=1,
+            manual_required=False,  # N5：诊断+通知后结束，不转人工
+            occurred_at=now.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        session.add(alert)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # 唯一索引竞态兜底 → 转聚合，不重复建单（只把「已存在」当聚合）
+            await session.rollback()
+            return 0
+        except Exception as e:  # noqa: BLE001
+            # 其它异常（DB 故障等）不静默吞：回滚并抛给上层感知，避免静默丢告警
+            await session.rollback()
+            logger.error("Pod 重启告警建单失败（非唯一冲突）: %s", e)
+            raise
+        await session.refresh(alert)
+        return alert.id
+
+
+async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
+                               fault_type: str, prev_r: int, restart: int) -> None:
+    """AI 诊断重启原因 → 结论入库 → 发告警通知
+
+    2026-11-19 修复：同 `_describe_pod`，本函数与 `_upsert_alert` 在 906453b 重构中被误删，
+    导致 N5 重启诊断链路整体失效（既建不了告警也发不出通知）。此处按 906453b 之前版本恢复。
+    """
+    async with async_session() as session:
+        alert = await session.get(Alert, alert_id)
+    if not alert:
+        return
+
+    events_text = await _describe_pod(cluster_id, pod["namespace"], pod["name"])
+    logs_text = await fetch_pod_logs(cluster_id, pod["namespace"], pod["name"])
+    alert_data = {
+        "alert_id": alert_id,
+        "cluster_name": str(cluster_id),
+        "namespace": pod["namespace"],
+        "pod_name": pod["name"],
+        "fault_type": _DIAGNOSIS_FAULT_TYPE.get(fault_type, fault_type),
+        "severity": alert.severity,
+        "restart_count": str(restart),
+        "status_info": f"重启次数 {prev_r} -> {restart}",
+        "recent_events": (events_text or "")[:3000],
+        "recent_logs": (logs_text or "")[:4000],
+    }
+    # 指标趋势（2026-10-29）：同一 Pod 的 CPU/内存/重启/limit 使用率，避免 AI 只能看日志猜
+    try:
+        from app.services import diagnosis_metrics
+        metrics_text = await diagnosis_metrics.pod_metrics_trend(cluster_id, pod["namespace"], pod["name"])
+        if metrics_text:
+            alert_data["metrics_trend"] = metrics_text
+    except Exception as e:  # noqa: BLE001
+        logger.debug("采集 Pod 指标趋势失败: %s", e)
+    # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测（N5 本就是探针/OOM 专项，最需要这个）
+    try:
+        from app.services import probe_audit
+        probe = await probe_audit.audit_pod(cluster_id, pod["namespace"], pod["name"])
+        if probe.get("text"):
+            alert_data["probe_evidence"] = probe["text"]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("采集探针证据失败: %s", e)
+    trace_id = generate_trace_id()
+
+    # AI 诊断（ai-service 侧落 AIDiagnosisResult，与 api-server 共享同一张表）
+    # 诊断结论只入库（供告警详情/故障诊断页查看），**不追加进告警 message**（避免通知里骚扰老板）
+    # 诊断去重（2026-10-29）：N5 每次重启增量都会走到这里，原来每来一次就新增一条诊断
+    # （同一 Pod 同一故障最多 15 条）。现在窗口内已有结论就直接复用，不再调 AI。
+    reused = None
+    try:
+        from app.services import diagnosis_reuse
+        # ① 同一告警已经诊断过（N5 聚合告警：重启计数又涨一次）→ 永不复诊，避免同一条告警刷十几条诊断
+        reused = await diagnosis_reuse.find_alert_diagnosis(alert_id)
+        if not reused:
+            # ② 其他告警但同一 Pod 同故障，且在复用窗口内 → 也算同一问题
+            reused = await diagnosis_reuse.find_reusable_diagnosis(
+                cluster_id, pod["namespace"], pod["name"], fault_type
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("诊断复用查询失败: %s", e)
+    if reused:
+        logger.info("Pod 重启告警 %d 复用同 Pod 同故障诊断 #%d（窗口内，跳过 AI）", alert_id, reused[0].id)
+    else:
+        try:
+            diagnosis = await ai_client.diagnose(alert_id, alert_data, {}, trace_id)
+            if not (diagnosis.get("root_cause") or diagnosis.get("suggestions")):
+                logger.info("Pod 重启告警 %d 诊断无结论（模型返回为空）", alert_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Pod 重启告警 %d AI 诊断失败: %s", alert_id, e)
+
+    # 通知：与集群/资源/DB 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
+    try:
+        async with async_session() as session:
+            a = await session.get(Alert, alert_id)
+        if a:
+            await notification_service.notify_alert(a)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Pod 重启告警 %d 通知失败: %s", alert_id, e)
 
 
 async def _process_increment(cluster_id: int, pod: dict, restart: int, prev_r: int) -> int:
