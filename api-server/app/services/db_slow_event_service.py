@@ -29,7 +29,7 @@ from sqlalchemy import delete, func, select, text
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.models import DBConnection, SlowSQLEvent
+from app.models import DBConnection, SlowSQLEvent, SlowSQLTag
 from app.services.dialects.mysql import MySQLDialect
 
 logger = get_logger("api-server.db_slow_event")
@@ -192,8 +192,11 @@ def _serialize_event(r: SlowSQLEvent) -> dict:
 
 
 def _build_filters(c: DBConnection, start, end, schema, host, user, keyword,
-                   min_seconds, digest) -> list:
-    """构建查询过滤条件（纯函数，返回 SQLAlchemy 条件列表）。"""
+                   min_seconds, digest, tag="") -> list:
+    """构建查询过滤条件（纯函数，返回 SQLAlchemy 条件列表）。
+
+    tag（S2）：按标签筛选——只保留 digest 命中 `slow_sql_tags` 该标签的事件。
+    """
     conds = [SlowSQLEvent.db_connection_id == c.id]
     if start is not None:
         conds.append(SlowSQLEvent.start_time >= start)
@@ -211,6 +214,10 @@ def _build_filters(c: DBConnection, start, end, schema, host, user, keyword,
         conds.append(SlowSQLEvent.exec_seconds >= float(min_seconds))
     if digest:
         conds.append(SlowSQLEvent.digest == digest)
+    if tag:
+        conds.append(SlowSQLEvent.digest.in_(
+            select(SlowSQLTag.digest).where(SlowSQLTag.tag == tag)
+        ))
     return conds
 
 
@@ -431,13 +438,16 @@ async def collect_connection_slow_events(conn_id: int) -> int:
 async def query_slow_events(c: DBConnection, *, start=None, end=None, schema: str = "",
                             host: str = "", user: str = "", keyword: str = "",
                             min_seconds=None, order: str = "time", digest: str = "",
-                            page: int = 1, page_size: int = 50) -> dict:
-    """查询慢 SQL 明细（筛选/排序/分页）。非 MySQL 返回 supported=False。"""
+                            tag: str = "", page: int = 1, page_size: int = 50) -> dict:
+    """查询慢 SQL 明细（筛选/排序/分页）。非 MySQL 返回 supported=False。
+
+    tag（S2）：按标签筛选（精确匹配 slow_sql_tags.tag）。
+    """
     if (c.db_type or "").lower() != "mysql":
         return {"total": 0, "items": [], "supported": False,
                 "note": "该实例类型暂不支持慢 SQL 明细（当前仅 MySQL 支持）"}
 
-    conds = _build_filters(c, start, end, schema, host, user, keyword, min_seconds, digest)
+    conds = _build_filters(c, start, end, schema, host, user, keyword, min_seconds, digest, tag)
     order_col = _order_column(order)
     page = max(1, int(page or 1))
     page_size = max(1, min(int(page_size or 50), 200))

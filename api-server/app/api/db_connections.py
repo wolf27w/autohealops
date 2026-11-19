@@ -1732,11 +1732,15 @@ async def list_slow_sql_events(
     min_seconds: float | None = None,
     order: str = "time",
     digest: str = "",
+    tag: str = "",
     page: int = 1,
     page_size: int = 50,
     current_user=Depends(require_any_user),
 ):
-    """慢 SQL 明细列表（一次执行一行，对齐阿里云慢日志）；非 MySQL 返回 supported=false"""
+    """慢 SQL 明细列表（一次执行一行，对齐阿里云慢日志）；非 MySQL 返回 supported=false
+
+    tag（S2）：按标签筛选；明细的 tag 字段来自 slow_sql_tags（按 digest 左连接）。
+    """
     if current_user.role != "admin" and not await user_permission_service.check_db_permission(
         current_user, conn_id
     ):
@@ -1751,7 +1755,7 @@ async def list_slow_sql_events(
     end_dt, bad = _parse_ts(end)
     if bad:
         return {"code": 400, "message": f"end 格式不正确：{bad}", "data": None}
-    from app.services import db_slow_event_service
+    from app.services import db_slow_event_service, db_slow_tag_service
     data = await db_slow_event_service.query_slow_events(
         c,
         start=start_dt,
@@ -1763,9 +1767,16 @@ async def list_slow_sql_events(
         min_seconds=min_seconds,
         order=order,
         digest=digest,
+        tag=tag,
         page=page,
         page_size=page_size,
     )
+    # S2：明细列表按 digest 左连接展示标签（事件自身 tag 列恒为空）
+    items = data.get("items") or []
+    digests = [it.get("digest") for it in items if it.get("digest")]
+    if digests:
+        tag_map = await db_slow_tag_service.tag_map_for_digests(digests)
+        db_slow_tag_service.apply_tag_map(items, tag_map)
     return {"code": 200, "message": "success", "data": data}
 
 
@@ -1779,3 +1790,51 @@ async def collect_slow_sql_events(conn_id: int, current_user=Depends(require_ope
     from app.services import db_slow_event_service
     count = await db_slow_event_service.collect_connection_slow_events(conn_id)
     return {"code": 200, "message": "success", "data": {"collected": count}}
+
+
+@router.get("/{conn_id}/slow-sql-tags")
+async def list_slow_sql_tags(conn_id: int, current_user=Depends(require_any_user)):
+    """列出全部慢 SQL 标签（S2：用于列表筛选下拉 / 标签概览）"""
+    if current_user.role != "admin" and not await user_permission_service.check_db_permission(
+        current_user, conn_id
+    ):
+        return {"code": 403, "message": "无权限", "data": None}
+    from app.services import db_slow_tag_service
+    tags = await db_slow_tag_service.list_slow_sql_tags()
+    return {"code": 200, "message": "success", "data": {"items": tags}}
+
+
+@router.put("/{conn_id}/slow-sql-tags")
+async def set_slow_sql_tag(conn_id: int, payload: dict,
+                          current_user=Depends(require_operator)):
+    """打标 / 编辑标签（S2）：body {digest, tag, note}；tag 传空串 = 取消标签"""
+    if current_user.role != "admin" and not await user_permission_service.check_db_permission(
+        current_user, conn_id, "manage"
+    ):
+        return {"code": 403, "message": "无权限", "data": None}
+    from app.services import db_slow_tag_service
+    digest = (payload.get("digest") or "").strip()
+    err = db_slow_tag_service.validate_digest(digest)
+    if err:
+        return {"code": 400, "message": err, "data": None}
+    tag = payload.get("tag")
+    note = payload.get("note")
+    created_by = getattr(current_user, "username", "") or ""
+    try:
+        result = await db_slow_tag_service.set_slow_sql_tag(digest, tag, note, created_by)
+    except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+    return {"code": 200, "message": "success", "data": result}
+
+
+@router.delete("/{conn_id}/slow-sql-tags/{digest}")
+async def clear_slow_sql_tag(conn_id: int, digest: str,
+                             current_user=Depends(require_operator)):
+    """取消标签（S2）：删除该 digest 的标签行"""
+    if current_user.role != "admin" and not await user_permission_service.check_db_permission(
+        current_user, conn_id, "manage"
+    ):
+        return {"code": 403, "message": "无权限", "data": None}
+    from app.services import db_slow_tag_service
+    removed = await db_slow_tag_service.clear_slow_sql_tag(digest)
+    return {"code": 200, "message": "success", "data": {"removed": removed}}

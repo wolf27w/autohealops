@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import {
   Card, Table, Tag, Button, Space, DatePicker, Modal, Tooltip, message, Empty,
-  Input, InputNumber, Select, Switch,
+  Input, InputNumber, Select, Switch, Form,
 } from 'antd'
 import {
   ReloadOutlined, BarChartOutlined, ThunderboltOutlined, SyncOutlined, LineChartOutlined,
@@ -17,6 +17,7 @@ import {
 import SlowSqlDiagnoseModal from './SlowSqlDiagnoseModal'
 import SlowSqlEventTable, { SqlCell } from './SlowSqlEventTable'
 import SlowSqlDetailDrawer from './SlowSqlDetailDrawer'
+import { listSlowSqlTags, setSlowSqlTag, clearSlowSqlTag, type SlowSqlTagItem } from '../../services/api'
 
 // 慢 SQL 单条记录（聚合视图，后端字段可选容错）
 interface SlowSQLRow {
@@ -60,6 +61,7 @@ interface EventFilter {
   keyword: string
   minSeconds: number | null
   order: OrderVal
+  tag: string
 }
 
 const FALLBACK_NOTE = '该实例暂不支持执行明细，已回退到按 SQL 聚合视图'
@@ -100,7 +102,7 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
   const [f, setF] = useState<EventFilter>(() => ({
     range: [dayjs().subtract(1, 'hour'), dayjs()],
     schema: '', host: '', user: '', keyword: '',
-    minSeconds: null, order: 'time',
+    minSeconds: null, order: 'time', tag: '',
   }))
   // 文本类筛选（schema/host/user/keyword）先存草稿，回车/查询时提交
   const [textDraft, setTextDraft] = useState({ schema: '', host: '', user: '', keyword: '' })
@@ -127,6 +129,12 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
   const [overallTrend, setOverallTrend] = useState<TrendPoint[]>([])
   const [diagRow, setDiagRow] = useState<{ digest?: string; sql_text?: string; schema_name?: string } | null>(null)
   const [detailRow, setDetailRow] = useState<SlowSqlEventItem | null>(null)
+
+  // S2：标签（打标/编辑/取消 + 按标签筛选）
+  const [tagItems, setTagItems] = useState<SlowSqlTagItem[]>([])
+  const [tagEditRow, setTagEditRow] = useState<SlowSqlEventItem | null>(null)
+  const [tagDraft, setTagDraft] = useState({ tag: '', note: '' })
+  const [tagSaving, setTagSaving] = useState(false)
   const [cmpOpen, setCmpOpen] = useState(false)
   const [cmpA, setCmpA] = useState<RangeVal>([dayjs().subtract(1, 'day').startOf('day'), dayjs().startOf('day')])
   const [cmpB, setCmpB] = useState<RangeVal>([dayjs().startOf('day'), dayjs()])
@@ -138,7 +146,8 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     if (!connId) return
     setEventLoading(true)
     try {
-      const d = await getSlowSqlEvents(connId, {
+      // S2：tag 筛选字段（api.ts 的 SlowSqlEventsQuery 尚未包含，先本地扩展类型）
+      const params: Parameters<typeof getSlowSqlEvents>[1] & { tag?: string } = {
         start: f.range?.[0]?.toISOString(),
         end: f.range?.[1]?.toISOString(),
         schema: f.schema || undefined,
@@ -147,9 +156,11 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
         keyword: f.keyword || undefined,
         min_seconds: f.minSeconds ?? undefined,
         order: f.order,
+        tag: f.tag || undefined,
         page,
         page_size: pageSize,
-      })
+      }
+      const d = await getSlowSqlEvents(connId, params)
       if (d?.supported === false) {
         setMode('aggregate')
         setFallback(d.note || FALLBACK_NOTE)
@@ -181,6 +192,59 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     }
   }
 
+  // S2：加载标签列表（筛选下拉 + 编辑时回填备注）
+  const loadTagOptions = async () => {
+    if (!connId) return
+    try {
+      const d = await listSlowSqlTags(connId)
+      setTagItems(d?.items || [])
+    } catch {
+      /* 忽略：标签接口不可用时仅不展示下拉 */
+    }
+  }
+
+  // S2：打开打标/编辑弹窗
+  const openTagEdit = (r: SlowSqlEventItem) => {
+    const existing = tagItems.find((t) => t.digest === r.digest)
+    setTagDraft({ tag: existing?.tag || r.tag || '', note: existing?.note || '' })
+    setTagEditRow(r)
+  }
+
+  // S2：保存标签（tag 传空 = 取消标签，由后端统一处理）
+  const saveTag = async () => {
+    if (!connId || !tagEditRow?.digest) return
+    setTagSaving(true)
+    try {
+      const tag = tagDraft.tag.trim()
+      await setSlowSqlTag(connId, { digest: tagEditRow.digest, tag, note: tagDraft.note.trim() })
+      message.success(tag ? '标签已保存' : '已取消标签')
+      setTagEditRow(null)
+      await loadTagOptions()
+      setReloadTick((x) => x + 1)
+    } catch {
+      /* 拦截器已提示 */
+    } finally {
+      setTagSaving(false)
+    }
+  }
+
+  // S2：取消标签（单独入口，明确语义）
+  const clearTag = async () => {
+    if (!connId || !tagEditRow?.digest) return
+    setTagSaving(true)
+    try {
+      await clearSlowSqlTag(connId, tagEditRow.digest)
+      message.success('已取消标签')
+      setTagEditRow(null)
+      await loadTagOptions()
+      setReloadTick((x) => x + 1)
+    } catch {
+      /* 拦截器已提示 */
+    } finally {
+      setTagSaving(false)
+    }
+  }
+
   // 首载/筛选/分页变化：按当前模式拉对应数据源
   useEffect(() => {
     if (!connId) return
@@ -188,6 +252,12 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     else loadEvents()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connId, mode, f, page, pageSize, reloadTick])
+
+  // S2：连接变化时加载标签列表
+  useEffect(() => {
+    loadTagOptions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connId])
 
   // 自动刷新（默认关；开启后 15s，页面隐藏时跳过）
   useEffect(() => {
@@ -358,6 +428,10 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
                 value={f.minSeconds} onChange={(v) => { setF((prev) => ({ ...prev, minSeconds: v ?? null })); setPage(1) }} />
               <Select value={f.order} options={ORDER_OPTIONS} style={{ width: 140 }}
                 onChange={(v) => { setF((prev) => ({ ...prev, order: v })); setPage(1) }} />
+              <Select allowClear placeholder="标签" style={{ width: 120 }}
+                value={f.tag || undefined}
+                options={tagItems.map((t) => ({ value: t.tag, label: t.tag })).filter((o) => o.value)}
+                onChange={(v) => { setF((prev) => ({ ...prev, tag: v ?? '' })); setPage(1) }} />
               <Space size={4}>
                 <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} />
                 <span style={{ fontSize: 12, color: '#8c8c8c' }}>自动刷新</span>
@@ -385,6 +459,7 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
                 onOpenTrend={(r) => openTrend(r.digest || '')}
                 onOpenDetail={(r) => setDetailRow(r)}
                 onDiagnose={(r) => setDiagRow(r)}
+                onEditTag={openTagEdit}
               />
             : <Empty description="暂无慢 SQL 执行明细" />
         ) : (
@@ -402,6 +477,32 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
 
       {/* 慢 SQL 执行详情抽屉 */}
       <SlowSqlDetailDrawer connId={connId} row={detailRow} onClose={() => setDetailRow(null)} />
+
+      {/* S2：慢 SQL 标签打标/编辑弹窗 */}
+      <Modal
+        open={!!tagEditRow}
+        title={`慢 SQL 标签（SQL ID ${(tagEditRow?.digest || '').slice(0, 16)}${(tagEditRow?.digest || '').length > 16 ? '…' : ''}）`}
+        onCancel={() => setTagEditRow(null)}
+        width={480}
+        footer={[
+          <Button key="clear" danger disabled={!tagDraft.tag && !tagEditRow?.tag}
+            onClick={clearTag}>取消标签</Button>,
+          <Button key="cancel" onClick={() => setTagEditRow(null)}>取消</Button>,
+          <Button key="ok" type="primary" loading={tagSaving} onClick={saveTag}>保存</Button>,
+        ]}
+      >
+        <Form layout="vertical">
+          <Form.Item label="标签（自由文本，如「核心链路」/「可忽略」）">
+            <Input value={tagDraft.tag} maxLength={100} allowClear placeholder="输入标签"
+              onChange={(e) => setTagDraft((d) => ({ ...d, tag: e.target.value }))} />
+          </Form.Item>
+          <Form.Item label="备注（可选）">
+            <Input.TextArea value={tagDraft.note} maxLength={500} rows={2}
+              placeholder="备注，如忽略原因 / 负责人"
+              onChange={(e) => setTagDraft((d) => ({ ...d, note: e.target.value }))} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* digest 趋势弹窗 */}
       <Modal open={!!trend} onCancel={() => setTrend(null)} footer={null} width={720}

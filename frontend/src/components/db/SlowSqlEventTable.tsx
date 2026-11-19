@@ -47,11 +47,12 @@ interface Props {
   onOpenTrend: (row: SlowSqlEventItem) => void
   onOpenDetail: (row: SlowSqlEventItem) => void
   onDiagnose: (row: SlowSqlEventItem) => void
+  onEditTag: (row: SlowSqlEventItem) => void
 }
 
 export default function SlowSqlEventTable({
   items, loading, total, page, pageSize,
-  onPageChange, onOpenTrend, onOpenDetail, onDiagnose,
+  onPageChange, onOpenTrend, onOpenDetail, onDiagnose, onEditTag,
 }: Props) {
   const columns: TableColumnsType<SlowSqlEventItem> = [
     {
@@ -77,7 +78,11 @@ export default function SlowSqlEventTable({
     { title: '用户', dataIndex: 'db_user', width: 96, render: (v: string) => v || '-' },
     { title: '线程', dataIndex: 'thread_id', width: 78, align: 'right', render: (v: number) => fmtNum(v) },
     { title: '表名', dataIndex: 'tables', width: 140, ellipsis: true, render: (v: string) => v || '-' },
-    { title: '标签', dataIndex: 'tag', width: 100, render: (v: string) => (v ? <Tag color="purple">{v}</Tag> : '-') },
+    { title: '标签', dataIndex: 'tag', width: 110, render: (v: string, r) => (
+      v
+        ? <Tag color="purple" style={{ cursor: 'pointer' }} onClick={() => onEditTag(r)}>{v}</Tag>
+        : <Button size="small" type="link" style={{ padding: 0, height: 18 }} onClick={() => onEditTag(r)}>打标</Button>
+    ) },
     {
       title: '操作', width: 132, fixed: 'right',
       render: (_: unknown, r) => (

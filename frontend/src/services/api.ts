@@ -777,6 +777,7 @@ export interface SlowSqlEventsQuery {
   min_seconds?: number
   order?: SlowSqlEventOrder
   digest?: string
+  tag?: string
   page?: number
   page_size?: number
 }
@@ -784,6 +785,21 @@ export const getSlowSqlEvents = (connId: number, params: SlowSqlEventsQuery = {}
   http.get<SlowSqlEventsResult>(`/db-connections/${connId}/slow-sql-events`, { params })
 export const collectSlowSqlEvents = (connId: number) =>
   http.post<{ collected: number }>(`/db-connections/${connId}/slow-sql-events/collect`)
+
+// ============ 慢 SQL 标签（S2，按 digest 打标，跨连接共享）============
+export interface SlowSqlTagItem {
+  digest: string
+  tag: string
+  note: string
+  created_by: string
+  updated_at?: string
+}
+export const listSlowSqlTags = (connId: number) =>
+  http.get<{ items: SlowSqlTagItem[] }>(`/db-connections/${connId}/slow-sql-tags`)
+export const setSlowSqlTag = (connId: number, data: { digest: string; tag: string; note?: string }) =>
+  http.put<SlowSqlTagItem | null>(`/db-connections/${connId}/slow-sql-tags`, data)
+export const clearSlowSqlTag = (connId: number, digest: string) =>
+  http.delete<{ removed: boolean }>(`/db-connections/${connId}/slow-sql-tags/${encodeURIComponent(digest)}`)
 
 // ============ 慢 SQL 诊断（AI 优化建议）============
 export interface SlowSqlDiagnoseIssue { type: string; detail: string; severity: string }
