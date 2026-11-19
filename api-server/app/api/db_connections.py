@@ -19,6 +19,8 @@ from app.core.security import decrypt_aes256_gcm, encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_any_user, require_operator
 from app.models import DBConnection
 from app.services import user_permission_service
+from app.services.dialects import UnsupportedError, get_dialect
+from app.services.dialects.base import check_ident, check_type_spec, sql_literal
 
 router = APIRouter(prefix="/api/v1/db-connections")
 logger = logging.getLogger(__name__)
@@ -393,14 +395,20 @@ async def query_connection(conn_id: int, payload: dict, user=Depends(require_any
     return {"code": 200, "message": "success", "data": data}
 
 
+def _db_supports(c: DBConnection, capability: str) -> bool:
+    """直连库方言能力检测（query/exec/export/import/backup 等），agent 库走隧道不参与。"""
+    from app.services.dialects import supports
+    return supports((c.db_type or "mysql").lower(), capability)
+
+
 def _db_ready(c: DBConnection):
-    """库是否支持平台操作：agent 库（需 key）或直连 mysql（平台有账密）。"""
+    """库是否支持平台操作：agent 库（需 key）或直连库（平台有账密，方言支持 query）。"""
     if (getattr(c, "source", "direct") or "direct") == "agent":
         if not c.cluster_id or not c.agent_db_key:
             return False, "该库缺少 agent 归属信息（cluster_id/key）"
         return True, ""
-    if (c.db_type or "mysql").lower() != "mysql":
-        return False, f"直连执行暂只支持 mysql（当前 {c.db_type}）"
+    if not _db_supports(c, "query"):
+        return False, f"直连执行暂不支持 {c.db_type}（当前支持 mysql/oracle）"
     if not c.password_encrypted and not c.readonly_password_encrypted:
         return False, "直连库缺少密码（无法连接）"
     return True, ""
@@ -559,108 +567,28 @@ async def get_object_ddl(conn_id: int, kind: str, name: str, db: str = "",
 # 定位：SQL 终端里「看结构」不够用，要能像客户端那样改字段/索引/表选项。
 # 安全口径：所有标识符与类型串都过白名单校验；执行前必须 dry_run 出 DDL 预览；
 # 命中审核策略（kind=ddl）时返回 428 信封，走既有 B12 审核单执行链。
-_TYPE_RE = re.compile(r"^[A-Za-z0-9_ ,()'\".+-]{1,200}$")
-_EXPR_DEFAULT_RE = re.compile(r"^-?\d+(\.\d+)?$")
+# DDL 生成已下沉到方言层（app/services/dialects/*）：MySQL 逻辑原样迁入 mysql.py，
+# Oracle 在 oracle.py 生成（类型映射 / IDENTITY / COMMENT ON / RENAME COLUMN / 多语句）。
 
 
 def _check_ident(v: str, what: str = "标识符") -> str:
-    v = (v or "").strip()
-    if not _IDENT_RE.match(v):
-        raise ValueError(f"{what}不合法：{v}")
-    return v
+    return check_ident(v, what)
 
 
 def _check_type_spec(t: str) -> str:
-    t = (t or "").strip()
-    if not t or not _TYPE_RE.match(t) or ";" in t or "--" in t or "/*" in t or "`" in t:
-        raise ValueError(f"字段类型不合法：{t}")
-    return t
+    return check_type_spec(t)
 
 
 def _lit(v: str) -> str:
-    s = str(v)
-    if ";" in s or "--" in s or "/*" in s:
-        raise ValueError("注释/默认值包含非法字符")
-    return "'" + s.replace("\\", "\\\\").replace("'", "''") + "'"
-
-
-def _column_def(col: dict) -> str:
-    """单列定义：`name` type [NOT NULL] [DEFAULT x] [AUTO_INCREMENT] [COMMENT '...']"""
-    name = _check_ident(col.get("name") or "", "字段名")
-    typ = _check_type_spec(col.get("type") or "")
-    parts = [f"`{name}` {typ}"]
-    if not bool(col.get("nullable", True)):
-        parts.append("NOT NULL")
-    dv = col.get("default")
-    if dv is not None and str(dv) != "":
-        s = str(dv)
-        up = s.upper()
-        if up == "NULL":
-            parts.append("DEFAULT NULL")
-        elif _EXPR_DEFAULT_RE.match(s) or up in ("CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP()"):
-            parts.append(f"DEFAULT {s}")
-        else:
-            parts.append(f"DEFAULT {_lit(s)}")
-    if col.get("auto_increment"):
-        parts.append("AUTO_INCREMENT")
-    if (col.get("comment") or "") != "":
-        parts.append(f"COMMENT {_lit(col.get('comment'))}")
-    return " ".join(parts)
+    return sql_literal(v)
 
 
 def _build_table_alter(database: str, table: str, ch: dict) -> str:
-    """结构化改动 → 单条 ALTER TABLE（RENAME TO 作为子句并入，便于审核单一次执行）。"""
-    _check_ident(database, "库名")
-    _check_ident(table, "表名")
-    ch = ch or {}
-    clauses: list[str] = []
-    for c in ch.get("add_columns") or []:
-        clause = "ADD COLUMN " + _column_def(c)
-        after = (c.get("after") or "").strip()
-        if after:
-            clause += f" AFTER `{_check_ident(after, 'after 字段')}`"
-        clauses.append(clause)
-    for name in ch.get("drop_columns") or []:
-        clauses.append(f"DROP COLUMN `{_check_ident(name, '字段名')}`")
-    for c in ch.get("modify_columns") or []:
-        clauses.append("MODIFY COLUMN " + _column_def(c))
-    for c in ch.get("change_columns") or []:
-        old = _check_ident(c.get("from") or "", "字段名")
-        clauses.append(f"CHANGE COLUMN `{old}` " + _column_def(c))
-    for i in ch.get("add_indexes") or []:
-        cols = ", ".join(f"`{_check_ident(x, '索引字段')}`" for x in (i.get("columns") or []))
-        if not cols:
-            raise ValueError("索引至少需要一个字段")
-        uniq = "UNIQUE " if i.get("unique") else ""
-        idx_name = (i.get("name") or "").strip()
-        name_sql = f"`{_check_ident(idx_name, '索引名')}` " if idx_name else ""
-        clauses.append(f"ADD {uniq}INDEX {name_sql}({cols})")
-    for name in ch.get("drop_indexes") or []:
-        clauses.append(f"DROP INDEX `{_check_ident(name, '索引名')}`")
-    if ch.get("comment") is not None:
-        clauses.append(f"COMMENT={_lit(ch.get('comment') or '')}")
-    if (ch.get("engine") or "").strip():
-        eng = str(ch["engine"]).strip()
-        if not re.match(r"^[A-Za-z0-9_]{1,32}$", eng):
-            raise ValueError(f"存储引擎不合法：{eng}")
-        clauses.append(f"ENGINE={eng}")
-    charset = (ch.get("charset") or "").strip()
-    if charset:
-        if not re.match(r"^[A-Za-z0-9_]{1,32}$", charset):
-            raise ValueError(f"字符集不合法：{charset}")
-        clause = f"CONVERT TO CHARACTER SET {charset}"
-        collation = (ch.get("collation") or "").strip()
-        if collation:
-            if not re.match(r"^[A-Za-z0-9_]{1,64}$", collation):
-                raise ValueError(f"排序规则不合法：{collation}")
-            clause += f" COLLATE {collation}"
-        clauses.append(clause)
-    if not clauses:
-        raise ValueError("没有任何改动")
-    new_name = (ch.get("rename_table") or "").strip()
-    if new_name:
-        clauses.append(f"RENAME TO `{_check_ident(new_name, '新表名')}`")
-    return f"ALTER TABLE `{database}`.`{table}`\n  " + ",\n  ".join(clauses)
+    """兼容旧调用（tests.test_db_table_alter 等）：委托 MySQL 方言，返回单条 SQL。
+
+    ⚠️ 端点请改走 `get_dialect(db_type).build_table_alter(...)`（Oracle 需多语句列表）。
+    """
+    return get_dialect("mysql").build_table_alter(database, table, ch)[0]
 
 
 async def _rows(c: DBConnection, sql: str, limit: int = 500) -> list[dict]:
@@ -673,7 +601,10 @@ async def _rows(c: DBConnection, sql: str, limit: int = 500) -> list[dict]:
 @router.get("/{conn_id}/table-schema")
 async def get_table_schema(conn_id: int, database: str = "", table: str = "",
                            user=Depends(require_any_user)):
-    """表结构详情：字段（类型/可空/默认/注释/AUTO_INCREMENT）+ 索引 + 表选项（MySQL）。"""
+    """表结构详情：字段（类型/可空/默认/注释）+ 索引 + 表选项。
+
+    按方言读取：MySQL 走 information_schema；Oracle 走 all_tab_columns 等数据字典，返回同形。
+    """
     async with async_session() as session:
         c = await session.get(DBConnection, conn_id)
     if not c:
@@ -689,55 +620,29 @@ async def get_table_schema(conn_id: int, database: str = "", table: str = "",
     except ValueError as e:
         return {"code": 400, "message": str(e), "data": None}
     try:
-        cols = await _rows(c, (
-            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT, "
-            "CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_KEY FROM information_schema.COLUMNS "
-            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY ORDINAL_POSITION"))
-        idx_rows = await _rows(c, (
-            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE "
-            "FROM information_schema.STATISTICS "
-            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY INDEX_NAME, SEQ_IN_INDEX"))
-        meta = await _rows(c, (
-            "SELECT ENGINE, TABLE_COLLATION, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES "
-            f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}'"))
+        if (getattr(c, "source", "direct") or "direct") == "agent":
+            # agent 库为 MySQL，经隧道用 information_schema 查询（与直连 MySQL 同形）
+            from app.services.dialects.mysql import _mysql_schema_to_dict
+            cols = await _rows(c, (
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT, "
+                "CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_KEY FROM information_schema.COLUMNS "
+                f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY ORDINAL_POSITION"))
+            idx_rows = await _rows(c, (
+                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE "
+                "FROM information_schema.STATISTICS "
+                f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}' ORDER BY INDEX_NAME, SEQ_IN_INDEX"))
+            meta = await _rows(c, (
+                "SELECT ENGINE, TABLE_COLLATION, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES "
+                f"WHERE TABLE_SCHEMA='{db}' AND TABLE_NAME='{tbl}'"))
+            data = _mysql_schema_to_dict(db, tbl, cols, idx_rows, meta)
+        else:
+            data = await get_dialect((c.db_type or "mysql").lower()).table_schema(c, db, tbl)
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"获取表结构失败：{e}", "data": None}
-    if not cols:
+    if not data.get("columns"):
         return {"code": 404, "message": f"表 {db}.{tbl} 不存在或无权限", "data": None}
-
-    columns = [{
-        "name": r.get("COLUMN_NAME"),
-        "type": r.get("COLUMN_TYPE") or "",
-        "nullable": (r.get("IS_NULLABLE") or "YES") == "YES",
-        "default": r.get("COLUMN_DEFAULT"),
-        "extra": r.get("EXTRA") or "",
-        "comment": r.get("COLUMN_COMMENT") or "",
-        "key": r.get("COLUMN_KEY") or "",
-        "charset": r.get("CHARACTER_SET_NAME") or "",
-        "collation": r.get("COLLATION_NAME") or "",
-    } for r in cols]
-
-    idx_map: dict[str, dict] = {}
-    for r in idx_rows:
-        name = r.get("INDEX_NAME") or ""
-        item = idx_map.setdefault(name, {
-            "name": name, "unique": _safe_int(r.get("NON_UNIQUE"), 1) == 0,
-            "type": r.get("INDEX_TYPE") or "", "columns": [],
-        })
-        item["columns"].append(r.get("COLUMN_NAME") or "")
-
-    tinfo = meta[0] if meta else {}
-    collation = tinfo.get("TABLE_COLLATION") or ""
-    return {"code": 200, "message": "success", "data": {
-        "database": db, "table": tbl,
-        "engine": tinfo.get("ENGINE") or "",
-        "charset": collation.split("_")[0] if collation else "",
-        "collation": collation,
-        "comment": tinfo.get("TABLE_COMMENT") or "",
-        "rows": _safe_int(tinfo.get("TABLE_ROWS")),
-        "columns": columns,
-        "indexes": list(idx_map.values()),
-    }}
+    data["db_type"] = (c.db_type or "mysql").lower()
+    return {"code": 200, "message": "success", "data": data}
 
 
 @router.post("/{conn_id}/table-alter")
@@ -755,27 +660,32 @@ async def alter_table(conn_id: int, payload: dict, user=Depends(require_operator
     database = (payload.get("database") or "").strip()
     table = (payload.get("table") or "").strip()
     try:
-        stmt = _build_table_alter(database or (c.database or ""), table, payload.get("changes") or {})
-    except ValueError as e:
+        dialect = get_dialect((c.db_type or "mysql").lower())
+        stmts = dialect.build_table_alter(database or (c.database or ""), table,
+                                          payload.get("changes") or {})
+    except (ValueError, UnsupportedError) as e:
         return {"code": 400, "message": str(e), "data": None}
     if bool(payload.get("dry_run", True)):
-        return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
+        return {"code": 200, "message": "success", "data": {"statements": stmts}}
 
     block = await _check_approval(conn_id, "ddl")
     if block:
         return block
     started = time.time()
     err = ""
-    try:
-        await _run_sql(c, stmt, allow_write=True, timeout=120.0, database=database or None)
-    except Exception as e:  # noqa: BLE001
-        err = str(e)
-    await _audit_sql(user, c, stmt, round(time.time() - started, 2), 0, not err, err,
+    audit_sql = ";\n".join(stmts)
+    for stmt in stmts:
+        try:
+            await _run_sql(c, stmt, allow_write=True, timeout=120.0, database=database or None)
+        except Exception as e:  # noqa: BLE001
+            err = str(e)
+            break
+    await _audit_sql(user, c, audit_sql, round(time.time() - started, 2), 0, not err, err,
                      "db_table_alter")
     if err:
         return {"code": 500, "message": f"执行失败：{err}", "data": None}
     _SCHEMA_CACHE.pop(conn_id, None)
-    return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
+    return {"code": 200, "message": "success", "data": {"statements": stmts}}
 
 
 @router.get("/{conn_id}/databases/{name}/info")
@@ -811,7 +721,10 @@ async def get_database_info(conn_id: int, name: str, user=Depends(require_any_us
 
 @router.post("/{conn_id}/databases/{name}/alter")
 async def alter_database(conn_id: int, name: str, payload: dict, user=Depends(require_operator)):
-    """编辑库：改字符集/排序规则（body {charset, collation}，dry_run 可选）。"""
+    """编辑库：改字符集/排序规则（body {charset, collation}，dry_run 可选）。
+
+    Oracle 无「库字符集/排序规则」概念，返回 400 不支持（前端据此禁用「编辑库」入口）。
+    """
     async with async_session() as session:
         c = await session.get(DBConnection, conn_id)
     if not c:
@@ -823,21 +736,10 @@ async def alter_database(conn_id: int, name: str, payload: dict, user=Depends(re
         return {"code": 400, "message": why, "data": None}
     try:
         db = _check_ident(name, "库名")
-        charset = (payload.get("charset") or "").strip()
-        collation = (payload.get("collation") or "").strip()
-        if not charset and not collation:
-            return {"code": 400, "message": "至少指定字符集或排序规则", "data": None}
-        if charset and not re.match(r"^[A-Za-z0-9_]{1,32}$", charset):
-            raise ValueError(f"字符集不合法：{charset}")
-        if collation and not re.match(r"^[A-Za-z0-9_]{1,64}$", collation):
-            raise ValueError(f"排序规则不合法：{collation}")
-        parts = []
-        if charset:
-            parts.append(f"CHARACTER SET {charset}")
-        if collation:
-            parts.append(f"COLLATE {collation}")
-        stmt = f"ALTER DATABASE `{db}` " + " ".join(parts)
+        stmt = get_dialect((c.db_type or "mysql").lower()).build_database_alter(db, payload)
     except ValueError as e:
+        return {"code": 400, "message": str(e), "data": None}
+    except UnsupportedError as e:
         return {"code": 400, "message": str(e), "data": None}
     if bool(payload.get("dry_run", False)):
         return {"code": 200, "message": "success", "data": {"statements": [stmt]}}
@@ -894,6 +796,8 @@ async def export_objects(conn_id: int, payload: dict, user=Depends(require_any_u
             if err:
                 return {"code": 500, "message": f"导出失败：{err}", "data": None}
             return {"code": 200, "message": "success", "data": data}
+        if not _db_supports(c, "export"):
+            return {"code": 400, "message": f"直连执行暂不支持 {c.db_type} 的导出（当前支持 mysql）", "data": None}
         from app.services import db_direct_service
         return {"code": 200, "message": "success",
                 "data": await db_direct_service.export_sql(c, c.database, table if scope == "table" else "",
@@ -934,6 +838,8 @@ async def import_objects(conn_id: int, payload: dict, user=Depends(require_admin
                 180.0,
             )
             result = json.loads(raw)
+        if not _db_supports(c, "import"):
+            return {"code": 400, "message": f"直连执行暂不支持 {c.db_type} 的导入（当前支持 mysql）", "data": None}
         else:
             from app.services import db_direct_service
             result = await db_direct_service.import_content(
@@ -1075,6 +981,8 @@ async def import_sql_file(conn_id: int, payload: dict, user=Depends(require_oper
     block = await _check_approval(conn_id, kind)
     if block:
         return block
+    if not _db_supports(c, "import"):
+        return {"code": 400, "message": f"直连执行暂不支持 {c.db_type} 的导入（当前支持 mysql）", "data": None}
 
     started = time.time()
     result, err = {}, ""
@@ -1143,6 +1051,8 @@ async def backup_database(conn_id: int, databases: str = "", schema_only: bool =
         )
 
     # 预检：连接可达 + 目标库存在（在开始流式返回前给出 JSON 错误，避免响应头已发再报错）
+    if not _db_supports(c, "backup"):
+        return {"code": 400, "message": f"直连执行暂不支持 {c.db_type} 的备份（当前支持 mysql）", "data": None}
     from app.services import db_direct_service
     try:
         existing = await db_direct_service.list_databases(c)

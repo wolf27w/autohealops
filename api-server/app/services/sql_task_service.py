@@ -232,9 +232,11 @@ async def execute_task(task_id: int, dry_run: bool = False) -> dict:
             result["error"] = "数据库连接不存在"
             return result
         is_agent = (getattr(conn, "source", "direct") or "direct") == "agent"
-        if not is_agent and (conn.db_type or "mysql").lower() != "mysql":
-            result["error"] = f"直连库定时任务暂只支持 mysql（当前 {conn.db_type}）"
-            return result
+        if not is_agent:
+            from app.services.dialects import supports
+            if not supports((conn.db_type or "mysql").lower(), "query"):
+                result["error"] = f"直连库定时任务暂不支持 {conn.db_type}（当前支持 mysql/oracle）"
+                return result
 
         statements = split_sql((task.sql or "").strip())
         if not statements:

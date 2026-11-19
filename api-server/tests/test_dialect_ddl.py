@@ -1,0 +1,174 @@
+# -*- coding: utf-8 -*-
+"""方言 DDL 生成单测（R37 §6.6 方言化，2026-11-16）
+
+覆盖：
+- MySQL：`build_table_alter` 逐字快照（锁住迁移前后 SQL 不变）
+- Oracle：类型映射 / IDENTITY 自增 / COMMENT ON / RENAME COLUMN / 多语句顺序
+- Oracle 明确不支持的能力（ENGINE/字符集/排序规则/AFTER 列位置/编辑库）抛 UnsupportedError
+
+只测纯函数，不连库。
+
+运行：cd api-server && ./.venv/bin/python -m unittest tests.test_dialect_ddl -v
+"""
+import unittest
+
+from app.services.dialects import UnsupportedError, get_dialect
+from app.services.dialects.oracle import _oracle_type
+
+
+MYSQL_SNAPSHOT = (
+    "ALTER TABLE `db1`.`t1`\n"
+    "  ADD COLUMN `age` INT COMMENT '年龄' AFTER `name`,\n"
+    "  ADD COLUMN `flag` TINYINT(1) NOT NULL DEFAULT 0,\n"
+    "  ADD COLUMN `uid` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',\n"
+    "  DROP COLUMN `tmp`,\n"
+    "  MODIFY COLUMN `age` BIGINT COMMENT '岁',\n"
+    "  CHANGE COLUMN `name` `title` VARCHAR(64) NOT NULL DEFAULT '无',\n"
+    "  ADD UNIQUE INDEX `idx_title` (`title`, `age`),\n"
+    "  DROP INDEX `idx_old`,\n"
+    "  COMMENT='主表',\n"
+    "  ENGINE=InnoDB,\n"
+    "  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,\n"
+    "  RENAME TO `t2`"
+)
+
+
+class TestMySQLDDLSnapshot(unittest.TestCase):
+    def _changes(self):
+        return {
+            "add_columns": [
+                {"name": "age", "type": "INT", "nullable": True, "comment": "年龄", "after": "name"},
+                {"name": "flag", "type": "TINYINT(1)", "nullable": False, "default": "0"},
+                {"name": "uid", "type": "BIGINT", "nullable": False,
+                 "auto_increment": True, "comment": "主键"},
+            ],
+            "modify_columns": [{"name": "age", "type": "BIGINT", "nullable": True, "comment": "岁"}],
+            "change_columns": [{"from": "name", "name": "title", "type": "VARCHAR(64)",
+                                "nullable": False, "default": "无"}],
+            "drop_columns": ["tmp"],
+            "add_indexes": [{"name": "idx_title", "columns": ["title", "age"], "unique": True}],
+            "drop_indexes": ["idx_old"],
+            "comment": "主表",
+            "engine": "InnoDB",
+            "charset": "utf8mb4",
+            "collation": "utf8mb4_unicode_ci",
+            "rename_table": "t2",
+        }
+
+    def test_byte_identical_snapshot(self):
+        stmts = get_dialect("mysql").build_table_alter("db1", "t1", self._changes())
+        self.assertEqual(len(stmts), 1)  # MySQL 单条
+        self.assertEqual(stmts[0], MYSQL_SNAPSHOT)
+
+    def test_single_statement_semantics(self):
+        stmts = get_dialect("mysql").build_table_alter("db1", "t1", {"rename_table": "t2", "comment": "x"})
+        self.assertEqual(stmts[0].count("ALTER TABLE"), 1)
+        self.assertIn("RENAME TO `t2`", stmts[0])
+
+
+class TestOracleDDL(unittest.TestCase):
+    def test_type_mapping(self):
+        cases = {
+            "int": "NUMBER(10)",
+            "int(11)": "NUMBER(10)",
+            "bigint": "NUMBER(19)",
+            "tinyint": "NUMBER(3)",
+            "smallint": "NUMBER(5)",
+            "varchar(64)": "VARCHAR2(64)",
+            "varchar": "VARCHAR2(255)",
+            "text": "CLOB",
+            "longtext": "CLOB",
+            "datetime": "TIMESTAMP",
+            "decimal(10,2)": "NUMBER(10,2)",
+            "numeric": "NUMBER",
+            "blob": "BLOB",
+            "double": "FLOAT",
+            "boolean": "NUMBER(1)",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(_oracle_type(src), want)
+
+    def test_type_passthrough_oracle_native(self):
+        cases = {
+            "number(19)": "NUMBER(19)",
+            "varchar2(128)": "VARCHAR2(128)",
+            "char(36)": "CHAR(36)",
+            "date": "DATE",
+            "timestamp(6)": "TIMESTAMP(6)",
+            "clob": "CLOB",
+            "raw(16)": "RAW(16)",
+        }
+        for src, want in cases.items():
+            with self.subTest(src=src):
+                self.assertEqual(_oracle_type(src), want)
+
+    def test_multi_statement_order_and_syntax(self):
+        stmts = get_dialect("oracle").build_table_alter("APP", "T1", {
+            "add_columns": [
+                {"name": "AGE", "type": "INT", "nullable": True, "comment": "年龄"},
+                {"name": "ID", "type": "NUMBER(19)", "nullable": False, "auto_increment": True},
+            ],
+            "modify_columns": [{"name": "AGE", "type": "BIGINT", "nullable": False}],
+            "change_columns": [{"from": "NAME", "name": "TITLE", "type": "VARCHAR2(64)", "nullable": False}],
+            "drop_columns": ["TMP"],
+            "add_indexes": [{"name": "idx_title", "columns": ["TITLE", "AGE"], "unique": True}],
+            "drop_indexes": ["idx_old"],
+            "comment": "主表",
+            "rename_table": "T2",
+        })
+        # 多条，且顺序：ADD → MODIFY → RENAME COLUMN → MODIFY → DROP → CREATE INDEX → DROP INDEX → COMMENT → RENAME TO
+        self.assertGreater(len(stmts), 1)
+        joined = "\n".join(stmts)
+        self.assertIn('ALTER TABLE "APP"."T1" ADD (\n  "AGE" NUMBER(10),\n  "ID" NUMBER(19) GENERATED BY DEFAULT AS IDENTITY NOT NULL\n)', joined)
+        self.assertIn('ALTER TABLE "APP"."T1" MODIFY (\n  "AGE" NUMBER(19) NOT NULL\n)', joined)
+        self.assertIn('ALTER TABLE "APP"."T1" RENAME COLUMN "NAME" TO "TITLE"', joined)
+        self.assertIn('ALTER TABLE "APP"."T1" MODIFY (\n  "TITLE" VARCHAR2(64) NOT NULL\n)', joined)
+        self.assertIn('ALTER TABLE "APP"."T1" DROP (\n  "TMP"\n)', joined)
+        self.assertIn('CREATE UNIQUE INDEX "idx_title" ON "APP"."T1" ("TITLE", "AGE")', joined)
+        self.assertIn('DROP INDEX "idx_old"', joined)
+        self.assertIn('COMMENT ON COLUMN "APP"."T1"."AGE" IS \'年龄\'', joined)
+        self.assertIn('COMMENT ON TABLE "APP"."T1" IS \'主表\'', joined)
+        self.assertIn('ALTER TABLE "APP"."T1" RENAME TO "T2"', joined)
+        # 重命名列在改名后再次 MODIFY（改名与改定义分离成两条）
+        self.assertEqual(stmts[-1], 'ALTER TABLE "APP"."T1" RENAME TO "T2"')
+
+    def test_comment_and_identity_choices(self):
+        stmts = get_dialect("oracle").build_table_alter("APP", "T1", {
+            "add_columns": [{"name": "ID", "type": "INT", "nullable": False,
+                             "auto_increment": True, "comment": "主键"}],
+        })
+        self.assertEqual(len(stmts), 2)
+        self.assertIn("GENERATED BY DEFAULT AS IDENTITY", stmts[0])
+        self.assertEqual(stmts[1], 'COMMENT ON COLUMN "APP"."T1"."ID" IS \'主键\'')
+
+    def test_auto_index_name_generated(self):
+        stmts = get_dialect("oracle").build_table_alter("APP", "T1", {
+            "add_indexes": [{"name": "", "columns": ["A", "B"], "unique": False}],
+        })
+        self.assertIn('CREATE INDEX "idx_T1_A_B"', stmts[0])
+
+    def test_unsupported_engine_charset_after(self):
+        dialect = get_dialect("oracle")
+        cases = [
+            {"engine": "InnoDB"},
+            {"charset": "utf8mb4"},
+            {"collation": "utf8mb4_unicode_ci"},
+            {"add_columns": [{"name": "A", "type": "INT", "after": "B"}]},
+        ]
+        for ch in cases:
+            with self.subTest(changes=ch):
+                with self.assertRaises(UnsupportedError):
+                    dialect.build_table_alter("APP", "T1", ch)
+
+    def test_edit_database_unsupported(self):
+        with self.assertRaises(UnsupportedError):
+            get_dialect("oracle").build_database_alter("APP", {"charset": "utf8mb4"})
+
+    def test_empty_changes_rejected(self):
+        with self.assertRaises(ValueError):
+            get_dialect("oracle").build_table_alter("APP", "T1", {})
+
+
+if __name__ == "__main__":
+    unittest.main()
