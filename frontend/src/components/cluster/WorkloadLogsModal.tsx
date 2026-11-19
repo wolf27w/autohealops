@@ -10,6 +10,7 @@ import { Modal, Space, Button, Select, Switch, Input, message, Tag, DatePicker }
 import type { Dayjs } from 'dayjs'
 import { DownloadOutlined, PlayCircleOutlined, PauseCircleOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
 import { getWorkloadContainers } from '../../services/api'
+import { buildLogFilename } from '../../utils/logFilename'
 import { applyHighlight, loadRules, saveRules, LogHighlightSettings, type HighlightRule } from '../LogHighlightSettings'
 
 interface Props {
@@ -262,15 +263,23 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       }
     }
     const text = sections.join('\n') + (sections.length ? '\n' : '')
+    const filenameBase = {
+      namespace,
+      name,
+      container: multi ? 'multi' : targets[0],
+      tail: hasRange ? undefined : DOWNLOAD_TAIL,
+      range: hasRange ? (timeRange as [Dayjs, Dayjs]) : undefined,
+      filtered: keywords.length > 0,
+      now: new Date(),
+    }
     let blob: Blob
     let filename: string
-    const rangeSuffix = hasRange ? '_timerange' : ''
     try {
       blob = await gzipBlob(text)
-      filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}${rangeSuffix}_${Date.now()}.log.gz`
+      filename = buildLogFilename(filenameBase)
     } catch {
       blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-      filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}${rangeSuffix}_${Date.now()}.log`
+      filename = buildLogFilename(filenameBase).replace(/\.gz$/, '')
     }
     const objectUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
