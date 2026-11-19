@@ -4,13 +4,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import {
-  Button, Tag, Space, Table, Empty, Popconfirm, Modal, message, Tabs, Radio, Input, Select, Alert, Collapse, DatePicker,
+  Button, Tag, Space, Empty, Popconfirm, Modal, message, Tabs, Radio, Input, Select, Alert, Collapse, DatePicker,
 } from 'antd'
 import {
   ReloadOutlined, ImportOutlined, ExportOutlined, CloudDownloadOutlined, PlayCircleOutlined, EyeOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import DbInstanceTree, { type DbTreeConn, type DbTreeSelectNode } from '../components/db/DbInstanceTree'
 import TableDesignerModal from '../components/db/TableDesignerModal'
+import ResultGrid from '../components/db/ResultGrid'
 import { useSqlSuggest, keywordsFor, referencedTables, MIRROR_STYLE } from '../components/useSqlSuggest'
 import type { Dayjs } from 'dayjs'
 import {
@@ -830,17 +831,7 @@ export default function SqlTerminal() {
                                 <div style={{ padding: '2px 2px', fontSize: 12, color: '#8c8c8c' }}>
                                   返回 {(r.rows || []).length} 行{r.truncated ? '（已截断）' : ''}
                                 </div>
-                                <Table
-                                  size="small"
-                                  rowKey={(_, idx) => String(idx)}
-                                  dataSource={(r.rows || []).map((row, idx) => ({ __i: idx, row }))}
-                                  columns={(r.columns || []).map((c, ci) => ({
-                                    title: c, dataIndex: ['row', ci],
-                                    render: (v: unknown) => (v === null ? 'NULL' : String(v)),
-                                  }))}
-                                  pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
-                                  scroll={{ x: 'max-content' }}
-                                />
+                                <ResultGrid columns={r.columns || []} rows={r.rows || []} />
                               </div>
                             )
                           ) : r.pendingApproval ? (
