@@ -8,7 +8,7 @@ import time
 import yaml
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, func, or_, select, text
 
 from app.clients.executor_client import executor_client
@@ -2084,16 +2084,19 @@ async def list_isolated(cluster_id: int, namespace: str, user=Depends(require_an
 async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, name: str,
                                    container: str = "", tail: int = 200, previous: bool = False,
                                    since_seconds: int = 0, all: bool = False,
+                                   start: str = "", end: str = "",
                                    user=Depends(require_any_user)):
     """聚合日志（R5）：拉取 Deployment 下所有 Pod 的日志（最多 60 个）
 
     since_seconds > 0：按「最近 N 秒」窗口取（走 executor 日志流 HTTP，并发拉取）；
     日志流不可用的 Pod 回落 gRPC tail 行数口径（result 里 fallback=True 标记）。
+    start/end 同时给定：按时间段过滤（整份带时间戳日志 + api-server 侧按时间戳过滤）。
     """
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
     tail = max(1, min(int(tail or 200), 2000))
     since_seconds = max(0, min(int(since_seconds or 0), 7 * 24 * 3600))
+    time_range = bool(start and end)
     pods_r = await executor_client.acall(executor_client.list_deployment_pods, cluster_id, namespace, name)
     if not pods_r.get("success"):
         return {"code": 500, "message": pods_r.get("message") or "列 Pod 失败", "data": None}
@@ -2102,8 +2105,17 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
     async def _one(p: dict) -> dict:
         pname = p.get("name")
         base = {"pod": pname, "phase": p.get("phase")}
-        if since_seconds or all:
-            from app.services.logstream_client import fetch_logs
+        if since_seconds or all or time_range:
+            from app.services.logstream_client import fetch_logs, filter_logs_by_time
+            if time_range:
+                raw, err = await fetch_logs(cluster_id, namespace, pname, container,
+                                            all_lines=True, keep_timestamps=True,
+                                            previous=previous, timeout=60.0)
+                if not err:
+                    return {**base, "success": True,
+                            "logs": filter_logs_by_time(raw, start, end), "error": "", "fallback": False}
+                return {**base, "success": False, "logs": "",
+                        "error": f"日志流不可用，无法按时间段过滤：{err}", "fallback": True}
             text, err = await fetch_logs(cluster_id, namespace, pname, container,
                                          since_seconds=since_seconds, all_lines=all,
                                          previous=previous, timeout=60.0 if all else 30.0)
@@ -2114,7 +2126,7 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
         return {**base, "success": r.get("success"), "logs": r.get("logs", ""),
                 "error": r.get("error", ""), "fallback": bool(since_seconds)}
 
-    if since_seconds or all:
+    if since_seconds or all or time_range:
         results = list(await asyncio.gather(*[_one(p) for p in pods]))
     else:
         results = []
@@ -2616,10 +2628,12 @@ async def node_drain(cluster_id: int, node: str, payload: dict, user=Depends(req
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs/download")
 async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, container: str = "",
                             tail: int = 2000, previous: bool = False, all: bool = False,
-                            gzip: int = 1, user=Depends(require_any_user)):
+                            gzip: int = 1, start: str = "", end: str = "",
+                            user=Depends(require_any_user)):
     """下载 Pod 容器日志（gzip，附件）。
 
     all=true：导出整个日志文件（不截断，走日志流 HTTP；失败回落 5000 行）。
+    start/end（RFC3339 或 epoch 秒）同时给定：按时间段过滤下载（整份带时间戳日志 + api-server 侧过滤）。
     下载永远是「整份文件/整段」，不受页面上「最近 2 分钟」视图影响。
     """
     # 注意：形参名是 gzip（query 参数 gzip=0/1），这里必须用别名，不能 import gzip 覆盖它
@@ -2628,7 +2642,14 @@ async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, cont
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
     text = ""
-    if all:
+    if start and end:
+        from app.services.logstream_client import fetch_logs, filter_logs_by_time
+        raw, err = await fetch_logs(cluster_id, namespace, pod_name, container,
+                                    all_lines=True, keep_timestamps=True, previous=previous, timeout=120.0)
+        if err:
+            raise HTTPException(status_code=502, detail=f"日志流不可用，无法按时间段过滤：{err}")
+        text = filter_logs_by_time(raw, start, end)
+    elif all:
         from app.services.logstream_client import fetch_logs
         text, err = await fetch_logs(cluster_id, namespace, pod_name, container,
                                      all_lines=True, previous=previous, timeout=120.0)

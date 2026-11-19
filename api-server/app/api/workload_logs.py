@@ -255,14 +255,29 @@ async def workload_logs_stream(request: Request, cluster_id: int, namespace: str
 
 @router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs/download")
 async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, container: str = "",
-                            tail: int = 5000, gzip: int = 1, user=Depends(require_any_user)):
-    """下载单 Pod 容器日志（附件）。gzip=1（默认）用 gzip 流式压缩，文件名带 pod 与时间戳。"""
+                            tail: int = 5000, gzip: int = 1, start: str = "", end: str = "",
+                            user=Depends(require_any_user)):
+    """下载单 Pod 容器日志（附件）。gzip=1（默认）用 gzip 流式压缩，文件名带 pod 与时间戳。
+
+    start/end（RFC3339 或 epoch 秒）同时给定时，按时间段过滤下载：走 executor 日志流 HTTP
+    取整份带时间戳日志后在 api-server 侧按时间戳过滤（executor 只支持 since_seconds，不支持任意起止）。
+    日志流不可用（agent 集群无平台 kubeconfig）时返回 502，由调用方决定是否降级为 tail 行数。
+    """
     tail = max(1, min(int(tail or MAX_DOWNLOAD_TAIL), MAX_DOWNLOAD_TAIL))
     if denied := await _deny_cluster(user, cluster_id, namespace):
         return denied
-    r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name,
-                                    container, tail, False)
-    text = r.get("logs", "") if r.get("success") else ""
+    text = ""
+    if start and end:
+        from app.services.logstream_client import fetch_logs, filter_logs_by_time
+        raw, err = await fetch_logs(cluster_id, namespace, pod_name, container,
+                                    all_lines=True, keep_timestamps=True, timeout=120.0)
+        if err:
+            raise HTTPException(status_code=502, detail=f"日志流不可用，无法按时间段过滤：{err}")
+        text = filter_logs_by_time(raw, start, end)
+    else:
+        r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name,
+                                        container, tail, False)
+        text = r.get("logs", "") if r.get("success") else ""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     safe_ns = namespace or "default"
     safe_pod = pod_name or "pod"

@@ -6,9 +6,11 @@
 // 多容器：容器下拉为多选（留空=全部），每个容器各拉一次快照 / 各开一条 SSE 合并到同一列表，
 //         多容器时行前缀额外带 `[容器]` 区分。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, Space, Button, Select, Switch, Input, message, Tag } from 'antd'
+import { Modal, Space, Button, Select, Switch, Input, message, Tag, DatePicker } from 'antd'
+import type { Dayjs } from 'dayjs'
 import { DownloadOutlined, PlayCircleOutlined, PauseCircleOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
 import { getWorkloadContainers } from '../../services/api'
+import { applyHighlight, loadRules, saveRules, LogHighlightSettings, type HighlightRule } from '../LogHighlightSettings'
 
 interface Props {
   clusterId: number
@@ -69,6 +71,10 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const [onlyErrors, setOnlyErrors] = useState(false) // 只看错误/异常
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [truncated, setTruncated] = useState(false)
+  const [rules, setRules] = useState<HighlightRule[]>(() => loadRules())
+  const [timeRange, setTimeRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
+
+  const onChangeRules = useCallback((r: HighlightRule[]) => { setRules(r); saveRules(r) }, [])
 
   useEffect(() => { pausedRef.current = paused }, [paused])
 
@@ -225,14 +231,20 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     const targets = effectiveContainers
     const multi = targets.length > 1
     const sections: string[] = []
+    const hasRange = !!(timeRange && timeRange[0] && timeRange[1])
     for (const c of targets) {
       const p = new URLSearchParams({ container: c, all: 'true', tail: String(DOWNLOAD_TAIL) })
+      if (timeRange && timeRange[0] && timeRange[1]) {
+        p.set('start', String(Math.floor(timeRange[0].valueOf() / 1000)))
+        p.set('end', String(Math.floor(timeRange[1].valueOf() / 1000)))
+      }
       const url = `/api/v1/resources/clusters/${clusterId}/namespaces/${encodeURIComponent(namespace)}/workloads/${kind}/${name}/logs?${p.toString()}`
       try {
         const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
         const body = await resp.json()
         if (body.code !== 200) { message.error(body.message || '下载失败'); continue }
         const data = body.data as AggregateData
+        if (data.errors && data.errors.length) data.errors.forEach((e) => message.warning(`[${e.pod}] ${e.error}`))
         // 下载也只导当前筛选结果（关键字 / Pod / 只看错误），与页面上看到的一致
         const rows = (data.rows || []).filter((r) => {
           if (podFilter && r.pod !== podFilter) return false
@@ -252,12 +264,13 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     const text = sections.join('\n') + (sections.length ? '\n' : '')
     let blob: Blob
     let filename: string
+    const rangeSuffix = hasRange ? '_timerange' : ''
     try {
       blob = await gzipBlob(text)
-      filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}_${Date.now()}.log.gz`
+      filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}${rangeSuffix}_${Date.now()}.log.gz`
     } catch {
       blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-      filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}_${Date.now()}.log`
+      filename = `${namespace}_${name}${keywords.length ? '_filtered' : ''}${rangeSuffix}_${Date.now()}.log`
     }
     const objectUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -277,13 +290,6 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     }
     return true
   }), [lines, podFilter, collapsed, keywords, onlyErrors])
-
-  const colorize = (l: string) => {
-    if (/\bERROR\b/i.test(l)) return { color: '#ff7875' }
-    if (/\bWARN(ING)?\b/i.test(l)) return { color: '#ffc069' }
-    if (/\bINFO\b/i.test(l)) return { color: '#95de64' }
-    return undefined
-  }
 
   const multi = effectiveContainers.length > 1
 
@@ -319,6 +325,10 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
           : <Button icon={<PauseCircleOutlined />} onClick={() => { pausedRef.current = true; setPaused(true) }}>暂停</Button>}
         <Space size={4}><span>自动滚动</span><Switch checked={autoScroll} onChange={setAutoScroll} /></Space>
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>贴底</Button>
+        <LogHighlightSettings rules={rules} onChange={onChangeRules} />
+        <DatePicker.RangePicker size="small" showTime={{ format: 'HH:mm:ss' }} style={{ width: 320 }} allowClear
+          value={timeRange} placeholder={['下载开始', '下载结束']}
+          onChange={(v) => setTimeRange(v as [Dayjs | null, Dayjs | null] | null)} />
         <Button icon={<DownloadOutlined />} onClick={download}>下载(gzip)</Button>
       </Space>
       <pre ref={boxRef} style={{ maxHeight: '66vh', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'monospace', borderRadius: 6 }}>
@@ -329,7 +339,11 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
               <span onClick={() => toggleCollapse(l.pod)} title="点击折叠/展开该 Pod"
                 style={{ color: podColor(l.pod), cursor: 'pointer', userSelect: 'none', marginRight: 8, flexShrink: 0 }}>[{l.pod}]</span>
               {multi && <span style={{ color: containerColor(l.container), marginRight: 8, flexShrink: 0 }}>[{l.container}]</span>}
-              <span style={{ ...(colorize(l.line) || {}), wordBreak: 'break-all' }}>{l.line}</span>
+              <span style={{ wordBreak: 'break-all' }}>
+                {applyHighlight(l.line, rules).map((seg, j) => (
+                  <span key={j} style={seg.color ? { color: seg.color, fontWeight: seg.bold ? 600 : undefined, background: `${seg.color}26` } : undefined}>{seg.text}</span>
+                ))}
+              </span>
             </div>
           ))}
       </pre>
