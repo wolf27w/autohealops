@@ -349,8 +349,10 @@ message GetPodLogsRequest {
   string namespace = 2;
   string pod_name = 3;
   string container = 4;    // 空=第一个容器
-  int64 tail_lines = 5;    // 返回最近 N 行（默认 200）
+  int64 tail_lines = 5;    // 返回最近 N 行（默认 200；0=不限制，配合 timestamps/since_seconds 取整份）
   bool previous = 6;       // 是否取上一次崩溃日志
+  bool timestamps = 7;     // 行首带 RFC3339 时间戳（时间段过滤/整份下载用，R55）
+  int64 since_seconds = 8; // 只取最近 N 秒（0=不限，R55）
 }
 message GetPodLogsResponse {
   bool success = 1;

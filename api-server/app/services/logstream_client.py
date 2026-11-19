@@ -100,6 +100,44 @@ def filter_logs_by_time(text: str, start, end) -> str:
     return "\n".join(keep)
 
 
+def has_timestamps(text: str) -> bool:
+    """判断文本中是否有任意行带行首 RFC3339 时间戳。
+
+    用于检测旧 agent 未透传 timestamps 字段：旧 agent 忽略新字段，返回的日志没有时间戳前缀。
+    """
+    if not text:
+        return False
+    return any(_TS_RE.match(line) for line in text.splitlines())
+
+
+def filter_logs_by_time_strict(text: str, start, end):
+    """按 [start, end] 过滤带时间戳日志，返回 (text, error)。
+
+    与 filter_logs_by_time 相同，但多一道校验：text 非空且无任何行带时间戳时返回 error
+    （agent 版本过低，未透传 timestamps），调用方据此明确报错而不是静默返回空。
+    """
+    if not text:
+        return "", ""
+    if not has_timestamps(text):
+        return "", "agent 版本过低，不支持按时间段下载，请升级 agent"
+    return filter_logs_by_time(text, start, end), ""
+
+
+async def is_agent_cluster(cluster_id: int) -> bool:
+    """判断集群是否为 agent 接入（source=agent）。
+
+    agent 接入集群平台侧无 kubeconfig → 日志流 9099 必 502，时间段下载/整份下载需改走 gRPC 隧道。
+    平台直连（kubeconfig / in-cluster）返回 False。
+    """
+    from sqlalchemy import select
+
+    from app.core.database import async_session
+    from app.models import Cluster
+    async with async_session() as session:
+        r = await session.execute(select(Cluster.source).where(Cluster.id == int(cluster_id)))
+        return (r.scalar_one_or_none() or "") == "agent"
+
+
 async def fetch_logs(cluster_id: int, namespace: str, pod: str, container: str = "",
                      since_seconds: int = 0, all_lines: bool = False, previous: bool = False,
                      tail: int = 0, timeout: float = 30.0,

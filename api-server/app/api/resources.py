@@ -35,6 +35,51 @@ async def _deny_cluster(user, cluster_id: int, namespace: str = "", required: st
     return None
 
 
+# ==================== R55：agent 接入集群日志下载走 gRPC 隧道 ====================
+# agent 接入集群（source=agent）平台侧无 kubeconfig，日志流 9099 必 502。
+# 时间段下载/整份下载（all=true）改走 GetPodLogs(timestamps=True) 经隧道拉取，平台侧过滤。
+
+async def _agent_pod_logs_timed(cluster_id: int, namespace: str, pod: str, container: str,
+                                start: str, end: str, previous: bool = False) -> tuple[str, str]:
+    """agent 集群按时间段取日志：GetPodLogs(timestamps=True, since_seconds=now-start)，平台侧过滤。
+
+    返回 (text, error)。text 已剥掉时间戳；error 非空 = 失败（含「agent 版本过低」）。
+    """
+    from app.services.logstream_client import _parse_time, filter_logs_by_time_strict
+    start_epoch = _parse_time(start)
+    if start_epoch is None:
+        return "", "开始时间无法解析"
+    since = max(1, int(time.time() - start_epoch))
+    r = await executor_client.acall(
+        executor_client.get_pod_logs, cluster_id, namespace, pod, container,
+        0, previous, timestamps=True, since_seconds=since,
+    )
+    if not r.get("success"):
+        return "", r.get("error") or "日志获取失败"
+    return filter_logs_by_time_strict(r.get("logs") or "", start, end)
+
+
+async def _agent_pod_logs_all(cluster_id: int, namespace: str, pod: str, container: str,
+                              previous: bool = False) -> tuple[str, str]:
+    """agent 集群整份日志：GetPodLogs(timestamps=True, tail_lines=0)，平台侧剥时间戳。
+
+    旧 agent 忽略新字段（只回 tail 行且无时间戳）→ 明确报错，不静默返回截断内容。
+    """
+    from app.services.logstream_client import has_timestamps, strip_timestamps
+    r = await executor_client.acall(
+        executor_client.get_pod_logs, cluster_id, namespace, pod, container,
+        0, previous, timestamps=True, since_seconds=0,
+    )
+    if not r.get("success"):
+        return "", r.get("error") or "日志获取失败"
+    logs = r.get("logs") or ""
+    if not logs:
+        return "", ""
+    if not has_timestamps(logs):
+        return "", "agent 版本过低，不支持整份日志下载，请升级 agent"
+    return strip_timestamps(logs), ""
+
+
 @router.get("/clusters/{cluster_id}/overview")
 async def overview(cluster_id: int, user=Depends(require_any_user)):
     if denied := await _deny_cluster(user, cluster_id):
@@ -2102,10 +2147,19 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
         return {"code": 500, "message": pods_r.get("message") or "列 Pod 失败", "data": None}
     pods = pods_r.get("pods", [])[:60]
 
+    from app.services.logstream_client import is_agent_cluster
+    agent = await is_agent_cluster(cluster_id)
+
     async def _one(p: dict) -> dict:
         pname = p.get("name")
         base = {"pod": pname, "phase": p.get("phase")}
         if since_seconds or all or time_range:
+            # R55：agent 集群 all=true 走 gRPC 隧道（timestamps 路径），不再静默返回 0 行
+            if agent and all and not since_seconds and not time_range:
+                text, err = await _agent_pod_logs_all(cluster_id, namespace, pname, container, previous)
+                if not err:
+                    return {**base, "success": True, "logs": text, "error": "", "fallback": False}
+                return {**base, "success": False, "logs": "", "error": err, "fallback": True}
             from app.services.logstream_client import fetch_logs, filter_logs_by_time
             if time_range:
                 raw, err = await fetch_logs(cluster_id, namespace, pname, container,
@@ -2643,18 +2697,28 @@ async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, cont
         return denied
     text = ""
     if start and end:
-        from app.services.logstream_client import fetch_logs, filter_logs_by_time
-        raw, err = await fetch_logs(cluster_id, namespace, pod_name, container,
-                                    all_lines=True, keep_timestamps=True, previous=previous, timeout=120.0)
-        if err:
-            raise HTTPException(status_code=502, detail=f"日志流不可用，无法按时间段过滤：{err}")
-        text = filter_logs_by_time(raw, start, end)
+        from app.services.logstream_client import fetch_logs, filter_logs_by_time, is_agent_cluster
+        if await is_agent_cluster(cluster_id):
+            text, err = await _agent_pod_logs_timed(cluster_id, namespace, pod_name, container, start, end, previous)
+            if err:
+                raise HTTPException(status_code=502, detail=err)
+        else:
+            raw, err = await fetch_logs(cluster_id, namespace, pod_name, container,
+                                        all_lines=True, keep_timestamps=True, previous=previous, timeout=120.0)
+            if err:
+                raise HTTPException(status_code=502, detail=f"日志流不可用，无法按时间段过滤：{err}")
+            text = filter_logs_by_time(raw, start, end)
     elif all:
-        from app.services.logstream_client import fetch_logs
-        text, err = await fetch_logs(cluster_id, namespace, pod_name, container,
-                                     all_lines=True, previous=previous, timeout=120.0)
-        if err:
-            logger.debug("整份日志下载失败，回落 gRPC 5000 行: %s", err)
+        from app.services.logstream_client import fetch_logs, is_agent_cluster
+        if await is_agent_cluster(cluster_id):
+            text, err = await _agent_pod_logs_all(cluster_id, namespace, pod_name, container, previous)
+            if err:
+                raise HTTPException(status_code=502, detail=err)
+        else:
+            text, err = await fetch_logs(cluster_id, namespace, pod_name, container,
+                                         all_lines=True, previous=previous, timeout=120.0)
+            if err:
+                logger.debug("整份日志下载失败，回落 gRPC 5000 行: %s", err)
     if not text:
         tail = max(1, min(int(tail or 2000), 5000))
         r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name,

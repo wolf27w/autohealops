@@ -377,7 +377,7 @@ func (s *Server) GetPodLogs(ctx context.Context, req *pb.GetPodLogsRequest) (*pb
 	if err != nil {
 		return nil, err
 	}
-	logs, err := ex.GetPodLogs(ctx, req.Namespace, req.PodName, req.Container, req.TailLines, req.Previous)
+	logs, err := ex.GetPodLogs(ctx, req.Namespace, req.PodName, req.Container, req.TailLines, req.Previous, req.Timestamps, req.SinceSeconds)
 	if err != nil {
 		return &pb.GetPodLogsResponse{Success: false, Error: err.Error()}, nil
 	}

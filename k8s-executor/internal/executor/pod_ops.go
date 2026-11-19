@@ -13,11 +13,10 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// GetPodLogs 获取 Pod 容器日志（tail 最近 N 行；previous=取上一次崩溃日志）
-func (e *Executor) GetPodLogs(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool) (string, error) {
-	if tailLines <= 0 {
-		tailLines = 200
-	}
+// GetPodLogs 获取 Pod 容器日志（tail 最近 N 行；previous=取上一次崩溃日志）。
+// timestamps=true 时行首带 RFC3339 时间戳（R55 时间段过滤/整份下载用）；
+// sinceSeconds>0 时只取最近 N 秒。tailLines=0 且 sinceSeconds>0 或 timestamps=true 时不截断（取整份）。
+func (e *Executor) GetPodLogs(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool, timestamps bool, sinceSeconds int64) (string, error) {
 	// 容器名为空时自动选容器：多容器 Pod 不指定容器会被 API Server 拒绝
 	// （报错形如 "the server rejected our request for an unknown reason"）
 	// 选择顺序：kubectl.kubernetes.io/default-container 注解 → 第一个非 sidecar 容器 → 第一个容器
@@ -26,11 +25,23 @@ func (e *Executor) GetPodLogs(ctx context.Context, namespace, podName, container
 			container = pickDefaultContainer(pod)
 		}
 	}
-	req := e.clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
-		Container: container,
-		TailLines: &tailLines,
-		Previous:  previous,
-	})
+	opts := &corev1.PodLogOptions{
+		Container:  container,
+		Previous:   previous,
+		Timestamps: timestamps,
+	}
+	if sinceSeconds > 0 {
+		opts.SinceSeconds = &sinceSeconds
+	}
+	switch {
+	case tailLines > 0:
+		opts.TailLines = &tailLines
+	case sinceSeconds <= 0 && !timestamps:
+		// 兼容旧语义：无 tail 且无 since/timestamps 时默认取最近 200 行
+		d := int64(200)
+		opts.TailLines = &d
+	}
+	req := e.clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
 	data, err := req.Do(ctx).Raw()
 	if err != nil {
 		return "", err

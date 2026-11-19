@@ -2526,9 +2526,11 @@ type GetPodLogsRequest struct {
 	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	PodName       string                 `protobuf:"bytes,3,opt,name=pod_name,json=podName,proto3" json:"pod_name,omitempty"`
-	Container     string                 `protobuf:"bytes,4,opt,name=container,proto3" json:"container,omitempty"`                   // 空=第一个容器
-	TailLines     int64                  `protobuf:"varint,5,opt,name=tail_lines,json=tailLines,proto3" json:"tail_lines,omitempty"` // 返回最近 N 行（默认 200）
-	Previous      bool                   `protobuf:"varint,6,opt,name=previous,proto3" json:"previous,omitempty"`                    // 是否取上一次崩溃日志
+	Container     string                 `protobuf:"bytes,4,opt,name=container,proto3" json:"container,omitempty"`                            // 空=第一个容器
+	TailLines     int64                  `protobuf:"varint,5,opt,name=tail_lines,json=tailLines,proto3" json:"tail_lines,omitempty"`          // 返回最近 N 行（默认 200；0=不限制，配合 timestamps/since_seconds 取整份）
+	Previous      bool                   `protobuf:"varint,6,opt,name=previous,proto3" json:"previous,omitempty"`                             // 是否取上一次崩溃日志
+	Timestamps    bool                   `protobuf:"varint,7,opt,name=timestamps,proto3" json:"timestamps,omitempty"`                         // 行首带 RFC3339 时间戳（时间段过滤/整份下载用，R55）
+	SinceSeconds  int64                  `protobuf:"varint,8,opt,name=since_seconds,json=sinceSeconds,proto3" json:"since_seconds,omitempty"` // 只取最近 N 秒（0=不限，R55）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2603,6 +2605,20 @@ func (x *GetPodLogsRequest) GetPrevious() bool {
 		return x.Previous
 	}
 	return false
+}
+
+func (x *GetPodLogsRequest) GetTimestamps() bool {
+	if x != nil {
+		return x.Timestamps
+	}
+	return false
+}
+
+func (x *GetPodLogsRequest) GetSinceSeconds() int64 {
+	if x != nil {
+		return x.SinceSeconds
+	}
+	return 0
 }
 
 type GetPodLogsResponse struct {
@@ -7578,7 +7594,7 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x10\n" +
 	"\x03p80\x18\x02 \x01(\x01R\x03p80\x12\x10\n" +
 	"\x03p95\x18\x03 \x01(\x01R\x03p95\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xc4\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x89\x02\n" +
 	"\x11GetPodLogsRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
@@ -7587,7 +7603,11 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\tcontainer\x18\x04 \x01(\tR\tcontainer\x12\x1d\n" +
 	"\n" +
 	"tail_lines\x18\x05 \x01(\x03R\ttailLines\x12\x1a\n" +
-	"\bprevious\x18\x06 \x01(\bR\bprevious\"X\n" +
+	"\bprevious\x18\x06 \x01(\bR\bprevious\x12\x1e\n" +
+	"\n" +
+	"timestamps\x18\a \x01(\bR\n" +
+	"timestamps\x12#\n" +
+	"\rsince_seconds\x18\b \x01(\x03R\fsinceSeconds\"X\n" +
 	"\x12GetPodLogsResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x12\n" +
 	"\x04logs\x18\x02 \x01(\tR\x04logs\x12\x14\n" +

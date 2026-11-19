@@ -687,12 +687,18 @@ class ExecutorClient:
             return {"success": False, "data": "", "error": str(e)}
 
     def get_pod_logs(self, cluster_id: int, namespace: str, pod_name: str,
-                     container: str = "", tail_lines: int = 200, previous: bool = False, trace_id: str = "") -> dict:
-        """查看 Pod 容器日志 → 返回 {success, logs, error}"""
+                     container: str = "", tail_lines: int = 200, previous: bool = False,
+                     timestamps: bool = False, since_seconds: int = 0, trace_id: str = "") -> dict:
+        """查看 Pod 容器日志 → 返回 {success, logs, error}
+
+        timestamps=True：行首带 RFC3339 时间戳（R55 时间段过滤/整份下载用）。
+        since_seconds>0：只取最近 N 秒（配合 tail_lines=0 取整份带时间戳日志）。
+        """
         try:
             req = executor_pb2.GetPodLogsRequest(
                 cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
                 container=container, tail_lines=tail_lines, previous=previous,
+                timestamps=timestamps, since_seconds=since_seconds,
             )
             resp = _agent_call(cluster_id, "GetPodLogs", req, executor_pb2.GetPodLogsResponse, self.TIMEOUT)
             if resp is None:
