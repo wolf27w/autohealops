@@ -2,17 +2,52 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<script>
+/* 主题初始化（最早执行，避免 FOUC）：bigscreen-theme 优先，否则跟随父窗口 data-theme，默认深色 */
+(function(){
+  var t = null;
+  try { t = localStorage.getItem('bigscreen-theme'); } catch(e){}
+  if (!t) {
+    try {
+      var p = window.parent;
+      if (p && p !== window) t = p.document.documentElement.getAttribute('data-theme');
+    } catch(e){}
+  }
+  document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+})();
+</script>
 <title>AutoHealOps · 运行大屏</title>
 <style>
+  /* ============ D7 平台同源 token（深色默认 / 浅色覆盖） ============ */
   :root{
-    --bg:#0d1117; --surface:#151b23; --surface-2:#10161e; --head:#182029;
-    --line:#232c38; --line-2:#2d3745;
-    --ink:#e6edf3; --ink-2:#9aa7b6; --ink-3:#6e7d8c;
-    --ok:#2ea043; --warn:#d29922; --err:#f85149; --info:#58a6ff; --accent:#58a6ff;
+    --bg:#0e1412; --surface:#141b18; --surface-2:#101613; --head:#1a231e;
+    --line:#232d28; --line-2:#313d37;
+    --ink:#e9efec; --ink-2:#a7b4ad; --ink-3:#7f8d86;
+    --ok:#37c08a; --warn:#e09a4e; --err:#f0736a; --info:#60a5fa; --accent:#37c08a;
+    --ok-soft:rgba(55,192,138,.14);   --ok-line:rgba(55,192,138,.34);
+    --warn-soft:rgba(224,154,78,.16); --warn-line:rgba(224,154,78,.36);
+    --err-soft:rgba(240,115,106,.16); --err-line:rgba(240,115,106,.36);
+    --info-soft:rgba(96,165,250,.15); --info-line:rgba(96,165,250,.36);
+    --track:#1d2823;
+    --bg-glow:rgba(55,192,138,.05);
+    --on-accent:#06231a;
+  }
+  html[data-theme='light']{
+    --bg:#eef4ef; --surface:#ffffff; --surface-2:#f7fbf8; --head:#f2f7f4;
+    --line:#e3ede7; --line-2:#d3e2da;
+    --ink:#0f2018; --ink-2:#5a7368; --ink-3:#8aa196;
+    --ok:#177a4e; --warn:#b45309; --err:#cf3b34; --info:#2563eb; --accent:#177a4e;
+    --ok-soft:rgba(23,122,78,.12);   --ok-line:rgba(23,122,78,.30);
+    --warn-soft:rgba(180,83,9,.12);  --warn-line:rgba(180,83,9,.30);
+    --err-soft:rgba(207,59,52,.12);  --err-line:rgba(207,59,52,.30);
+    --info-soft:rgba(37,99,235,.10); --info-line:rgba(37,99,235,.30);
+    --track:#e3ede7;
+    --bg-glow:rgba(23,122,78,.04);
+    --on-accent:#ffffff;
   }
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;color:var(--ink);overflow:hidden;background:radial-gradient(1400px 480px at 50% -10%, rgba(88,166,255,.06), transparent 62%), var(--bg);
+  body{margin:0;color:var(--ink);overflow:hidden;background:radial-gradient(1400px 480px at 50% -10%, var(--bg-glow), transparent 62%), var(--bg);
     font:14px/1.45 -apple-system,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
   .num{font-variant-numeric:tabular-nums}
 
@@ -20,24 +55,36 @@
 
   /* header */
   .hd{flex:none;display:flex;align-items:center;gap:12px;height:44px}
-  .logo{width:26px;height:26px;border-radius:6px;background:var(--info);display:grid;place-items:center;flex:none}
+  .logo{width:26px;height:26px;border-radius:6px;background:var(--accent);display:grid;place-items:center;flex:none}
   .logo svg{width:16px;height:16px}
   .title{font-size:22px;font-weight:700;letter-spacing:1.2px;color:var(--ink)}
   .sub{font-size:12px;color:var(--ink-3);letter-spacing:.6px;margin-top:-2px}
   .pill{font-size:11.5px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 10px;background:var(--surface-2)}
-  .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ok);border:1px solid rgba(46,160,67,.32);border-radius:5px;padding:2px 9px}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ok);border:1px solid var(--ok-line);border-radius:5px;padding:2px 9px}
   .live i{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1.6s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-  .live.poll{color:var(--warn);border-color:rgba(210,153,34,.32)} .live.poll i{animation:none;opacity:1}
+  .live.poll{color:var(--warn);border-color:var(--warn-line)} .live.poll i{animation:none;opacity:1}
   .live.err{color:var(--ink-3);border-color:var(--line-2)} .live.err i{animation:none;opacity:.5}
   .clock{margin-left:auto;display:flex;align-items:baseline;gap:10px}
   .clock .t{font-size:22px;font-weight:600;font-family:"SFMono-Regular",ui-monospace,Menlo,Consolas,"Roboto Mono",monospace}
   .clock .d{font-size:11.5px;color:var(--ink-3)}
+  .theme-btn{flex:none;width:30px;height:30px;border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);cursor:pointer;display:grid;place-items:center;color:var(--ink-2)}
+  .theme-btn:hover{color:var(--accent);border-color:var(--accent)}
+  .theme-btn svg{width:15px;height:15px}
+  .theme-btn .sun{display:none} .theme-btn .moon{display:block}
+  html[data-theme='dark'] .theme-btn .sun{display:block} html[data-theme='dark'] .theme-btn .moon{display:none}
+
+  /* 返回 / 时间范围（单集群视图头部） */
+  .back{flex:none;font-size:13px;font-weight:600;padding:6px 14px;border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink-2);cursor:pointer}
+  .back:hover{color:var(--accent);border-color:var(--accent)}
+  .ranges{display:flex;gap:6px;margin-left:auto;align-items:center}
+  .ranges .r{font-size:12px;padding:3px 12px;border-radius:5px;border:1px solid var(--line-2);cursor:pointer;color:var(--ink-2);background:var(--surface-2)}
+  .ranges .r.sel{color:var(--accent);border-color:var(--accent);background:var(--ok-soft)}
 
   /* KPI 条 */
   .kpis{flex:none;display:grid;grid-template-columns:repeat(8,1fr);gap:9px}
   .kpi{position:relative;border:1px solid var(--line);border-radius:7px;background:var(--surface);padding:9px 12px 8px;overflow:hidden}
-  .kpi:before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--info)}
+  .kpi:before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
   .kpi.ok:before{background:var(--ok)}.kpi.warn:before{background:var(--warn)}.kpi.err:before{background:var(--err)}
   .kpi .t{font-size:12.5px;color:var(--ink-3);letter-spacing:.3px}
   .kpi .v{font-size:36px;font-weight:600;line-height:1.15;letter-spacing:-.5px}
@@ -51,16 +98,14 @@
   .main{flex:1;min-height:0;display:grid;grid-template-columns:336px minmax(0,1fr) 352px;gap:9px}
   .col{display:flex;flex-direction:column;gap:9px;min-height:0}
   .panel{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:7px;display:flex;flex-direction:column;min-height:0}
-  /* 四角角标（1px、45% 透明） */
   .panel:before,.panel:after{content:"";position:absolute;width:9px;height:9px;pointer-events:none;opacity:.45}
-  .panel:before{left:-1px;top:-1px;border-left:1px solid var(--info);border-top:1px solid var(--info);border-top-left-radius:7px}
-  .panel:after{right:-1px;bottom:-1px;border-right:1px solid var(--info);border-bottom:1px solid var(--info);border-bottom-right-radius:7px}
+  .panel:before{left:-1px;top:-1px;border-left:1px solid var(--accent);border-top:1px solid var(--accent);border-top-left-radius:7px}
+  .panel:after{right:-1px;bottom:-1px;border-right:1px solid var(--accent);border-bottom:1px solid var(--accent);border-bottom-right-radius:7px}
   .ph{flex:none;display:flex;align-items:center;gap:9px;height:42px;padding:0 15px;border-bottom:1px solid var(--line);font-size:14px;font-weight:600;letter-spacing:.4px;color:var(--ink-2);background:var(--head);border-radius:7px 7px 0 0}
-  .ph .bar{width:3px;height:11px;background:var(--info);border-radius:2px}
+  .ph .bar{width:3px;height:11px;background:var(--accent);border-radius:2px}
   .ph .r{margin-left:auto;font-size:10.5px;font-weight:400;color:var(--ink-3)}
   .pb{flex:1;min-height:0;overflow:auto;padding:9px 12px}
 
-  /* 占位（断网/无数据） */
   .empty{color:var(--ink-3);font-size:12px;padding:14px 4px;text-align:center;letter-spacing:.3px}
 
   /* 集群健康 */
@@ -70,15 +115,15 @@
   .cl .top{display:flex;align-items:center;gap:7px;margin-bottom:5px}
   .cl .nm{font-size:15px;font-weight:600}
   .cl .env{font-size:10px;padding:0 5px;border-radius:3px;border:1px solid var(--line-2);color:var(--ink-2)}
-  .env.prod{color:var(--err);border-color:rgba(240,115,106,.3);background:rgba(240,115,106,.08)}
-  .env.qa{color:var(--ok);border-color:rgba(55,192,138,.3);background:rgba(55,192,138,.08)}
-  .env.uat{color:var(--warn);border-color:rgba(224,154,78,.3);background:rgba(224,154,78,.08)}
+  .env.prod{color:var(--err);border-color:var(--err-line);background:var(--err-soft)}
+  .env.qa{color:var(--ok);border-color:var(--ok-line);background:var(--ok-soft)}
+  .env.uat{color:var(--warn);border-color:var(--warn-line);background:var(--warn-soft)}
   .cl .st{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:5px;color:var(--ok)}
   .cl .st.warn{color:var(--warn)}
   .cl .st i{width:6px;height:6px;border-radius:50%;background:currentColor}
   .mrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3);margin-top:3px}
   .mrow .lb{width:26px;flex:none}
-  .mrow .tr{flex:1;height:5px;border-radius:3px;background:#1b2621;overflow:hidden}
+  .mrow .tr{flex:1;height:5px;border-radius:3px;background:var(--track);overflow:hidden}
   .mrow .tr i{display:block;height:100%;background:var(--ok);border-radius:3px}
   .mrow .tr.w i{background:var(--warn)} .mrow .tr.e i{background:var(--err)}
   .mrow .vv{width:32px;text-align:right;color:var(--ink-2);flex:none}
@@ -99,23 +144,23 @@
   .dgi:hover{background:var(--head)}
   .dgi.p1{border-left-color:var(--warn)} .dgi.p2{border-left-color:var(--info)}
   .dgi .t1{display:flex;align-items:center;gap:7px}
-  .lv{font-size:11px;font-weight:700;padding:0 5px;border-radius:3px;background:rgba(240,115,106,.17);color:var(--err)}
-  .dgi.p1 .lv{background:rgba(224,154,78,.15);color:var(--warn)}
-  .dgi.p2 .lv{background:rgba(96,165,250,.15);color:var(--info)}
+  .lv{font-size:11px;font-weight:700;padding:0 5px;border-radius:3px;background:var(--err-soft);color:var(--err)}
+  .dgi.p1 .lv{background:var(--warn-soft);color:var(--warn)}
+  .dgi.p2 .lv{background:var(--info-soft);color:var(--info)}
   .dgi .n{font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dgi .age{margin-left:auto;font-size:10.5px;color:var(--ink-3);flex:none}
   .dgi .who{font-size:12px;color:var(--ink-3);margin-top:2px}
   .dgi .dx{margin-top:7px;border-top:1px dashed var(--line-2);padding-top:7px;font-size:13px;color:var(--ink-2);line-height:1.5}
   .dgi .dx b{color:var(--ink)} .dgi .dx .hl{color:var(--ok)}
   .dgi .ft{display:flex;align-items:center;gap:6px;margin-top:6px}
-  .chip{font-size:11px;padding:0 6px;border-radius:3px;background:rgba(55,192,138,.13);color:var(--ok)}
-  .dgi.p1 .chip{background:rgba(224,154,78,.13);color:var(--warn)}
+  .chip{font-size:11px;padding:0 6px;border-radius:3px;background:var(--ok-soft);color:var(--ok)}
+  .dgi.p1 .chip{background:var(--warn-soft);color:var(--warn)}
   .chip.g{background:var(--line);color:var(--ink-2)}
 
   /* 自愈效果 */
   .heal{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center;margin-bottom:9px}
   .ring{--p:0;width:92px;height:92px;border-radius:50%;flex:none;display:grid;place-items:center;
-    background:conic-gradient(var(--ok) calc(var(--p)*1%), #1b2621 0)}
+    background:conic-gradient(var(--ok) calc(var(--p)*1%), var(--track) 0)}
   .ring .in{width:72px;height:72px;border-radius:50%;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1}
   .ring .in b{font-size:22px;font-weight:600}
   .ring .in small{font-size:10px;color:var(--ink-3)}
@@ -133,19 +178,51 @@
   .row.click{cursor:pointer}
   .row.click:hover{background:var(--surface-2)}
   .row .t{flex:0 0 40px;color:var(--ink-3);font-size:11.5px}
-  .row .lv2{flex:none;font-size:9.5px;font-weight:700;padding:0 4px;border-radius:3px;background:rgba(240,115,106,.16);color:var(--err);height:16px;line-height:16px}
-  .row .lv2.p1{background:rgba(224,154,78,.14);color:var(--warn)}
-  .row .lv2.p2{background:rgba(96,165,250,.14);color:var(--info)}
-  .row .lv2.g{background:rgba(55,192,138,.12);color:var(--ok)}
+  .row .lv2{flex:none;font-size:9.5px;font-weight:700;padding:0 4px;border-radius:3px;background:var(--err-soft);color:var(--err);height:16px;line-height:16px}
+  .row .lv2.p1{background:var(--warn-soft);color:var(--warn)}
+  .row .lv2.p2{background:var(--info-soft);color:var(--info)}
+  .row .lv2.g{background:var(--ok-soft);color:var(--ok)}
   .row .m{flex:1;min-width:0}
   .row .m .n{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .row .m .s{color:var(--ink-3);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .row .tm{flex:none;color:var(--ink-3);font-size:10px;align-self:center}
 
   .ticker{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:9px 15px;font-size:13px}
-  .ticker .tag{flex:none;font-size:10px;color:var(--ok);border:1px solid rgba(55,192,138,.32);border-radius:3px;padding:0 6px}
+  .ticker .tag{flex:none;font-size:10px;color:var(--ok);border:1px solid var(--ok-line);border-radius:3px;padding:0 6px}
   .ticker .txt{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .ticker .tm{margin-left:auto;flex:none;font-size:10.5px;color:var(--ink-3)}
+
+  /* ============ 单集群视图 ============ */
+  .ctabs{flex:none;display:flex;gap:8px}
+  .ctab{font-size:14px;font-weight:600;padding:8px 16px;border-radius:6px;border:1px solid var(--line-2);cursor:pointer;color:var(--ink-2);background:var(--surface)}
+  .ctab.sel{color:var(--accent);border-color:var(--accent);background:var(--ok-soft)}
+  .ctab:hover{border-color:var(--accent)}
+  .cbody{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:9px}
+  .cgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .cgrid .panel{min-height:220px}
+  .cgrid .panel.tall{min-height:320px}
+  .tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{text-align:left;color:var(--ink-3);font-weight:500;font-size:11.5px;padding:7px 10px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:8px 10px;border-bottom:1px solid var(--line-2);color:var(--ink);vertical-align:middle}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl td.dim{color:var(--ink-3)}
+  .tbl .s{color:var(--ink-3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+  .ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;padding:0 7px;border-radius:4px;line-height:18px}
+  .tag.ok{background:var(--ok-soft);color:var(--ok)}
+  .tag.err{background:var(--err-soft);color:var(--err)}
+  .tag.warn{background:var(--warn-soft);color:var(--warn)}
+  .tag.gray{background:var(--line);color:var(--ink-2)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+  .bt{display:flex;align-items:center;gap:8px}
+  .bt .lb{width:34px;flex:none;font-size:11px;color:var(--ink-3)}
+  .bt .tr{flex:1;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+  .bt .tr i{display:block;height:100%;background:var(--ok)}
+  .bt .tr.w i{background:var(--warn)} .bt .tr.e i{background:var(--err)}
+  .bt .vv{width:44px;text-align:right;font-size:12px;color:var(--ink-2);flex:none}
+  .chartbox{height:200px;width:100%;min-height:0}
+  .chartbox-title{font-size:12px;color:var(--ink-3);margin-bottom:4px}
 
   @media (prefers-reduced-motion: reduce){
     .live i{animation:none;opacity:1}
@@ -153,23 +230,28 @@
   @media (max-width:1440px){
     .main{grid-template-columns:300px minmax(0,1fr) 320px}
     .kpi .v{font-size:24px}
+    .cgrid{grid-template-columns:1fr}
   }
 </style>
 </head>
 <body>
-<div class="screen">
+<!-- ============ 全局总览 ============ -->
+<div class="screen" id="overview">
   <div class="hd">
-    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#0a1220" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4M12 11.2 6.6 16.9M12 11.2l5.4 5.7"/></svg></div>
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4M12 11.2 6.6 16.9M12 11.2l5.4 5.7"/></svg></div>
     <div><div class="title">AutoHealOps 运行大屏</div><div class="sub">全部集群 · 故障诊断 · 自愈效果</div></div>
     <span class="pill" id="clusterPill" style="margin-left:6px">全部集群（—）</span>
     <span class="live err" id="live"><i></i><span id="liveTxt">离线</span></span>
+    <button class="theme-btn" title="切换深/浅色" onclick="toggleTheme()">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
     <div class="clock"><span class="t num" id="clockT">--:--:--</span><span class="d" id="clockD"></span></div>
   </div>
 
   <div class="kpis" id="kpis"></div>
 
   <div class="main">
-    <!-- 左：集群健康 + 告警趋势 -->
     <div class="col">
       <div class="panel" style="flex:1.35;min-height:0">
         <div class="ph"><span class="bar"></span>集群健康<span class="r" id="clCount">—</span></div>
@@ -184,7 +266,6 @@
       </div>
     </div>
 
-    <!-- 中：故障诊断（重点）+ 自愈效果 -->
     <div class="col">
       <div class="panel" style="flex:1.45;min-height:0">
         <div class="ph"><span class="bar"></span>故障诊断<span class="r" id="diagR">进行中 —</span></div>
@@ -196,7 +277,6 @@
       </div>
     </div>
 
-    <!-- 右：优先处理 + 实时告警 + 事件流 -->
     <div class="col">
       <div class="panel" style="flex:1;min-height:0">
         <div class="ph"><span class="bar"></span>优先处理<span class="r">P0/P1 · SLA</span></div>
@@ -220,11 +300,29 @@
   </div>
 </div>
 
+<!-- ============ 单集群视图 ============ -->
+<div class="screen" id="cluster" style="display:none">
+  <div class="hd">
+    <button class="back" onclick="backOverview()">← 返回全局总览</button>
+    <div><div class="title" id="cName">—</div><div class="sub" id="cEnv">—</div></div>
+    <div class="ranges" id="cRanges"></div>
+    <button class="theme-btn" title="切换深/浅色" onclick="toggleTheme()">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <div class="clock"><span class="t num" id="cClockT">--:--:--</span><span class="d" id="cClockD"></span></div>
+  </div>
+  <div class="ctabs" id="cTabs"></div>
+  <div class="cbody" id="cBody"></div>
+</div>
+
 <script>
 /* =========================================================
-   AutoHealOps 运行大屏 · 全局总览驾驶舱
+   AutoHealOps 运行大屏
+   - 全局总览驾驶舱（R40 v9 结构）
+   - 单集群视图（R46：大屏内切换，不跳出 iframe）
+   - 主题切换（R45）+ D7 平台同源配色（R47）
    数据：GET /api/v1/stats/dashboard + SSE /stats/dashboard/stream
-   视觉：深蓝黑 #0d1117 + 蓝强调 #58a6ff（零渐变文字/零光晕）
    ========================================================= */
 const API = '/api/v1';
 const TOK = () => localStorage.getItem('token') || new URLSearchParams(location.search).get('token') || '';
@@ -237,6 +335,8 @@ const num = v => (v == null || v === '' || isNaN(v)) ? '—' : Number(v).toLocal
 let D = null;            // 最近一次 dashboard 数据（null = 尚无数据 → 占位）
 let lastAt = 0;          // 最近成功刷新时间
 let liveOk = false;      // SSE 是否在线
+let VIEW = { page: 'overview', cluster: null, tab: 'service', range: '1h' }; // 视图状态
+let CV = {};             // 单集群视图缓存
 
 /* ---------- 字段容错读取 ---------- */
 const val = (v, d) => (v == null || v === '') ? d : v;
@@ -248,13 +348,15 @@ const lvOf = s => SEV_LV[s] || { lv: 'P1', cls: 'p1' };
 const STATUS_LABEL = { pending: '待处理', awaiting_approval: '待审批', ticketed: '已转工单', self_healed: '已自愈', resolved: '已解决' };
 const sevRank = s => ({ critical: 0, high: 1, medium: 2, low: 3 })[s] ?? 9;
 
-function distMap() {
-  const m = { self_heal: 0, approval: 0, manual: 0, auto_resolved: 0, open: 0 };
-  ((D && D.ai_result_dist) || []).forEach(x => { const k = x && x.key; if (k) m[k] = (x.count != null ? x.count : x.value) || 0; });
-  return m;
+/* ---------- 主题切换 ---------- */
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('bigscreen-theme', next); } catch(e) {}
 }
 
-/* ---------- 时长格式化（容错 duration_seconds / detected_at） ---------- */
+/* ---------- 时长 / 时间格式化 ---------- */
 function fmtDur(sec) {
   if (sec == null || sec === '' || isNaN(sec)) return '—';
   sec = Math.max(0, Math.round(Number(sec)));
@@ -285,8 +387,10 @@ function fmtTime(ts) {
   if (isNaN(d)) return '--:--';
   return pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
+function fmtBytes(n){ if(n==null||isNaN(n))return '—'; const u=['B','KiB','MiB','GiB','TiB']; let x=n,i=0; while(x>=1024&&i<u.length-1){x/=1024;i++;} return x.toFixed(i?1:0)+u[i]; }
+function fmtCompact(v){ if(v==null||isNaN(v))return '—'; const a=Math.abs(v); if(a>=1e9)return (v/1e9).toFixed(1)+'G'; if(a>=1e6)return (v/1e6).toFixed(1)+'M'; if(a>=1e3)return (v/1e3).toFixed(1)+'k'; return String(Math.round(v*100)/100); }
 
-/* ---------- 导航 ---------- */
+/* ---------- 导航（告警跳转用，D8：跳告警处理页） ---------- */
 function goto(url) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } }
 
 /* ---------- 渲染：KPI 条（8 项） ---------- */
@@ -299,14 +403,12 @@ function renderKpis() {
   const nodeTotal = cd.reduce((s, c) => s + (c.node_total || 0), 0);
   const nodeReady = cd.reduce((s, c) => s + (c.node_ready || 0), 0);
   const podTotal = cd.reduce((s, c) => s + (c.pods || 0), 0);
-  // 容器总数：后端 R40.4 已补 kpi.container_total（集群级无分项，集群行仍显示 —）
   const containerTotal = (kpi.container_total != null && Number(kpi.container_total) > 0) ? Number(kpi.container_total) : null;
   const alertPending = val(core.alert_pending, 0);
   const auto24h = val(kpi.auto_processed_24h, 0);
   const rate = (kpi.self_heal_rate != null ? val(kpi.self_heal_rate, null) : null) ?? val(kpi.heal_rate, null);
   const mttr = val(kpi.mttr_minutes, val(core.mttr_minutes, null));
 
-  // 未恢复告警严重级别拆解（realtime_alerts Top15 内近似）
   const ra = (D && D.realtime_alerts) || [];
   const sc = { critical: 0, high: 0, medium: 0, low: 0 };
   ra.forEach(a => { if (sc[a.severity] != null && (a.status === 'pending' || a.status === 'awaiting_approval' || a.status === 'ticketed')) sc[a.severity]++; });
@@ -352,7 +454,7 @@ function renderClusters() {
     const barCls = p => (p == null ? '' : p >= 80 ? 'e' : p >= 60 ? 'w' : '');
     const pct = p => (p == null ? '—' : p + '%');
     const width = p => (p == null ? 0 : Math.max(0, Math.min(100, p)));
-    return `<div class="cl" onclick="goto('/clusters/${esc(c.id)}')">
+    return `<div class="cl" onclick="navCluster(${esc(JSON.stringify(c.id))})">
       <div class="top"><span class="nm">${esc(c.name || ('#' + c.id))}</span><span class="env ${envCls(c.env_tag)}">${esc(envLabel(c.env_tag))}</span>
         <span class="st ${bad ? 'warn' : ''}"><i></i>${bad ? '关注' : '健康'}</span></div>
       <div class="mrow"><span class="lb">CPU</span><span class="tr ${barCls(c.cpu_pct)}"><i style="width:${width(c.cpu_pct)}%"></i></span><span class="vv num">${pct(c.cpu_pct)}</span></div>
@@ -362,7 +464,7 @@ function renderClusters() {
   }).join('');
 }
 
-/* ---------- 渲染：告警趋势（alert_trend 5 分钟桶按小时聚合 → 24 柱） ---------- */
+/* ---------- 渲染：告警趋势 ---------- */
 function hourlyTrend() {
   const at = (D && D.alert_trend) || [];
   if (at.length) {
@@ -391,7 +493,7 @@ function renderTrend() {
   }).join('');
 }
 
-/* ---------- 渲染：故障诊断（视觉重点，4 条） ---------- */
+/* ---------- 渲染：故障诊断 ---------- */
 function diagItems() {
   const ra = (D && D.realtime_alerts) || [];
   return ra.slice().sort((a, b) => {
@@ -415,7 +517,6 @@ function renderDiag() {
     const lv = lvOf(a.severity);
     const title = a.message || a.fault_type || a.resource_name || '未命名告警';
     const who = `${envLabel(a.env || a.cluster_env)} · ${a.cluster_name || '—'} · ${a.namespace || '—'}`;
-    // AI 诊断结论：字段存在（diagnosis）就展示；否则退化显示 fault_type + 「诊断中」
     let dx;
     if (a.diagnosis && typeof a.diagnosis === 'string') {
       dx = esc(a.diagnosis);
@@ -437,17 +538,19 @@ function renderDiag() {
 }
 
 /* ---------- 渲染：自愈效果 ---------- */
+function distMap() {
+  const m = { self_heal: 0, approval: 0, manual: 0, auto_resolved: 0, open: 0 };
+  ((D && D.ai_result_dist) || []).forEach(x => { const k = x && x.key; if (k) m[k] = (x.count != null ? x.count : x.value) || 0; });
+  return m;
+}
 function healBodyHtml() {
-  const kpi = (D && D.kpi) || {}, core = (D && D.core) || {};
   const dist = distMap();
   const action = (D && D.action_stat) || {};
   const total = dist.self_heal + dist.approval + dist.manual + dist.auto_resolved;
   const _she0 = (D && D.self_heal_effect) || {};
-  // 环形成功率与「成功/失败/总次数」同源（动作级），避免与 KPI 口径打架
   const rate = _she0.success_rate != null ? Math.round(Number(_she0.success_rate) * 100)
     : (total > 0 ? Math.round(dist.self_heal / total * 100) : 0);
   const saved = dist.self_heal + dist.auto_resolved;
-  // R40.4：节省人工优先用后端 self_heal_effect.labor_saved_minutes（成功动作 × 30min 估算），按小时展示
   const she = (D && D.self_heal_effect) || {};
   const laborMin = she.labor_saved_minutes != null ? Number(she.labor_saved_minutes) : null;
   const laborHtml = laborMin != null && laborMin > 0
@@ -487,7 +590,7 @@ function renderHeal() {
   el.innerHTML = D ? healBodyHtml() : `<div class="empty">等待数据接入…</div>`;
 }
 
-/* ---------- 渲染：优先处理（P0/P1 待办 3 条） ---------- */
+/* ---------- 渲染：优先处理 ---------- */
 function renderPriority() {
   const el = $('#priBody'); if (!el) return;
   const ra = (D && D.realtime_alerts) || [];
@@ -504,7 +607,7 @@ function renderPriority() {
   }).join('');
 }
 
-/* ---------- 渲染：实时故障告警（最近 5 条） ---------- */
+/* ---------- 渲染：实时故障告警 ---------- */
 function renderAlerts() {
   const el = $('#alBody'); if (!el) return;
   const ra = (D && D.realtime_alerts) || [];
@@ -518,7 +621,7 @@ function renderAlerts() {
   }).join('');
 }
 
-/* ---------- 渲染：最新事件（4 条） ---------- */
+/* ---------- 渲染：最新事件 ---------- */
 function eventItems() {
   const at = (D && D.action_timeline) || [];
   if (at.length) return at.slice(0, 4).map(e => ({ time: fmtTime(e.time), text: `${e.action || '自愈'} · ${e.target || ''}`, ok: e.status === 'success' }));
@@ -562,7 +665,7 @@ function renderAll() {
 }
 
 /* ---------- 连接状态指示 ---------- */
-function setLive(state) { // 'ok' | 'poll' | 'err'
+function setLive(state) {
   const el = $('#live'); if (!el) return;
   el.className = 'live ' + state;
   $('#liveTxt').textContent = state === 'ok' ? '实时' : state === 'poll' ? '轮询' : '离线';
@@ -586,7 +689,245 @@ async function loadData() {
   setLive(liveOk ? 'ok' : 'poll');
 }
 
-/* ---------- SSE：/stats/dashboard/stream?token=...（EventSource 不能带头，token 走 query） ---------- */
+/* =========================================================
+   单集群视图（R46）：大屏内切换，不跳出 iframe
+   接口沿用旧版：/monitoring/clusters/{id}/query|range、
+   /monitoring/clusters/{id}/metrics/container_cpu_top|container_mem_top、
+   /resources/clusters/{id}/nodes、/resources/clusters/{id}/pods
+   ========================================================= */
+const RANGES = { '1h': [60, 30], '6h': [360, 120], '24h': [1440, 300] };
+const RANGE_LABEL = { '1h': '1小时', '6h': '6小时', '24h': '24小时' };
+
+async function promInstant(cid, q) {
+  try { const d = await apiGet('/monitoring/clusters/' + cid + '/query?promql=' + encodeURIComponent(q)); return (d && d.items) || []; }
+  catch (e) { return []; }
+}
+async function promRange(cid, q, min, step) {
+  try { const d = await apiGet('/monitoring/clusters/' + cid + '/range?promql=' + encodeURIComponent(q) + '&minutes=' + min + '&step=' + (step || 60)); return (d && d.series) || []; }
+  catch (e) { return []; }
+}
+function clusterMeta(id) {
+  const cd = (D && D.cluster_details) || [];
+  return cd.find(x => String(x.id) === String(id)) || {};
+}
+function mapBy(arr, key) { const m = {}; (arr || []).forEach(x => { const k = x.metric && x.metric[key]; if (k != null) m[k] = x.value; }); return m; }
+
+/* 进入单集群视图 */
+function navCluster(id) {
+  VIEW.page = 'cluster';
+  VIEW.cluster = id;
+  VIEW.tab = 'service';
+  VIEW.range = '1h';
+  CV = { cluster: id };
+  document.getElementById('overview').style.display = 'none';
+  document.getElementById('cluster').style.display = 'flex';
+  renderCluster();
+  openCluster(id);
+}
+function backOverview() {
+  VIEW.page = 'overview';
+  document.getElementById('cluster').style.display = 'none';
+  document.getElementById('overview').style.display = 'flex';
+  renderAll();
+}
+function switchTab(t) { VIEW.tab = t; renderCluster(); if (VIEW.page === 'cluster') renderClusterBody(); }
+function setRange(r) { VIEW.range = r; renderCluster(); loadHistory(); }
+
+function renderCluster() {
+  const meta = clusterMeta(VIEW.cluster);
+  document.getElementById('cName').textContent = meta.name || ('#' + VIEW.cluster);
+  document.getElementById('cEnv').textContent = envLabel(meta.env_tag) + (meta.cluster_type || meta.access_type ? '' : '');
+  document.getElementById('cRanges').innerHTML = Object.keys(RANGES).map(k =>
+    `<span class="r ${VIEW.range === k ? 'sel' : ''}" onclick="setRange('${k}')">${RANGE_LABEL[k]}</span>`).join('');
+  document.getElementById('cTabs').innerHTML = `
+    <div class="ctab ${VIEW.tab === 'service' ? 'sel' : ''}" onclick="switchTab('service')">服务 / 容器监控</div>
+    <div class="ctab ${VIEW.tab === 'node' ? 'sel' : ''}" onclick="switchTab('node')">节点监控</div>`;
+}
+
+async function openCluster(id) {
+  const cid = String(id);
+  try {
+    const [nodes, pods, cpuTop, memTop, podCpu, podMem] = await Promise.all([
+      apiGet('/resources/clusters/' + cid + '/nodes').catch(() => []),
+      apiGet('/resources/clusters/' + cid + '/pods').then(d => (d && d.pods) || []).catch(() => []),
+      apiGet('/monitoring/clusters/' + cid + '/metrics/container_cpu_top').then(d => (d && d.items) || []).catch(() => []),
+      apiGet('/monitoring/clusters/' + cid + '/metrics/container_mem_top').then(d => (d && d.items) || []).catch(() => []),
+      promInstant(cid, 'sum by(pod)(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m]))'),
+      promInstant(cid, 'sum by(pod)(container_memory_working_set_bytes{container!="",container!="POD"})'),
+    ]);
+    CV.nodes = nodes; CV.pods = pods; CV.cpuTop = cpuTop; CV.memTop = memTop;
+    CV.podCpu = mapBy(podCpu, 'pod'); CV.podMem = mapBy(podMem, 'pod');
+    CV.loaded = true;
+  } catch (e) { CV.loaded = true; }
+  await loadHistory();
+  if (VIEW.page === 'cluster') renderClusterBody();
+}
+
+async function loadHistory() {
+  const cid = String(VIEW.cluster);
+  const [m, s] = RANGES[VIEW.range] || RANGES['1h'];
+  const [cpu, mem] = await Promise.all([
+    promRange(cid, 'sum(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m]))', m, s),
+    promRange(cid, 'sum(container_memory_working_set_bytes{container!="",container!="POD"})', m, s),
+  ]);
+  CV.history = { cpu: cpu, mem: mem, range: VIEW.range, at: Date.now() };
+  if (VIEW.page === 'cluster') renderClusterBody();
+}
+
+/* 轮询刷新单集群数据（5s；历史曲线 30s 才刷新） */
+async function refreshCluster() {
+  if (VIEW.page !== 'cluster' || VIEW.cluster == null) return;
+  const cid = String(VIEW.cluster);
+  const histStale = !CV.histAt || (Date.now() - CV.histAt) > 30000;
+  try {
+    const jobs = [
+      apiGet('/resources/clusters/' + cid + '/nodes').catch(() => []),
+      apiGet('/resources/clusters/' + cid + '/pods').then(d => (d && d.pods) || []).catch(() => []),
+      apiGet('/monitoring/clusters/' + cid + '/metrics/container_cpu_top').then(d => (d && d.items) || []).catch(() => []),
+      apiGet('/monitoring/clusters/' + cid + '/metrics/container_mem_top').then(d => (d && d.items) || []).catch(() => []),
+      promInstant(cid, 'sum by(pod)(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m]))'),
+      promInstant(cid, 'sum by(pod)(container_memory_working_set_bytes{container!="",container!="POD"})'),
+    ];
+    const [nodes, pods, cpuTop, memTop, podCpu, podMem] = await Promise.all(jobs);
+    CV.nodes = nodes; CV.pods = pods; CV.cpuTop = cpuTop; CV.memTop = memTop;
+    CV.podCpu = mapBy(podCpu, 'pod'); CV.podMem = mapBy(podMem, 'pod');
+    CV.histAt = Date.now();
+  } catch (e) {}
+  if (histStale) loadHistory(); else if (VIEW.page === 'cluster') renderClusterBody();
+}
+
+/* ---------- 单集群视图：Tab1 服务 / 容器监控 ---------- */
+function containerTopTable(rows, fmt) {
+  if (!rows || !rows.length) return '<div class="empty">暂无容器数据（需集群 Prometheus + cAdvisor）</div>';
+  const trs = rows.slice(0, 10).map((r, i) => {
+    const m = r.metric || {};
+    return `<tr><td class="dim num">${i + 1}</td>
+      <td><div class="ell"><b>${esc(m.container || '—')}</b></div><div class="s">${esc(m.namespace || '—')} / ${esc(m.pod || '—')}</div></td>
+      <td class="num" style="font-weight:600;color:var(--accent)">${fmt(r.value)}</td></tr>`;
+  }).join('');
+  return `<table class="tbl"><thead><tr><th style="width:40px">#</th><th>容器（命名空间 / Pod）</th><th style="text-align:right">值</th></tr></thead><tbody>${trs}</tbody></table>`;
+}
+function podTable() {
+  const pods = CV.pods || [];
+  if (!pods.length) return '<div class="empty">暂无 Pod 数据</div>';
+  const cpu = CV.podCpu || {}, mem = CV.podMem || {};
+  const rows = pods.slice().sort((a, b) => (cpu[b.name] || 0) - (cpu[a.name] || 0)).slice(0, 50).map(p => {
+    const total = p.total_containers != null ? p.total_containers : (p.containers ? p.containers.length : 0);
+    const ready = p.ready_containers != null ? p.ready_containers : (p.ready ? total : 0);
+    const c = cpu[p.name], m = mem[p.name];
+    const st = p.status || p.phase || '—';
+    const bad = (st && st !== 'Running') || (ready < total);
+    const stCls = !bad ? 'ok' : (st === 'Running' || st === 'Pending' || st === '—' ? 'warn' : 'err');
+    return `<tr>
+      <td><div class="ell" title="${esc(p.name)}"><b>${esc(p.name)}</b></div><div class="s">${esc(p.namespace || '—')}</div></td>
+      <td class="num" style="color:${ready < total ? 'var(--warn)' : 'var(--ink-2)'}">${ready} / ${total}</td>
+      <td class="num">${c != null ? Number(c).toFixed(3) + ' core' : '—'}</td>
+      <td class="num">${m != null ? fmtBytes(m) : '—'}</td>
+      <td><span class="tag ${stCls}">${esc(st)}</span></td>
+    </tr>`;
+  }).join('');
+  return `<table class="tbl"><thead><tr><th>Pod</th><th>容器数</th><th>CPU</th><th>内存</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function fmtTimeFull(ts) {
+  const d = new Date(ts);
+  if (VIEW.range === '24h') return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+/* 纯 SVG 折线图（无依赖；颜色走 CSS 变量随主题切换） */
+function lineChartSvg(values, times, color) {
+  const W = 1000, H = 210, L = 54, R = 16, T = 14, B = 26;
+  if (!values || values.length < 2) return '<div class="empty">暂无历史曲线数据</div>';
+  const n = values.length;
+  const mn = Math.min.apply(null, values), mx = Math.max.apply(null, values);
+  const span = (mx - mn) || 1;
+  const ix = i => L + (i * (W - L - R) / (n - 1));
+  const iy = v => T + (H - T - B) * (1 - (v - mn) / span);
+  let path = '', area = '';
+  values.forEach((v, i) => {
+    const x = ix(i).toFixed(1), y = iy(v).toFixed(1);
+    path += (i ? ' L' : 'M') + x + ' ' + y;
+    area += (i ? ' L' : 'M') + x + ' ' + y;
+  });
+  area += ' L' + ix(n - 1).toFixed(1) + ' ' + (H - B) + ' L' + ix(0).toFixed(1) + ' ' + (H - B) + ' Z';
+  let grid = '';
+  for (let g = 0; g <= 3; g++) {
+    const gy = (T + (H - T - B) * g / 3).toFixed(1);
+    grid += `<line x1="${L}" y1="${gy}" x2="${W - R}" y2="${gy}" stroke="var(--line)" stroke-width="1"/>`;
+  }
+  const t0 = times && times[0] ? esc(times[0]) : '';
+  const t1 = times && times[n - 1] ? esc(times[n - 1]) : '';
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:100%;display:block">
+    ${grid}
+    <path d="${area}" fill="${color}" opacity="0.10"/>
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    <text x="${L - 6}" y="${T + 5}" fill="var(--ink-3)" font-size="11" text-anchor="end">${fmtCompact(mx)}</text>
+    <text x="${L - 6}" y="${H - B + 4}" fill="var(--ink-3)" font-size="11" text-anchor="end">${fmtCompact(mn)}</text>
+    <text x="${L}" y="${H - 8}" fill="var(--ink-3)" font-size="11">${t0}</text>
+    <text x="${W - R}" y="${H - 8}" fill="var(--ink-3)" font-size="11" text-anchor="end">${t1}</text>
+  </svg>`;
+}
+function historyHtml() {
+  const hist = CV.history;
+  if (!hist) return '<div class="empty">历史曲线加载中…</div>';
+  const cpuSeries = hist.cpu && hist.cpu[0] ? hist.cpu[0].values : null;
+  const memSeries = hist.mem && hist.mem[0] ? hist.mem[0].values : null;
+  const cpuVals = cpuSeries ? cpuSeries.map(v => v[1]) : null;
+  const memVals = memSeries ? memSeries.map(v => v[1] / 1048576) : null;
+  const times = cpuSeries ? cpuSeries.map(v => fmtTimeFull(v[0] * 1000)) : (memSeries ? memSeries.map(v => fmtTimeFull(v[0] * 1000)) : null);
+  if (!cpuVals && !memVals) return '<div class="empty">暂无历史曲线数据（集群 Prometheus 无数据）</div>';
+  return `
+    <div class="chartbox-title">集群容器 CPU 总量（core）</div>
+    <div class="chartbox">${cpuVals ? lineChartSvg(cpuVals, times, 'var(--accent)') : '<div class="empty">无 CPU 历史数据</div>'}</div>
+    <div class="chartbox-title" style="margin-top:16px">集群容器内存总量（MiB）</div>
+    <div class="chartbox">${memVals ? lineChartSvg(memVals, times, 'var(--info)') : '<div class="empty">无内存历史数据</div>'}</div>`;
+}
+function renderServiceTab() {
+  const cpuRows = CV.cpuTop || [], memRows = CV.memTop || [];
+  document.getElementById('cBody').innerHTML = `
+  <div class="cgrid">
+    <div class="panel"><div class="ph"><span class="bar"></span>容器 CPU TopN<span class="r">topk(20) · core</span></div><div class="pb">${containerTopTable(cpuRows, v => v == null ? '—' : Number(v).toFixed(3) + ' core')}</div></div>
+    <div class="panel"><div class="ph"><span class="bar"></span>容器内存 TopN<span class="r">topk(20) · MiB</span></div><div class="pb">${containerTopTable(memRows, v => v == null ? '—' : fmtBytes(v))}</div></div>
+  </div>
+  <div class="cgrid">
+    <div class="panel tall"><div class="ph"><span class="bar"></span>Pod 列表<span class="r">容器数 / CPU / 内存</span></div><div class="pb">${podTable()}</div></div>
+    <div class="panel tall"><div class="ph"><span class="bar"></span>容器历史曲线<span class="r">${RANGE_LABEL[VIEW.range] || VIEW.range} · 集群聚合</span></div><div class="pb">${historyHtml()}</div></div>
+  </div>`;
+}
+
+/* ---------- 单集群视图：Tab2 节点监控 ---------- */
+function renderNodeTab() {
+  const nodes = CV.nodes || [];
+  if (!nodes.length) { document.getElementById('cBody').innerHTML = '<div class="empty">暂无节点数据</div>'; return; }
+  const rows = nodes.map(n => {
+    const cpu = n.cpu_pct, mem = n.mem_pct;
+    const bad = n.ready !== 'Ready';
+    const barCls = p => (p == null ? '' : p >= 80 ? 'e' : p >= 60 ? 'w' : '');
+    const w = p => (p == null ? 0 : Math.max(0, Math.min(100, p)));
+    const pct = p => (p == null ? '—' : Math.round(p) + '%');
+    return `<tr>
+      <td><span class="dot ${bad ? 'err' : (n.schedulable === false ? 'warn' : 'ok')}"></span><b>${esc(n.name)}</b></td>
+      <td>${bad ? '<span class="tag err">异常</span>' : (n.schedulable === false ? '<span class="tag warn">已隔离</span>' : '<span class="tag ok">Ready</span>')}</td>
+      <td class="dim">${esc(n.roles || 'worker')}</td>
+      <td style="width:24%"><div class="bt"><span class="lb">CPU</span><span class="tr ${barCls(cpu)}"><i style="width:${w(cpu)}%"></i></span><span class="vv num">${pct(cpu)}</span></div></td>
+      <td style="width:24%"><div class="bt"><span class="lb">内存</span><span class="tr ${barCls(mem)}"><i style="width:${w(mem)}%"></i></span><span class="vv num">${pct(mem)}</span></div></td>
+      <td class="dim num">${num(n.pods_count)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('cBody').innerHTML = `
+  <div class="panel">
+    <div class="ph"><span class="bar"></span>节点监控<span class="r">${nodes.length} 节点 · CPU / 内存水位</span></div>
+    <div class="pb"><table class="tbl">
+      <thead><tr><th>节点</th><th>状态</th><th>角色</th><th>CPU 水位</th><th>内存水位</th><th>Pod</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+
+function renderClusterBody() {
+  if (VIEW.page !== 'cluster') return;
+  if (VIEW.tab === 'node') renderNodeTab(); else renderServiceTab();
+}
+
+/* ---------- SSE：/stats/dashboard/stream ---------- */
 let _es = null;
 let _sseTimer = null;
 function sseRefresh() {
@@ -601,7 +942,7 @@ function startSSE() {
     _es = new EventSource(API + '/stats/dashboard/stream?token=' + encodeURIComponent(token));
     _es.addEventListener('dashboard', () => { liveOk = true; setLive('ok'); sseRefresh(); });
     _es.onopen = () => { liveOk = true; setLive('ok'); };
-    _es.onerror = () => { liveOk = false; setLive('poll'); };  // EventSource 原生自动重连；5s 轮询兜底
+    _es.onerror = () => { liveOk = false; setLive('poll'); };
   } catch (e) { liveOk = false; setLive('poll'); }
 }
 setInterval(() => { if (_es && _es.readyState === EventSource.CLOSED && TOK()) startSSE(); }, 30000);
@@ -609,26 +950,27 @@ setInterval(() => { if (_es && _es.readyState === EventSource.CLOSED && TOK()) s
 /* ---------- 时钟 ---------- */
 function tick() {
   const d = new Date();
-  $('#clockT').textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  $('#clockD').textContent = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 周${'日一二三四五六'[d.getDay()]}`;
+  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const dd = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 周${'日一二三四五六'[d.getDay()]}`;
+  $('#clockT').textContent = t; $('#clockD').textContent = dd;
+  const ct = $('#cClockT'), cd = $('#cClockD');
+  if (ct) ct.textContent = t; if (cd) cd.textContent = dd;
 }
 
 /* ---------- 启动 ---------- */
 let _refreshing = false;
 (async function boot() {
-  renderAll();                       // 先渲染占位（D=null），不白屏不塌陷
+  renderAll();
   tick(); setInterval(tick, 1000);
   try { await loadData(); } catch (e) { setLive('err'); }
   startSSE();
-  // 5s 轮询兜底（SSE 失效时仍持续更新；后台降频由浏览器节流控制）
   setInterval(async () => {
     if (_refreshing) return;
     _refreshing = true;
-    try { await loadData(); } catch (e) {}
+    try { if (VIEW.page === 'cluster') await refreshCluster(); else await loadData(); } catch (e) {}
     finally { _refreshing = false; }
   }, 5000);
-  // 回到前台/网络恢复立即补刷
-  const resume = () => { if (!document.hidden && Date.now() - lastAt > 1500) { try { loadData(); } catch (e) {} } };
+  const resume = () => { if (!document.hidden && Date.now() - lastAt > 1500) { try { if (VIEW.page === 'cluster') refreshCluster(); else loadData(); } catch (e) {} } };
   document.addEventListener('visibilitychange', resume);
   window.addEventListener('focus', resume);
   window.addEventListener('online', resume);
