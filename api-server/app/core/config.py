@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     REGISTRY_PASSWORD: str = ""
     REGISTRY_CREDS: str = ""
 
+    # 阶段 7：ReAct 决策循环开关（默认关闭，避免影响现有单次 AI 诊断链路）。
+    #   开启后报警自愈诊断走「多轮自主调工具」循环；超限/异常自动降级回单次诊断（不阻塞闭环）。
+    AGENT_REACT_LOOP_ENABLED: bool = False
+
     # 监控指标保留期（R27-1）：必须与 k8s-executor 读同一个环境变量，
     # 否则「平台直连」与「agent 接入」两种方式的 pod_metrics 可查时长会不一致。
     #   原始 60s 采样保留小时数（默认 24h）
