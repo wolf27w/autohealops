@@ -87,8 +87,6 @@ export default function ApprovalList() {
 
   const pending = pendingData?.items ?? []
   const pendingTotal = pendingData?.total ?? 0
-  const manualPending = pending.filter((a) => a.kind === 'manual_assist')
-  const riskPending = pending.filter((a) => a.kind !== 'manual_assist')
 
   const renderPendingList = (list: Approval[]) => (
     <div>
@@ -106,9 +104,7 @@ export default function ApprovalList() {
                 <Checkbox checked={selected.includes(a.id)} onChange={(e) => {
                   setSelected(e.target.checked ? [...selected, a.id] : selected.filter((x) => x !== a.id))
                 }} />
-                <Tag color={a.kind === 'manual_assist' ? 'orange' : 'blue'}>
-                  {a.kind === 'manual_assist' ? '人工协助' : '风险审批'}
-                </Tag>
+                <Tag color="blue">风险审批</Tag>
                 <span>审批 #{a.id} ｜ 级别 {a.required_level === 5 ? '双人' : '单人'}</span>
                 <Button size="small" type="primary" onClick={() => openApproval(a)}>审批</Button>
                 <Tooltip title="追加一名审批人"><Button size="small" onClick={() => { setAssignTarget(a); setAssignName('') }}>加签</Button></Tooltip>
@@ -128,7 +124,7 @@ export default function ApprovalList() {
       {/* 待审批服务端分页：后端不分 kind，两个 tab 共用同一总页数 */}
       <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <span style={{ color: '#999', fontSize: 12 }}>
-          待审批共 {pendingTotal} 条（人工协助 + 风险审批合计，每页 {PENDING_PAGE_SIZE} 条）
+          待审批共 {pendingTotal} 条（每页 {PENDING_PAGE_SIZE} 条）
         </span>
         <Pagination size="small" current={pendingPage} pageSize={PENDING_PAGE_SIZE} total={pendingTotal}
           showSizeChanger={false} onChange={setPendingPage} />
@@ -140,8 +136,7 @@ export default function ApprovalList() {
     <div>
       <Tabs
         items={[
-          { key: 'manual', label: '人工协助', children: renderPendingList(manualPending) },
-          { key: 'risk', label: '风险审批', children: renderPendingList(riskPending) },
+          { key: 'risk', label: '风险审批', children: renderPendingList(pending) },
           { key: 'db-approvals', label: '数据库审核', children: <DbApprovalsTab /> },
         ]}
       />
@@ -155,9 +150,7 @@ export default function ApprovalList() {
         {current && (
           <div style={{ marginBottom: 12, padding: 8, background: '#fafafa', borderRadius: 4 }}>
             <div style={{ marginBottom: 6 }}>
-              <Tag color={current.kind === 'manual_assist' ? 'orange' : 'blue'}>
-                {current.kind === 'manual_assist' ? '人工协助' : '风险审批'}
-              </Tag>
+              <Tag color="blue">风险审批</Tag>
               <b>审批 #{current.id}</b>
             </div>
             {(detail?.alert || current.alert_fault_type) && (

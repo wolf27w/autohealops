@@ -33,7 +33,10 @@ async def list_approvals(status: str | None = None, page: int = 1, page_size: in
     """审批列表：同一 pod（资源名+命名空间）去重（保留最新一张）+ 分页
 
     status 可选值：pending / approved / rejected / cancelled / ...；
-    特殊值 handled = 所有非 pending（已处理）。
+    特殊值 handled = 所有非 pending（已处理，保留兼容返回，前端不再使用）。
+
+    口径（D4/H7）：审批列表只展示「风险审批」类单据；manual_assist（人工协助）已改为
+    生成工单，不再作为审批单展示（存量数据由 scripts/migrate_manual_assist.py 迁移归档）。
     """
     if page < 1:
         page = 1
@@ -43,6 +46,8 @@ async def list_approvals(status: str | None = None, page: int = 1, page_size: in
         page_size = 1000  # 上限放宽：待审批列表前端做服务端分页，不再静默截断成 20
     async with async_session() as session:
         query = select(Approval).order_by(Approval.id.desc())
+        # D4/H7：人工协助单不再作为审批展示（统一排除，保证统计数字口径一致）
+        query = query.where(Approval.kind != "manual_assist")
         if status == "handled":
             query = query.where(Approval.status != "pending")
         elif status:
