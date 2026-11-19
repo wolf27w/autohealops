@@ -176,7 +176,9 @@ def _hash_token(token: str) -> str:
 
 def _new_agent_token() -> str:
     import secrets
-    return secrets.token_urlsafe(32)
+    # H10：agent 接入令牌固定 266 字符（urlsafe base64，无填充）。
+    # token_urlsafe(199) → 199 字节 → base64 268 字符去掉末尾 2 个 '=' → 恰好 266 字符。
+    return secrets.token_urlsafe(199)
 
 
 def _public_base_url() -> str:
