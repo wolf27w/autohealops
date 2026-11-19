@@ -51,6 +51,7 @@ const AgentChat = lazy(() => import('./pages/AgentChat'))
 const DiagnoseStrategy = lazy(() => import('./pages/DiagnoseStrategy'))
 const CustomTasks = lazy(() => import('./pages/CustomTasks'))
 const ReleaseHistory = lazy(() => import('./pages/ReleaseHistory'))
+const AgentTrace = lazy(() => import('./pages/AgentTrace'))
 const ExecutionsPage = lazy(() => import('./pages/ExecutionsPage'))       // H9/D5：执行与审批记录 → 只展示执行明细
 const ExecutionDetail = lazy(() => import('./pages/ExecutionDetail'))
 // 平台
@@ -172,6 +173,7 @@ export default function App() {
         <Route path="diagnose/strategy" element={guard('/diagnose/strategy', <DiagnoseStrategy />)} />
         <Route path="diagnose/tasks" element={guard('/diagnose/tasks', <CustomTasks />)} />
         <Route path="diagnose/release" element={<ReleaseHistory />} />
+        <Route path="diagnose/traces" element={guard('/diagnose/traces', <AgentTrace />)} />
         <Route path="diagnose/executions" element={<ExecutionsPage />} />
         <Route path="diagnose/executions/:planId" element={<ExecutionDetail />} />
 

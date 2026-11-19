@@ -54,6 +54,7 @@ export const NAV: NavGroup[] = [
       { key: '/diagnose/tasks', label: '定时与批量任务', icon: 'ClockCircleOutlined', minRole: 'admin' },
       { key: '/diagnose/release', label: '发布历史', icon: 'RocketOutlined' },
       { key: '/diagnose/executions', label: '执行明细', icon: 'AuditOutlined' },
+      { key: '/diagnose/traces', label: 'Agent 运行轨迹', icon: 'NodeIndexOutlined' },
     ],
   },
   {

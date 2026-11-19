@@ -11,7 +11,7 @@ import {
   ApartmentOutlined, BellOutlined, FullscreenOutlined, FullscreenExitOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, DatabaseOutlined, MessageOutlined,
   ControlOutlined, SunOutlined, MoonOutlined, StopOutlined, DesktopOutlined, CalendarOutlined,
-  CodeOutlined, RocketOutlined, AuditOutlined,
+  CodeOutlined, RocketOutlined, AuditOutlined, NodeIndexOutlined,
   SearchOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
@@ -55,6 +55,7 @@ const ICONS: Record<string, ReactNode> = {
   ClockCircleOutlined: <ClockCircleOutlined />,
   RocketOutlined: <RocketOutlined />,
   AuditOutlined: <AuditOutlined />,
+  NodeIndexOutlined: <NodeIndexOutlined />,
   UserOutlined: <UserOutlined />,
   RobotOutlined: <RobotOutlined />,
   BarChartOutlined: <BarChartOutlined />,
