@@ -444,6 +444,23 @@ async def startup_tasks() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("Pod 重启原因诊断扫描启动失败: %s", e)
 
+    # 异常 Pod 日志留存（R60 P2b：每 180 秒，CrashLoop/镜像拉取失败/重启增长/Failed 的 Pod 抓崩溃日志落盘）
+    try:
+        from app.services.crash_log_service import collect_crash_logs, crash_log_enabled
+
+        async def _crash_log_job():
+            if not crash_log_enabled():
+                return
+            n = await collect_crash_logs()
+            if n:
+                logger.info("异常 Pod 日志留存完成：本轮留存 %d 份", n)
+
+        _background_tasks.append(asyncio.create_task(
+            _interval_worker("异常Pod日志留存", 180, _crash_log_job, 300.0)))
+        logger.info("异常 Pod 日志留存已启动（每 180 秒，CRASH_LOG_ENABLED 开关控制）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("异常 Pod 日志留存启动失败: %s", e)
+
     # 主动诊断（应用巡检）：持续高水位/频繁重启但无告警 → 自动 AI 全面诊断（不建告警）
     try:
         from app.services.proactive_diagnosis_service import background_loop as proactive_loop
