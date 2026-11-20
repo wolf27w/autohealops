@@ -54,6 +54,7 @@ export const NAV: NavGroup[] = [
       { key: '/diagnose/release', label: '发布历史', icon: 'RocketOutlined' },
       { key: '/diagnose/executions', label: '执行明细', icon: 'AuditOutlined' },
       { key: '/diagnose/traces', label: 'Agent 运行轨迹', icon: 'NodeIndexOutlined' },
+      { key: '/diagnose/eval', label: '诊断质量评估', icon: 'AuditOutlined' },
     ],
   },
   {
