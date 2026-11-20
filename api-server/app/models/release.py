@@ -66,6 +66,11 @@ class ReleaseBuild(Base):
     # R19 回滚：本次发布是基于哪条历史记录做的回滚（NULL = 正常发布）
     rollback_of_build_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     rollback_reason: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    # R60 P2a 发布基线：发布前后镜像 + 对应 commit（都可空/默认空串，不阻断存量数据）
+    image_tag_before: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    image_tag_after: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    commit_sha: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    commit_subject: Mapped[str] = mapped_column(String(500), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

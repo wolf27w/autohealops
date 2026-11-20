@@ -380,6 +380,79 @@ async def list_branches(payload: dict, user=Depends(require_operator)):
     }}
 
 
+def _extract_first_container_image(yaml_text: str) -> str:
+    """从 Deployment YAML 提取第一个容器的镜像（image 字段）。
+
+    优先 yaml.safe_load 结构化解析；失败则正则回退。取不到返回空串（不阻断发布）。
+    """
+    if not yaml_text:
+        return ""
+    import re
+    try:
+        import yaml
+        doc = yaml.safe_load(yaml_text) or {}
+        spec = doc.get("spec") if isinstance(doc.get("spec"), dict) else {}
+        tpl = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+        tpl_spec = tpl.get("spec") if isinstance(tpl, dict) else {}
+        containers = tpl_spec.get("containers") or spec.get("containers") or []
+        if containers and isinstance(containers[0], dict):
+            img = containers[0].get("image") or ""
+            if img:
+                return str(img).strip()
+    except Exception:  # noqa: BLE001
+        pass
+    for line in (yaml_text.splitlines() or []):
+        m = re.match(r"^\s*-?\s*image:\s*['\"]?([^'\"\s]+)", line)
+        if m:
+            return m.group(1).strip()
+    return ""
+
+
+def _extract_image_tag_from_log(text: str) -> str:
+    """从 Jenkins 构建日志正则出发布后镜像（如 'Pushed registry/ns/svc:tag'）。
+
+    取不到返回空串；不猜。
+    """
+    if not text:
+        return ""
+    import re
+    for pat in (
+        re.compile(r"Pushed\s+(?P<img>\S+)", re.IGNORECASE),
+        re.compile(r"Successfully\s+tagged\s+(?P<img>\S+)", re.IGNORECASE),
+        re.compile(r"Successfully\s+pushed\s+(?P<img>\S+)", re.IGNORECASE),
+    ):
+        m = pat.search(text)
+        if m:
+            img = m.group("img").strip().rstrip(".,;\"'")
+            if img and ":" in img:
+                return img
+    return ""
+
+
+async def _fill_build_baseline(j: JenkinsInstance, build: ReleaseBuild) -> None:
+    """R60 P2a：构建成功后回填 commit（changeSets）+ 发布后镜像（从日志正则）。
+
+    幂等：只在 commit_sha 为空时由调用方调用；内部任何失败都吞掉、不抛异常、不阻断状态更新。
+    """
+    client = _get_client(j)
+    try:
+        changes = await client.get_build_changesets(build.job_name, build.build_number)
+        if changes:
+            build.commit_sha = changes[0].get("commit_sha") or ""
+            build.commit_subject = changes[0].get("subject") or ""
+        try:
+            log_res = await client.get_build_log(build.job_name, build.build_number, 0)
+            tag = _extract_image_tag_from_log((log_res or {}).get("text") or "")
+            if tag:
+                build.image_tag_after = tag
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("回填构建基线失败 build=%s: %s", build.id, e)
+    finally:
+        await client.close()
+
+
 @router.post("/trigger")
 async def trigger_release(payload: dict, user=Depends(require_operator)):
     """触发发布：namespace 标签 → 集群权限 → 映射(服务→job) → 服务账号触发 → 写构建描述（真实用户）。
@@ -406,6 +479,18 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
     if not m or not j:
         return {"code": 400, "message": "该服务未配置发布映射（管理员在 系统设置→发布 里配置）", "data": None}
 
+    # R60 P2a：发布前记录当前镜像（image_tag_before），取不到不阻断发布
+    image_tag_before = ""
+    try:
+        from app.clients.executor_client import executor_client
+        yr = await executor_client.acall(
+            executor_client.get_workload_yaml, cluster_id, "deployment", namespace, service_name
+        )
+        if (yr or {}).get("success"):
+            image_tag_before = _extract_first_container_image((yr or {}).get("yaml") or "")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("取发布前镜像失败 %s/%s: %s", namespace, service_name, e)
+
     params = {m.service_param: service_name}
     if branch:
         params[m.branch_param] = branch
@@ -429,6 +514,7 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
             cluster_id=cluster_id, namespace=namespace, service_name=service_name,
             jenkins_instance_id=m.jenkins_instance_id, job_name=m.job_name,
             branch=branch, build_number=number, status="queued",
+            image_tag_before=image_tag_before,
             triggered_by=user.id,
             triggered_by_name=f"{getattr(user, 'username', '') or ''}({mode})",
         )
@@ -589,8 +675,12 @@ async def build_status(build_id: int, user=Depends(require_operator)):
         status = st["result"].lower()
     async with async_session() as session:
         bb = await session.get(ReleaseBuild, build_id)
-        if bb and bb.status != status:
-            bb.status = status
+        if bb:
+            if bb.status != status:
+                bb.status = status
+            # R60 P2a：构建成功且尚未记录 commit 时，回填 commit + 发布后镜像
+            if status == "success" and not bb.commit_sha:
+                await _fill_build_baseline(j, bb)
             await session.commit()
     return {"code": 200, "message": "success", "data": {
         "build_number": st.get("number"), "building": st.get("building"),

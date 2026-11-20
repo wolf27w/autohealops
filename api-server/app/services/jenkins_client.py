@@ -146,6 +146,31 @@ class JenkinsClient:
         j = await self._get_json(f"job/{quote(job_name)}/{number}/api/json?tree=number,building,result,displayName")
         return {"number": j.get("number"), "building": bool(j.get("building")), "result": j.get("result")}
 
+    async def get_build_changesets(self, job_name: str, number: int) -> list[dict]:
+        """取某次构建的 changeSets（commit 信息）→ [{commit_sha, subject, author, timestamp}]。
+
+        无数据返回 []；异常返回 [] 并记日志（不抛异常）。
+        """
+        try:
+            j = await self._get_json(
+                f"job/{quote(job_name)}/{number}/api/json"
+                f"?tree=changeSet[items[commitId,msg,author[fullName],timestamp]]"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("取 changeSets 失败 job=%s #%s: %s", job_name, number, e)
+            return []
+        out: list[dict] = []
+        change_set = j.get("changeSet") or {}
+        for it in change_set.get("items") or []:
+            author = it.get("author") or {}
+            out.append({
+                "commit_sha": it.get("commitId") or "",
+                "subject": it.get("msg") or "",
+                "author": author.get("fullName") if isinstance(author, dict) else "",
+                "timestamp": it.get("timestamp"),
+            })
+        return out
+
     async def get_build_log(self, job_name: str, number: int, start: int = 0) -> dict:
         """返回 {text, size, has_more}（progressiveText）。"""
         path = f"job/{quote(job_name)}/{number}/logText/progressiveText?start={start}"

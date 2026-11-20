@@ -731,6 +731,138 @@ async def _h_get_workload_events_timeline(args: dict, context: dict) -> dict:
     return {"success": True, "output": "\n".join(parts)[:8000], "error": ""}
 
 
+async def _h_get_change_history(args: dict, context: dict) -> dict:
+    """发布变更记录：查 ReleaseBuild 最近 N 条（时间/操作人/分支/构建号/状态/前后镜像/commit）。"""
+    service = (args.get("service") or "").strip()
+    if not service:
+        service = (context.get("workload_name") or "").strip() or (context.get("resource_name") or "").strip()
+    try:
+        limit = int(args.get("limit", 10))
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 50))
+
+    from sqlalchemy import select
+    from app.core.database import async_session
+    from app.models import ReleaseBuild
+
+    stmt = select(ReleaseBuild).order_by(ReleaseBuild.created_at.desc(), ReleaseBuild.id.desc()).limit(limit)
+    if service:
+        stmt = stmt.where(ReleaseBuild.service_name == service)
+    try:
+        async with async_session() as session:
+            rows = list((await session.execute(stmt)).scalars())
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"查询发布记录失败: {e}"}
+
+    if not rows:
+        return {"success": True, "output": "(无发布记录)", "error": ""}
+
+    status_cn = {"queued": "排队中", "running": "运行中", "success": "成功",
+                 "failure": "失败", "aborted": "中止", "unknown": "未知"}
+    lines = []
+    latest_success = None
+    latest_failure = None
+    for b in rows:
+        ts = str(b.created_at or "")[:16]
+        img_before = b.image_tag_before or "-"
+        img_after = b.image_tag_after or "-"
+        commit = " ".join(x for x in (b.commit_sha, b.commit_subject) if x) or "-"
+        line = (
+            f"{ts} | {b.triggered_by_name or '-'} | 分支 {b.branch or '-'} | "
+            f"构建 #{b.build_number} | {status_cn.get(b.status, b.status or '-')} | "
+            f"镜像 {img_before} → {img_after} | commit {commit}"
+        )
+        lines.append(line)
+        if b.status == "success" and latest_success is None:
+            latest_success = line
+        if b.status == "failure" and latest_failure is None:
+            latest_failure = line
+    parts = [f"最近 {len(rows)} 条发布记录（服务={service or '全部'}，新→旧）："] + lines
+    parts.append(f"最近成功: {latest_success or '(无)'}")
+    parts.append(f"最近失败: {latest_failure or '(无)'}")
+    return {"success": True, "output": "\n".join(parts)[:6000], "error": ""}
+
+
+async def _h_get_crash_logs(args: dict, context: dict) -> dict:
+    """崩溃日志留存查询（懒导入 crash_log_service，与并行开发解耦）。"""
+    workload = (args.get("workload") or "").strip()
+    if not workload:
+        workload = (context.get("workload_name") or "").strip() or (context.get("resource_name") or "").strip()
+    try:
+        hours = int(args.get("hours", 24))
+    except (TypeError, ValueError):
+        hours = 24
+    hours = max(1, min(hours, 24 * 30))
+
+    try:
+        from app.services.crash_log_service import list_crash_logs
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"崩溃日志服务暂不可用（模块缺失/加载失败）: {e}"}
+    try:
+        result = list_crash_logs(workload=workload or None, hours=hours)
+        import inspect
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"查询崩溃日志失败: {e}"}
+
+    rows = result
+    if isinstance(result, dict):
+        rows = result.get("items") or result.get("data") or []
+    if not isinstance(rows, (list, tuple)):
+        rows = []
+    if not rows:
+        return {"success": True, "output": f"(近 {hours} 小时无留存日志)", "error": ""}
+
+    lines = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        lines.append(
+            f"{r.get('time') or r.get('created_at') or r.get('logged_at') or '-'} | "
+            f"{r.get('namespace') or r.get('ns') or '-'} | "
+            f"{r.get('pod') or r.get('pod_name') or '-'} | "
+            f"{r.get('container') or r.get('container_name') or '-'} | "
+            f"{r.get('failure_reason') or r.get('reason') or '-'} | "
+            f"{r.get('retained_path') or r.get('path') or '-'} | "
+            f"{str(r.get('first_line') or r.get('summary') or '-')[:120]}"
+        )
+    return {"success": True, "output": "\n".join(lines)[:6000], "error": ""}
+
+
+async def _h_compare_images(args: dict, context: dict) -> dict:
+    """镜像差异对比（懒导入 image_compare_service，与并行开发解耦）。"""
+    image_a = (args.get("image_a") or "").strip()
+    image_b = (args.get("image_b") or "").strip()
+    if not image_a or not image_b:
+        return {"success": False, "output": "", "error": "缺少 image_a / image_b（必填）"}
+
+    try:
+        from app.services.image_compare_service import compare_images
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"镜像对比服务暂不可用（模块缺失/加载失败）: {e}"}
+    try:
+        result = compare_images(image_a, image_b)
+        import inspect
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"镜像对比失败: {e}"}
+
+    if isinstance(result, str):
+        return {"success": True, "output": result, "error": ""}
+    if isinstance(result, dict):
+        err = result.get("error")
+        out = result.get("output") or result.get("summary") or result.get("diff") or ""
+        if isinstance(out, (list, tuple)):
+            out = "\n".join(str(x) for x in out)
+        if err and not out:
+            return {"success": False, "output": "", "error": str(err)}
+        return {"success": True, "output": str(out) or "(无差异)", "error": str(err or "")}
+    return {"success": True, "output": str(result), "error": ""}
+
+
 # ============ 注册表 ============
 
 TOOL_REGISTRY: dict[str, dict] = {}
@@ -940,6 +1072,56 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_get_workload_events_timeline,
+})
+
+
+_register({
+    "name": "get_change_history",
+    "label": "发布变更记录",
+    "description": (
+        "查询平台发布记录（ReleaseBuild）：每次发布的时间/操作人/分支/构建号/状态/前后镜像/commit。"
+        "用于诊断「哪次发布改了镜像导致问题」（只读）。"
+    ),
+    "args_schema": {
+        "service": {"type": "string", "required": False,
+                    "description": "服务名（留空则取上下文 workload_name / resource_name）", "default": ""},
+        "limit": {"type": "int", "required": False, "description": "返回条数，默认 10（上限 50）", "default": 10},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_change_history,
+})
+
+_register({
+    "name": "get_crash_logs",
+    "label": "崩溃日志留存",
+    "description": (
+        "查询崩溃日志留存（近 N 小时的崩溃/失败留存日志）：时间/命名空间/Pod/容器/失败原因/留存路径/首行摘要。"
+        "用于诊断「发布后新 Pod 崩溃」时找到被留存下来的崩溃现场（只读）。"
+    ),
+    "args_schema": {
+        "workload": {"type": "string", "required": False, "description": "工作负载名（可选）", "default": ""},
+        "hours": {"type": "int", "required": False, "description": "回溯小时数，默认 24（上限 720）", "default": 24},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_crash_logs,
+})
+
+_register({
+    "name": "compare_images",
+    "label": "镜像差异对比",
+    "description": (
+        "对比两个镜像的 Cmd/Entrypoint/Env/Labels/层差异摘要。"
+        "用于诊断「新旧镜像行为差异导致起不来/异常」时定位镜像本身改了哪些配置（只读）。"
+    ),
+    "args_schema": {
+        "image_a": {"type": "string", "required": True, "description": "镜像 A（对比基准，如 registry/ns/svc:old）"},
+        "image_b": {"type": "string", "required": True, "description": "镜像 B（对比目标，如 registry/ns/svc:new）"},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_compare_images,
 })
 
 
