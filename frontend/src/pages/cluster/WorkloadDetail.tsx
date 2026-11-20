@@ -1,6 +1,6 @@
 // 工作负载详情页（整页）：概览 / 元数据 / 环境变量 / 实时事件 / 历史事件 / 监控
 // 路由形态：/clusters/:id/workloads/:kind/:namespace/:name（路由由父会话接线，此处用 useParams）
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Breadcrumb, Card, Descriptions, Button, Space, Table, Tag, Modal, InputNumber, Input, Empty, Dropdown, Tabs, Select, message,
 } from 'antd'
@@ -17,6 +17,7 @@ import WorkloadMountsPanel from '../../components/WorkloadMountsPanel'
 import WorkloadCreateModal, { type WorkloadCreateTarget } from '../../components/WorkloadCreateModal'
 import { parseYaml, asMap, asArr, asStr, yamlToValues, type YamlNode, type WorkloadValues, type VolumeMountValue, type VolumeType } from '../../components/workloadYaml'
 import MonitorPanel from '../../components/cluster/MonitorPanel'
+import HpaPanel from '../../components/cluster/HpaPanel'
 import {
   getWorkloads, getClusters, getClusterDetail, getClusterPods, getWorkloadContainers,
   getWorkloadYaml, getWorkloadEventsRealtime, getWorkloadEventHistory, scaleWorkload, rolloutWorkload, deleteWorkload,
@@ -196,6 +197,34 @@ export default function WorkloadDetail() {
   const readyReplicas = meta.ready ?? workload?.ready_replicas ?? 0
   const status = desired === 0 ? '已停止' : readyReplicas >= desired ? '运行中' : '更新中'
   const statusColor = { 运行中: 'green', 更新中: 'orange', 已停止: 'default' }[status]
+
+  // —— 自动刷新：滚动更新中 3s、稳定 5s；页面隐藏时跳过（只更新数据，不重建视图/不触发提示）——
+  const loadRef = useRef(load)
+  const loadPodsRef = useRef(loadPods)
+  const desiredRef = useRef(desired)
+  const readyRef = useRef(readyReplicas)
+  loadRef.current = load
+  loadPodsRef.current = loadPods
+  desiredRef.current = desired
+  readyRef.current = readyReplicas
+
+  useEffect(() => {
+    let stopped = false
+    let timer: number
+    const tick = () => {
+      if (stopped) return
+      if (!document.hidden) {
+        loadRef.current()
+        loadPodsRef.current()
+      }
+      const d = desiredRef.current
+      const r = readyRef.current
+      const updating = d > 0 && r < d
+      timer = window.setTimeout(tick, updating ? 3000 : 5000)
+    }
+    timer = window.setTimeout(tick, 5000)
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [id, kind, namespace, name])
 
   const fmtTime = (v?: string) => (v ? String(v).slice(0, 19).replace('T', ' ') : '-')
 
@@ -509,6 +538,9 @@ export default function WorkloadDetail() {
           { key: 'env', label: '环境变量', children: (
             <WorkloadMountsPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} onlySection="env" />
           ) },
+          { key: 'hpa', label: '弹性伸缩', children: (
+            <HpaPanel clusterId={clusterId} kind={kind} namespace={namespace} name={name} />
+          ) },
           { key: 'events-realtime', label: '实时事件', children: realtimeEventsTab },
           { key: 'events-history', label: '历史事件', children: historyEventsTab },
           { key: 'monitor', label: '监控', children: (
@@ -517,7 +549,7 @@ export default function WorkloadDetail() {
         ]} />
       </Card>
 
-      <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} />
+      <WorkloadYamlModal target={wlYaml} onClose={() => setWlYaml(null)} onApplied={load} />
       <WorkloadMetricsDrawer
         target={metricsOpen ? { clusterId, kind, namespace, name } : null}
         onClose={() => setMetricsOpen(false)}

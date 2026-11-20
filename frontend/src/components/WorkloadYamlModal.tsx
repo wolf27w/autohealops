@@ -10,7 +10,7 @@ export interface WorkloadTarget {
   name: string
 }
 
-export default function WorkloadYamlModal({ target, onClose }: { target: WorkloadTarget | null; onClose: () => void }) {
+export default function WorkloadYamlModal({ target, onClose, onApplied }: { target: WorkloadTarget | null; onClose: () => void; onApplied?: () => void }) {
   const [yaml, setYaml] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -31,6 +31,7 @@ export default function WorkloadYamlModal({ target, onClose }: { target: Workloa
       await applyWorkloadYaml(target.clusterId, target.kind, target.namespace, target.name, yaml)
       message.success('已应用（整个服务）')
       onClose()
+      onApplied?.()
     } catch {
       message.error('YAML 应用失败')
     } finally {
