@@ -470,6 +470,42 @@ export const getWorkloadContainers = (clusterId: number, kind: string, ns: strin
   http.get<{ containers: { name: string; image: string }[] }>(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/containers`)
 export const applyWorkloadYaml = (clusterId: number, kind: string, ns: string, name: string, yaml: string) =>
   http.put(`/resources/clusters/${clusterId}/workloads/${kind}/${ns}/${name}/yaml`, { yaml })
+// ==================== R57：HPA（弹性伸缩） ====================
+export interface HpaMetric {
+  type: 'Resource' | 'Pods' | 'Object' | 'External'
+  name: string
+  target_type: 'Utilization' | 'AverageValue' | 'Value'
+  target_utilization?: number
+  target_value?: string
+  current_value?: string
+  current_utilization?: number
+  current_available?: boolean
+}
+export interface HpaInfo {
+  namespace: string
+  name: string
+  target_kind: string
+  target_name: string
+  target_api_version?: string
+  min_replicas: number
+  max_replicas: number
+  current_replicas: number
+  desired_replicas: number
+  metrics: HpaMetric[]
+  conditions: string[]
+  last_scale_time?: string
+  scale_up_stabilization_seconds?: number
+  scale_down_stabilization_seconds?: number
+}
+export const listWorkloadHpa = (clusterId: number, ns: string, kind?: string, name?: string) =>
+  http.get<{ items: HpaInfo[] }>(`/resources/clusters/${clusterId}/hpa`, { params: { namespace: ns, target_kind: kind, target_name: name } })
+export const getHpa = (clusterId: number, ns: string, name: string) =>
+  http.get<{ item: HpaInfo; yaml: string }>(`/resources/clusters/${clusterId}/hpa/${ns}/${name}`)
+export const applyHpa = (clusterId: number, data: Payload) =>
+  http.post<{ message: string; yaml?: string }>(`/resources/clusters/${clusterId}/hpa/apply`, data)
+export const deleteHpa = (clusterId: number, ns: string, name: string) =>
+  http.delete(`/resources/clusters/${clusterId}/hpa/${ns}/${name}`)
+
 // 创建/编辑工作负载（name 留空=按 YAML 内 metadata.name 创建）
 export const applyWorkload = (clusterId: number, data: Payload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/apply`, data)
