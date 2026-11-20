@@ -775,6 +775,119 @@ func (s *Server) RolloutHistory(ctx context.Context, req *pb.RolloutHistoryReque
 	return &pb.RolloutHistoryResponse{Success: true, Revisions: revs}, nil
 }
 
+// ListHPA 列出命名空间下的 HPA（可按目标 workload 过滤）
+func (s *Server) ListHPA(ctx context.Context, req *pb.ListHPARequest) (*pb.ListHPAResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	items, err := ex.ListHPA(ctx, req.Namespace, req.TargetKind, req.TargetName)
+	if err != nil {
+		return &pb.ListHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	out := make([]*pb.HPAInfo, 0, len(items))
+	for i := range items {
+		out = append(out, hpaToPb(&items[i]))
+	}
+	return &pb.ListHPAResponse{Success: true, Items: out}, nil
+}
+
+// GetHPA 获取单个 HPA 详情 + YAML
+func (s *Server) GetHPA(ctx context.Context, req *pb.GetHPARequest) (*pb.GetHPAResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	info, y, err := ex.GetHPA(ctx, req.Namespace, req.Name)
+	if err != nil {
+		return &pb.GetHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.GetHPAResponse{Success: true, Item: hpaToPb(&info), Yaml: y}, nil
+}
+
+// ApplyHPA 创建/更新 HPA（dry-run 只回 YAML 不落盘）
+func (s *Server) ApplyHPA(ctx context.Context, req *pb.ApplyHPARequest) (*pb.ApplyHPAResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ApplyHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	metrics := make([]executor.HPAMetricSpec, 0, len(req.Metrics))
+	for _, m := range req.Metrics {
+		metrics = append(metrics, executor.HPAMetricSpec{
+			Type:              m.Type,
+			Name:              m.Name,
+			TargetType:        m.TargetType,
+			TargetUtilization: m.TargetUtilization,
+			TargetValue:       m.TargetValue,
+		})
+	}
+	spec := executor.ApplyHPASpec{
+		Namespace:                     req.Namespace,
+		Name:                          req.Name,
+		TargetKind:                    req.TargetKind,
+		TargetName:                    req.TargetName,
+		MinReplicas:                   req.MinReplicas,
+		MaxReplicas:                   req.MaxReplicas,
+		Metrics:                       metrics,
+		ScaleUpStabilizationSeconds:   req.ScaleUpStabilizationSeconds,
+		ScaleDownStabilizationSeconds: req.ScaleDownStabilizationSeconds,
+	}
+	y, err := ex.ApplyHPA(ctx, spec, req.DryRun)
+	if err != nil {
+		return &pb.ApplyHPAResponse{Success: false, Yaml: y, Error: err.Error()}, nil
+	}
+	msg := "已应用"
+	if req.DryRun {
+		msg = "dry-run 预览"
+	}
+	return &pb.ApplyHPAResponse{Success: true, Message: msg, Yaml: y}, nil
+}
+
+// DeleteHPA 删除 HPA
+func (s *Server) DeleteHPA(ctx context.Context, req *pb.DeleteHPARequest) (*pb.DeleteHPAResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.DeleteHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	if err := ex.DeleteHPA(ctx, req.Namespace, req.Name); err != nil {
+		return &pb.DeleteHPAResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.DeleteHPAResponse{Success: true, Message: "已删除"}, nil
+}
+
+// hpaToPb 将 executor 侧 HPAInfo 转成 proto HPAInfo
+func hpaToPb(in *executor.HPAInfo) *pb.HPAInfo {
+	out := &pb.HPAInfo{
+		Namespace:                     in.Namespace,
+		Name:                          in.Name,
+		TargetKind:                    in.TargetKind,
+		TargetName:                    in.TargetName,
+		TargetApiVersion:              in.TargetApiVersion,
+		MinReplicas:                   in.MinReplicas,
+		MaxReplicas:                   in.MaxReplicas,
+		CurrentReplicas:               in.CurrentReplicas,
+		DesiredReplicas:               in.DesiredReplicas,
+		Conditions:                    in.Conditions,
+		LastScaleTime:                 in.LastScaleTime,
+		ScaleUpStabilizationSeconds:   in.ScaleUpStabilizationSeconds,
+		ScaleDownStabilizationSeconds: in.ScaleDownStabilizationSeconds,
+	}
+	for i := range in.Metrics {
+		m := in.Metrics[i]
+		out.Metrics = append(out.Metrics, &pb.HPAMetricSpec{
+			Type:               m.Type,
+			Name:               m.Name,
+			TargetType:         m.TargetType,
+			TargetUtilization:  m.TargetUtilization,
+			TargetValue:        m.TargetValue,
+			CurrentValue:       m.CurrentValue,
+			CurrentUtilization: m.CurrentUtilization,
+			CurrentAvailable:   m.CurrentAvailable,
+		})
+	}
+	return out
+}
+
 // UpdateProbe 探针便捷编辑
 func (s *Server) UpdateProbe(ctx context.Context, req *pb.UpdateProbeRequest) (*pb.UpdateProbeResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)

@@ -58,6 +58,10 @@ const (
 	ExecutorService_ScaleWorkload_FullMethodName         = "/executor.ExecutorService/ScaleWorkload"
 	ExecutorService_RolloutWorkload_FullMethodName       = "/executor.ExecutorService/RolloutWorkload"
 	ExecutorService_RolloutHistory_FullMethodName        = "/executor.ExecutorService/RolloutHistory"
+	ExecutorService_ListHPA_FullMethodName               = "/executor.ExecutorService/ListHPA"
+	ExecutorService_GetHPA_FullMethodName                = "/executor.ExecutorService/GetHPA"
+	ExecutorService_ApplyHPA_FullMethodName              = "/executor.ExecutorService/ApplyHPA"
+	ExecutorService_DeleteHPA_FullMethodName             = "/executor.ExecutorService/DeleteHPA"
 	ExecutorService_UpdateProbe_FullMethodName           = "/executor.ExecutorService/UpdateProbe"
 	ExecutorService_RecreateWorkload_FullMethodName      = "/executor.ExecutorService/RecreateWorkload"
 	ExecutorService_ExecPodStream_FullMethodName         = "/executor.ExecutorService/ExecPodStream"
@@ -141,6 +145,11 @@ type ExecutorServiceClient interface {
 	ScaleWorkload(ctx context.Context, in *ScaleWorkloadRequest, opts ...grpc.CallOption) (*ScaleWorkloadResponse, error)
 	RolloutWorkload(ctx context.Context, in *RolloutWorkloadRequest, opts ...grpc.CallOption) (*RolloutWorkloadResponse, error)
 	RolloutHistory(ctx context.Context, in *RolloutHistoryRequest, opts ...grpc.CallOption) (*RolloutHistoryResponse, error)
+	// R57：HPA（水平自动扩缩容）管理
+	ListHPA(ctx context.Context, in *ListHPARequest, opts ...grpc.CallOption) (*ListHPAResponse, error)
+	GetHPA(ctx context.Context, in *GetHPARequest, opts ...grpc.CallOption) (*GetHPAResponse, error)
+	ApplyHPA(ctx context.Context, in *ApplyHPARequest, opts ...grpc.CallOption) (*ApplyHPAResponse, error)
+	DeleteHPA(ctx context.Context, in *DeleteHPARequest, opts ...grpc.CallOption) (*DeleteHPAResponse, error)
 	UpdateProbe(ctx context.Context, in *UpdateProbeRequest, opts ...grpc.CallOption) (*UpdateProbeResponse, error)
 	RecreateWorkload(ctx context.Context, in *RecreateWorkloadRequest, opts ...grpc.CallOption) (*RecreateWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
@@ -547,6 +556,46 @@ func (c *executorServiceClient) RolloutHistory(ctx context.Context, in *RolloutH
 	return out, nil
 }
 
+func (c *executorServiceClient) ListHPA(ctx context.Context, in *ListHPARequest, opts ...grpc.CallOption) (*ListHPAResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListHPAResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ListHPA_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) GetHPA(ctx context.Context, in *GetHPARequest, opts ...grpc.CallOption) (*GetHPAResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetHPAResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_GetHPA_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) ApplyHPA(ctx context.Context, in *ApplyHPARequest, opts ...grpc.CallOption) (*ApplyHPAResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyHPAResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ApplyHPA_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) DeleteHPA(ctx context.Context, in *DeleteHPARequest, opts ...grpc.CallOption) (*DeleteHPAResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteHPAResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_DeleteHPA_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) UpdateProbe(ctx context.Context, in *UpdateProbeRequest, opts ...grpc.CallOption) (*UpdateProbeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateProbeResponse)
@@ -676,6 +725,11 @@ type ExecutorServiceServer interface {
 	ScaleWorkload(context.Context, *ScaleWorkloadRequest) (*ScaleWorkloadResponse, error)
 	RolloutWorkload(context.Context, *RolloutWorkloadRequest) (*RolloutWorkloadResponse, error)
 	RolloutHistory(context.Context, *RolloutHistoryRequest) (*RolloutHistoryResponse, error)
+	// R57：HPA（水平自动扩缩容）管理
+	ListHPA(context.Context, *ListHPARequest) (*ListHPAResponse, error)
+	GetHPA(context.Context, *GetHPARequest) (*GetHPAResponse, error)
+	ApplyHPA(context.Context, *ApplyHPARequest) (*ApplyHPAResponse, error)
+	DeleteHPA(context.Context, *DeleteHPARequest) (*DeleteHPAResponse, error)
 	UpdateProbe(context.Context, *UpdateProbeRequest) (*UpdateProbeResponse, error)
 	RecreateWorkload(context.Context, *RecreateWorkloadRequest) (*RecreateWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
@@ -804,6 +858,18 @@ func (UnimplementedExecutorServiceServer) RolloutWorkload(context.Context, *Roll
 }
 func (UnimplementedExecutorServiceServer) RolloutHistory(context.Context, *RolloutHistoryRequest) (*RolloutHistoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RolloutHistory not implemented")
+}
+func (UnimplementedExecutorServiceServer) ListHPA(context.Context, *ListHPARequest) (*ListHPAResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListHPA not implemented")
+}
+func (UnimplementedExecutorServiceServer) GetHPA(context.Context, *GetHPARequest) (*GetHPAResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetHPA not implemented")
+}
+func (UnimplementedExecutorServiceServer) ApplyHPA(context.Context, *ApplyHPARequest) (*ApplyHPAResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyHPA not implemented")
+}
+func (UnimplementedExecutorServiceServer) DeleteHPA(context.Context, *DeleteHPARequest) (*DeleteHPAResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteHPA not implemented")
 }
 func (UnimplementedExecutorServiceServer) UpdateProbe(context.Context, *UpdateProbeRequest) (*UpdateProbeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateProbe not implemented")
@@ -1493,6 +1559,78 @@ func _ExecutorService_RolloutHistory_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_ListHPA_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHPARequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ListHPA(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ListHPA_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ListHPA(ctx, req.(*ListHPARequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_GetHPA_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetHPARequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).GetHPA(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_GetHPA_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).GetHPA(ctx, req.(*GetHPARequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_ApplyHPA_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyHPARequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ApplyHPA(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ApplyHPA_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ApplyHPA(ctx, req.(*ApplyHPARequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_DeleteHPA_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteHPARequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).DeleteHPA(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_DeleteHPA_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).DeleteHPA(ctx, req.(*DeleteHPARequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_UpdateProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateProbeRequest)
 	if err := dec(in); err != nil {
@@ -1718,6 +1856,22 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RolloutHistory",
 			Handler:    _ExecutorService_RolloutHistory_Handler,
+		},
+		{
+			MethodName: "ListHPA",
+			Handler:    _ExecutorService_ListHPA_Handler,
+		},
+		{
+			MethodName: "GetHPA",
+			Handler:    _ExecutorService_GetHPA_Handler,
+		},
+		{
+			MethodName: "ApplyHPA",
+			Handler:    _ExecutorService_ApplyHPA_Handler,
+		},
+		{
+			MethodName: "DeleteHPA",
+			Handler:    _ExecutorService_DeleteHPA_Handler,
 		},
 		{
 			MethodName: "UpdateProbe",

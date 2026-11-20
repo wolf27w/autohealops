@@ -82,6 +82,11 @@ service ExecutorService {
   rpc ScaleWorkload(ScaleWorkloadRequest) returns (ScaleWorkloadResponse);
   rpc RolloutWorkload(RolloutWorkloadRequest) returns (RolloutWorkloadResponse);
   rpc RolloutHistory(RolloutHistoryRequest) returns (RolloutHistoryResponse);
+  // R57：HPA（水平自动扩缩容）管理
+  rpc ListHPA(ListHPARequest) returns (ListHPAResponse);
+  rpc GetHPA(GetHPARequest) returns (GetHPAResponse);
+  rpc ApplyHPA(ApplyHPARequest) returns (ApplyHPAResponse);
+  rpc DeleteHPA(DeleteHPARequest) returns (DeleteHPAResponse);
   rpc UpdateProbe(UpdateProbeRequest) returns (UpdateProbeResponse);
   rpc RecreateWorkload(RecreateWorkloadRequest) returns (RecreateWorkloadResponse);
 
@@ -734,6 +739,93 @@ message RolloutHistoryRequest {
 message RolloutHistoryResponse {
   bool success = 1;
   repeated int64 revisions = 2;
+  string error = 3;
+}
+
+// ==================== R57：HPA 管理 ====================
+
+// 指标条目（一条 HPA 可有多个指标）
+message HPAMetricSpec {
+  string type = 1;                 // Resource / Pods / Object / External
+  string name = 2;                 // cpu / memory / 自定义指标名
+  string target_type = 3;          // Utilization / AverageValue / Value
+  int32 target_utilization = 4;    // 目标利用率百分比（target_type=Utilization）
+  string target_value = 5;         // 目标绝对值（如 500m / 100）
+  string current_value = 6;        // 当前值（只读回填）
+  int32 current_utilization = 7;   // 当前利用率百分比（只读回填，-1=无）
+  bool current_available = 8;      // 当前指标是否可用（false = unknown）
+}
+
+// HPA 完整信息（列表/详情共用）
+message HPAInfo {
+  string namespace = 1;
+  string name = 2;
+  string target_kind = 3;                    // Deployment / StatefulSet
+  string target_name = 4;
+  string target_api_version = 5;             // apps/v1
+  int32 min_replicas = 6;
+  int32 max_replicas = 7;
+  int32 current_replicas = 8;
+  int32 desired_replicas = 9;
+  repeated HPAMetricSpec metrics = 10;
+  repeated string conditions = 11;           // "ScalingActive=True (ValidMetricFound)"
+  string last_scale_time = 12;               // RFC3339，空=从未
+  int32 scale_up_stabilization_seconds = 13; // behavior.scaleUp.stabilizationWindowSeconds
+  int32 scale_down_stabilization_seconds = 14;
+}
+
+message ListHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;      // 必填（不跨 ns）
+  string target_kind = 3;    // 可选：只返回指向该 workload 的 HPA
+  string target_name = 4;
+}
+message ListHPAResponse {
+  bool success = 1;
+  repeated HPAInfo items = 2;
+  string error = 3;
+}
+
+message GetHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;
+}
+message GetHPAResponse {
+  bool success = 1;
+  HPAInfo item = 2;
+  string yaml = 3;
+  string error = 4;
+}
+
+message ApplyHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;
+  string target_kind = 4;      // deployment/statefulset（大小写不敏感）
+  string target_name = 5;
+  int32 min_replicas = 6;
+  int32 max_replicas = 7;
+  repeated HPAMetricSpec metrics = 8;
+  int32 scale_up_stabilization_seconds = 9;
+  int32 scale_down_stabilization_seconds = 10;
+  bool dry_run = 11;           // true = 只回 yaml 不落盘
+}
+message ApplyHPAResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+  string yaml = 4;             // 实际应用/预览的 YAML
+}
+
+message DeleteHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;
+}
+message DeleteHPAResponse {
+  bool success = 1;
+  string message = 2;
   string error = 3;
 }
 

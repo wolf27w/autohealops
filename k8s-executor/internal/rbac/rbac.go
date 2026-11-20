@@ -41,6 +41,7 @@ func clusterRoles() []*rbacv1.ClusterRole {
 		{APIGroups: []string{""}, Resources: []string{"pods", "services", "events", "namespaces", "nodes", "persistentvolumes", "persistentvolumeclaims", "configmaps", "secrets"}, Verbs: []string{"get", "list", "watch"}},
 		{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets", "daemonsets", "replicasets"}, Verbs: []string{"get", "list", "watch"}},
 		{APIGroups: []string{"batch"}, Resources: []string{"jobs", "cronjobs"}, Verbs: []string{"get", "list", "watch"}},
+		{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: []string{"get", "list", "watch"}},
 		{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}},
 	}
 
@@ -51,6 +52,7 @@ func clusterRoles() []*rbacv1.ClusterRole {
 
 	managerRules := append(append([]rbacv1.PolicyRule{}, operateRules...),
 		rbacv1.PolicyRule{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets", "daemonsets"}, Verbs: []string{"delete", "patch", "update"}},
+		rbacv1.PolicyRule{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: []string{"create", "update", "patch", "delete"}},
 		rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"pods", "services"}, Verbs: []string{"delete", "patch", "update"}},
 		rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"configmaps", "secrets"}, Verbs: []string{"create", "update", "patch", "delete"}},
 	)

@@ -399,6 +399,8 @@ func workloadGVR(kind string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}, nil
 	case "pod":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, nil
+	case "hpa", "horizontalpodautoscaler", "horizontalpodautoscalers":
+		return schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}, nil
 	case "namespace":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}, nil
 	case "mutatingwebhookconfiguration":
@@ -493,7 +495,7 @@ func (e *Executor) DeleteResource(ctx context.Context, kind, namespace, name str
 	switch kind {
 	case "configmap", "secret", "service", "ingress", "pvc",
 		"serviceaccount", "storageclass",
-		"deployment", "statefulset", "daemonset", "cronjob", "pod",
+		"deployment", "statefulset", "daemonset", "cronjob", "pod", "hpa",
 		"namespace", "mutatingwebhookconfiguration", "validatingwebhookconfiguration":
 	default:
 		return fmt.Errorf("不支持删除的类型 %q", kind)
