@@ -343,17 +343,59 @@ async def _h_rag_search(args: dict, context: dict) -> dict:
     return {"success": True, "output": "\n".join(lines), "error": ""}
 
 
+def _hpa_metric_target(m: dict) -> str:
+    """HPA 指标的目标阈值文本（Utilization → 百分比；其余 → value）。"""
+    if "utilization" in (m.get("target_type") or "").lower():
+        return f"{m.get('target_utilization')}%"
+    return str(m.get("target_value", ""))
+
+
+def _hpa_metric_current(m: dict) -> str:
+    """HPA 指标的当前值文本（current_available=false → unknown）。"""
+    if m.get("current_available") is False:
+        return "unknown"
+    if "utilization" in (m.get("target_type") or "").lower():
+        return f"{m.get('current_utilization')}%"
+    return str(m.get("current_value", ""))
+
+
+def _render_hpa(item: dict) -> str:
+    """单个 HPA 渲染成高信息密度文本（给 AI 看）。"""
+    lines = [
+        f"HPA {item.get('name', '')}: target={item.get('target_kind', '')}/{item.get('target_name', '')} "
+        f"min={item.get('min_replicas', '')} max={item.get('max_replicas', '')} "
+        f"current={item.get('current_replicas', '')} desired={item.get('desired_replicas', '')}",
+    ]
+    for m in item.get("metrics") or []:
+        mname = m.get("name") or m.get("type") or ""
+        lines.append(f"  指标: {mname} 目标={_hpa_metric_target(m)} 当前={_hpa_metric_current(m)}")
+    conds = item.get("conditions") or []
+    if conds:
+        lines.append("  条件: " + " | ".join(str(c) for c in conds))
+    lines.append(f"  最近扩缩容: {item.get('last_scale_time') or '从未'}")
+    sup = item.get("scale_up_stabilization_seconds") or 0
+    sdn = item.get("scale_down_stabilization_seconds") or 0
+    if sup or sdn:
+        lines.append(f"  伸缩窗口: scaleUp={sup}s scaleDown={sdn}s")
+    return "\n".join(lines)
+
+
 async def _h_get_hpa(args: dict, context: dict) -> dict:
-    """只读：查询命名空间下 HPA 扩缩容配置（min/max 副本数、指标与阈值、当前值）"""
-    r = await executor_client.acall(
-        executor_client.execute_command,
-        context["cluster_id"],
-        context["namespace"],
-        "get hpa",
-    )
-    if r.get("success"):
-        return {"success": True, "output": r.get("output", "")[:6000], "error": ""}
-    return {"success": False, "output": "", "error": r.get("error", "get hpa 执行失败")}
+    """只读：查询命名空间下 HPA 扩缩容配置（结构化：min/max 副本数、指标与阈值、当前值、条件）"""
+    cluster_id = context.get("cluster_id")
+    namespace = context.get("namespace") or ""
+    if not cluster_id:
+        return {"success": False, "output": "", "error": "缺少集群上下文（cluster_id）"}
+    try:
+        r = await executor_client.acall(executor_client.list_hpa, cluster_id, namespace)
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"查询 HPA 异常: {e}"}
+    if not r.get("success"):
+        return {"success": False, "output": "", "error": r.get("error") or "list_hpa 执行失败"}
+    items = r.get("items") or []
+    if not items:
+        return {"success": True, "output": "(该命名空间无 HPA)", "error": ""}
+    return {"success": True, "output": "\n\n".join(_render_hpa(it) for it in items)[:6000], "error": ""}
 
 
 async def _h_get_deployment(args: dict, context: dict) -> dict:
@@ -453,7 +495,7 @@ _register({
 _register({
     "name": "get_hpa",
     "label": "HPA 扩缩容配置",
-    "description": "查询命名空间下 HPA（水平自动扩缩容）配置：min/max 副本数、扩容指标与阈值、当前副本数与指标值。用于诊断「一直扩容不回收/不扩容/副本数异常」类问题（只读）",
+    "description": "查询命名空间下 HPA（水平自动扩缩容）配置：min/max 副本数、扩容指标与阈值、当前副本数与指标值。含 conditions（ScalingActive/FailedGetResourceMetric 等），用于判断「卡在 maxReplicas / 指标 unknown / 无法获取指标」。用于诊断「一直扩容不回收/不扩容/副本数异常」类问题（只读）",
     "args_schema": {},
     "permission": "readonly",
     "domain": "application",

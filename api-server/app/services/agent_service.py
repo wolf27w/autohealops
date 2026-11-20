@@ -84,9 +84,11 @@ FAULT_TEMPLATES: list[dict] = [
     },
     {
         "key": "resource", "label": "资源高水位",
-        "keywords": ["资源", "cpu", "使用率", "水位", "飙升", "飙高", "负载", "扩容", "hpa", "不回收", "降不下来"],
+        "keywords": ["资源", "cpu", "使用率", "水位", "飙升", "飙高", "负载", "扩容", "hpa", "不回收", "降不下来",
+                     "扩容不上去", "扩不上去", "卡住", "卡在", "max", "maxreplicas", "target", "指标", "unknown",
+                     "缩容", "回收", "抖动", "thrash", "频繁扩缩"],
         "tools": [("get_hpa", {}), ("get_deployment", {})],
-        "note": "关注 HPA 阈值 / requests-limits / 固定成本型负载",
+        "note": "关注 HPA 条件（ScalingActive/FailedGetResourceMetric）、是否卡 maxReplicas、requests 未配导致指标 unknown、伸缩窗口过短导致抖动",
     },
     {
         "key": "crash", "label": "崩溃/重启",

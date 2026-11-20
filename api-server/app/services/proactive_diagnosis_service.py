@@ -168,6 +168,48 @@ def _merge_hits(hits: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+async def _hpa_snapshot_text(cluster_id: int, namespace: str) -> str:
+    """HPA 快照文本（资源/负载类主动诊断上下文用）：每个 HPA 一行摘要。
+
+    异常/无数据一律返回 ""，绝不抛异常打断主流程。
+    """
+    if not cluster_id or not namespace:
+        return ""
+    try:
+        r = await executor_client.acall(executor_client.list_hpa, cluster_id, namespace)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("HPA 快照采集失败（跳过）: %s", e)
+        return ""
+    if not r.get("success"):
+        return ""
+    items = r.get("items") or []
+    if not items:
+        return ""
+    lines = []
+    for it in items:
+        name = it.get("name", "")
+        tk = it.get("target_kind", "")
+        tn = it.get("target_name", "")
+        mn = it.get("min_replicas", "")
+        mx = it.get("max_replicas", "")
+        cur = it.get("current_replicas", "")
+        des = it.get("desired_replicas", "")
+        msum = ""
+        metrics = it.get("metrics") or []
+        if metrics:
+            m = metrics[0]
+            mname = m.get("name") or m.get("type") or ""
+            if m.get("current_available") is False:
+                mcur = "unknown"
+            elif "utilization" in (m.get("target_type") or "").lower():
+                mcur = f"{m.get('current_utilization')}%"
+            else:
+                mcur = str(m.get("current_value", ""))
+            msum = f" {mname}={mcur}"
+        lines.append(f"{name} target={tk}/{tn} {mn}-{mx} {cur}/{des}{msum}")
+    return "HPA 快照:\n" + "\n".join(lines)
+
+
 async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str, user_id: int = 0) -> int:
     """建巡检会话 + 跑快速诊断（含容器日志/JVM/指标预采集），返回会话 id。
 
@@ -178,6 +220,11 @@ async def _diagnose(cluster: Cluster, namespace: str, pod: str, reason: str, use
         f"平台主动巡检发现异常：{reason}。请全面诊断（结合资源趋势、容器 stdout 日志"
         f"（含上次重启实例）、JVM 堆/GC/线程、HPA/资源配额等），给出根因与处理建议。"
     )
+    # 资源/负载类（高水位）诊断：附 HPA 快照，让 AI 一眼看到扩缩容状态（异常静默跳过，不打断主流程）
+    if "使用率" in reason:
+        hpa_snap = await _hpa_snapshot_text(cluster.id, namespace)
+        if hpa_snap:
+            problem += f"\n\n{hpa_snap}"
     async with async_session() as s:
         sess = DiagnosisSession(
             user_id=user_id, cluster_id=cluster.id, namespace=namespace, pod_name=pod,
