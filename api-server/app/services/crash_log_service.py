@@ -17,7 +17,7 @@
    单容器最多 5000 行，单文件上限 5MB。
 5. 落盘：api-server/data/crash-logs/{cluster_id}/{namespace}/{pod}_{container}_{YYYYmmdd-HHMMSS}.log
    文件头一行元信息；路径存索引 index.json（控制在几千条以内，超了按时间淘汰）。
-6. 清理：留存超过 CRASH_LOG_RETENTION_DAYS（默认 7）天的文件删除。
+6. 清理：留存超过 CRASH_LOG_RETENTION_DAYS（默认 3）天，或总量超过 CRASH_LOG_MAX_MB（默认 200MB）的文件删除；gzip 落盘。
 
 索引 index.json 结构（"entries" 数组，按 captured_at 倒序）：
 {
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import gzip
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -59,12 +60,12 @@ CRASH_REASONS = frozenset({
 })
 
 # 去重窗口（秒）：同一 pod+container 30 分钟内只留存一次
-DEDUP_WINDOW_SECONDS = 30 * 60
+DEDUP_WINDOW_SECONDS = 30 * 60  # 兜底去重窗口（正常按 restart_count 去重）
 
 # 抓取上限
-MAX_LOG_LINES = 5000       # 单容器最多取 5000 行
-MAX_LOG_BYTES = 5 * 1024 * 1024   # 单文件上限 5MB
-MAX_INDEX_ENTRIES = 3000   # 索引条数上限（超了按时间淘汰最旧的）
+MAX_LOG_LINES = 3000       # 单容器最多取 3000 行（压缩后占用极小）
+MAX_LOG_BYTES = 1 * 1024 * 1024   # 单文件上限 1MB（gzip 后通常几十 KB）
+MAX_INDEX_ENTRIES = 1000   # 索引条数上限（超了按时间淘汰最旧的）
 READ_TRUNCATE_BYTES = 200 * 1024  # read_crash_log 返回内容截断 200KB
 
 # 后台扫描间隔（秒；main.py 用它注册后台任务）
@@ -93,7 +94,7 @@ def crash_log_enabled() -> bool:
 
 def retention_days() -> int:
     """CRASH_LOG_RETENTION_DAYS 保留天数（默认 7）。"""
-    raw = os.environ.get("CRASH_LOG_RETENTION_DAYS", "7").strip()
+    raw = os.environ.get("CRASH_LOG_RETENTION_DAYS", "3").strip()
     try:
         return max(1, int(raw))
     except (TypeError, ValueError):
@@ -197,14 +198,66 @@ async def _cleanup(retention: int) -> int:
     return removed
 
 
+def crash_log_max_bytes() -> int:
+    """崩溃日志总量上限（CRASH_LOG_MAX_MB，默认 200MB）。"""
+    try:
+        mb = int(os.environ.get("CRASH_LOG_MAX_MB", "200"))
+    except ValueError:
+        mb = 200
+    return max(10, mb) * 1024 * 1024
+
+
+def _dir_size() -> int:
+    total = 0
+    root = _crash_log_dir()
+    if not root.exists():
+        return 0
+    for p in root.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:  # noqa: BLE001
+            continue
+    return total
+
+
+async def _enforce_quota() -> int:
+    """总量超限时按时间从最旧开始淘汰（连带删文件）。返回淘汰条数。"""
+    limit = crash_log_max_bytes()
+    if _dir_size() <= limit:
+        return 0
+    removed = 0
+    async with _index_lock:
+        entries = await _read_index()
+        # 索引按插入顺序（最新在前）
+        while entries and _dir_size() > limit:
+            e = entries.pop()
+            p = _resolve_safe(str(e.get("path") or ""))
+            if p is not None:
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:  # noqa: BLE001
+                    pass
+            removed += 1
+        if removed:
+            await _write_index(entries)
+    if removed:
+        logger.info("崩溃日志超出配额（%dMB），已淘汰 %d 份", limit // (1024 * 1024), removed)
+    return removed
+
+
 async def _capture_container(cluster_id: int, namespace: str, pod: str, container: str,
                              reason: str, restart: int, phase: str) -> int:
     """抓取并留存单个容器的崩溃日志；返回 1=已留存，0=去重跳过/无内容/失败。"""
     key = f"{cluster_id}/{namespace}/{pod}/{container}"
     now = datetime.now()
+    # 按「崩溃实例」去重：restart_count 没变说明还是同一次崩溃，不必重复留存；
+    # restart_count 变化 = 又崩了一次，才留新的一份。
     last = _dedup.get(key)
-    if last is not None and (now.timestamp() - last) < DEDUP_WINDOW_SECONDS:
-        return 0
+    if last is not None:
+        last_restart, last_ts = last
+        if int(restart or 0) <= int(last_restart or 0) and (now.timestamp() - last_ts) < DEDUP_WINDOW_SECONDS:
+            return 0
 
     logs = ""
     source = ""
@@ -240,7 +293,7 @@ async def _capture_container(cluster_id: int, namespace: str, pod: str, containe
     ts = now.strftime("%Y%m%d-%H%M%S")
     safe_pod = str(pod).replace("/", "_")
     safe_container = str(container).replace("/", "_")
-    rel_path = f"{cluster_id}/{namespace}/{safe_pod}_{safe_container}_{ts}.log"
+    rel_path = f"{cluster_id}/{namespace}/{safe_pod}_{safe_container}_{ts}.log.gz"
     abs_path = _crash_log_dir() / rel_path
 
     header = (
@@ -250,7 +303,8 @@ async def _capture_container(cluster_id: int, namespace: str, pod: str, containe
     )
     try:
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-        with abs_path.open("w", encoding="utf-8") as f:
+        # gzip 落盘：日志压缩比通常 5~10 倍，显著降低磁盘占用
+        with gzip.open(abs_path, "wt", encoding="utf-8") as f:
             f.write(header)
             f.write(logs)
     except Exception as e:  # noqa: BLE001
@@ -283,7 +337,8 @@ async def _capture_container(cluster_id: int, namespace: str, pod: str, containe
             except OSError:  # noqa: BLE001
                 pass
 
-    _dedup[key] = now.timestamp()
+    await _enforce_quota()
+    _dedup[key] = (int(restart or 0), now.timestamp())
     logger.info("已留存崩溃日志 %s/%s/%s（reason=%s restart=%d）→ %s",
                 namespace, pod, container, reason, restart, rel_path)
     return 1
@@ -436,7 +491,8 @@ async def read_crash_log(rel_path: str) -> str:
 
     def _read() -> str:
         try:
-            with p.open("r", encoding="utf-8", errors="replace") as f:
+            opener = gzip.open if p.suffix == ".gz" else open
+            with opener(p, "rt", encoding="utf-8", errors="replace") as f:
                 return f.read(READ_TRUNCATE_BYTES)
         except FileNotFoundError:
             return ""
