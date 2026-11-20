@@ -19,6 +19,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/clusters")
 
 
+# R59：agent 能力协商 —— 「不需要升级」所需具备的最低能力集合。
+# 与 executor_client._FEATURE_REQUIRED 对应：缺任一即认为版本过低（需升级）。
+_AGENT_MIN_CAPABILITIES = frozenset({"ListHPA", "log_time_range"})
+
+
+def _agent_need_upgrade(c) -> bool:
+    """R59：该集群 agent 是否需要升级（仅对已连接的 agent 集群判定，不误伤 pending/disconnected）。"""
+    if (getattr(c, "source", "") or "") != "agent" or (getattr(c, "agent_status", "") or "") != "connected":
+        return False
+    raw = (getattr(c, "agent_capabilities", "") or "").strip()
+    caps: set = set()
+    if raw:
+        try:
+            import json as _json
+            caps = set(_json.loads(raw))
+        except Exception:  # noqa: BLE001 老数据/异常按空处理
+            caps = set()
+    # 老 agent 不上报能力 → caps 为空 → 视为需升级；新 agent 上报但缺能力 → 也需升级
+    return not _AGENT_MIN_CAPABILITIES.issubset(caps)
+
+
 
 def _kubeconfig_server(kubeconfig: str) -> str:
     """解析 kubeconfig 首个 cluster 的 server URL（幂等键）；失败返回空串"""
@@ -552,6 +573,43 @@ async def agent_default_image(user=Depends(require_admin)):
     return {"code": 200, "message": "success", "data": {"image": settings.AGENT_IMAGE}}
 
 
+@router.get("/{cluster_id}/agent-upgrade")
+async def agent_upgrade_command(cluster_id: int, user=Depends(require_any_user)):
+    """R59 升级通道：返回可执行的 agent 升级命令/清单（文本，不真触发滚动升级）。
+
+    给运维一个复制即用的升级命令（改 Deployment 镜像 → 滚动重启 → 新版本重连），
+    与 POST /{cluster_id}/agent/upgrade 的隧道式升级互补（后者由平台经隧道改镜像）。
+    """
+    async with async_session() as session:
+        c = await session.get(Cluster, cluster_id)
+    if not c:
+        return {"code": 404, "message": "集群不存在", "data": None}
+    if (c.source or "") != "agent":
+        return {"code": 400, "message": "该集群不是 agent 接入方式", "data": None}
+    ns = ((c.agent_namespace or "").strip()
+          or (getattr(settings, "AGENT_NAMESPACE", "") or "autohealops").strip()
+          or "autohealops")
+    image = (getattr(settings, "AGENT_IMAGE", "") or "").strip() \
+        or "harbor.efreight.cn/ops/autohealops-agent:latest"
+    current_image = (c.agent_image or "").strip() or image
+    deploy = "autohealops-agent"
+    command = (
+        f"kubectl -n {ns} set image deployment/{deploy} agent={image}\n"
+        f"kubectl -n {ns} rollout status deployment/{deploy} --timeout=120s\n"
+        f"kubectl -n {ns} get pod -l app=autohealops-agent -o wide"
+    )
+    return {"code": 200, "message": "success", "data": {
+        "id": cluster_id,
+        "namespace": ns,
+        "deployment": deploy,
+        "current_version": c.agent_version or "",
+        "current_image": current_image,
+        "recommended_image": image,
+        "command": command,
+        "note": "执行后 agent 会滚动重启并以新版本重连平台；也可用平台的「升级/回退 Agent」走隧道式升级。",
+    }}
+
+
 @router.post("/{cluster_id}/agent/upgrade")
 async def agent_upgrade(cluster_id: int, payload: dict | None = None, user=Depends(require_admin)):
     """升级/回退单个集群的 agent（改 Deployment 镜像，等待重新注册回报新版本）"""
@@ -710,6 +768,8 @@ async def list_clusters(user=Depends(require_any_user)):
          "agent_status": c.agent_status or "",
          "agent_last_seen_at": str(c.agent_last_seen_at) if c.agent_last_seen_at else "",
          "agent_version": c.agent_version or "",
+         "agent_capabilities": (c.agent_capabilities or ""),
+         "agent_need_upgrade": _agent_need_upgrade(c),
          "created_at": str(c.created_at),
          "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
          "inspect_enabled": bool(c.inspect_enabled),
@@ -740,6 +800,8 @@ async def get_cluster(cluster_id: int, user=Depends(require_any_user)):
         "agent_status": c.agent_status or "",
         "agent_last_seen_at": str(c.agent_last_seen_at) if c.agent_last_seen_at else "",
         "agent_version": c.agent_version or "",
+        "agent_capabilities": (c.agent_capabilities or ""),
+        "agent_need_upgrade": _agent_need_upgrade(c),
         "rbac_enabled": bool(c.rbac_enabled), "rbac_mode": c.rbac_mode, "rbac_status": c.rbac_status or "",
         "inspect_enabled": bool(c.inspect_enabled),
         "auto_heal_enabled": bool(getattr(c, "auto_heal_enabled", True)),

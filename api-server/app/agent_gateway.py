@@ -29,8 +29,12 @@ _server: grpc.Server | None = None
 _loop = None
 
 
-async def _verify_and_mark(cluster_id: int, token: str, version: str = "") -> str:
-    """校验 agent 令牌（按集群 sha256 哈希），通过则标记 connected + 心跳 + 版本；返回空串=成功"""
+async def _verify_and_mark(cluster_id: int, token: str, version: str = "", capabilities: list | None = None) -> str:
+    """校验 agent 令牌（按集群 sha256 哈希），通过则标记 connected + 心跳 + 版本 + 能力；返回空串=成功
+
+    capabilities 为上报的能力列表（protobuf repeated 字段，老 agent 未上报时为空列表）。
+    空列表 = 老 agent / 无能力 → 平台按能力缺失处理（不阻断现有功能）。
+    """
     import hashlib
     from datetime import datetime
     from app.core.database import async_session
@@ -47,6 +51,8 @@ async def _verify_and_mark(cluster_id: int, token: str, version: str = "") -> st
             c.agent_last_seen_at = datetime.now()
             if version:
                 c.agent_version = version[:50]
+            if capabilities is not None:
+                c.agent_capabilities = json.dumps(list(capabilities), ensure_ascii=False)
             need_rbac = (c.rbac_mode or "off") == "off"
             await s.commit()
         if need_rbac:
@@ -88,6 +94,9 @@ class _AgentConn:
         # 流式会话：req_id → queue.Queue（stream_msg 帧投递到此；结束时投 _STREAM_END）
         self.streams: dict[str, "queue.Queue"] = {}
         self.alive = True
+        # R59：agent 上报的版本与能力（内存态，供能力协商用）
+        self.version: str = ""
+        self.capabilities: frozenset = frozenset()
 
     def fail_streams(self, msg: str) -> None:
         for q in list(self.streams.values()):
@@ -99,6 +108,28 @@ def is_connected(cluster_id: int) -> bool:
     with _agents_lock:
         a = _agents.get(int(cluster_id))
     return bool(a and a.alive)
+
+
+def agent_capabilities(cluster_id: int):
+    """R59：该集群在线 agent 的能力集合（frozenset[str]）；未连接返回 None。
+
+    注意区分：未连接= None（不该做能力拦截，走直连/错误兑底）；
+    已连接但老 agent 未上报能力 = frozenset()（空集合 → 视为能力全缺 → 提示升级）。
+    """
+    with _agents_lock:
+        a = _agents.get(int(cluster_id))
+    if not a or not a.alive:
+        return None
+    return a.capabilities
+
+
+def agent_version(cluster_id: int) -> str:
+    """R59：该集群在线 agent 版本（未连接/未上报返回空串）"""
+    with _agents_lock:
+        a = _agents.get(int(cluster_id))
+    if not a or not a.alive:
+        return ""
+    return a.version or ""
 
 
 def call(cluster_id: int, method: str, payload: bytes, timeout: float = 30.0) -> bytes:
@@ -230,7 +261,7 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                         if _loop:
                             try:
                                 err = asyncio.run_coroutine_threadsafe(
-                                    _verify_and_mark(f.cluster_id, f.token, f.version), _loop
+                                    _verify_and_mark(f.cluster_id, f.token, f.version, list(f.capabilities)), _loop
                                 ).result(timeout=8)
                             except Exception as e:  # noqa: BLE001
                                 err = f"验证异常: {e}"
@@ -241,11 +272,14 @@ class _Servicer(agent_pb2_grpc.AgentServiceServicer):
                             context.abort(grpc.StatusCode.UNAUTHENTICATED, err)
                             return
                         a = _AgentConn(f.cluster_id)
+                        a.version = f.version or ""
+                        a.capabilities = frozenset(f.capabilities or [])
                         state["a"] = a
                         with _agents_lock:
                             _agents[a.cluster_id] = a
                         a.out.put(agent_pb2.AgentFrame(type="register_ack"))
-                        logger.info("agent 已接入 cluster=%s version=%s", a.cluster_id, f.version or "-")
+                        logger.info("agent 已接入 cluster=%s version=%s 能力=%d 项",
+                                    a.cluster_id, f.version or "-", len(a.capabilities))
                         # P2：把告警策略下发给 agent（agent 内 watcher 用；agent 连不到平台库）
                         _push_config(a)
                     elif f.type == "stream_msg":

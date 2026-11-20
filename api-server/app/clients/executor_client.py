@@ -152,6 +152,80 @@ def _gateway_bidi_call(cluster_id: int, method: str, request_iterator, timeout: 
     yield from agent_gateway.bidi_call(cluster_id, method, request_iterator, timeout=timeout)
 
 
+# ==================== R59：Agent 能力协商 ====================
+# agent 注册时上报能力列表（ExecutorService 方法名 + 字段级特性标记）。平台在调用前按
+# 「特性 → 依赖能力」判定；不支持返回友好文案，而不是把 unknown method 原文甩给用户。
+# 老 agent 不上报能力 → 网关内存态为空集合 frozenset() → 视为能力全缺。
+
+# 特性 → 依赖的能力标记集合（方法名 + 字段级特性标记混合判定）
+_FEATURE_REQUIRED: dict[str, frozenset] = {
+    # HPA 管理（R57）：4 个 HPA 方法一起加的，缺一即视为不支持
+    "hpa": frozenset({"ListHPA", "GetHPA", "ApplyHPA", "DeleteHPA"}),
+    # 日志时间段下载（R55）：GetPodLogs 的 timestamps/since_seconds 字段级能力
+    "log_time_range": frozenset({"log_time_range"}),
+}
+# 特性 → 展示名（友好文案）
+_FEATURE_LABEL: dict[str, str] = {
+    "hpa": "HPA 管理",
+    "log_time_range": "日志时间段下载",
+}
+# 方法名 → 特性（错误转义时按方法名反查特性）
+_METHOD_TO_FEATURE: dict[str, str] = {
+    "ListHPA": "hpa", "GetHPA": "hpa", "ApplyHPA": "hpa", "DeleteHPA": "hpa",
+}
+# gRPC「方法不存在」错误特征串（大小写不敏感匹配）
+_UNKNOWN_METHOD_MARKERS = ("unknown method", "unknown service", "unimplemented")
+
+
+def _agent_capabilities(cluster_id: int):
+    """该集群在线 agent 的能力集合（frozenset）；未连接/remote 模式返回 None（不拦截）"""
+    if _gw_mode() == "remote":
+        return None  # remote 模式能力查询 R59 阶段 1 未实现，走错误转义兑底
+    from app import agent_gateway
+    return agent_gateway.agent_capabilities(cluster_id)
+
+
+def _agent_version(cluster_id: int) -> str:
+    if _gw_mode() == "remote":
+        return ""
+    from app import agent_gateway
+    return agent_gateway.agent_version(cluster_id) or ""
+
+
+def check_agent_feature(cluster_id: int, feature: str) -> str | None:
+    """能力协商：该集群 agent 是否支持某特性。返回 None=支持；否则返回友好错误文案。
+
+    仅对「已连接且已上报能力」的 agent 集群做拦截；未连接（None）不拦截，
+    交给直连或错误转义兑底，保证 kubeconfig/直连集群与老 agent 不被误伤。
+    """
+    caps = _agent_capabilities(cluster_id)
+    if caps is None:
+        return None
+    required = _FEATURE_REQUIRED.get(feature)
+    if not required:
+        return None
+    missing = required - caps
+    if not missing:
+        return None
+    v = _agent_version(cluster_id) or "未知版本"
+    label = _FEATURE_LABEL.get(feature, feature)
+    return f"该集群 agent 版本过低（{v}），不支持{label}，请升级 agent 后重试"
+
+
+def _friendly_agent_error(cluster_id: int, method: str, err) -> str:
+    """把 agent 侧原始 gRPC 错误转义成友好文案（unknown method → 提示升级）；非方法缺失错误原样返回。"""
+    msg = str(err)
+    low = msg.lower()
+    if not any(mk in low for mk in _UNKNOWN_METHOD_MARKERS):
+        return msg
+    feature = _METHOD_TO_FEATURE.get(method)
+    if not feature:
+        return msg
+    v = _agent_version(cluster_id) or "未知版本"
+    label = _FEATURE_LABEL.get(feature, feature)
+    return f"该集群 agent 版本过低（{v}），不支持{label}，请升级 agent 后重试"
+
+
 # ==================== P1：全方法反向代理（agent 隧道） ====================
 # 原先只有 ExecuteCommand / GetPodLogs 显式走 _agent_call，其余 30+ 个方法一律直连平台侧 executor，
 # agent 接入的集群「连得上但用不了」。这里在 stub 层做一次代理：
@@ -188,13 +262,19 @@ class _TunnelAwareStub:
             cid = int(getattr(req, "cluster_id", 0) or 0)
             if cid:
                 if _gateway_is_connected(cid):
-                    data = _gateway_call(
-                        cid, name, req.SerializeToString(),
-                        timeout=timeout or ExecutorClient.TIMEOUT,
-                    )
-                    return resp_cls.FromString(data)
+                    try:
+                        data = _gateway_call(
+                            cid, name, req.SerializeToString(),
+                            timeout=timeout or ExecutorClient.TIMEOUT,
+                        )
+                        return resp_cls.FromString(data)
+                    except Exception as e:  # noqa: BLE001 老 agent 缺方法 → 转义成友好提示
+                        raise RuntimeError(_friendly_agent_error(cid, name, e)) from e
                 # R14 pull 模式：平台直连 agent
-                out = _pull_call(cid, name, req, resp_cls, timeout or ExecutorClient.TIMEOUT)
+                try:
+                    out = _pull_call(cid, name, req, resp_cls, timeout or ExecutorClient.TIMEOUT)
+                except Exception as e:  # noqa: BLE001
+                    raise RuntimeError(_friendly_agent_error(cid, name, e)) from e
                 if out is not None:
                     return out
             return fn(req, timeout=timeout, metadata=metadata, **kwargs)
@@ -743,6 +823,10 @@ class ExecutorClient:
         timestamps=True：行首带 RFC3339 时间戳（R55 时间段过滤/整份下载用）。
         since_seconds>0：只取最近 N 秒（配合 tail_lines=0 取整份带时间戳日志）。
         """
+        if timestamps or since_seconds:
+            _up = check_agent_feature(cluster_id, "log_time_range")
+            if _up:
+                return {"success": False, "logs": "", "error": _up}
         try:
             req = executor_pb2.GetPodLogsRequest(
                 cluster_id=cluster_id, namespace=namespace, pod_name=pod_name,
@@ -755,7 +839,7 @@ class ExecutorClient:
             return {"success": resp.success, "logs": resp.logs, "error": resp.error}
         except Exception as e:  # noqa: BLE001
             logger.error("get_pod_logs 失败: %s", e)
-            return {"success": False, "logs": "", "error": str(e)}
+            return {"success": False, "logs": "", "error": _friendly_agent_error(cluster_id, "GetPodLogs", e)}
 
     def get_pod_yaml(self, cluster_id: int, namespace: str, pod_name: str, trace_id: str = "") -> dict:
         """获取 Pod YAML → 返回 {success, yaml, error}"""
@@ -1084,6 +1168,9 @@ class ExecutorClient:
 
     def list_hpa(self, cluster_id: int, namespace: str, target_kind: str = "", target_name: str = "", trace_id: str = "") -> dict:
         """HPA 列表 → 返回 {success, items, error}（target_kind/target_name 可选过滤）"""
+        _up = check_agent_feature(cluster_id, "hpa")
+        if _up:
+            return {"success": False, "items": [], "error": _up}
         try:
             resp = _get_stub().ListHPA(
                 executor_pb2.ListHPARequest(
@@ -1101,6 +1188,9 @@ class ExecutorClient:
 
     def get_hpa(self, cluster_id: int, namespace: str, name: str, trace_id: str = "") -> dict:
         """HPA 详情 → 返回 {success, item, yaml, error}"""
+        _up = check_agent_feature(cluster_id, "hpa")
+        if _up:
+            return {"success": False, "item": None, "yaml": "", "error": _up}
         try:
             resp = _get_stub().GetHPA(
                 executor_pb2.GetHPARequest(cluster_id=cluster_id, namespace=namespace, name=name),
@@ -1120,6 +1210,9 @@ class ExecutorClient:
                   scale_up_stabilization_seconds: int = 0, scale_down_stabilization_seconds: int = 0,
                   dry_run: bool = False, trace_id: str = "") -> dict:
         """创建/更新 HPA → 返回 {success, message, error, yaml}"""
+        _up = check_agent_feature(cluster_id, "hpa")
+        if _up:
+            return {"success": False, "message": "", "error": _up, "yaml": ""}
         try:
             resp = _get_stub().ApplyHPA(
                 executor_pb2.ApplyHPARequest(
@@ -1141,6 +1234,9 @@ class ExecutorClient:
 
     def delete_hpa(self, cluster_id: int, namespace: str, name: str, trace_id: str = "") -> dict:
         """删除 HPA → 返回 {success, message, error}"""
+        _up = check_agent_feature(cluster_id, "hpa")
+        if _up:
+            return {"success": False, "message": "", "error": _up}
         try:
             resp = _get_stub().DeleteHPA(
                 executor_pb2.DeleteHPARequest(cluster_id=cluster_id, namespace=namespace, name=name),

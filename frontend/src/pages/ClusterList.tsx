@@ -19,6 +19,8 @@ type ClusterWithExtra = Cluster & {
   agent_status?: string
   agent_last_seen_at?: string
   agent_version?: string
+  agent_capabilities?: string
+  agent_need_upgrade?: boolean
   agent_mode?: string
   agent_pull_url?: string
   has_pull_token?: boolean
@@ -260,6 +262,17 @@ export default function ClusterList() {
             const ver = r.agent_version ? ` v${r.agent_version.replace(/^v/, '')}` : ''
             const tip = r.agent_version ? `agent 版本 ${r.agent_version}` : '尚未上报版本（旧版 agent 或未连接）'
             return <Tooltip title={tip}><Tag color={x.c}>{x.t}{ver}</Tag></Tooltip>
+          } },
+          { title: 'Agent 版本', dataIndex: 'agent_version', render: (v: string, r: ClusterWithExtra) => {
+            if (r.source !== 'agent') return '-'
+            if (!v) return <Tag>未知</Tag>
+            const need = r.agent_need_upgrade === true
+            return (
+              <Space size={4}>
+                <span>v{v.replace(/^v/, '')}</span>
+                {need && <Tooltip title="agent 版本过低，缺少 HPA 管理/日志时间段下载等能力，请升级"><Tag color="red">需升级</Tag></Tooltip>}
+              </Space>
+            )
           } },
           { title: '自愈', dataIndex: 'auto_heal_enabled', width: 80, render: (v: boolean, r: ClusterWithExtra) => (
             <Tooltip title={v ? '开：异常自动 AI 诊断/自愈' : '关：只通知，不自动 AI 诊断/自愈'}>

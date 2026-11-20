@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v7.35.1
-// source: agent.proto
+// source: proto/agent/agent.proto
 
 package agentpb
 
@@ -22,22 +22,28 @@ const (
 )
 
 type AgentFrame struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`                             // 帧类型：register | register_ack | request | response | ping | pong | error
-	ClusterId     int64                  `protobuf:"varint,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // 注册：agent 归属的集群 id
-	Token         string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`                           // 注册：接入令牌（平台校验）
-	ReqId         string                 `protobuf:"bytes,4,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`              // 请求/响应关联 id
-	Method        string                 `protobuf:"bytes,5,opt,name=method,proto3" json:"method,omitempty"`                         // 隧道方法名（如 ExecuteCommand / GetPodLogs），对应 ExecutorService 的 rpc 名
-	Payload       []byte                 `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`                       // 该方法请求或响应的序列化 protobuf（对应 executor.proto 的消息）
-	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                           // 错误信息（type=error 或 response 失败时）
-	Version       string                 `protobuf:"bytes,8,opt,name=version,proto3" json:"version,omitempty"`                       // 注册：agent 版本（构建时写入，平台侧用于版本可见/灰度）
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Type      string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`                             // 帧类型：register | register_ack | request | response | ping | pong | error
+	ClusterId int64                  `protobuf:"varint,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // 注册：agent 归属的集群 id
+	Token     string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`                           // 注册：接入令牌（平台校验）
+	ReqId     string                 `protobuf:"bytes,4,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`              // 请求/响应关联 id
+	Method    string                 `protobuf:"bytes,5,opt,name=method,proto3" json:"method,omitempty"`                         // 隧道方法名（如 ExecuteCommand / GetPodLogs），对应 ExecutorService 的 rpc 名
+	Payload   []byte                 `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`                       // 该方法请求或响应的序列化 protobuf（对应 executor.proto 的消息）
+	Error     string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                           // 错误信息（type=error 或 response 失败时）
+	Version   string                 `protobuf:"bytes,8,opt,name=version,proto3" json:"version,omitempty"`                       // 注册：agent 版本（构建时写入，平台侧用于版本可见/灰度）
+	// 注册：agent 能力列表（R59 能力协商）。
+	// 内容 = ExecutorService 方法名集合（编译时自动派生，老 agent 缺少新方法如 ListHPA）
+	//   - 字段级特性标记（如 log_time_range，代表 GetPodLogs 支持 timestamps/since_seconds）。
+	//
+	// 老 agent 不上报 → 平台按「能力未知/为空」处理，不阻断现有功能。
+	Capabilities  []string `protobuf:"bytes,9,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentFrame) Reset() {
 	*x = AgentFrame{}
-	mi := &file_agent_proto_msgTypes[0]
+	mi := &file_proto_agent_agent_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -49,7 +55,7 @@ func (x *AgentFrame) String() string {
 func (*AgentFrame) ProtoMessage() {}
 
 func (x *AgentFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[0]
+	mi := &file_proto_agent_agent_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -62,7 +68,7 @@ func (x *AgentFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentFrame.ProtoReflect.Descriptor instead.
 func (*AgentFrame) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{0}
+	return file_proto_agent_agent_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *AgentFrame) GetType() string {
@@ -121,11 +127,18 @@ func (x *AgentFrame) GetVersion() string {
 	return ""
 }
 
-var File_agent_proto protoreflect.FileDescriptor
+func (x *AgentFrame) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
 
-const file_agent_proto_rawDesc = "" +
+var File_proto_agent_agent_proto protoreflect.FileDescriptor
+
+const file_proto_agent_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\"\xce\x01\n" +
+	"\x17proto/agent/agent.proto\x12\x05agent\"\xf2\x01\n" +
 	"\n" +
 	"AgentFrame\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1d\n" +
@@ -136,27 +149,28 @@ const file_agent_proto_rawDesc = "" +
 	"\x06method\x18\x05 \x01(\tR\x06method\x12\x18\n" +
 	"\apayload\x18\x06 \x01(\fR\apayload\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x12\x18\n" +
-	"\aversion\x18\b \x01(\tR\aversion2B\n" +
+	"\aversion\x18\b \x01(\tR\aversion\x12\"\n" +
+	"\fcapabilities\x18\t \x03(\tR\fcapabilities2B\n" +
 	"\fAgentService\x122\n" +
 	"\x06Tunnel\x12\x11.agent.AgentFrame\x1a\x11.agent.AgentFrame(\x010\x01B9Z7github.com/autohealops/k8s-executor/proto/agent;agentpbb\x06proto3"
 
 var (
-	file_agent_proto_rawDescOnce sync.Once
-	file_agent_proto_rawDescData []byte
+	file_proto_agent_agent_proto_rawDescOnce sync.Once
+	file_proto_agent_agent_proto_rawDescData []byte
 )
 
-func file_agent_proto_rawDescGZIP() []byte {
-	file_agent_proto_rawDescOnce.Do(func() {
-		file_agent_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)))
+func file_proto_agent_agent_proto_rawDescGZIP() []byte {
+	file_proto_agent_agent_proto_rawDescOnce.Do(func() {
+		file_proto_agent_agent_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_agent_agent_proto_rawDesc), len(file_proto_agent_agent_proto_rawDesc)))
 	})
-	return file_agent_proto_rawDescData
+	return file_proto_agent_agent_proto_rawDescData
 }
 
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_agent_proto_goTypes = []any{
+var file_proto_agent_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_proto_agent_agent_proto_goTypes = []any{
 	(*AgentFrame)(nil), // 0: agent.AgentFrame
 }
-var file_agent_proto_depIdxs = []int32{
+var file_proto_agent_agent_proto_depIdxs = []int32{
 	0, // 0: agent.AgentService.Tunnel:input_type -> agent.AgentFrame
 	0, // 1: agent.AgentService.Tunnel:output_type -> agent.AgentFrame
 	1, // [1:2] is the sub-list for method output_type
@@ -166,26 +180,26 @@ var file_agent_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_agent_proto_init() }
-func file_agent_proto_init() {
-	if File_agent_proto != nil {
+func init() { file_proto_agent_agent_proto_init() }
+func file_proto_agent_agent_proto_init() {
+	if File_proto_agent_agent_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_agent_agent_proto_rawDesc), len(file_proto_agent_agent_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_agent_proto_goTypes,
-		DependencyIndexes: file_agent_proto_depIdxs,
-		MessageInfos:      file_agent_proto_msgTypes,
+		GoTypes:           file_proto_agent_agent_proto_goTypes,
+		DependencyIndexes: file_proto_agent_agent_proto_depIdxs,
+		MessageInfos:      file_proto_agent_agent_proto_msgTypes,
 	}.Build()
-	File_agent_proto = out.File
-	file_agent_proto_goTypes = nil
-	file_agent_proto_depIdxs = nil
+	File_proto_agent_agent_proto = out.File
+	file_proto_agent_agent_proto_goTypes = nil
+	file_proto_agent_agent_proto_depIdxs = nil
 }

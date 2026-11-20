@@ -27,6 +27,7 @@ import (
 	"github.com/autohealops/k8s-executor/internal/prometheus"
 	"github.com/autohealops/k8s-executor/internal/quota"
 	"github.com/autohealops/k8s-executor/internal/watcher"
+	pb "github.com/autohealops/k8s-executor/proto"
 	agentpb "github.com/autohealops/k8s-executor/proto/agent"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -41,6 +42,30 @@ const defaultWhitelist = "get,list,describe,logs,top,explain,rollout,scale,set,a
 
 // version 由构建时注入：-ldflags "-X main.version=<tag>"
 var version = "dev"
+
+// featureCapabilities：agent 支持的「字段级特性」标记（R59 能力协商）。
+// 方法级能力（如 ListHPA）由 executor.proto 的服务描述自动派生（buildCapabilities）；
+// 这里维护的是「方法名没变、但入参语义扩展」的特性，例如：
+//   log_time_range = GetPodLogs 支持 timestamps/since_seconds 时间段过滤（R55）。
+// 老 agent 二进制里没有这些标记 → 平台按能力缺失提示升级，不阻断现有功能。
+var featureCapabilities = []string{
+	"log_time_range",
+}
+
+// buildCapabilities 汇总 agent 的能力列表：ExecutorService 全部方法名 + 字段级特性标记。
+// 方法名从编译期生成的服务描述派生（agent 内嵌完整 ExecutorService，支持哪些方法由二进制决定），
+// 这样「平台新增 RPC → 重新打包 agent」后能力列表自动更新，无需手工维护。
+func buildCapabilities() []string {
+	caps := make([]string, 0, len(pb.ExecutorService_ServiceDesc.Methods)+len(pb.ExecutorService_ServiceDesc.Streams)+len(featureCapabilities))
+	for _, m := range pb.ExecutorService_ServiceDesc.Methods {
+		caps = append(caps, m.MethodName)
+	}
+	for _, s := range pb.ExecutorService_ServiceDesc.Streams {
+		caps = append(caps, s.StreamName)
+	}
+	caps = append(caps, featureCapabilities...)
+	return caps
+}
 
 func buildRestConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig != "" {
@@ -222,11 +247,11 @@ func runTunnel(ctx context.Context, conn *grpc.ClientConn, clusterID int64, toke
 		return stream.Send(f)
 	}
 
-	// 注册
-	if err := send(&agentpb.AgentFrame{Type: "register", ClusterId: clusterID, Token: token, Version: version}); err != nil {
+	// 注册（R59：带版本 + 能力列表，供平台能力协商/版本可见）
+	if err := send(&agentpb.AgentFrame{Type: "register", ClusterId: clusterID, Token: token, Version: version, Capabilities: buildCapabilities()}); err != nil {
 		return err
 	}
-	fmt.Printf("[agent] 已向平台注册集群 %d（version=%s），等待指令\n", clusterID, version)
+	fmt.Printf("[agent] 已向平台注册集群 %d（version=%s，能力 %d 项），等待指令\n", clusterID, version, len(buildCapabilities()))
 
 	// 指标上报（agent 集群无平台侧采集器 → agent 在集群内采集 Pod 指标，经隧道上报平台落库）
 	stopMetrics := startMetricsPush(ctx, mc, send, uint(clusterID), logger)
