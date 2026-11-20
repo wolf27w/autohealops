@@ -24,6 +24,7 @@
 context 约定（由调用方传入）：
     {"cluster_id": int, "namespace": str, "pod_name": str, "user_id": int, "session_id": int, "db_conn_id": int|None}
 """
+import difflib
 import json
 
 from app.clients.executor_client import executor_client
@@ -411,6 +412,325 @@ async def _h_get_deployment(args: dict, context: dict) -> dict:
     return {"success": False, "output": "", "error": r.get("error", "get deployment 执行失败")}
 
 
+# ============ R60：发布历史 / 版本差异 / 事件时间线 ============
+
+def _extract_pod_spec(doc) -> dict:
+    """从 YAML 文档抽取 PodSpec（兼容 PodTemplateSpec / 完整 Deployment/ReplicaSet 模板）。"""
+    if not isinstance(doc, dict):
+        return {}
+    spec = doc.get("spec")
+    if not isinstance(spec, dict):
+        return {}
+    tpl = spec.get("template")
+    if isinstance(tpl, dict) and isinstance(tpl.get("spec"), dict):
+        return tpl["spec"]
+    if "containers" in spec:
+        return spec
+    return {}
+
+
+def _container_map(containers) -> tuple:
+    """容器列表按 name 建索引；无名容器单独返回（按位置兜底）。"""
+    named, anon = {}, []
+    for c in containers:
+        if not isinstance(c, dict):
+            continue
+        n = c.get("name")
+        if n:
+            named[n] = c
+        else:
+            anon.append(c)
+    return named, anon
+
+
+def _env_map(container) -> dict:
+    """容器 env → {name: (kind, repr)}，便于按 name 对比。"""
+    out = {}
+    for e in container.get("env") or []:
+        if not isinstance(e, dict):
+            continue
+        name = e.get("name")
+        if name is None:
+            continue
+        if "value" in e:
+            out[name] = ("value", e.get("value"))
+        elif "valueFrom" in e:
+            out[name] = ("valueFrom", json.dumps(e.get("valueFrom"), sort_keys=True, ensure_ascii=False))
+        else:
+            out[name] = ("other", json.dumps(e, sort_keys=True, ensure_ascii=False))
+    return out
+
+
+def _probes_repr(container) -> str:
+    out = {}
+    for k in ("livenessProbe", "readinessProbe", "startupProbe"):
+        if container.get(k):
+            out[k] = container[k]
+    return json.dumps(out, sort_keys=True, ensure_ascii=False)
+
+
+def _resources_repr(container) -> str:
+    r = container.get("resources") or {}
+    return json.dumps({"requests": r.get("requests") or {}, "limits": r.get("limits") or {}},
+                      sort_keys=True, ensure_ascii=False)
+
+
+def _summarize_pod_diff(yaml_a: str, yaml_b: str) -> list[str]:
+    """纯函数：比较两个 PodTemplateSpec YAML 的结构化差异。
+
+    逐项列出 镜像(containers 的 image) / command / args / env(按 name 对比 added/removed/changed) /
+    探针 / resources / replicas 的变化。无结构化差异时返回空列表；解析失败按空文档处理，不抛异常。
+    """
+    import yaml
+    try:
+        a = yaml.safe_load(yaml_a) or {}
+    except Exception:  # noqa: BLE001
+        a = {}
+    try:
+        b = yaml.safe_load(yaml_b) or {}
+    except Exception:  # noqa: BLE001
+        b = {}
+    spec_a = _extract_pod_spec(a)
+    spec_b = _extract_pod_spec(b)
+    lines: list[str] = []
+
+    # replicas（顶层 spec.replicas：完整 Deployment/ReplicaSet 才有）
+    if isinstance(a.get("spec"), dict) or isinstance(b.get("spec"), dict):
+        ra = (a.get("spec") or {}).get("replicas") if isinstance(a.get("spec"), dict) else None
+        rb = (b.get("spec") or {}).get("replicas") if isinstance(b.get("spec"), dict) else None
+        if ra != rb and (ra is not None or rb is not None):
+            lines.append(f"replicas: {ra} → {rb}")
+
+    ca, anon_a = _container_map(spec_a.get("containers") or [])
+    cb, anon_b = _container_map(spec_b.get("containers") or [])
+    common = [n for n in ca if n in cb]
+    added = [n for n in cb if n not in ca]
+    removed = [n for n in ca if n not in cb]
+    for n in added:
+        lines.append(f"新增容器: {n}")
+    for n in removed:
+        lines.append(f"移除容器: {n}")
+
+    for n in common:
+        x, y = ca[n], cb[n]
+        if (x.get("image") or "") != (y.get("image") or ""):
+            lines.append(f"镜像[{n}]: {x.get('image') or '-'} → {y.get('image') or '-'}")
+        if (x.get("command") or []) != (y.get("command") or []):
+            lines.append(f"command[{n}]: {x.get('command') or '[]'} → {y.get('command') or '[]'}")
+        if (x.get("args") or []) != (y.get("args") or []):
+            lines.append(f"args[{n}]: {x.get('args') or '[]'} → {y.get('args') or '[]'}")
+        ex, ey = _env_map(x), _env_map(y)
+        eadd = [k for k in ey if k not in ex]
+        erm = [k for k in ex if k not in ey]
+        echg = [k for k in ex if k in ey and ex[k] != ey[k]]
+        if eadd:
+            lines.append(f"env[{n}] 新增: {', '.join(eadd)}")
+        if erm:
+            lines.append(f"env[{n}] 移除: {', '.join(erm)}")
+        for k in echg:
+            lines.append(f"env[{n}] 变更 {k}: {ex[k][1]} → {ey[k][1]}")
+        if _probes_repr(x) != _probes_repr(y):
+            lines.append(f"探针[{n}]: {_probes_repr(x)} → {_probes_repr(y)}")
+        if _resources_repr(x) != _resources_repr(y):
+            lines.append(f"resources[{n}]: {_resources_repr(x)} → {_resources_repr(y)}")
+
+    # 无名容器按位置兜底（仅镜像）
+    for i, (x, y) in enumerate(zip(anon_a, anon_b)):
+        if (x.get("image") or "") != (y.get("image") or ""):
+            lines.append(f"镜像[容器#{i}]: {x.get('image') or '-'} → {y.get('image') or '-'}")
+    return lines
+
+
+def _resolve_workload_name(args: dict, context: dict) -> str:
+    """解析工作负载名：显式 workload_name → context.workload_name → context.resource_name。"""
+    n = (args.get("workload_name") or "").strip()
+    if n:
+        return n
+    n = (context.get("workload_name") or "").strip()
+    if n:
+        return n
+    return (context.get("resource_name") or "").strip()
+
+
+async def _h_list_revisions(args: dict, context: dict) -> dict:
+    cluster_id = context.get("cluster_id")
+    ns = context.get("namespace") or ""
+    name = _resolve_workload_name(args, context)
+    if not cluster_id:
+        return {"success": False, "output": "", "error": "缺少集群上下文（cluster_id）"}
+    if not name:
+        return {"success": False, "output": "", "error": "缺少工作负载名（workload_name / resource_name）"}
+    try:
+        r = await executor_client.acall(executor_client.list_revisions, cluster_id, ns, name)
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"查询发布历史异常: {e}"}
+    if not r.get("success"):
+        return {"success": False, "output": "", "error": r.get("error") or "list_revisions 执行失败"}
+    items = r.get("items") or []
+    if not items:
+        return {"success": True, "output": "(无发布历史)", "error": ""}
+    lines = []
+    failed_revs = []
+    cur = r.get("current_revision")
+    for it in items:
+        rev = it.get("revision")
+        images = it.get("images") or []
+        img_txt = images[0] if images else "-"
+        images_joined = ",".join(images)
+        extra = f" | {images_joined}" if len(images) > 1 else ""
+        line = (
+            f"rev {rev} | image={img_txt}{extra} | "
+            f"desired={it.get('desired_replicas')} ready={it.get('ready_replicas')} | "
+            f"{it.get('created_at') or ''} | "
+            f"{'失败' if it.get('failed') else '正常'} | "
+            f"change-cause: {it.get('change_cause') or '-'}"
+        )
+        if it.get("is_current") or (cur is not None and rev == cur):
+            line += " [当前]"
+        lines.append(line)
+        if it.get("failed"):
+            failed_revs.append(f"rev{rev}")
+    summary = (
+        f"共 {len(items)} 个版本；失败的 {len(failed_revs)} 个："
+        f"{','.join(failed_revs) if failed_revs else '无'}；"
+        f"当前 rev={cur if cur is not None else '-'}"
+    )
+    lines.append(summary)
+    return {"success": True, "output": "\n".join(lines)[:6000], "error": ""}
+
+
+async def _h_compare_revisions(args: dict, context: dict) -> dict:
+    cluster_id = context.get("cluster_id")
+    ns = context.get("namespace") or ""
+    name = _resolve_workload_name(args, context)
+    rev_a = args.get("rev_a")
+    rev_b = args.get("rev_b")
+    if not cluster_id:
+        return {"success": False, "output": "", "error": "缺少集群上下文（cluster_id）"}
+    if not name:
+        return {"success": False, "output": "", "error": "缺少工作负载名（workload_name / resource_name）"}
+    if rev_a is None or rev_b is None:
+        return {"success": False, "output": "", "error": "缺少 rev_a / rev_b（必填）"}
+    try:
+        ra = await executor_client.acall(executor_client.get_revision_template, cluster_id, ns, name, rev_a)
+    except Exception as e:  # noqa: BLE001
+        ra = {"success": False, "yaml": "", "error": str(e)}
+    try:
+        rb = await executor_client.acall(executor_client.get_revision_template, cluster_id, ns, name, rev_b)
+    except Exception as e:  # noqa: BLE001
+        rb = {"success": False, "yaml": "", "error": str(e)}
+    if not ra.get("success"):
+        return {"success": False, "output": "", "error": f"revision {rev_a} 模板获取失败: {ra.get('error') or '未知错误'}"}
+    if not rb.get("success"):
+        return {"success": False, "output": "", "error": f"revision {rev_b} 模板获取失败: {rb.get('error') or '未知错误'}"}
+    ya = ra.get("yaml") or ""
+    yb = rb.get("yaml") or ""
+    summary = _summarize_pod_diff(ya, yb)
+    diff = "\n".join(difflib.unified_diff(
+        ya.splitlines(), yb.splitlines(),
+        fromfile=f"rev{rev_a}", tofile=f"rev{rev_b}", lineterm="",
+    ))
+    out = [f"版本差异对比：rev {rev_a} → rev {rev_b}（工作负载 {name} / {ns}）"]
+    if not summary:
+        if ya == yb:
+            out.append("(两个版本的 PodTemplate 完全一致)")
+        else:
+            out.append("(结构化字段无差异，仅顺序/注释/元数据不同，详见下方 diff)")
+    else:
+        out.append("【结构化摘要】")
+        out.extend(summary)
+    out.append("\n【unified diff】")
+    out.append(diff[:4000] if diff else "(无差异)")
+    return {"success": True, "output": "\n".join(out), "error": ""}
+
+
+async def _h_get_workload_events_timeline(args: dict, context: dict) -> dict:
+    cluster_id = context.get("cluster_id")
+    ns = context.get("namespace") or ""
+    name = _resolve_workload_name(args, context)
+    try:
+        hours = int(args.get("hours", 24))
+    except (TypeError, ValueError):
+        hours = 24
+    hours = max(1, min(hours, 24 * 30))
+    if not cluster_id:
+        return {"success": False, "output": "", "error": "缺少集群上下文（cluster_id）"}
+    if not name:
+        return {"success": False, "output": "", "error": "缺少工作负载名（workload_name / resource_name）"}
+
+    # 取发布历史，拿到各 revision 的 pod_template_hash 用于事件按版本归因（失败则降级为全 ?）
+    hashes: dict[str, int] = {}
+    try:
+        rev_r = await executor_client.acall(executor_client.list_revisions, cluster_id, ns, name)
+        if rev_r.get("success"):
+            for it in rev_r.get("items") or []:
+                h = (it.get("pod_template_hash") or "").strip()
+                if h:
+                    hashes[h] = it.get("revision")
+    except Exception:  # noqa: BLE001
+        pass
+
+    from datetime import datetime, timedelta
+    from sqlalchemy import and_, or_, select
+    from app.core.database import async_session
+    from app.models import K8sEvent
+    since = datetime.now() - timedelta(hours=hours)
+    try:
+        async with async_session() as session:
+            rows = list((await session.execute(
+                select(K8sEvent).where(
+                    K8sEvent.cluster_id == cluster_id,
+                    K8sEvent.namespace == ns,
+                    K8sEvent.last_seen >= since,
+                    or_(
+                        K8sEvent.owner_name == name,
+                        and_(K8sEvent.resource_name == name,
+                             K8sEvent.resource_kind.in_(("Deployment", "StatefulSet", "DaemonSet"))),
+                        K8sEvent.resource_name.like(f"{name}-%"),
+                    ),
+                ).order_by(K8sEvent.last_seen.asc()).limit(500)
+            )).scalars())
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"查询事件历史失败: {e}"}
+
+    if not rows:
+        return {"success": True, "output": f"(近 {hours} 小时无事件)", "error": ""}
+
+    def _match_rev(rname: str):
+        for h, rev in hashes.items():
+            if rname == f"{name}-{h}" or rname.startswith(f"{name}-{h}-"):
+                return rev
+        return None
+
+    lines = []
+    fail_count = 0
+    first_ts = last_ts = None
+    for e in rows:
+        ts = str(e.last_seen or e.first_seen or "")
+        if ts:
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+        etype = (e.type or "").lower()
+        reason = (e.reason or "").lower()
+        if etype in ("warning", "error", "failed") or any(
+            k in reason for k in ("fail", "error", "unhealthy", "backoff", "oomkill", "evicted", "crash")
+        ):
+            fail_count += 1
+        rname = e.resource_name or ""
+        rev = _match_rev(rname)
+        rev_txt = f"rev{rev}" if rev is not None else "?"
+        msg = (e.message or "").replace("\n", " ").replace("\r", " ")[:120]
+        lines.append(f"{ts} | {e.type or '-'} | {e.reason or '-'} | {rname} | {rev_txt} | {msg}")
+
+    parts = [f"工作负载 {name}（{ns}）近 {hours} 小时事件时间线（共 {len(lines)} 条，按时间排序）："] + lines
+    if fail_count:
+        rng = f"{first_ts}-{last_ts}" if first_ts and last_ts else "-"
+        parts.append(f"失败/告警类事件 {fail_count} 条，集中在 {rng}")
+    return {"success": True, "output": "\n".join(parts)[:8000], "error": ""}
+
+
 # ============ 注册表 ============
 
 TOOL_REGISTRY: dict[str, dict] = {}
@@ -566,6 +886,60 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_get_probe_config,
+})
+
+
+_register({
+    "name": "list_revisions",
+    "label": "发布历史",
+    "description": (
+        "查询工作负载（Deployment）的发布历史（ReplicaSet revision 列表）：每个版本的镜像、期望/就绪副本数、"
+        "创建时间、是否失败、change-cause 与当前版本。用于诊断「新版本发布后起不来 / 回滚 / 版本漂移」类问题，"
+        "先看历史上有哪些版本、哪个失败、当前在哪一版（只读）。"
+    ),
+    "args_schema": {
+        "workload_name": {"type": "string", "required": False,
+                           "description": "工作负载名（留空则取上下文里的 workload_name / resource_name）", "default": ""},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_list_revisions,
+})
+
+_register({
+    "name": "compare_revisions",
+    "label": "版本差异对比",
+    "description": (
+        "对比两个 revision 的 PodTemplateSpec 差异：先给结构化摘要（镜像/command/args/env/探针/resources/replicas 的"
+        "added/removed/changed），再附 unified diff 原文。用于定位「哪个版本改了什么导致起不来」（只读）。"
+    ),
+    "args_schema": {
+        "rev_a": {"type": "int", "required": True, "description": "版本号 A（对比基准，如 112）"},
+        "rev_b": {"type": "int", "required": True, "description": "版本号 B（对比目标，如 113）"},
+        "workload_name": {"type": "string", "required": False,
+                           "description": "工作负载名（留空则取上下文里的 workload_name / resource_name）", "default": ""},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_compare_revisions,
+})
+
+_register({
+    "name": "get_workload_events_timeline",
+    "label": "事件时间线（按版本归因）",
+    "description": (
+        "查询工作负载近 N 小时的 k8s 事件时间线（平台自存历史，含已重建 Pod 的旧事件），按时间排序，"
+        "并把每条事件归因到对应的 revision（用 Pod 名前缀 <workload>-<pod-template-hash>- 匹配发布历史）。"
+        "用于诊断「发布后新 Pod 反复失败/告警集中在哪个版本」（只读）。"
+    ),
+    "args_schema": {
+        "hours": {"type": "int", "required": False, "description": "回溯小时数，默认 24（上限 720）", "default": 24},
+        "workload_name": {"type": "string", "required": False,
+                           "description": "工作负载名（留空则取上下文里的 workload_name / resource_name）", "default": ""},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_workload_events_timeline,
 })
 
 

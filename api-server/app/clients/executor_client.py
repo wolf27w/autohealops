@@ -510,6 +510,22 @@ def _conv_hpa_info(it) -> dict:
     }
 
 
+def _conv_revision_info(it) -> dict:
+    """gRPC RevisionInfo → dict（R60 发布历史）"""
+    return {
+        "revision": it.revision,
+        "replicaset": it.replicaset,
+        "images": list(it.images),
+        "desired_replicas": it.desired_replicas,
+        "ready_replicas": it.ready_replicas,
+        "created_at": it.created_at,
+        "is_current": it.is_current,
+        "failed": it.failed,
+        "change_cause": it.change_cause,
+        "pod_template_hash": it.pod_template_hash,
+    }
+
+
 class ExecutorClient:
     """k8s-executor gRPC 客户端封装（含超时控制 + 错误处理 + 日志）"""
 
@@ -1273,6 +1289,40 @@ class ExecutorClient:
         except Exception as e:  # noqa: BLE001
             logger.error("rollout_history 失败: %s", e)
             return {"success": False, "revisions": [], "error": str(e)}
+
+    # ============ 发布历史 / 版本差异（R60） ============
+
+    def list_revisions(self, cluster_id: int, namespace: str, name: str, trace_id: str = "") -> dict:
+        """发布历史（Deployment ReplicaSet 历史）→ 返回 {success, items, current_revision, error}"""
+        try:
+            resp = _get_stub().ListRevisions(
+                executor_pb2.ListRevisionsRequest(
+                    cluster_id=cluster_id, namespace=namespace, name=name,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "error": resp.error,
+                    "items": [_conv_revision_info(it) for it in resp.items],
+                    "current_revision": resp.current_revision}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_revisions 失败: %s", e)
+            return {"success": False, "items": [], "current_revision": 0, "error": str(e)}
+
+    def get_revision_template(self, cluster_id: int, namespace: str, name: str, revision: int, trace_id: str = "") -> dict:
+        """获取指定 revision 的 PodTemplateSpec YAML → 返回 {success, yaml, replicaset, error}"""
+        try:
+            resp = _get_stub().GetRevisionTemplate(
+                executor_pb2.GetRevisionTemplateRequest(
+                    cluster_id=cluster_id, namespace=namespace, name=name, revision=revision,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "yaml": resp.yaml, "replicaset": resp.replicaset, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_revision_template 失败: %s", e)
+            return {"success": False, "yaml": "", "replicaset": "", "error": str(e)}
 
     def update_probe(self, cluster_id: int, namespace: str, name: str, probe: dict, trace_id: str = "") -> dict:
         try:

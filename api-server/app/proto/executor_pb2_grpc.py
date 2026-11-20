@@ -240,6 +240,16 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.DeleteHPARequest.SerializeToString,
                 response_deserializer=executor__pb2.DeleteHPAResponse.FromString,
                 _registered_method=True)
+        self.ListRevisions = channel.unary_unary(
+                '/executor.ExecutorService/ListRevisions',
+                request_serializer=executor__pb2.ListRevisionsRequest.SerializeToString,
+                response_deserializer=executor__pb2.ListRevisionsResponse.FromString,
+                _registered_method=True)
+        self.GetRevisionTemplate = channel.unary_unary(
+                '/executor.ExecutorService/GetRevisionTemplate',
+                request_serializer=executor__pb2.GetRevisionTemplateRequest.SerializeToString,
+                response_deserializer=executor__pb2.GetRevisionTemplateResponse.FromString,
+                _registered_method=True)
         self.UpdateProbe = channel.unary_unary(
                 '/executor.ExecutorService/UpdateProbe',
                 request_serializer=executor__pb2.UpdateProbeRequest.SerializeToString,
@@ -551,6 +561,19 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListRevisions(self, request, context):
+        """R60：发布历史与版本对比
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetRevisionTemplate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def UpdateProbe(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -791,6 +814,16 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.DeleteHPA,
                     request_deserializer=executor__pb2.DeleteHPARequest.FromString,
                     response_serializer=executor__pb2.DeleteHPAResponse.SerializeToString,
+            ),
+            'ListRevisions': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRevisions,
+                    request_deserializer=executor__pb2.ListRevisionsRequest.FromString,
+                    response_serializer=executor__pb2.ListRevisionsResponse.SerializeToString,
+            ),
+            'GetRevisionTemplate': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRevisionTemplate,
+                    request_deserializer=executor__pb2.GetRevisionTemplateRequest.FromString,
+                    response_serializer=executor__pb2.GetRevisionTemplateResponse.SerializeToString,
             ),
             'UpdateProbe': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateProbe,
@@ -1926,6 +1959,60 @@ class ExecutorService(object):
             '/executor.ExecutorService/DeleteHPA',
             executor__pb2.DeleteHPARequest.SerializeToString,
             executor__pb2.DeleteHPAResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListRevisions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ListRevisions',
+            executor__pb2.ListRevisionsRequest.SerializeToString,
+            executor__pb2.ListRevisionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRevisionTemplate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetRevisionTemplate',
+            executor__pb2.GetRevisionTemplateRequest.SerializeToString,
+            executor__pb2.GetRevisionTemplateResponse.FromString,
             options,
             channel_credentials,
             insecure,
