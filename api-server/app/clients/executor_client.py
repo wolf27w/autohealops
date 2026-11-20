@@ -381,6 +381,55 @@ def _metadata(trace_id: str = ""):
     return (("trace-id", trace_id),) if trace_id else None
 
 
+def _hpametric_spec(m: dict):
+    """HPA 指标 dict → gRPC HPAMetricSpec（空字段跳过）"""
+    spec = executor_pb2.HPAMetricSpec()
+    if not isinstance(m, dict):
+        return spec
+    if m.get("type"):
+        spec.type = str(m["type"])
+    if m.get("name"):
+        spec.name = str(m["name"])
+    if m.get("target_type"):
+        spec.target_type = str(m["target_type"])
+    tu = m.get("target_utilization")
+    if tu not in (None, ""):
+        try:
+            spec.target_utilization = int(tu)
+        except (TypeError, ValueError):
+            pass
+    tv = m.get("target_value")
+    if tv not in (None, ""):
+        spec.target_value = str(tv)
+    return spec
+
+
+def _conv_hpa_metric(m) -> dict:
+    """gRPC HPAMetricSpec → dict"""
+    return {
+        "type": m.type, "name": m.name, "target_type": m.target_type,
+        "target_utilization": m.target_utilization, "target_value": m.target_value,
+        "current_value": m.current_value, "current_utilization": m.current_utilization,
+        "current_available": m.current_available,
+    }
+
+
+def _conv_hpa_info(it) -> dict:
+    """gRPC HPAInfo → dict"""
+    return {
+        "namespace": it.namespace, "name": it.name,
+        "target_kind": it.target_kind, "target_name": it.target_name,
+        "target_api_version": it.target_api_version,
+        "min_replicas": it.min_replicas, "max_replicas": it.max_replicas,
+        "current_replicas": it.current_replicas, "desired_replicas": it.desired_replicas,
+        "metrics": [_conv_hpa_metric(m) for m in it.metrics],
+        "conditions": list(it.conditions),
+        "last_scale_time": it.last_scale_time,
+        "scale_up_stabilization_seconds": it.scale_up_stabilization_seconds,
+        "scale_down_stabilization_seconds": it.scale_down_stabilization_seconds,
+    }
+
+
 class ExecutorClient:
     """k8s-executor gRPC 客户端封装（含超时控制 + 错误处理 + 日志）"""
 
@@ -1029,6 +1078,78 @@ class ExecutorClient:
             return {"success": resp.success, "message": resp.message, "error": resp.error}
         except Exception as e:  # noqa: BLE001
             logger.error("scale_workload 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e)}
+
+    # ============ HPA（水平自动扩缩容，R57） ============
+
+    def list_hpa(self, cluster_id: int, namespace: str, target_kind: str = "", target_name: str = "", trace_id: str = "") -> dict:
+        """HPA 列表 → 返回 {success, items, error}（target_kind/target_name 可选过滤）"""
+        try:
+            resp = _get_stub().ListHPA(
+                executor_pb2.ListHPARequest(
+                    cluster_id=cluster_id, namespace=namespace,
+                    target_kind=target_kind, target_name=target_name,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "error": resp.error,
+                    "items": [_conv_hpa_info(it) for it in resp.items]}
+        except Exception as e:  # noqa: BLE001
+            logger.error("list_hpa 失败: %s", e)
+            return {"success": False, "items": [], "error": str(e)}
+
+    def get_hpa(self, cluster_id: int, namespace: str, name: str, trace_id: str = "") -> dict:
+        """HPA 详情 → 返回 {success, item, yaml, error}"""
+        try:
+            resp = _get_stub().GetHPA(
+                executor_pb2.GetHPARequest(cluster_id=cluster_id, namespace=namespace, name=name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            item = None
+            if resp.item and resp.item.name:
+                item = _conv_hpa_info(resp.item)
+            return {"success": resp.success, "item": item, "yaml": resp.yaml, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("get_hpa 失败: %s", e)
+            return {"success": False, "item": None, "yaml": "", "error": str(e)}
+
+    def apply_hpa(self, cluster_id: int, namespace: str, name: str, target_kind: str,
+                  target_name: str, min_replicas: int, max_replicas: int, metrics: list,
+                  scale_up_stabilization_seconds: int = 0, scale_down_stabilization_seconds: int = 0,
+                  dry_run: bool = False, trace_id: str = "") -> dict:
+        """创建/更新 HPA → 返回 {success, message, error, yaml}"""
+        try:
+            resp = _get_stub().ApplyHPA(
+                executor_pb2.ApplyHPARequest(
+                    cluster_id=cluster_id, namespace=namespace, name=name,
+                    target_kind=target_kind, target_name=target_name,
+                    min_replicas=min_replicas, max_replicas=max_replicas,
+                    metrics=[_hpametric_spec(m) for m in metrics],
+                    scale_up_stabilization_seconds=scale_up_stabilization_seconds,
+                    scale_down_stabilization_seconds=scale_down_stabilization_seconds,
+                    dry_run=dry_run,
+                ),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error, "yaml": resp.yaml}
+        except Exception as e:  # noqa: BLE001
+            logger.error("apply_hpa 失败: %s", e)
+            return {"success": False, "message": "", "error": str(e), "yaml": ""}
+
+    def delete_hpa(self, cluster_id: int, namespace: str, name: str, trace_id: str = "") -> dict:
+        """删除 HPA → 返回 {success, message, error}"""
+        try:
+            resp = _get_stub().DeleteHPA(
+                executor_pb2.DeleteHPARequest(cluster_id=cluster_id, namespace=namespace, name=name),
+                timeout=self.TIMEOUT,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("delete_hpa 失败: %s", e)
             return {"success": False, "message": "", "error": str(e)}
 
     def rollout_workload(self, cluster_id: int, kind: str, namespace: str, name: str, action: str, revision: int = 0, trace_id: str = "") -> dict:

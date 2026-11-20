@@ -220,6 +220,26 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.RolloutHistoryRequest.SerializeToString,
                 response_deserializer=executor__pb2.RolloutHistoryResponse.FromString,
                 _registered_method=True)
+        self.ListHPA = channel.unary_unary(
+                '/executor.ExecutorService/ListHPA',
+                request_serializer=executor__pb2.ListHPARequest.SerializeToString,
+                response_deserializer=executor__pb2.ListHPAResponse.FromString,
+                _registered_method=True)
+        self.GetHPA = channel.unary_unary(
+                '/executor.ExecutorService/GetHPA',
+                request_serializer=executor__pb2.GetHPARequest.SerializeToString,
+                response_deserializer=executor__pb2.GetHPAResponse.FromString,
+                _registered_method=True)
+        self.ApplyHPA = channel.unary_unary(
+                '/executor.ExecutorService/ApplyHPA',
+                request_serializer=executor__pb2.ApplyHPARequest.SerializeToString,
+                response_deserializer=executor__pb2.ApplyHPAResponse.FromString,
+                _registered_method=True)
+        self.DeleteHPA = channel.unary_unary(
+                '/executor.ExecutorService/DeleteHPA',
+                request_serializer=executor__pb2.DeleteHPARequest.SerializeToString,
+                response_deserializer=executor__pb2.DeleteHPAResponse.FromString,
+                _registered_method=True)
         self.UpdateProbe = channel.unary_unary(
                 '/executor.ExecutorService/UpdateProbe',
                 request_serializer=executor__pb2.UpdateProbeRequest.SerializeToString,
@@ -506,6 +526,31 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListHPA(self, request, context):
+        """R57：HPA（水平自动扩缩容）管理
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetHPA(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ApplyHPA(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteHPA(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def UpdateProbe(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -726,6 +771,26 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.RolloutHistory,
                     request_deserializer=executor__pb2.RolloutHistoryRequest.FromString,
                     response_serializer=executor__pb2.RolloutHistoryResponse.SerializeToString,
+            ),
+            'ListHPA': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListHPA,
+                    request_deserializer=executor__pb2.ListHPARequest.FromString,
+                    response_serializer=executor__pb2.ListHPAResponse.SerializeToString,
+            ),
+            'GetHPA': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetHPA,
+                    request_deserializer=executor__pb2.GetHPARequest.FromString,
+                    response_serializer=executor__pb2.GetHPAResponse.SerializeToString,
+            ),
+            'ApplyHPA': grpc.unary_unary_rpc_method_handler(
+                    servicer.ApplyHPA,
+                    request_deserializer=executor__pb2.ApplyHPARequest.FromString,
+                    response_serializer=executor__pb2.ApplyHPAResponse.SerializeToString,
+            ),
+            'DeleteHPA': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteHPA,
+                    request_deserializer=executor__pb2.DeleteHPARequest.FromString,
+                    response_serializer=executor__pb2.DeleteHPAResponse.SerializeToString,
             ),
             'UpdateProbe': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateProbe,
@@ -1753,6 +1818,114 @@ class ExecutorService(object):
             '/executor.ExecutorService/RolloutHistory',
             executor__pb2.RolloutHistoryRequest.SerializeToString,
             executor__pb2.RolloutHistoryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListHPA(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ListHPA',
+            executor__pb2.ListHPARequest.SerializeToString,
+            executor__pb2.ListHPAResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetHPA(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/GetHPA',
+            executor__pb2.GetHPARequest.SerializeToString,
+            executor__pb2.GetHPAResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ApplyHPA(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/ApplyHPA',
+            executor__pb2.ApplyHPARequest.SerializeToString,
+            executor__pb2.ApplyHPAResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteHPA(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/DeleteHPA',
+            executor__pb2.DeleteHPARequest.SerializeToString,
+            executor__pb2.DeleteHPAResponse.FromString,
             options,
             channel_credentials,
             insecure,

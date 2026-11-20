@@ -1285,6 +1285,96 @@ async def scale_workload(cluster_id: int, payload: dict, user=Depends(require_op
     return {"code": 200, "message": "success", "data": {"message": r.get("message")}}
 
 
+# ============ HPA（水平自动扩缩容，R57） ============
+
+@router.get("/clusters/{cluster_id}/hpa")
+async def list_hpa(cluster_id: int, namespace: str, target_kind: str = "", target_name: str = "",
+                   user=Depends(require_any_user)):
+    """HPA 列表（namespace 必填；target_kind/target_name 可选过滤）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    if not namespace:
+        return {"code": 400, "message": "namespace 必填", "data": None}
+    r = await executor_client.acall(executor_client.list_hpa, cluster_id, namespace, target_kind, target_name)
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "HPA 列表获取失败"), "data": None}
+    return {"code": 200, "message": "success", "data": {"items": r.get("items", [])}}
+
+
+@router.post("/clusters/{cluster_id}/hpa/apply")
+async def apply_hpa(cluster_id: int, payload: dict, user=Depends(require_operator)):
+    """创建/更新 HPA（需操作员权限）"""
+    namespace = (payload.get("namespace") or "").strip()
+    name = (payload.get("name") or "").strip()
+    target_kind = (payload.get("target_kind") or "").strip().lower()
+    target_name = (payload.get("target_name") or "").strip()
+    metrics = payload.get("metrics") or []
+    dry_run = bool(payload.get("dry_run", False))
+    try:
+        scale_up_stabilization_seconds = int(payload.get("scale_up_stabilization_seconds") or 0)
+        scale_down_stabilization_seconds = int(payload.get("scale_down_stabilization_seconds") or 0)
+    except (TypeError, ValueError):
+        scale_up_stabilization_seconds = 0
+        scale_down_stabilization_seconds = 0
+
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    if not namespace or not name:
+        return {"code": 400, "message": "namespace/name 必填", "data": None}
+    if target_kind not in ("deployment", "statefulset"):
+        return {"code": 400, "message": "target_kind 只支持 deployment/statefulset", "data": None}
+    if not isinstance(metrics, list) or len(metrics) == 0:
+        return {"code": 400, "message": "metrics 至少 1 条（0 条指标的 HPA 永不扩缩）", "data": None}
+    try:
+        min_replicas = int(payload.get("min_replicas"))
+        max_replicas = int(payload.get("max_replicas"))
+    except (TypeError, ValueError):
+        return {"code": 400, "message": "min_replicas/max_replicas 必须是整数", "data": None}
+    if min_replicas < 1:
+        return {"code": 400, "message": "min_replicas 必须 >= 1", "data": None}
+    if max_replicas < min_replicas:
+        return {"code": 400, "message": "max_replicas 必须 >= min_replicas", "data": None}
+    r = await executor_client.acall(
+        executor_client.apply_hpa, cluster_id, namespace, name, target_kind, target_name,
+        min_replicas, max_replicas, metrics,
+        scale_up_stabilization_seconds, scale_down_stabilization_seconds, dry_run,
+    )
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error", "HPA 应用失败"), "data": None}
+    return {"code": 200, "message": "success",
+            "data": {"message": r.get("message", "已应用"), "yaml": r.get("yaml", "")}}
+
+
+@router.get("/clusters/{cluster_id}/hpa/{namespace}/{hpa_name}")
+async def get_hpa(cluster_id: int, namespace: str, hpa_name: str, user=Depends(require_any_user)):
+    """HPA 详情（含 YAML）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace):
+        return denied
+    r = await executor_client.acall(executor_client.get_hpa, cluster_id, namespace, hpa_name)
+    if not r.get("success"):
+        err = r.get("error") or "HPA 详情获取失败"
+        # k8s 侧 no such resource → 404，避免前端把它当服务端故障
+        if "not found" in err.lower() or "不存在" in err:
+            return {"code": 404, "message": f"HPA {hpa_name} 不存在", "data": None}
+        return {"code": 500, "message": err, "data": None}
+    return {"code": 200, "message": "success",
+            "data": {"item": r.get("item"), "yaml": r.get("yaml", "")}}
+
+
+@router.delete("/clusters/{cluster_id}/hpa/{namespace}/{hpa_name}")
+async def delete_hpa(cluster_id: int, namespace: str, hpa_name: str, user=Depends(require_operator)):
+    """删除 HPA（需操作员权限）"""
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    r = await executor_client.acall(executor_client.delete_hpa, cluster_id, namespace, hpa_name)
+    if not r.get("success"):
+        err = r.get("error") or "HPA 删除失败"
+        if "not found" in err.lower() or "不存在" in err:
+            return {"code": 404, "message": f"HPA {hpa_name} 不存在", "data": None}
+        return {"code": 500, "message": err, "data": None}
+    return {"code": 200, "message": "success", "data": {"message": r.get("message", "已删除")}}
+
+
 @router.post("/clusters/{cluster_id}/workloads/rollout")
 async def rollout_workload(cluster_id: int, payload: dict, user=Depends(require_operator)):
     """回滚/重启（action=restart|undo，revision 用于 undo）"""
