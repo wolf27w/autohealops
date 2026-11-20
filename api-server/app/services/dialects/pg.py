@@ -283,7 +283,9 @@ class PGDialect(Dialect):
         """表结构详情：字段/索引/表注释/行数估计，与 MySQL 同形（extra/key/charset/collation 恒空）。
 
         PG 中 `db` = schema；列注释/表注释从 pg_description（col_description/obj_description）取，
-        索引从 pg_index + pg_attribute 取（按 indkey 顺序展开列，unique/method 同形映射）。
+        索引从 pg_index + pg_attribute 取：用 `unnest(indkey) WITH ORDINALITY` 按 indkey 真实顺序
+        展开列（非 attnum 排序），区分 unique/primary，表达式列（attnum=0）标注 (expression)，
+        INCLUDE 列（indnkeyatts 之外）排除。
         """
         conn = await self.connect(c, readonly=True)
         try:
@@ -307,16 +309,19 @@ class PGDialect(Dialect):
                 "WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r'", db, table)
             idx_rows = await conn.fetch(
                 "SELECT i.relname AS index_name, ix.indisunique AS is_unique, "
-                "am.amname AS access_method, a.attname AS column_name "
+                "ix.indisprimary AS is_primary, am.amname AS access_method, "
+                "u.ord AS col_position, a.attname AS column_name "
                 "FROM pg_catalog.pg_class t "
                 "JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace "
                 "JOIN pg_catalog.pg_index ix ON ix.indrelid = t.oid "
                 "JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid "
                 "JOIN pg_catalog.pg_am am ON am.oid = i.relam "
-                "JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid "
-                "  AND a.attnum = ANY(ix.indkey) "
+                "CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS u(attnum, ord) "
+                "LEFT JOIN pg_catalog.pg_attribute a "
+                "  ON a.attrelid = t.oid AND a.attnum = u.attnum "
                 "WHERE n.nspname = $1 AND t.relname = $2 AND t.relkind = 'r' "
-                "ORDER BY i.relname, array_position(ix.indkey::int2[], a.attnum)", db, table)
+                "  AND u.ord <= ix.indnkeyatts "
+                "ORDER BY i.relname, u.ord", db, table)
         finally:
             await conn.close()
 
@@ -333,23 +338,12 @@ class PGDialect(Dialect):
             "collation": "",
         } for r in col_rows]
 
-        idx_map: dict[str, dict] = {}
-        for r in idx_rows:
-            name = r["index_name"]
-            item = idx_map.setdefault(name, {
-                "name": name,
-                "unique": bool(r["is_unique"]),
-                "type": (r["access_method"] or "btree").upper(),
-                "columns": [],
-            })
-            item["columns"].append(r["column_name"])
-
         return {
             "database": db, "table": table,
             "engine": "", "charset": "", "collation": "",
             "comment": (tinfo_row["comment"] if tinfo_row else "") or "",
             "rows": int(tinfo_row["rows"] or 0) if tinfo_row else 0,
-            "columns": columns, "indexes": list(idx_map.values()),
+            "columns": columns, "indexes": _indexes_from_rows(idx_rows),
         }
 
 
@@ -388,6 +382,53 @@ def _norm_pg_default(d):
     if len(d) >= 2 and d[0] == "'" and d[-1] == "'":
         return d[1:-1].replace("''", "'")
     return d
+
+
+def _indexes_from_rows(rows) -> list[dict]:
+    """索引查询结果行 → 索引结构列表（与 MySQL 同形，额外带 primary 标志）。
+
+    每行 = 一个索引的一列（SQL 端已按 `unnest(indkey) WITH ORDINALITY` 展开，带
+    `col_position`）。这里把同一索引的多行按 `col_position` 稳定排序，保证列序与
+    `indkey` 的真实顺序一致（而不是按 attnum 排序造成多列索引列序错位）。
+
+    - `is_unique` 为真、`is_primary` 为真 → 主键索引（unique=True, primary=True）；
+      仅 `is_unique` 为真 → 唯一索引（unique=True, primary=False）。
+    - `column_name` 为 NULL/空 → 表达式列（indkey 里 attnum=0 无对应 pg_attribute），
+      给 `(expression)` 占位，保证表达式索引不报错、也不丢失列位。
+    """
+    grouped: dict[str, dict] = {}
+    order: list[str] = []
+    for r in rows:
+        name = r["index_name"]
+        if name not in grouped:
+            grouped[name] = {
+                "name": name,
+                "unique": bool(r.get("is_unique")),
+                "primary": bool(r.get("is_primary")),
+                "type": (r.get("access_method") or "btree").upper(),
+                "_cols": [],
+            }
+            order.append(name)
+        pos = r.get("col_position")
+        if pos is None:
+            pos = len(grouped[name]["_cols"])
+        col = r.get("column_name")
+        if col is None or str(col).strip() == "":
+            col = "(expression)"
+        grouped[name]["_cols"].append((int(pos), col))
+
+    out: list[dict] = []
+    for name in order:
+        item = grouped[name]
+        cols = [c for _, c in sorted(item["_cols"], key=lambda t: t[0])]
+        out.append({
+            "name": item["name"],
+            "unique": item["unique"],
+            "primary": item["primary"],
+            "type": item["type"],
+            "columns": cols,
+        })
+    return out
 
 
 # ============ DDL 生成（表结构设计器，R48） ============
@@ -452,7 +493,7 @@ def _pg_modify_clauses(qual: str, name: str, col: dict) -> list[str]:
         stmts.append(
             f'ALTER TABLE {qual} ALTER COLUMN "{name}" '
             f'{"DROP" if col.get("nullable") else "SET"} NOT NULL')
-    if col.get("default") is not None:
+    if "default" in col:
         d = _pg_default_sql(col.get("default"))
         if d:
             stmts.append(f'ALTER TABLE {qual} ALTER COLUMN "{name}" SET {d}')
