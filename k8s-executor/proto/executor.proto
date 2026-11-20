@@ -87,6 +87,9 @@ service ExecutorService {
   rpc GetHPA(GetHPARequest) returns (GetHPAResponse);
   rpc ApplyHPA(ApplyHPARequest) returns (ApplyHPAResponse);
   rpc DeleteHPA(DeleteHPARequest) returns (DeleteHPAResponse);
+  // R60：发布历史与版本对比
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
+  rpc GetRevisionTemplate(GetRevisionTemplateRequest) returns (GetRevisionTemplateResponse);
   rpc UpdateProbe(UpdateProbeRequest) returns (UpdateProbeResponse);
   rpc RecreateWorkload(RecreateWorkloadRequest) returns (RecreateWorkloadResponse);
 
@@ -816,6 +819,46 @@ message ApplyHPAResponse {
   string message = 2;
   string error = 3;
   string yaml = 4;             // 实际应用/预览的 YAML
+}
+
+// ==================== R60：发布历史 / 版本对比 ====================
+
+message RevisionInfo {
+  int64 revision = 1;
+  string replicaset = 2;
+  repeated string images = 3;      // 各容器镜像
+  int32 desired_replicas = 4;
+  int32 ready_replicas = 5;
+  string created_at = 6;           // RFC3339
+  bool is_current = 7;             // 是否为 Deployment 当前 revision
+  bool failed = 8;                 // 有期望副本但 0 就绪（或关联 Pod 处于 CrashLoop/ImagePull 等）
+  string change_cause = 9;         // deployment.kubernetes.io/change-cause 注解
+  string pod_template_hash = 10;
+}
+
+message ListRevisionsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;                 // deployment 名
+}
+message ListRevisionsResponse {
+  bool success = 1;
+  repeated RevisionInfo items = 2;
+  int64 current_revision = 3;
+  string error = 4;
+}
+
+message GetRevisionTemplateRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;                 // deployment 名
+  int64 revision = 4;
+}
+message GetRevisionTemplateResponse {
+  bool success = 1;
+  string yaml = 2;                 // PodTemplateSpec 的 YAML
+  string replicaset = 3;
+  string error = 4;
 }
 
 message DeleteHPARequest {

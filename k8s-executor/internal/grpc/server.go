@@ -855,6 +855,48 @@ func (s *Server) DeleteHPA(ctx context.Context, req *pb.DeleteHPARequest) (*pb.D
 	return &pb.DeleteHPAResponse{Success: true, Message: "已删除"}, nil
 }
 
+// ListRevisions 列出 Deployment 发布历史（按 revision 降序）
+func (s *Server) ListRevisions(ctx context.Context, req *pb.ListRevisionsRequest) (*pb.ListRevisionsResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.ListRevisionsResponse{Success: false, Error: err.Error()}, nil
+	}
+	items, curRev, err := ex.ListRevisions(ctx, req.Namespace, req.Name)
+	if err != nil {
+		return &pb.ListRevisionsResponse{Success: false, Error: err.Error()}, nil
+	}
+	out := make([]*pb.RevisionInfo, 0, len(items))
+	for i := range items {
+		it := &items[i]
+		out = append(out, &pb.RevisionInfo{
+			Revision:        it.Revision,
+			Replicaset:      it.Replicaset,
+			Images:          it.Images,
+			DesiredReplicas: it.DesiredReplicas,
+			ReadyReplicas:   it.ReadyReplicas,
+			CreatedAt:       it.CreatedAt,
+			IsCurrent:       it.IsCurrent,
+			Failed:          it.Failed,
+			ChangeCause:     it.ChangeCause,
+			PodTemplateHash: it.PodTemplateHash,
+		})
+	}
+	return &pb.ListRevisionsResponse{Success: true, Items: out, CurrentRevision: curRev}, nil
+}
+
+// GetRevisionTemplate 获取指定 revision 的 Pod 模板 YAML
+func (s *Server) GetRevisionTemplate(ctx context.Context, req *pb.GetRevisionTemplateRequest) (*pb.GetRevisionTemplateResponse, error) {
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.GetRevisionTemplateResponse{Success: false, Error: err.Error()}, nil
+	}
+	y, rsName, err := ex.GetRevisionTemplate(ctx, req.Namespace, req.Name, req.Revision)
+	if err != nil {
+		return &pb.GetRevisionTemplateResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.GetRevisionTemplateResponse{Success: true, Yaml: y, Replicaset: rsName}, nil
+}
+
 // hpaToPb 将 executor 侧 HPAInfo 转成 proto HPAInfo
 func hpaToPb(in *executor.HPAInfo) *pb.HPAInfo {
 	out := &pb.HPAInfo{

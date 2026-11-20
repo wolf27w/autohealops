@@ -62,6 +62,8 @@ const (
 	ExecutorService_GetHPA_FullMethodName                = "/executor.ExecutorService/GetHPA"
 	ExecutorService_ApplyHPA_FullMethodName              = "/executor.ExecutorService/ApplyHPA"
 	ExecutorService_DeleteHPA_FullMethodName             = "/executor.ExecutorService/DeleteHPA"
+	ExecutorService_ListRevisions_FullMethodName         = "/executor.ExecutorService/ListRevisions"
+	ExecutorService_GetRevisionTemplate_FullMethodName   = "/executor.ExecutorService/GetRevisionTemplate"
 	ExecutorService_UpdateProbe_FullMethodName           = "/executor.ExecutorService/UpdateProbe"
 	ExecutorService_RecreateWorkload_FullMethodName      = "/executor.ExecutorService/RecreateWorkload"
 	ExecutorService_ExecPodStream_FullMethodName         = "/executor.ExecutorService/ExecPodStream"
@@ -150,6 +152,9 @@ type ExecutorServiceClient interface {
 	GetHPA(ctx context.Context, in *GetHPARequest, opts ...grpc.CallOption) (*GetHPAResponse, error)
 	ApplyHPA(ctx context.Context, in *ApplyHPARequest, opts ...grpc.CallOption) (*ApplyHPAResponse, error)
 	DeleteHPA(ctx context.Context, in *DeleteHPARequest, opts ...grpc.CallOption) (*DeleteHPAResponse, error)
+	// R60：发布历史与版本对比
+	ListRevisions(ctx context.Context, in *ListRevisionsRequest, opts ...grpc.CallOption) (*ListRevisionsResponse, error)
+	GetRevisionTemplate(ctx context.Context, in *GetRevisionTemplateRequest, opts ...grpc.CallOption) (*GetRevisionTemplateResponse, error)
 	UpdateProbe(ctx context.Context, in *UpdateProbeRequest, opts ...grpc.CallOption) (*UpdateProbeResponse, error)
 	RecreateWorkload(ctx context.Context, in *RecreateWorkloadRequest, opts ...grpc.CallOption) (*RecreateWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
@@ -596,6 +601,26 @@ func (c *executorServiceClient) DeleteHPA(ctx context.Context, in *DeleteHPARequ
 	return out, nil
 }
 
+func (c *executorServiceClient) ListRevisions(ctx context.Context, in *ListRevisionsRequest, opts ...grpc.CallOption) (*ListRevisionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRevisionsResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_ListRevisions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *executorServiceClient) GetRevisionTemplate(ctx context.Context, in *GetRevisionTemplateRequest, opts ...grpc.CallOption) (*GetRevisionTemplateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRevisionTemplateResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_GetRevisionTemplate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) UpdateProbe(ctx context.Context, in *UpdateProbeRequest, opts ...grpc.CallOption) (*UpdateProbeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateProbeResponse)
@@ -730,6 +755,9 @@ type ExecutorServiceServer interface {
 	GetHPA(context.Context, *GetHPARequest) (*GetHPAResponse, error)
 	ApplyHPA(context.Context, *ApplyHPARequest) (*ApplyHPAResponse, error)
 	DeleteHPA(context.Context, *DeleteHPARequest) (*DeleteHPAResponse, error)
+	// R60：发布历史与版本对比
+	ListRevisions(context.Context, *ListRevisionsRequest) (*ListRevisionsResponse, error)
+	GetRevisionTemplate(context.Context, *GetRevisionTemplateRequest) (*GetRevisionTemplateResponse, error)
 	UpdateProbe(context.Context, *UpdateProbeRequest) (*UpdateProbeResponse, error)
 	RecreateWorkload(context.Context, *RecreateWorkloadRequest) (*RecreateWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
@@ -870,6 +898,12 @@ func (UnimplementedExecutorServiceServer) ApplyHPA(context.Context, *ApplyHPAReq
 }
 func (UnimplementedExecutorServiceServer) DeleteHPA(context.Context, *DeleteHPARequest) (*DeleteHPAResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteHPA not implemented")
+}
+func (UnimplementedExecutorServiceServer) ListRevisions(context.Context, *ListRevisionsRequest) (*ListRevisionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRevisions not implemented")
+}
+func (UnimplementedExecutorServiceServer) GetRevisionTemplate(context.Context, *GetRevisionTemplateRequest) (*GetRevisionTemplateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRevisionTemplate not implemented")
 }
 func (UnimplementedExecutorServiceServer) UpdateProbe(context.Context, *UpdateProbeRequest) (*UpdateProbeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateProbe not implemented")
@@ -1631,6 +1665,42 @@ func _ExecutorService_DeleteHPA_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_ListRevisions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRevisionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).ListRevisions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_ListRevisions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).ListRevisions(ctx, req.(*ListRevisionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ExecutorService_GetRevisionTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRevisionTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).GetRevisionTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_GetRevisionTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).GetRevisionTemplate(ctx, req.(*GetRevisionTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_UpdateProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateProbeRequest)
 	if err := dec(in); err != nil {
@@ -1872,6 +1942,14 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteHPA",
 			Handler:    _ExecutorService_DeleteHPA_Handler,
+		},
+		{
+			MethodName: "ListRevisions",
+			Handler:    _ExecutorService_ListRevisions_Handler,
+		},
+		{
+			MethodName: "GetRevisionTemplate",
+			Handler:    _ExecutorService_GetRevisionTemplate_Handler,
 		},
 		{
 			MethodName: "UpdateProbe",

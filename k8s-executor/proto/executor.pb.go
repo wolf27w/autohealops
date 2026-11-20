@@ -7180,6 +7180,386 @@ func (x *ApplyHPAResponse) GetYaml() string {
 	return ""
 }
 
+type RevisionInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Revision        int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	Replicaset      string                 `protobuf:"bytes,2,opt,name=replicaset,proto3" json:"replicaset,omitempty"`
+	Images          []string               `protobuf:"bytes,3,rep,name=images,proto3" json:"images,omitempty"` // 各容器镜像
+	DesiredReplicas int32                  `protobuf:"varint,4,opt,name=desired_replicas,json=desiredReplicas,proto3" json:"desired_replicas,omitempty"`
+	ReadyReplicas   int32                  `protobuf:"varint,5,opt,name=ready_replicas,json=readyReplicas,proto3" json:"ready_replicas,omitempty"`
+	CreatedAt       string                 `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`       // RFC3339
+	IsCurrent       bool                   `protobuf:"varint,7,opt,name=is_current,json=isCurrent,proto3" json:"is_current,omitempty"`      // 是否为 Deployment 当前 revision
+	Failed          bool                   `protobuf:"varint,8,opt,name=failed,proto3" json:"failed,omitempty"`                             // 有期望副本但 0 就绪（或关联 Pod 处于 CrashLoop/ImagePull 等）
+	ChangeCause     string                 `protobuf:"bytes,9,opt,name=change_cause,json=changeCause,proto3" json:"change_cause,omitempty"` // deployment.kubernetes.io/change-cause 注解
+	PodTemplateHash string                 `protobuf:"bytes,10,opt,name=pod_template_hash,json=podTemplateHash,proto3" json:"pod_template_hash,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RevisionInfo) Reset() {
+	*x = RevisionInfo{}
+	mi := &file_proto_executor_proto_msgTypes[100]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevisionInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevisionInfo) ProtoMessage() {}
+
+func (x *RevisionInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[100]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevisionInfo.ProtoReflect.Descriptor instead.
+func (*RevisionInfo) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{100}
+}
+
+func (x *RevisionInfo) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *RevisionInfo) GetReplicaset() string {
+	if x != nil {
+		return x.Replicaset
+	}
+	return ""
+}
+
+func (x *RevisionInfo) GetImages() []string {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+func (x *RevisionInfo) GetDesiredReplicas() int32 {
+	if x != nil {
+		return x.DesiredReplicas
+	}
+	return 0
+}
+
+func (x *RevisionInfo) GetReadyReplicas() int32 {
+	if x != nil {
+		return x.ReadyReplicas
+	}
+	return 0
+}
+
+func (x *RevisionInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *RevisionInfo) GetIsCurrent() bool {
+	if x != nil {
+		return x.IsCurrent
+	}
+	return false
+}
+
+func (x *RevisionInfo) GetFailed() bool {
+	if x != nil {
+		return x.Failed
+	}
+	return false
+}
+
+func (x *RevisionInfo) GetChangeCause() string {
+	if x != nil {
+		return x.ChangeCause
+	}
+	return ""
+}
+
+func (x *RevisionInfo) GetPodTemplateHash() string {
+	if x != nil {
+		return x.PodTemplateHash
+	}
+	return ""
+}
+
+type ListRevisionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"` // deployment 名
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRevisionsRequest) Reset() {
+	*x = ListRevisionsRequest{}
+	mi := &file_proto_executor_proto_msgTypes[101]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRevisionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRevisionsRequest) ProtoMessage() {}
+
+func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[101]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRevisionsRequest.ProtoReflect.Descriptor instead.
+func (*ListRevisionsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{101}
+}
+
+func (x *ListRevisionsRequest) GetClusterId() int64 {
+	if x != nil {
+		return x.ClusterId
+	}
+	return 0
+}
+
+func (x *ListRevisionsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ListRevisionsRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type ListRevisionsResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Success         bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Items           []*RevisionInfo        `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	CurrentRevision int64                  `protobuf:"varint,3,opt,name=current_revision,json=currentRevision,proto3" json:"current_revision,omitempty"`
+	Error           string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ListRevisionsResponse) Reset() {
+	*x = ListRevisionsResponse{}
+	mi := &file_proto_executor_proto_msgTypes[102]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRevisionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRevisionsResponse) ProtoMessage() {}
+
+func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[102]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRevisionsResponse.ProtoReflect.Descriptor instead.
+func (*ListRevisionsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{102}
+}
+
+func (x *ListRevisionsResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ListRevisionsResponse) GetItems() []*RevisionInfo {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *ListRevisionsResponse) GetCurrentRevision() int64 {
+	if x != nil {
+		return x.CurrentRevision
+	}
+	return 0
+}
+
+func (x *ListRevisionsResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type GetRevisionTemplateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"` // deployment 名
+	Revision      int64                  `protobuf:"varint,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRevisionTemplateRequest) Reset() {
+	*x = GetRevisionTemplateRequest{}
+	mi := &file_proto_executor_proto_msgTypes[103]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRevisionTemplateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRevisionTemplateRequest) ProtoMessage() {}
+
+func (x *GetRevisionTemplateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[103]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRevisionTemplateRequest.ProtoReflect.Descriptor instead.
+func (*GetRevisionTemplateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{103}
+}
+
+func (x *GetRevisionTemplateRequest) GetClusterId() int64 {
+	if x != nil {
+		return x.ClusterId
+	}
+	return 0
+}
+
+func (x *GetRevisionTemplateRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *GetRevisionTemplateRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetRevisionTemplateRequest) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+type GetRevisionTemplateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Yaml          string                 `protobuf:"bytes,2,opt,name=yaml,proto3" json:"yaml,omitempty"` // PodTemplateSpec 的 YAML
+	Replicaset    string                 `protobuf:"bytes,3,opt,name=replicaset,proto3" json:"replicaset,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRevisionTemplateResponse) Reset() {
+	*x = GetRevisionTemplateResponse{}
+	mi := &file_proto_executor_proto_msgTypes[104]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRevisionTemplateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRevisionTemplateResponse) ProtoMessage() {}
+
+func (x *GetRevisionTemplateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_executor_proto_msgTypes[104]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRevisionTemplateResponse.ProtoReflect.Descriptor instead.
+func (*GetRevisionTemplateResponse) Descriptor() ([]byte, []int) {
+	return file_proto_executor_proto_rawDescGZIP(), []int{104}
+}
+
+func (x *GetRevisionTemplateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *GetRevisionTemplateResponse) GetYaml() string {
+	if x != nil {
+		return x.Yaml
+	}
+	return ""
+}
+
+func (x *GetRevisionTemplateResponse) GetReplicaset() string {
+	if x != nil {
+		return x.Replicaset
+	}
+	return ""
+}
+
+func (x *GetRevisionTemplateResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type DeleteHPARequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId     int64                  `protobuf:"varint,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
@@ -7191,7 +7571,7 @@ type DeleteHPARequest struct {
 
 func (x *DeleteHPARequest) Reset() {
 	*x = DeleteHPARequest{}
-	mi := &file_proto_executor_proto_msgTypes[100]
+	mi := &file_proto_executor_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7203,7 +7583,7 @@ func (x *DeleteHPARequest) String() string {
 func (*DeleteHPARequest) ProtoMessage() {}
 
 func (x *DeleteHPARequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[100]
+	mi := &file_proto_executor_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7216,7 +7596,7 @@ func (x *DeleteHPARequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteHPARequest.ProtoReflect.Descriptor instead.
 func (*DeleteHPARequest) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{100}
+	return file_proto_executor_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *DeleteHPARequest) GetClusterId() int64 {
@@ -7251,7 +7631,7 @@ type DeleteHPAResponse struct {
 
 func (x *DeleteHPAResponse) Reset() {
 	*x = DeleteHPAResponse{}
-	mi := &file_proto_executor_proto_msgTypes[101]
+	mi := &file_proto_executor_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7263,7 +7643,7 @@ func (x *DeleteHPAResponse) String() string {
 func (*DeleteHPAResponse) ProtoMessage() {}
 
 func (x *DeleteHPAResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[101]
+	mi := &file_proto_executor_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7276,7 +7656,7 @@ func (x *DeleteHPAResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteHPAResponse.ProtoReflect.Descriptor instead.
 func (*DeleteHPAResponse) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{101}
+	return file_proto_executor_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *DeleteHPAResponse) GetSuccess() bool {
@@ -7323,7 +7703,7 @@ type UpdateProbeRequest struct {
 
 func (x *UpdateProbeRequest) Reset() {
 	*x = UpdateProbeRequest{}
-	mi := &file_proto_executor_proto_msgTypes[102]
+	mi := &file_proto_executor_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7335,7 +7715,7 @@ func (x *UpdateProbeRequest) String() string {
 func (*UpdateProbeRequest) ProtoMessage() {}
 
 func (x *UpdateProbeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[102]
+	mi := &file_proto_executor_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7348,7 +7728,7 @@ func (x *UpdateProbeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProbeRequest.ProtoReflect.Descriptor instead.
 func (*UpdateProbeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{102}
+	return file_proto_executor_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *UpdateProbeRequest) GetClusterId() int64 {
@@ -7467,7 +7847,7 @@ type UpdateProbeResponse struct {
 
 func (x *UpdateProbeResponse) Reset() {
 	*x = UpdateProbeResponse{}
-	mi := &file_proto_executor_proto_msgTypes[103]
+	mi := &file_proto_executor_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7479,7 +7859,7 @@ func (x *UpdateProbeResponse) String() string {
 func (*UpdateProbeResponse) ProtoMessage() {}
 
 func (x *UpdateProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[103]
+	mi := &file_proto_executor_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7492,7 +7872,7 @@ func (x *UpdateProbeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProbeResponse.ProtoReflect.Descriptor instead.
 func (*UpdateProbeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{103}
+	return file_proto_executor_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *UpdateProbeResponse) GetSuccess() bool {
@@ -7529,7 +7909,7 @@ type RecreateWorkloadRequest struct {
 
 func (x *RecreateWorkloadRequest) Reset() {
 	*x = RecreateWorkloadRequest{}
-	mi := &file_proto_executor_proto_msgTypes[104]
+	mi := &file_proto_executor_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7541,7 +7921,7 @@ func (x *RecreateWorkloadRequest) String() string {
 func (*RecreateWorkloadRequest) ProtoMessage() {}
 
 func (x *RecreateWorkloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[104]
+	mi := &file_proto_executor_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7554,7 +7934,7 @@ func (x *RecreateWorkloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecreateWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*RecreateWorkloadRequest) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{104}
+	return file_proto_executor_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *RecreateWorkloadRequest) GetClusterId() int64 {
@@ -7603,7 +7983,7 @@ type RecreateWorkloadResponse struct {
 
 func (x *RecreateWorkloadResponse) Reset() {
 	*x = RecreateWorkloadResponse{}
-	mi := &file_proto_executor_proto_msgTypes[105]
+	mi := &file_proto_executor_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7615,7 +7995,7 @@ func (x *RecreateWorkloadResponse) String() string {
 func (*RecreateWorkloadResponse) ProtoMessage() {}
 
 func (x *RecreateWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[105]
+	mi := &file_proto_executor_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7628,7 +8008,7 @@ func (x *RecreateWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecreateWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*RecreateWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{105}
+	return file_proto_executor_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *RecreateWorkloadResponse) GetSuccess() bool {
@@ -7679,7 +8059,7 @@ type ExecPodStreamFrame struct {
 
 func (x *ExecPodStreamFrame) Reset() {
 	*x = ExecPodStreamFrame{}
-	mi := &file_proto_executor_proto_msgTypes[106]
+	mi := &file_proto_executor_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7691,7 +8071,7 @@ func (x *ExecPodStreamFrame) String() string {
 func (*ExecPodStreamFrame) ProtoMessage() {}
 
 func (x *ExecPodStreamFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[106]
+	mi := &file_proto_executor_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7704,7 +8084,7 @@ func (x *ExecPodStreamFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecPodStreamFrame.ProtoReflect.Descriptor instead.
 func (*ExecPodStreamFrame) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{106}
+	return file_proto_executor_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ExecPodStreamFrame) GetClusterId() int64 {
@@ -7808,7 +8188,7 @@ type CleanupEvictedRequest struct {
 
 func (x *CleanupEvictedRequest) Reset() {
 	*x = CleanupEvictedRequest{}
-	mi := &file_proto_executor_proto_msgTypes[107]
+	mi := &file_proto_executor_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7820,7 +8200,7 @@ func (x *CleanupEvictedRequest) String() string {
 func (*CleanupEvictedRequest) ProtoMessage() {}
 
 func (x *CleanupEvictedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[107]
+	mi := &file_proto_executor_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7833,7 +8213,7 @@ func (x *CleanupEvictedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupEvictedRequest.ProtoReflect.Descriptor instead.
 func (*CleanupEvictedRequest) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{107}
+	return file_proto_executor_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *CleanupEvictedRequest) GetClusterId() int64 {
@@ -7862,7 +8242,7 @@ type CleanupEvictedResponse struct {
 
 func (x *CleanupEvictedResponse) Reset() {
 	*x = CleanupEvictedResponse{}
-	mi := &file_proto_executor_proto_msgTypes[108]
+	mi := &file_proto_executor_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7874,7 +8254,7 @@ func (x *CleanupEvictedResponse) String() string {
 func (*CleanupEvictedResponse) ProtoMessage() {}
 
 func (x *CleanupEvictedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[108]
+	mi := &file_proto_executor_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7887,7 +8267,7 @@ func (x *CleanupEvictedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupEvictedResponse.ProtoReflect.Descriptor instead.
 func (*CleanupEvictedResponse) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{108}
+	return file_proto_executor_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *CleanupEvictedResponse) GetSuccess() bool {
@@ -7933,7 +8313,7 @@ type JvmDiagnoseRequest struct {
 
 func (x *JvmDiagnoseRequest) Reset() {
 	*x = JvmDiagnoseRequest{}
-	mi := &file_proto_executor_proto_msgTypes[109]
+	mi := &file_proto_executor_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7945,7 +8325,7 @@ func (x *JvmDiagnoseRequest) String() string {
 func (*JvmDiagnoseRequest) ProtoMessage() {}
 
 func (x *JvmDiagnoseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[109]
+	mi := &file_proto_executor_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7958,7 +8338,7 @@ func (x *JvmDiagnoseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JvmDiagnoseRequest.ProtoReflect.Descriptor instead.
 func (*JvmDiagnoseRequest) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{109}
+	return file_proto_executor_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *JvmDiagnoseRequest) GetClusterId() int64 {
@@ -8015,7 +8395,7 @@ type JvmDiagnoseResponse struct {
 
 func (x *JvmDiagnoseResponse) Reset() {
 	*x = JvmDiagnoseResponse{}
-	mi := &file_proto_executor_proto_msgTypes[110]
+	mi := &file_proto_executor_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8027,7 +8407,7 @@ func (x *JvmDiagnoseResponse) String() string {
 func (*JvmDiagnoseResponse) ProtoMessage() {}
 
 func (x *JvmDiagnoseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[110]
+	mi := &file_proto_executor_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8040,7 +8420,7 @@ func (x *JvmDiagnoseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JvmDiagnoseResponse.ProtoReflect.Descriptor instead.
 func (*JvmDiagnoseResponse) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{110}
+	return file_proto_executor_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *JvmDiagnoseResponse) GetSuccess() bool {
@@ -8085,7 +8465,7 @@ type JvmParamsRequest struct {
 
 func (x *JvmParamsRequest) Reset() {
 	*x = JvmParamsRequest{}
-	mi := &file_proto_executor_proto_msgTypes[111]
+	mi := &file_proto_executor_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8097,7 +8477,7 @@ func (x *JvmParamsRequest) String() string {
 func (*JvmParamsRequest) ProtoMessage() {}
 
 func (x *JvmParamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[111]
+	mi := &file_proto_executor_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8110,7 +8490,7 @@ func (x *JvmParamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JvmParamsRequest.ProtoReflect.Descriptor instead.
 func (*JvmParamsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{111}
+	return file_proto_executor_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *JvmParamsRequest) GetClusterId() int64 {
@@ -8159,7 +8539,7 @@ type JvmParamsResponse struct {
 
 func (x *JvmParamsResponse) Reset() {
 	*x = JvmParamsResponse{}
-	mi := &file_proto_executor_proto_msgTypes[112]
+	mi := &file_proto_executor_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8171,7 +8551,7 @@ func (x *JvmParamsResponse) String() string {
 func (*JvmParamsResponse) ProtoMessage() {}
 
 func (x *JvmParamsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_executor_proto_msgTypes[112]
+	mi := &file_proto_executor_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8184,7 +8564,7 @@ func (x *JvmParamsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JvmParamsResponse.ProtoReflect.Descriptor instead.
 func (*JvmParamsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_executor_proto_rawDescGZIP(), []int{112}
+	return file_proto_executor_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *JvmParamsResponse) GetSuccess() bool {
@@ -8849,7 +9229,46 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12\x12\n" +
-	"\x04yaml\x18\x04 \x01(\tR\x04yaml\"c\n" +
+	"\x04yaml\x18\x04 \x01(\tR\x04yaml\"\xd9\x02\n" +
+	"\fRevisionInfo\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12\x1e\n" +
+	"\n" +
+	"replicaset\x18\x02 \x01(\tR\n" +
+	"replicaset\x12\x16\n" +
+	"\x06images\x18\x03 \x03(\tR\x06images\x12)\n" +
+	"\x10desired_replicas\x18\x04 \x01(\x05R\x0fdesiredReplicas\x12%\n" +
+	"\x0eready_replicas\x18\x05 \x01(\x05R\rreadyReplicas\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"is_current\x18\a \x01(\bR\tisCurrent\x12\x16\n" +
+	"\x06failed\x18\b \x01(\bR\x06failed\x12!\n" +
+	"\fchange_cause\x18\t \x01(\tR\vchangeCause\x12*\n" +
+	"\x11pod_template_hash\x18\n" +
+	" \x01(\tR\x0fpodTemplateHash\"g\n" +
+	"\x14ListRevisionsRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\xa0\x01\n" +
+	"\x15ListRevisionsResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12,\n" +
+	"\x05items\x18\x02 \x03(\v2\x16.executor.RevisionInfoR\x05items\x12)\n" +
+	"\x10current_revision\x18\x03 \x01(\x03R\x0fcurrentRevision\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x89\x01\n" +
+	"\x1aGetRevisionTemplateRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1a\n" +
+	"\brevision\x18\x04 \x01(\x03R\brevision\"\x81\x01\n" +
+	"\x1bGetRevisionTemplateResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x12\n" +
+	"\x04yaml\x18\x02 \x01(\tR\x04yaml\x12\x1e\n" +
+	"\n" +
+	"replicaset\x18\x03 \x01(\tR\n" +
+	"replicaset\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"c\n" +
 	"\x10DeleteHPARequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\x03R\tclusterId\x12\x1c\n" +
@@ -8942,7 +9361,7 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\x11JvmParamsResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x16\n" +
 	"\x06params\x18\x02 \x01(\tR\x06params\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error2\xa6\x1d\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error2\xdc\x1e\n" +
 	"\x0fExecutorService\x12G\n" +
 	"\n" +
 	"StartWatch\x12\x1b.executor.StartWatchRequest\x1a\x1c.executor.StartWatchResponse\x12D\n" +
@@ -8987,7 +9406,9 @@ const file_proto_executor_proto_rawDesc = "" +
 	"\aListHPA\x12\x18.executor.ListHPARequest\x1a\x19.executor.ListHPAResponse\x12;\n" +
 	"\x06GetHPA\x12\x17.executor.GetHPARequest\x1a\x18.executor.GetHPAResponse\x12A\n" +
 	"\bApplyHPA\x12\x19.executor.ApplyHPARequest\x1a\x1a.executor.ApplyHPAResponse\x12D\n" +
-	"\tDeleteHPA\x12\x1a.executor.DeleteHPARequest\x1a\x1b.executor.DeleteHPAResponse\x12J\n" +
+	"\tDeleteHPA\x12\x1a.executor.DeleteHPARequest\x1a\x1b.executor.DeleteHPAResponse\x12P\n" +
+	"\rListRevisions\x12\x1e.executor.ListRevisionsRequest\x1a\x1f.executor.ListRevisionsResponse\x12b\n" +
+	"\x13GetRevisionTemplate\x12$.executor.GetRevisionTemplateRequest\x1a%.executor.GetRevisionTemplateResponse\x12J\n" +
 	"\vUpdateProbe\x12\x1c.executor.UpdateProbeRequest\x1a\x1d.executor.UpdateProbeResponse\x12Y\n" +
 	"\x10RecreateWorkload\x12!.executor.RecreateWorkloadRequest\x1a\".executor.RecreateWorkloadResponse\x12O\n" +
 	"\rExecPodStream\x12\x1c.executor.ExecPodStreamFrame\x1a\x1c.executor.ExecPodStreamFrame(\x010\x01\x12J\n" +
@@ -9006,7 +9427,7 @@ func file_proto_executor_proto_rawDescGZIP() []byte {
 	return file_proto_executor_proto_rawDescData
 }
 
-var file_proto_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 113)
+var file_proto_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 118)
 var file_proto_executor_proto_goTypes = []any{
 	(*StartWatchRequest)(nil),             // 0: executor.StartWatchRequest
 	(*StartWatchResponse)(nil),            // 1: executor.StartWatchResponse
@@ -9108,19 +9529,24 @@ var file_proto_executor_proto_goTypes = []any{
 	(*GetHPAResponse)(nil),                // 97: executor.GetHPAResponse
 	(*ApplyHPARequest)(nil),               // 98: executor.ApplyHPARequest
 	(*ApplyHPAResponse)(nil),              // 99: executor.ApplyHPAResponse
-	(*DeleteHPARequest)(nil),              // 100: executor.DeleteHPARequest
-	(*DeleteHPAResponse)(nil),             // 101: executor.DeleteHPAResponse
-	(*UpdateProbeRequest)(nil),            // 102: executor.UpdateProbeRequest
-	(*UpdateProbeResponse)(nil),           // 103: executor.UpdateProbeResponse
-	(*RecreateWorkloadRequest)(nil),       // 104: executor.RecreateWorkloadRequest
-	(*RecreateWorkloadResponse)(nil),      // 105: executor.RecreateWorkloadResponse
-	(*ExecPodStreamFrame)(nil),            // 106: executor.ExecPodStreamFrame
-	(*CleanupEvictedRequest)(nil),         // 107: executor.CleanupEvictedRequest
-	(*CleanupEvictedResponse)(nil),        // 108: executor.CleanupEvictedResponse
-	(*JvmDiagnoseRequest)(nil),            // 109: executor.JvmDiagnoseRequest
-	(*JvmDiagnoseResponse)(nil),           // 110: executor.JvmDiagnoseResponse
-	(*JvmParamsRequest)(nil),              // 111: executor.JvmParamsRequest
-	(*JvmParamsResponse)(nil),             // 112: executor.JvmParamsResponse
+	(*RevisionInfo)(nil),                  // 100: executor.RevisionInfo
+	(*ListRevisionsRequest)(nil),          // 101: executor.ListRevisionsRequest
+	(*ListRevisionsResponse)(nil),         // 102: executor.ListRevisionsResponse
+	(*GetRevisionTemplateRequest)(nil),    // 103: executor.GetRevisionTemplateRequest
+	(*GetRevisionTemplateResponse)(nil),   // 104: executor.GetRevisionTemplateResponse
+	(*DeleteHPARequest)(nil),              // 105: executor.DeleteHPARequest
+	(*DeleteHPAResponse)(nil),             // 106: executor.DeleteHPAResponse
+	(*UpdateProbeRequest)(nil),            // 107: executor.UpdateProbeRequest
+	(*UpdateProbeResponse)(nil),           // 108: executor.UpdateProbeResponse
+	(*RecreateWorkloadRequest)(nil),       // 109: executor.RecreateWorkloadRequest
+	(*RecreateWorkloadResponse)(nil),      // 110: executor.RecreateWorkloadResponse
+	(*ExecPodStreamFrame)(nil),            // 111: executor.ExecPodStreamFrame
+	(*CleanupEvictedRequest)(nil),         // 112: executor.CleanupEvictedRequest
+	(*CleanupEvictedResponse)(nil),        // 113: executor.CleanupEvictedResponse
+	(*JvmDiagnoseRequest)(nil),            // 114: executor.JvmDiagnoseRequest
+	(*JvmDiagnoseResponse)(nil),           // 115: executor.JvmDiagnoseResponse
+	(*JvmParamsRequest)(nil),              // 116: executor.JvmParamsRequest
+	(*JvmParamsResponse)(nil),             // 117: executor.JvmParamsResponse
 }
 var file_proto_executor_proto_depIdxs = []int32{
 	19,  // 0: executor.GetPodStatusResponse.container_statuses:type_name -> executor.ContainerStatusInfo
@@ -9151,103 +9577,108 @@ var file_proto_executor_proto_depIdxs = []int32{
 	93,  // 25: executor.ListHPAResponse.items:type_name -> executor.HPAInfo
 	93,  // 26: executor.GetHPAResponse.item:type_name -> executor.HPAInfo
 	92,  // 27: executor.ApplyHPARequest.metrics:type_name -> executor.HPAMetricSpec
-	0,   // 28: executor.ExecutorService.StartWatch:input_type -> executor.StartWatchRequest
-	2,   // 29: executor.ExecutorService.StopWatch:input_type -> executor.StopWatchRequest
-	4,   // 30: executor.ExecutorService.ExecuteCommand:input_type -> executor.ExecuteCommandRequest
-	6,   // 31: executor.ExecutorService.ExecutePlan:input_type -> executor.ExecutePlanRequest
-	8,   // 32: executor.ExecutorService.RollbackPlan:input_type -> executor.RollbackPlanRequest
-	10,  // 33: executor.ExecutorService.HealthCheck:input_type -> executor.HealthCheckRequest
-	12,  // 34: executor.ExecutorService.CollectQuota:input_type -> executor.CollectQuotaRequest
-	14,  // 35: executor.ExecutorService.RunScript:input_type -> executor.RunScriptRequest
-	16,  // 36: executor.ExecutorService.BatchExecute:input_type -> executor.BatchExecuteRequest
-	18,  // 37: executor.ExecutorService.GetPodStatus:input_type -> executor.GetPodStatusRequest
-	21,  // 38: executor.ExecutorService.RepairImagePull:input_type -> executor.RepairImagePullRequest
-	23,  // 39: executor.ExecutorService.GetDeploymentStatus:input_type -> executor.GetDeploymentStatusRequest
-	25,  // 40: executor.ExecutorService.ExecInPod:input_type -> executor.ExecInPodRequest
-	27,  // 41: executor.ExecutorService.ListDeploymentPods:input_type -> executor.ListDeploymentPodsRequest
-	30,  // 42: executor.ExecutorService.ListPodRestartInfo:input_type -> executor.ListPodRestartInfoRequest
-	34,  // 43: executor.ExecutorService.QueryPrometheus:input_type -> executor.QueryPrometheusRequest
-	36,  // 44: executor.ExecutorService.GetPeakUsage:input_type -> executor.GetPeakUsageRequest
-	38,  // 45: executor.ExecutorService.GetPodLogs:input_type -> executor.GetPodLogsRequest
-	40,  // 46: executor.ExecutorService.GetPodYaml:input_type -> executor.GetPodYamlRequest
-	42,  // 47: executor.ExecutorService.ApplyPodYaml:input_type -> executor.ApplyPodYamlRequest
-	44,  // 48: executor.ExecutorService.ListPods:input_type -> executor.ListPodsRequest
-	53,  // 49: executor.ExecutorService.GetPodDetail:input_type -> executor.GetPodDetailRequest
-	59,  // 50: executor.ExecutorService.GetWorkloadMounts:input_type -> executor.GetWorkloadMountsRequest
-	61,  // 51: executor.ExecutorService.ListMiscResources:input_type -> executor.ListMiscResourcesRequest
-	69,  // 52: executor.ExecutorService.GetPodEvents:input_type -> executor.GetPodEventsRequest
-	72,  // 53: executor.ExecutorService.GetWorkloadYaml:input_type -> executor.GetWorkloadYamlRequest
-	74,  // 54: executor.ExecutorService.ApplyWorkloadYaml:input_type -> executor.ApplyWorkloadYamlRequest
-	76,  // 55: executor.ExecutorService.DeleteResource:input_type -> executor.DeleteResourceRequest
-	107, // 56: executor.ExecutorService.CleanupEvicted:input_type -> executor.CleanupEvictedRequest
-	47,  // 57: executor.ExecutorService.ListNamespaces:input_type -> executor.ListNamespacesRequest
-	50,  // 58: executor.ExecutorService.ListServiceAccounts:input_type -> executor.ListServiceAccountsRequest
-	78,  // 59: executor.ExecutorService.SetupRBAC:input_type -> executor.SetupRBACRequest
-	81,  // 60: executor.ExecutorService.ReconcileRoleBindings:input_type -> executor.ReconcileRoleBindingsRequest
-	84,  // 61: executor.ExecutorService.ListWorkloads:input_type -> executor.ListWorkloadsRequest
-	86,  // 62: executor.ExecutorService.ScaleWorkload:input_type -> executor.ScaleWorkloadRequest
-	88,  // 63: executor.ExecutorService.RolloutWorkload:input_type -> executor.RolloutWorkloadRequest
-	90,  // 64: executor.ExecutorService.RolloutHistory:input_type -> executor.RolloutHistoryRequest
-	94,  // 65: executor.ExecutorService.ListHPA:input_type -> executor.ListHPARequest
-	96,  // 66: executor.ExecutorService.GetHPA:input_type -> executor.GetHPARequest
-	98,  // 67: executor.ExecutorService.ApplyHPA:input_type -> executor.ApplyHPARequest
-	100, // 68: executor.ExecutorService.DeleteHPA:input_type -> executor.DeleteHPARequest
-	102, // 69: executor.ExecutorService.UpdateProbe:input_type -> executor.UpdateProbeRequest
-	104, // 70: executor.ExecutorService.RecreateWorkload:input_type -> executor.RecreateWorkloadRequest
-	106, // 71: executor.ExecutorService.ExecPodStream:input_type -> executor.ExecPodStreamFrame
-	109, // 72: executor.ExecutorService.JvmDiagnose:input_type -> executor.JvmDiagnoseRequest
-	111, // 73: executor.ExecutorService.JvmParams:input_type -> executor.JvmParamsRequest
-	1,   // 74: executor.ExecutorService.StartWatch:output_type -> executor.StartWatchResponse
-	3,   // 75: executor.ExecutorService.StopWatch:output_type -> executor.StopWatchResponse
-	5,   // 76: executor.ExecutorService.ExecuteCommand:output_type -> executor.ExecuteCommandResponse
-	7,   // 77: executor.ExecutorService.ExecutePlan:output_type -> executor.ExecutePlanResponse
-	9,   // 78: executor.ExecutorService.RollbackPlan:output_type -> executor.RollbackPlanResponse
-	11,  // 79: executor.ExecutorService.HealthCheck:output_type -> executor.HealthCheckResponse
-	13,  // 80: executor.ExecutorService.CollectQuota:output_type -> executor.CollectQuotaResponse
-	15,  // 81: executor.ExecutorService.RunScript:output_type -> executor.RunScriptResponse
-	17,  // 82: executor.ExecutorService.BatchExecute:output_type -> executor.BatchExecuteResponse
-	20,  // 83: executor.ExecutorService.GetPodStatus:output_type -> executor.GetPodStatusResponse
-	22,  // 84: executor.ExecutorService.RepairImagePull:output_type -> executor.RepairImagePullResponse
-	24,  // 85: executor.ExecutorService.GetDeploymentStatus:output_type -> executor.GetDeploymentStatusResponse
-	26,  // 86: executor.ExecutorService.ExecInPod:output_type -> executor.ExecInPodResponse
-	29,  // 87: executor.ExecutorService.ListDeploymentPods:output_type -> executor.ListDeploymentPodsResponse
-	33,  // 88: executor.ExecutorService.ListPodRestartInfo:output_type -> executor.ListPodRestartInfoResponse
-	35,  // 89: executor.ExecutorService.QueryPrometheus:output_type -> executor.QueryPrometheusResponse
-	37,  // 90: executor.ExecutorService.GetPeakUsage:output_type -> executor.GetPeakUsageResponse
-	39,  // 91: executor.ExecutorService.GetPodLogs:output_type -> executor.GetPodLogsResponse
-	41,  // 92: executor.ExecutorService.GetPodYaml:output_type -> executor.GetPodYamlResponse
-	43,  // 93: executor.ExecutorService.ApplyPodYaml:output_type -> executor.ApplyPodYamlResponse
-	46,  // 94: executor.ExecutorService.ListPods:output_type -> executor.ListPodsResponse
-	58,  // 95: executor.ExecutorService.GetPodDetail:output_type -> executor.GetPodDetailResponse
-	60,  // 96: executor.ExecutorService.GetWorkloadMounts:output_type -> executor.GetWorkloadMountsResponse
-	67,  // 97: executor.ExecutorService.ListMiscResources:output_type -> executor.ListMiscResourcesResponse
-	71,  // 98: executor.ExecutorService.GetPodEvents:output_type -> executor.GetPodEventsResponse
-	73,  // 99: executor.ExecutorService.GetWorkloadYaml:output_type -> executor.GetWorkloadYamlResponse
-	75,  // 100: executor.ExecutorService.ApplyWorkloadYaml:output_type -> executor.ApplyWorkloadYamlResponse
-	77,  // 101: executor.ExecutorService.DeleteResource:output_type -> executor.DeleteResourceResponse
-	108, // 102: executor.ExecutorService.CleanupEvicted:output_type -> executor.CleanupEvictedResponse
-	49,  // 103: executor.ExecutorService.ListNamespaces:output_type -> executor.ListNamespacesResponse
-	52,  // 104: executor.ExecutorService.ListServiceAccounts:output_type -> executor.ListServiceAccountsResponse
-	79,  // 105: executor.ExecutorService.SetupRBAC:output_type -> executor.SetupRBACResponse
-	82,  // 106: executor.ExecutorService.ReconcileRoleBindings:output_type -> executor.ReconcileRoleBindingsResponse
-	85,  // 107: executor.ExecutorService.ListWorkloads:output_type -> executor.ListWorkloadsResponse
-	87,  // 108: executor.ExecutorService.ScaleWorkload:output_type -> executor.ScaleWorkloadResponse
-	89,  // 109: executor.ExecutorService.RolloutWorkload:output_type -> executor.RolloutWorkloadResponse
-	91,  // 110: executor.ExecutorService.RolloutHistory:output_type -> executor.RolloutHistoryResponse
-	95,  // 111: executor.ExecutorService.ListHPA:output_type -> executor.ListHPAResponse
-	97,  // 112: executor.ExecutorService.GetHPA:output_type -> executor.GetHPAResponse
-	99,  // 113: executor.ExecutorService.ApplyHPA:output_type -> executor.ApplyHPAResponse
-	101, // 114: executor.ExecutorService.DeleteHPA:output_type -> executor.DeleteHPAResponse
-	103, // 115: executor.ExecutorService.UpdateProbe:output_type -> executor.UpdateProbeResponse
-	105, // 116: executor.ExecutorService.RecreateWorkload:output_type -> executor.RecreateWorkloadResponse
-	106, // 117: executor.ExecutorService.ExecPodStream:output_type -> executor.ExecPodStreamFrame
-	110, // 118: executor.ExecutorService.JvmDiagnose:output_type -> executor.JvmDiagnoseResponse
-	112, // 119: executor.ExecutorService.JvmParams:output_type -> executor.JvmParamsResponse
-	74,  // [74:120] is the sub-list for method output_type
-	28,  // [28:74] is the sub-list for method input_type
-	28,  // [28:28] is the sub-list for extension type_name
-	28,  // [28:28] is the sub-list for extension extendee
-	0,   // [0:28] is the sub-list for field type_name
+	100, // 28: executor.ListRevisionsResponse.items:type_name -> executor.RevisionInfo
+	0,   // 29: executor.ExecutorService.StartWatch:input_type -> executor.StartWatchRequest
+	2,   // 30: executor.ExecutorService.StopWatch:input_type -> executor.StopWatchRequest
+	4,   // 31: executor.ExecutorService.ExecuteCommand:input_type -> executor.ExecuteCommandRequest
+	6,   // 32: executor.ExecutorService.ExecutePlan:input_type -> executor.ExecutePlanRequest
+	8,   // 33: executor.ExecutorService.RollbackPlan:input_type -> executor.RollbackPlanRequest
+	10,  // 34: executor.ExecutorService.HealthCheck:input_type -> executor.HealthCheckRequest
+	12,  // 35: executor.ExecutorService.CollectQuota:input_type -> executor.CollectQuotaRequest
+	14,  // 36: executor.ExecutorService.RunScript:input_type -> executor.RunScriptRequest
+	16,  // 37: executor.ExecutorService.BatchExecute:input_type -> executor.BatchExecuteRequest
+	18,  // 38: executor.ExecutorService.GetPodStatus:input_type -> executor.GetPodStatusRequest
+	21,  // 39: executor.ExecutorService.RepairImagePull:input_type -> executor.RepairImagePullRequest
+	23,  // 40: executor.ExecutorService.GetDeploymentStatus:input_type -> executor.GetDeploymentStatusRequest
+	25,  // 41: executor.ExecutorService.ExecInPod:input_type -> executor.ExecInPodRequest
+	27,  // 42: executor.ExecutorService.ListDeploymentPods:input_type -> executor.ListDeploymentPodsRequest
+	30,  // 43: executor.ExecutorService.ListPodRestartInfo:input_type -> executor.ListPodRestartInfoRequest
+	34,  // 44: executor.ExecutorService.QueryPrometheus:input_type -> executor.QueryPrometheusRequest
+	36,  // 45: executor.ExecutorService.GetPeakUsage:input_type -> executor.GetPeakUsageRequest
+	38,  // 46: executor.ExecutorService.GetPodLogs:input_type -> executor.GetPodLogsRequest
+	40,  // 47: executor.ExecutorService.GetPodYaml:input_type -> executor.GetPodYamlRequest
+	42,  // 48: executor.ExecutorService.ApplyPodYaml:input_type -> executor.ApplyPodYamlRequest
+	44,  // 49: executor.ExecutorService.ListPods:input_type -> executor.ListPodsRequest
+	53,  // 50: executor.ExecutorService.GetPodDetail:input_type -> executor.GetPodDetailRequest
+	59,  // 51: executor.ExecutorService.GetWorkloadMounts:input_type -> executor.GetWorkloadMountsRequest
+	61,  // 52: executor.ExecutorService.ListMiscResources:input_type -> executor.ListMiscResourcesRequest
+	69,  // 53: executor.ExecutorService.GetPodEvents:input_type -> executor.GetPodEventsRequest
+	72,  // 54: executor.ExecutorService.GetWorkloadYaml:input_type -> executor.GetWorkloadYamlRequest
+	74,  // 55: executor.ExecutorService.ApplyWorkloadYaml:input_type -> executor.ApplyWorkloadYamlRequest
+	76,  // 56: executor.ExecutorService.DeleteResource:input_type -> executor.DeleteResourceRequest
+	112, // 57: executor.ExecutorService.CleanupEvicted:input_type -> executor.CleanupEvictedRequest
+	47,  // 58: executor.ExecutorService.ListNamespaces:input_type -> executor.ListNamespacesRequest
+	50,  // 59: executor.ExecutorService.ListServiceAccounts:input_type -> executor.ListServiceAccountsRequest
+	78,  // 60: executor.ExecutorService.SetupRBAC:input_type -> executor.SetupRBACRequest
+	81,  // 61: executor.ExecutorService.ReconcileRoleBindings:input_type -> executor.ReconcileRoleBindingsRequest
+	84,  // 62: executor.ExecutorService.ListWorkloads:input_type -> executor.ListWorkloadsRequest
+	86,  // 63: executor.ExecutorService.ScaleWorkload:input_type -> executor.ScaleWorkloadRequest
+	88,  // 64: executor.ExecutorService.RolloutWorkload:input_type -> executor.RolloutWorkloadRequest
+	90,  // 65: executor.ExecutorService.RolloutHistory:input_type -> executor.RolloutHistoryRequest
+	94,  // 66: executor.ExecutorService.ListHPA:input_type -> executor.ListHPARequest
+	96,  // 67: executor.ExecutorService.GetHPA:input_type -> executor.GetHPARequest
+	98,  // 68: executor.ExecutorService.ApplyHPA:input_type -> executor.ApplyHPARequest
+	105, // 69: executor.ExecutorService.DeleteHPA:input_type -> executor.DeleteHPARequest
+	101, // 70: executor.ExecutorService.ListRevisions:input_type -> executor.ListRevisionsRequest
+	103, // 71: executor.ExecutorService.GetRevisionTemplate:input_type -> executor.GetRevisionTemplateRequest
+	107, // 72: executor.ExecutorService.UpdateProbe:input_type -> executor.UpdateProbeRequest
+	109, // 73: executor.ExecutorService.RecreateWorkload:input_type -> executor.RecreateWorkloadRequest
+	111, // 74: executor.ExecutorService.ExecPodStream:input_type -> executor.ExecPodStreamFrame
+	114, // 75: executor.ExecutorService.JvmDiagnose:input_type -> executor.JvmDiagnoseRequest
+	116, // 76: executor.ExecutorService.JvmParams:input_type -> executor.JvmParamsRequest
+	1,   // 77: executor.ExecutorService.StartWatch:output_type -> executor.StartWatchResponse
+	3,   // 78: executor.ExecutorService.StopWatch:output_type -> executor.StopWatchResponse
+	5,   // 79: executor.ExecutorService.ExecuteCommand:output_type -> executor.ExecuteCommandResponse
+	7,   // 80: executor.ExecutorService.ExecutePlan:output_type -> executor.ExecutePlanResponse
+	9,   // 81: executor.ExecutorService.RollbackPlan:output_type -> executor.RollbackPlanResponse
+	11,  // 82: executor.ExecutorService.HealthCheck:output_type -> executor.HealthCheckResponse
+	13,  // 83: executor.ExecutorService.CollectQuota:output_type -> executor.CollectQuotaResponse
+	15,  // 84: executor.ExecutorService.RunScript:output_type -> executor.RunScriptResponse
+	17,  // 85: executor.ExecutorService.BatchExecute:output_type -> executor.BatchExecuteResponse
+	20,  // 86: executor.ExecutorService.GetPodStatus:output_type -> executor.GetPodStatusResponse
+	22,  // 87: executor.ExecutorService.RepairImagePull:output_type -> executor.RepairImagePullResponse
+	24,  // 88: executor.ExecutorService.GetDeploymentStatus:output_type -> executor.GetDeploymentStatusResponse
+	26,  // 89: executor.ExecutorService.ExecInPod:output_type -> executor.ExecInPodResponse
+	29,  // 90: executor.ExecutorService.ListDeploymentPods:output_type -> executor.ListDeploymentPodsResponse
+	33,  // 91: executor.ExecutorService.ListPodRestartInfo:output_type -> executor.ListPodRestartInfoResponse
+	35,  // 92: executor.ExecutorService.QueryPrometheus:output_type -> executor.QueryPrometheusResponse
+	37,  // 93: executor.ExecutorService.GetPeakUsage:output_type -> executor.GetPeakUsageResponse
+	39,  // 94: executor.ExecutorService.GetPodLogs:output_type -> executor.GetPodLogsResponse
+	41,  // 95: executor.ExecutorService.GetPodYaml:output_type -> executor.GetPodYamlResponse
+	43,  // 96: executor.ExecutorService.ApplyPodYaml:output_type -> executor.ApplyPodYamlResponse
+	46,  // 97: executor.ExecutorService.ListPods:output_type -> executor.ListPodsResponse
+	58,  // 98: executor.ExecutorService.GetPodDetail:output_type -> executor.GetPodDetailResponse
+	60,  // 99: executor.ExecutorService.GetWorkloadMounts:output_type -> executor.GetWorkloadMountsResponse
+	67,  // 100: executor.ExecutorService.ListMiscResources:output_type -> executor.ListMiscResourcesResponse
+	71,  // 101: executor.ExecutorService.GetPodEvents:output_type -> executor.GetPodEventsResponse
+	73,  // 102: executor.ExecutorService.GetWorkloadYaml:output_type -> executor.GetWorkloadYamlResponse
+	75,  // 103: executor.ExecutorService.ApplyWorkloadYaml:output_type -> executor.ApplyWorkloadYamlResponse
+	77,  // 104: executor.ExecutorService.DeleteResource:output_type -> executor.DeleteResourceResponse
+	113, // 105: executor.ExecutorService.CleanupEvicted:output_type -> executor.CleanupEvictedResponse
+	49,  // 106: executor.ExecutorService.ListNamespaces:output_type -> executor.ListNamespacesResponse
+	52,  // 107: executor.ExecutorService.ListServiceAccounts:output_type -> executor.ListServiceAccountsResponse
+	79,  // 108: executor.ExecutorService.SetupRBAC:output_type -> executor.SetupRBACResponse
+	82,  // 109: executor.ExecutorService.ReconcileRoleBindings:output_type -> executor.ReconcileRoleBindingsResponse
+	85,  // 110: executor.ExecutorService.ListWorkloads:output_type -> executor.ListWorkloadsResponse
+	87,  // 111: executor.ExecutorService.ScaleWorkload:output_type -> executor.ScaleWorkloadResponse
+	89,  // 112: executor.ExecutorService.RolloutWorkload:output_type -> executor.RolloutWorkloadResponse
+	91,  // 113: executor.ExecutorService.RolloutHistory:output_type -> executor.RolloutHistoryResponse
+	95,  // 114: executor.ExecutorService.ListHPA:output_type -> executor.ListHPAResponse
+	97,  // 115: executor.ExecutorService.GetHPA:output_type -> executor.GetHPAResponse
+	99,  // 116: executor.ExecutorService.ApplyHPA:output_type -> executor.ApplyHPAResponse
+	106, // 117: executor.ExecutorService.DeleteHPA:output_type -> executor.DeleteHPAResponse
+	102, // 118: executor.ExecutorService.ListRevisions:output_type -> executor.ListRevisionsResponse
+	104, // 119: executor.ExecutorService.GetRevisionTemplate:output_type -> executor.GetRevisionTemplateResponse
+	108, // 120: executor.ExecutorService.UpdateProbe:output_type -> executor.UpdateProbeResponse
+	110, // 121: executor.ExecutorService.RecreateWorkload:output_type -> executor.RecreateWorkloadResponse
+	111, // 122: executor.ExecutorService.ExecPodStream:output_type -> executor.ExecPodStreamFrame
+	115, // 123: executor.ExecutorService.JvmDiagnose:output_type -> executor.JvmDiagnoseResponse
+	117, // 124: executor.ExecutorService.JvmParams:output_type -> executor.JvmParamsResponse
+	77,  // [77:125] is the sub-list for method output_type
+	29,  // [29:77] is the sub-list for method input_type
+	29,  // [29:29] is the sub-list for extension type_name
+	29,  // [29:29] is the sub-list for extension extendee
+	0,   // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_proto_executor_proto_init() }
@@ -9261,7 +9692,7 @@ func file_proto_executor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_executor_proto_rawDesc), len(file_proto_executor_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   113,
+			NumMessages:   118,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
