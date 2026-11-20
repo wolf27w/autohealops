@@ -2,12 +2,14 @@
 """诊断服务：模板匹配 + Prometheus/ES 上下文 + 多模型降级/协同仲裁"""
 import asyncio
 import json
+import re
 
 from sqlalchemy import select
 
 from app.core.database import async_session
 from app.models import AIDiagnosisResult, ModelAccuracyStat, PromptTemplate
-from app.services import prompt_engine, template_routing
+from app.services import fault_taxonomy, prompt_engine, template_routing
+from app.services.diagnosis_contract_prompt import CATEGORY_FIELD_SPEC
 from app.services.es_client import ESClient
 from app.services.model_adapter import call_with_fallback
 from app.services.prometheus_client import PrometheusClient
@@ -158,7 +160,8 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测（由 api-server 采集）
         "probe_evidence": _sanitize_external(ctx.get("probe_evidence") or alert_data.get("probe_evidence", "")),
     }
-    system_prompt = await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD
+    # R44-P2：三字段契约（category/confidence/evidence_refs）运行时追加，不依赖具体模板
+    system_prompt = await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD + CATEGORY_FIELD_SPEC
     user_prompt = await prompt_engine.render(tpl.user_prompt_template, render_ctx)
     # 模板里没有探针段（存量模板未改）→ 统一追加在末尾，不依赖改库里的提示词
     _probe_text = (ctx.get("probe_evidence") or alert_data.get("probe_evidence") or "").strip()
@@ -180,7 +183,7 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
             try:
                 fb_user = prompt_engine.render_template(fallback_tpl.user_prompt_template, render_ctx)
                 fb_resp, fb_model = await call_with_fallback(
-                    fallback_tpl.system_prompt + _INPUT_BOUNDARY_GUARD, fb_user, "diagnosis", severity)
+                    fallback_tpl.system_prompt + _INPUT_BOUNDARY_GUARD + CATEGORY_FIELD_SPEC, fb_user, "diagnosis", severity)
                 fb_parsed = _parse_diagnosis_json(fb_resp.content)
                 if (fb_parsed.get("root_cause") or "").strip() or fb_parsed.get("suggestions"):
                     parsed = fb_parsed
@@ -213,6 +216,9 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "confidence": parsed.get("confidence", 0.0),
         "root_cause_layer": parsed.get("root_cause_layer", "A"),
         "impact": parsed.get("impact", {}),
+        # R44-P2：三字段契约
+        "category": parsed.get("category", fault_taxonomy.UNKNOWN),
+        "evidence_refs": parsed.get("evidence_refs", []),
         "model_used": model_used,
         "template_name": template_name,
         "template_missed": not matched,
@@ -336,6 +342,45 @@ _CONFIDENCE_MAP = {
 }
 
 
+def _normalize_category(v) -> tuple[str, bool]:
+    """把模型返回的 category 归一化成 L2 族 key；返回 (key, 是否合法)。"""
+    return fault_taxonomy.normalize_family(v)
+
+
+def _normalize_evidence_refs(v) -> list[str]:
+    """归一化 evidence_refs 为字符串列表（容忍字符串/逗号分隔/JSON 数组/混入非字符串）。"""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        # 可能是 JSON 字符串数组（如 "[\"a\",\"b\"]"）→ 先试 JSON 解析
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                v = parsed
+            else:
+                v = [s]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # 非 JSON → 按逗号/分号/换行拆，拆不开就整条
+            parts = re.split(r"[,;\n]", s)
+            parts = [p.strip() for p in parts if p.strip()]
+            v = parts if parts else [s]
+    if isinstance(v, list):
+        out: list[str] = []
+        for x in v:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    # 其它类型（dict/number）→ 字符串化
+    s = str(v).strip()
+    return [s] if s else []
+
+
 def _normalize_confidence(v) -> float:
     """把 AI 返回的 confidence 归一化成 float（AI 可能返回等级字符串而非小数）"""
     if v is None:
@@ -436,11 +481,27 @@ def _normalize_layer(value) -> str:
     return "A"
 
 
-def _parse_diagnosis_json(content: str) -> dict:
-    """解析 AI 返回的 JSON（容忍 markdown 代码块包裹），并归一化 confidence / root_cause_layer"""
+# category 不在 11 类枚举内时的置信度惩罚系数（R44-P2：不在枚举 → 归未分类并降 confidence）
+_UNKNOWN_CATEGORY_PENALTY = 0.8
+
+
+def _parse_diagnosis_json(content: str, penalize_unknown_category: bool = True) -> dict:
+    """解析 AI 返回的 JSON（容忍 markdown 代码块包裹），并归一化 confidence / root_cause_layer /
+    category / evidence_refs。
+
+    penalize_unknown_category=False 用于非主诊断链路（如 JVM 综合诊断，其提示词本就不要求 category），
+    避免被「category 缺失」误降 confidence。
+    """
     parsed = extract_json(content, default={"root_cause": content, "suggestions": [], "risk_level": "low", "confidence": 0.0})
     # 归一化 confidence（AI 可能返回等级字符串而非小数，直接写 float 列会截断报错）
     parsed["confidence"] = _normalize_confidence(parsed.get("confidence"))
+    # R44-P2：归一化 category 到 L2 枚举（不在枚举 → unknown），并在主链路降 confidence
+    category, _cat_valid = _normalize_category(parsed.get("category"))
+    parsed["category"] = category
+    if penalize_unknown_category and not _cat_valid:
+        parsed["confidence"] = round(parsed["confidence"] * _UNKNOWN_CATEGORY_PENALTY, 4)
+    # R44-P2：归一化 evidence_refs 为字符串列表
+    parsed["evidence_refs"] = _normalize_evidence_refs(parsed.get("evidence_refs"))
     # 归一化根因层（A/B/C/D）
     parsed["root_cause_layer"] = _normalize_layer(parsed.get("root_cause_layer"))
     # R52：归一化影响范围判断（独立 impact 字段；缺失为 {}，由 api-server 回退根因层级）
@@ -473,7 +534,8 @@ async def jvm_analyze(alert_data: dict, context_data: dict | None = None) -> dic
         "请给出应用健康综合诊断（JSON）。"
     )
     resp, model_used = await call_with_fallback(_JVM_SYSTEM_PROMPT + _INPUT_BOUNDARY_GUARD, user_prompt, "diagnosis", severity)
-    parsed = _parse_diagnosis_json(resp.content)
+    # JVM 综合诊断提示词不要求 category，关闭「category 缺失 → 降 confidence」的惩罚
+    parsed = _parse_diagnosis_json(resp.content, penalize_unknown_category=False)
     return {
         "root_cause": parsed.get("root_cause", ""),
         "suggestions": parsed.get("suggestions", []),

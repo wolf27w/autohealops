@@ -214,6 +214,39 @@ def _infer_layer(fault_type: str) -> str:
     return FAULT_TYPE_LAYER.get(ft, "A")
 
 
+# ============ R44-P3：低置信度转人工闸门 ============
+
+def confidence_below_threshold(confidence, threshold: float | None = None) -> bool:
+    """判断诊断置信度是否低于阈值（低于 → 不自动执行，转人工）。
+
+    兼容分支（字段缺失 → 退回原有行为）：
+    - confidence 为 None（缺失）→ False，不触发闸门
+    - confidence 非法（非数字）→ False，不触发闸门
+
+    threshold 缺省取 settings.DIAGNOSIS_CONFIDENCE_THRESHOLD（默认 0.6，可在配置改）。
+    """
+    if confidence is None:
+        return False
+    try:
+        c = float(confidence)
+    except (TypeError, ValueError):
+        return False
+    thr = float(settings.DIAGNOSIS_CONFIDENCE_THRESHOLD if threshold is None else threshold)
+    return c < thr
+
+
+def _format_low_confidence_detail(confidence, category: str, evidence_refs: list, root_cause: str) -> str:
+    """低置信度转人工时的依据说明（写进工单 description，保证人能看到依据）。"""
+    parts = [f"AI 诊断置信度 {float(confidence):.2f} 低于阈值 {settings.DIAGNOSIS_CONFIDENCE_THRESHOLD:.2f}，不自动执行"]
+    if category:
+        parts.append(f"分类：{category}")
+    if root_cause:
+        parts.append(f"根因：{root_cause}")
+    if evidence_refs:
+        parts.append("依据：" + "；".join(str(x) for x in evidence_refs))
+    return "；".join(parts)
+
+
 async def _decide_action(alert: Alert, steps: list) -> str:
     """按四维风险评分决策：auto / approval_1（单人）/ approval_2（双人）"""
     from app.models import Cluster
@@ -874,8 +907,18 @@ async def _record_suppression(alert: Alert) -> None:
 
 # ============ 场景规则（执行决策矩阵「策略层规则库」） ============
 
+def _rule_matches_family(rule: SelfHealRule) -> bool:
+    """规则是否按 L2 fault_family 匹配（fault_type_match 以 family: 前缀，如 family:resource）。"""
+    return (rule.fault_type_match or "").strip().startswith("family:")
+
+
 def _match_rule(rule: SelfHealRule, alert: Alert) -> bool:
-    """判断告警是否命中规则（空匹配字段=不限制；namespace 支持 prod-* 前缀通配）"""
+    """判断告警是否命中规则（空匹配字段=不限制；namespace 支持 prod-* 前缀通配）。
+
+    fault_type_match 支持两种写法（R44-P4）：
+    - 精确 fault_type（如 CrashLoopBackOff）
+    - family:<L2族key>（如 family:resource）→ 按 alert.fault_family 匹配
+    """
     if rule.cluster_id is not None and rule.cluster_id != alert.cluster_id:
         return False
     pattern = (rule.namespace_match or "").strip()
@@ -887,8 +930,13 @@ def _match_rule(rule: SelfHealRule, alert: Alert) -> bool:
         elif ns != pattern:
             return False
     ft = (rule.fault_type_match or "").strip()
-    if ft and ft != (alert.fault_type or ""):
-        return False
+    if ft:
+        if ft.startswith("family:"):
+            fam = ft[len("family:"):].strip()
+            if fam and fam != (alert.fault_family or ""):
+                return False
+        elif ft != (alert.fault_type or ""):
+            return False
     rt = (rule.resource_type_match or "").strip()
     if rt and rt != (alert.resource_type or ""):
         return False
@@ -896,14 +944,20 @@ def _match_rule(rule: SelfHealRule, alert: Alert) -> bool:
 
 
 async def match_rule(alert: Alert) -> SelfHealRule | None:
-    """匹配最高优先级（priority 小=高）的启用场景规则"""
+    """匹配最高优先级（priority 小=高）的启用场景规则。
+
+    R44-P4：同优先级下精确 fault_type 规则优先于 family 规则（优先精确，其次 fault_family）。
+    """
     async with async_session() as s:
         result = await s.execute(
             select(SelfHealRule).where(SelfHealRule.enabled.is_(True)).order_by(SelfHealRule.priority.asc())
         )
-        for rule in result.scalars():
-            if _match_rule(rule, alert):
-                return rule
+        rules = list(result.scalars())
+    # 同优先级内精确 fault_type 规则排在 family 规则之前
+    rules.sort(key=lambda r: ((r.priority or 0), _rule_matches_family(r)))
+    for rule in rules:
+        if _match_rule(rule, alert):
+            return rule
     return None
 
 
@@ -1311,6 +1365,11 @@ async def _process_one(alert: Alert) -> bool:
     repair_steps_text = ""
     root_cause_layer = ""
     impact = {}  # R52：诊断「影响范围判断」（结构化；缺失回退根因层级）
+    # R44-P2/P3：诊断三字段契约（category/confidence/evidence_refs）；
+    # diag_confidence=None 表示缺失（KB 命中或字段缺失）→ 不触发低置信闸门，退回原有行为
+    diag_confidence = None
+    evidence_refs: list = []
+    diag_category = ""
     diag_cached = bool(diag_row and diag_row.diagnosis_json)
     # 探针专项（2026-10-29）：只对 Pod 类故障采一次，供给「AI 诊断上下文」和「探针调参方案」两处用
     probe_result: dict = {"text": "", "findings": []}
@@ -1343,6 +1402,11 @@ async def _process_one(alert: Alert) -> bool:
             repair_steps_text = "; ".join(diag_data.get("suggestions", []))
             root_cause_layer = diag_data.get("root_cause_layer", "")
             impact = extract_impact(diag_data)
+            # R44-P2/P3：从缓存诊断里取三字段（老数据缺字段 → 退回原有行为）
+            diag_confidence = diag_data.get("confidence")
+            _refs = diag_data.get("evidence_refs")
+            evidence_refs = _refs if isinstance(_refs, list) else []
+            diag_category = diag_data.get("category", "") or ""
         except json.JSONDecodeError:
             root_cause, repair_steps_text = "", ""
     else:
@@ -1461,6 +1525,11 @@ async def _process_one(alert: Alert) -> bool:
             repair_steps_text = "; ".join(diagnosis.get("suggestions", []))
             root_cause_layer = diagnosis.get("root_cause_layer", "")
             impact = extract_impact(diagnosis)
+            # R44-P2/P3：从 AI 诊断结果里取三字段（ai-service 已归一化，此处防御性再取）
+            diag_confidence = diagnosis.get("confidence")
+            _refs = diagnosis.get("evidence_refs")
+            evidence_refs = _refs if isinstance(_refs, list) else []
+            diag_category = diagnosis.get("category", "") or ""
             # C2：AI 返回空结论（无根因且无建议）→ 单独记录 empty_result + 转人工（不静默当成功）
             if not (root_cause or "").strip() and not diagnosis.get("suggestions"):
                 try:
@@ -1610,6 +1679,16 @@ async def _process_one(alert: Alert) -> bool:
 
     plan_json = json.dumps({"steps": steps}, ensure_ascii=False)
     if action == "auto":
+        # R44-P3：低置信度转人工闸门——AI 诊断置信度不足 → 不自动执行，转工单/待人工
+        # （diag_confidence=None 表示缺失，confidence_below_threshold 返回 False，退回原有行为）
+        if diag_confidence is not None and confidence_below_threshold(diag_confidence):
+            await _mark_manual_and_notify(
+                alert, "AI 诊断置信度不足",
+                _format_low_confidence_detail(diag_confidence, diag_category, evidence_refs, root_cause),
+            )
+            logger.info("告警 %d 诊断置信度 %.2f 低于阈值 %.2f，转人工",
+                        alert.id, float(diag_confidence), settings.DIAGNOSIS_CONFIDENCE_THRESHOLD)
+            return True
         # 循环抑制：同源反复自愈失败 → 转人工（治标不治本兜底）
         if await _check_suppression(alert):
             await _mark_manual_and_notify(
