@@ -69,6 +69,9 @@ class ReleaseBuild(Base):
     # R60 P2a 发布基线：发布前后镜像 + 对应 commit（都可空/默认空串，不阻断存量数据）
     image_tag_before: Mapped[str] = mapped_column(String(500), default="", server_default="")
     image_tag_after: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    # 2026-11-23 R60 P3-11：记录镜像 digest，防 tag 被覆盖/清理后无法回溯
+    image_digest_before: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    image_digest_after: Mapped[str] = mapped_column(String(120), default="", server_default="")
     commit_sha: Mapped[str] = mapped_column(String(64), default="", server_default="")
     commit_subject: Mapped[str] = mapped_column(String(500), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -445,6 +445,12 @@ async def _fill_build_baseline(j: JenkinsInstance, build: ReleaseBuild) -> None:
             tag = _extract_image_tag_from_log((log_res or {}).get("text") or "")
             if tag:
                 build.image_tag_after = tag
+                # 2026-11-23 R60 P3-11：同步记 digest（tag 被清理后仍可回溯），失败不阻断
+                try:
+                    from app.services.image_compare_service import resolve_digest
+                    build.image_digest_after = await resolve_digest(tag)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception:  # noqa: BLE001
             pass
     except Exception as e:  # noqa: BLE001
@@ -491,6 +497,15 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
     except Exception as e:  # noqa: BLE001
         logger.warning("取发布前镜像失败 %s/%s: %s", namespace, service_name, e)
 
+    # 2026-11-23 R60 P3-11：记录发布前镜像 digest（tag 可能被清理/覆盖后仍可回溯）
+    image_digest_before = ""
+    if image_tag_before:
+        try:
+            from app.services.image_compare_service import resolve_digest
+            image_digest_before = await resolve_digest(image_tag_before)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("解析发布前镜像 digest 失败 %s: %s", image_tag_before, e)
+
     params = {m.service_param: service_name}
     if branch:
         params[m.branch_param] = branch
@@ -515,6 +530,7 @@ async def trigger_release(payload: dict, user=Depends(require_operator)):
             jenkins_instance_id=m.jenkins_instance_id, job_name=m.job_name,
             branch=branch, build_number=number, status="queued",
             image_tag_before=image_tag_before,
+            image_digest_before=image_digest_before,
             triggered_by=user.id,
             triggered_by_name=f"{getattr(user, 'username', '') or ''}({mode})",
         )

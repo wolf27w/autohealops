@@ -768,10 +768,14 @@ async def _h_get_change_history(args: dict, context: dict) -> dict:
         img_before = b.image_tag_before or "-"
         img_after = b.image_tag_after or "-"
         commit = " ".join(x for x in (b.commit_sha, b.commit_subject) if x) or "-"
+        # 2026-11-23 R60 P3-11：带上 digest 短码（tag 可能已被清理，digest 是唯一可靠标识）
+        dg_b = (getattr(b, "image_digest_before", "") or "")[:19]
+        dg_a = (getattr(b, "image_digest_after", "") or "")[:19]
+        digest_txt = f" | digest {dg_b or '-'} → {dg_a or '-'}" if (dg_b or dg_a) else ""
         line = (
             f"{ts} | {b.triggered_by_name or '-'} | 分支 {b.branch or '-'} | "
             f"构建 #{b.build_number} | {status_cn.get(b.status, b.status or '-')} | "
-            f"镜像 {img_before} → {img_after} | commit {commit}"
+            f"镜像 {img_before} → {img_after}{digest_txt} | commit {commit}"
         )
         lines.append(line)
         if b.status == "success" and latest_success is None:
