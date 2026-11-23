@@ -214,6 +214,40 @@ def _infer_layer(fault_type: str) -> str:
     return FAULT_TYPE_LAYER.get(ft, "A")
 
 
+# ============ 2026-11-23：禁止“表象当根因”（agent 诊断深度闸门） ============
+# 这些词是「传感器读数」（检测信号），不能直接当 root_cause。
+_SYMPTOM_ONLY_PATTERNS = (
+    "readiness", "liveness", "探针", "探活", "健康检查", "失败", "异常", "告警",
+    "探针失败", "探活失败", "健康检查失败", "readiness失败", "liveness失败",
+    "pod重启", "容器重启", "反复重启", "crashloop",
+    "cpu高", "内存高", "cpu使用率高", "内存使用率高",
+    "5xx", "502", "503", "超时", "响应慢",
+)
+
+
+def _root_cause_is_symptom_only(rc: str) -> bool:
+    """root_cause 若只是表象词（无进一步机制/触发），视为未完成诊断。"""
+    raw = (rc or "").strip().lower()
+    text = raw.replace(" ", "").replace("\u3000", "")
+    if not text:
+        return True
+    # 含有因果/机制类词汇的，视为已往下追（不再判为纯表象）
+    if any(k in text for k in ("因为", "导致", "由于", "根因", "原因是", "堵住", "耗尽",
+                               "连不上", "未监听", "启动脚本", "oom", "超时5", "连接超时")):
+        return False
+    # 去掉表象词后若剩余信息太少（<=6 字），判为“只有表象”
+    stripped = text
+    for p in _SYMPTOM_ONLY_PATTERNS:
+        stripped = stripped.replace(p.lower().replace(" ", ""), "")
+    return len(stripped.strip("，。,:：;；-—()（）")) <= 6
+
+
+def _is_probe_root_cause(rc: str) -> bool:
+    """诊断根因是否真的指向「探针配置/超时」（只有这时才允许调探针）。"""
+    text = (rc or "").strip().lower()
+    return any(k in text for k in ("探针", "probe", "timeout", "超时时间", "阈值偏低", "首检延迟"))
+
+
 # ============ R71/R72：自主处置三条件闸门接线（2026-11-23） ============
 # 设计口径：闸门只“收紧”、不“放松”——它可以把 auto 降为审批/转人工，
 # 但永远不会绕过现有风险评分/审批链（原有 decision_engine 先跑，闸门在其后判定）。
@@ -741,6 +775,8 @@ async def _collect_container_diagnostics(alert: Alert) -> str:
     - 崩溃容器：采上一次崩溃日志（logs --previous）
     - 运行容器：exec 查进程列表（ps aux）
     返回拼接文本，作为诊断上下文的 exec_output。
+    2026-11-23 老板反馈：每容器那行补上 lastState reason/exitCode（从 describe 解析），
+    并在 logs --previous 输出后追加「首次异常」行，让诊断看到真实退出原因而非只看事件。
     """
     if alert.resource_type != "pod":
         return ""
@@ -751,19 +787,47 @@ async def _collect_container_diagnostics(alert: Alert) -> str:
     if not containers:
         return ""
 
+    # 从 describe 解析每个容器的 lastState reason/exitCode（get_pod_status 不含该字段）
+    term_by_name: dict = {}
+    try:
+        from app.services.termination_evidence import parse_describe_termination
+        desc = await executor_client.acall(
+            executor_client.execute_command, alert.cluster_id, ns, f"describe pod {pod}")
+        describe_text = desc.get("output", "") if desc.get("success") else ""
+        term_by_name = {c.get("name", ""): c for c in parse_describe_termination(describe_text).get("containers", [])}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("解析容器 describe 退出证据失败: %s", e)
+
     parts = []
     for c in containers:
         cname = c.get("name", "")
         state = c.get("state", "")
         reason = c.get("reason", "")
         restarts = c.get("restart_count", 0) or 0
-        parts.append(f"容器 {cname}: state={state} reason={reason} restart={restarts}")
+        t = term_by_name.get(cname) or {}
+        last_reason = t.get("last_reason") or ""
+        last_code = t.get("last_exit_code")
+        last_state_str = ""
+        if last_reason or last_code is not None:
+            last_state_str = (f" lastStateReason={last_reason or '-'}"
+                              f" lastStateExitCode={last_code if last_code is not None else '-'}")
+        parts.append(f"容器 {cname}: state={state} reason={reason} restart={restarts}{last_state_str}")
 
         # 崩溃/等待容器：采上一次崩溃日志（定位崩溃根因）
         if restarts > 0 or state in ("waiting", "terminated", "crash"):
             r = await executor_client.acall(executor_client.execute_command, alert.cluster_id, ns, f"logs {pod} -c {cname} --previous --tail=40")
             if r.get("success") and r.get("output"):
-                parts.append(f"--- {cname} 上次崩溃日志 ---\n{r['output'][:2500]}")
+                prev_logs = r['output'][:2500]
+                block = f"--- {cname} 上次崩溃日志 ---\n{prev_logs}"
+                # 2026-11-23：追加首次异常行，让诊断直接定位应用退出根因
+                try:
+                    from app.services.termination_evidence import first_error_line
+                    _err = first_error_line(prev_logs)
+                    if _err:
+                        block += f"\n首次异常：{_err}"
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("提取首次异常行失败: %s", e)
+                parts.append(block)
 
         # 运行容器：exec 只读查进程
         if state == "running":
@@ -1533,6 +1597,16 @@ async def _process_one(alert: Alert) -> bool:
         recent_events = await _collect_pod_events(alert)
         if recent_events:
             alert_data["recent_events"] = recent_events
+        # 2026-11-23 老板反馈：解析 describe 的容器退出事实（Last State/exitCode），
+        # 写入 termination_evidence 并前置到 recent_events，让诊断看到真实退出原因。
+        try:
+            from app.services.termination_evidence import parse_describe_termination
+            term = parse_describe_termination(recent_events or "")
+            if term.get("summary"):
+                alert_data["termination_evidence"] = term["summary"]
+                alert_data["recent_events"] = "【容器退出证据】\n" + term["summary"] + "\n\n" + (recent_events or "")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("解析容器退出证据失败: %s", e)
         # 诊断必须同时看「容器 stdout 日志」（不走 ES）
         if alert.resource_type == "pod" and alert.resource_name:
             try:
@@ -1583,7 +1657,8 @@ async def _process_one(alert: Alert) -> bool:
         return True
 
     # 3.2 知识库未命中且无缓存诊断 → AI 诊断
-    if not kb_hit_steps and not diag_cached:
+    # 2026-11-23：知识库命中也不短路诊断（旧逻辑会跳过 AI → 拿历史结论当根因）
+    if not diag_cached:
         try:
             container_diag = await _collect_container_diagnostics(alert)
             # 2026-11-23 R69：下线两处违反「先分析后处置」的旧逻辑——
@@ -1608,6 +1683,9 @@ async def _process_one(alert: Alert) -> bool:
             diag_ctx = {"exec_output": container_diag}
             if metrics_text:
                 diag_ctx["metrics_trend"] = metrics_text
+            # 2026-11-23：容器退出证据也进 ReAct 上下文（首轮即可见，避免把 readiness 失败当根因）
+            if alert_data.get("termination_evidence"):
+                diag_ctx["termination_evidence"] = alert_data["termination_evidence"]
             # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测，让结论落到
             # 「探针配置不合理」还是「端点真的挂了」，而不是笼统的「探针失败」。
             if probe_result.get("text"):
@@ -1640,6 +1718,13 @@ async def _process_one(alert: Alert) -> bool:
             if diagnosis is None:
                 raise _diag_err  # 交给外层 except → 转人工 + 通知
             root_cause = diagnosis.get("root_cause", "")
+            # 2026-11-23：优先用三层结论拼根因（机制 + 触发），避免只有表象
+            _mech = (diagnosis.get("mechanism") or "").strip()
+            _trig = (diagnosis.get("trigger") or "").strip()
+            if _mech:
+                root_cause = _mech + (f"；触发原因：{_trig}" if _trig else "")
+            if _trig and not _mech and _trig not in (root_cause or ""):
+                root_cause = f"{root_cause or ''}；触发原因：{_trig}".strip("；")
             repair_steps_text = "; ".join(diagnosis.get("suggestions", []))
             root_cause_layer = diagnosis.get("root_cause_layer", "")
             impact = extract_impact(diagnosis)
@@ -1648,6 +1733,24 @@ async def _process_one(alert: Alert) -> bool:
             _refs = diagnosis.get("evidence_refs")
             evidence_refs = _refs if isinstance(_refs, list) else []
             diag_category = diagnosis.get("category", "") or ""
+            # 2026-11-23 老板反馈：启动失败不能只归因探针。统一护栏（覆盖 ReAct 与单次诊断）：
+            # 证据里有 exitCode≠0（非 137/143）而结论只归因探针/健康检查 → 校正结论。
+            try:
+                from app.services.termination_evidence import apply_probe_guard
+                _evidence_text = ((alert_data.get("termination_evidence") or "") + "\n"
+                                  + (alert_data.get("recent_events") or ""))
+                _new_rc, _exit_code = apply_probe_guard(root_cause, _evidence_text)
+                if _new_rc != (root_cause or ""):
+                    logger.info("告警 %d 诊断被容器退出证据校正（exitCode=%s）", alert.id, _exit_code)
+                    root_cause = _new_rc
+                    _ref = f"termination:exitCode={_exit_code}"
+                    if _ref not in evidence_refs:
+                        evidence_refs = list(evidence_refs) + [_ref]
+                    # 同步回 diagnosis dict，后续落库/通知/知识库用同一份结论
+                    diagnosis["root_cause"] = root_cause
+                    diagnosis["evidence_refs"] = evidence_refs
+            except Exception as _e_guard:  # noqa: BLE001
+                logger.debug("诊断证据校正失败: %s", _e_guard)
             # C2：AI 返回空结论（无根因且无建议）→ 单独记录 empty_result + 转人工（不静默当成功）
             if not (root_cause or "").strip() and not diagnosis.get("suggestions"):
                 try:
@@ -1700,12 +1803,26 @@ async def _process_one(alert: Alert) -> bool:
 
     # 3.25 探针配置问题（平台可直接修）：AI 常把它判成 B 层「需改代码」就转人工，
     # 但实测已证明是探针参数问题 → 生成调参方案走审批链，不让人为踢回。
+    # 2026-11-23：诊断深度闸门——只到表象层（探针失败/重启/CPU高…）不算根因，转人工
+    if _root_cause_is_symptom_only(root_cause):
+        await _mark_manual_and_notify(
+            alert, "诊断未到根因层（仅表象）",
+            f"当前结论「{root_cause or '空'}」只是检测信号，未落到机制/触发层。"
+            "需补充证据：启动日志（含上次崩溃实例）、容器进程/端口监听、依赖连通性、JVM/GC、资源指标。",
+        )
+        logger.info("告警 %d 诊断仅到表象层（%r），转人工继续排查", alert.id, root_cause)
+        return True
+
     probe_steps = await _build_probe_fix_steps(alert, probe_result)
     if probe_steps:
-        logger.info("告警 %d 命中探针配置问题，生成 %d 个调参步骤（跳过 AI 方案生成）", alert.id, len(probe_steps))
+        logger.info("告警 %d 探针参数可调（仅作候选动作，不短路诊断）", alert.id)
 
-    # 3.3 根因层路由（执行决策矩阵落地）：B/C/D 层直接转人工，不再浪费 AI 生成方案；A 层才走 Pod 自愈
-    layer = "A" if probe_steps else (root_cause_layer or _infer_layer(alert.fault_type))
+    # 2026-11-23：拆掉“探针短路”——探针调参不得强制判 A 层、不得跳过诊断。
+    # 只有诊断根因确实指向探针/超时时，才允许使用调参动作（否则按诊断层级走）。
+    layer = root_cause_layer or _infer_layer(alert.fault_type)
+    if probe_steps and not _is_probe_root_cause(root_cause):
+        probe_steps = []
+        logger.info("告警 %d 诊断根因未指向探针配置，放弃调参动作（避免拿表象当根因）", alert.id)
     if layer == "B":
         await _mark_manual_and_notify(
             alert, "根因在应用层（需改代码走发布）",
@@ -1775,6 +1892,19 @@ async def _process_one(alert: Alert) -> bool:
     # 6. 其他故障：需要 steps（AI 方案为空用内置步骤兜底）
     if not steps:
         steps = build_standard_steps(alert)
+
+    # 6.5 发布相关性 → 优先「回滚」（R70，2026-11-23）
+    # 口径：诊断结论命中发布/版本/镜像类表述且目标是无状态 Deployment 时，
+    # 用平台回滚动作替代「删 Pod 重建」这类盲目重建（服务已坏，重建新版本仍会坏）。
+    _rc = locals().get("root_cause", "") or ""
+    _release_hit = any(k in _rc for k in ("发布", "版本", "镜像", "revision", "回滚", "新版本", "升级"))
+    if _release_hit and (alert.resource_type or "") == "deployment" and alert.namespace and alert.resource_name:
+        steps = [{
+            "platform_action": "rollback_deployment",
+            "description": f"回滚 {alert.namespace}/{alert.resource_name} 到上一个正常版本（{_rc[:60]}）",
+            "params": {"namespace": alert.namespace, "deployment": alert.resource_name, "to_revision": 0},
+        }] + [s for s in steps if isinstance(s, dict) and s.get("platform_action")]
+        logger.info("告警 %d 判定为发布引入，改用回滚动作（替代重建）", alert.id)
     if not steps:
         # AI/知识库/标准动作都拿不到可执行方案 → 转人工（等人工）
         await _mark_manual_and_notify(
@@ -1881,6 +2011,25 @@ async def _process_one(alert: Alert) -> bool:
             # 验证未通过：不标记已解决，保持 pending（下次扫描再处理，累积触发升级转人工）
             # 方案状态回退 pending（否则 executing 会挡住下轮重试），执行本身失败则保留 failed
             logger.warning("告警 %d 自动修复执行完成但验证未通过（exec=%s），保持待处理", alert.id, exec_result)
+            # 2026-11-23 反证机制：执行后验证未通过 → 原根因结论被否证，
+            # 清掉诊断缓存，让下一轮重新诊断（旧行为会复用同一结论 → 改了没用还说同一原因）。
+            try:
+                from app.models import AIDiagnosisResult
+                async with async_session() as session:
+                    rows = (await session.execute(
+                        select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert.id)
+                    )).scalars().all()
+                    for _r in rows:
+                        await session.delete(_r)
+                    await session.commit()
+                await audit_service.update_audit_record(trace_id, "diagnosis_refuted", json.dumps({
+                    "alert_id": alert.id, "root_cause": root_cause,
+                    "reason": "自动修复执行后验证未通过，原结论被否证",
+                }, ensure_ascii=False))
+                logger.info("告警 %d 修复未通过 → 原结论已否证并清缓存，下一轮重新诊断", alert.id)
+            except Exception as _re:  # noqa: BLE001
+                logger.warning("告警 %d 清诊断缓存失败: %s", alert.id, _re)
+
             if exec_result == "success":
                 await _set_plan_status(plan_id, "pending")
             async with async_session() as session:
