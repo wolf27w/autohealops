@@ -2327,9 +2327,11 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
         results = list(await asyncio.gather(*[_one(p) for p in pods]))
     else:
         results = []
+        # 2026-11-23：容器留空时用 workload_logs 的 fan-out（按 Pod 实际容器逐个拉取，
+        # 多容器加 [容器名] 前缀）；否则多容器 Pod 会报 "container name must be specified"。
+        from app.api.workload_logs import _fetch_pod_tail
         for p in pods:
-            r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, p.get("name"),
-                                            container, tail, previous)
+            _p, r = await _fetch_pod_tail(cluster_id, namespace, p, container, tail)
             results.append({"pod": p.get("name"), "phase": p.get("phase"),
                             "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
     # 2026-11-16（R5）：额外返回合并后的列式 rows（前端聚合日志弹窗用），pods 保持兼容
@@ -2343,7 +2345,10 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
     return {"code": 200, "message": "success",
             "data": {"kind": kind, "name": name, "tail": tail, "previous": previous, "pods": results,
                      "columns": ["pod", "line"], "rows": rows, "errors": errors,
-                     "truncated": any(len((r.get("logs") or "").splitlines()) >= tail for r in results)}}
+                     # 2026-11-23：只有真的撞到服务端行数上限才算“已截断”；
+                     # 原来只要行数==请求 tail 就标截断，导致正常查看也显示“已截断”。
+                     "truncated": tail >= 5000 and any(
+                         len((r.get("logs") or "").splitlines()) >= tail for r in results)}}
 
 
 _MEM_UNITS = {"Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4,

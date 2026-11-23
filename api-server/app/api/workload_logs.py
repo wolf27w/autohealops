@@ -146,13 +146,51 @@ async def _list_workload_pods(cluster_id: int, namespace: str, kind: str, name: 
     return _sort_pods(matched)
 
 
+async def _pod_container_names(cluster_id: int, namespace: str, pod_name: str) -> list[str]:
+    """取 Pod 实际容器名（含 sidecar；模板里可能看不到注入的 sidecar）。"""
+    try:
+        r = await executor_client.acall(executor_client.get_pod_detail, cluster_id, namespace, pod_name)
+        d = (r or {}).get("detail") or {}
+        return [c.get("name") for c in (d.get("containers") or []) if c.get("name")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 async def _fetch_pod_tail(cluster_id: int, namespace: str, pod: dict, container: str,
                           tail: int) -> tuple[dict, dict]:
-    """拉单个 Pod 的 tail 日志（受 _AGG_SEMAPHORE 限流）。返回 (pod, result_dict)。"""
+    """拉单个 Pod 的 tail 日志（受 _AGG_SEMAPHORE 限流）。返回 (pod, result_dict)。
+
+    2026-11-23：`container` 为空 = **聚合该 Pod 所有容器**（含 sidecar），
+    每行加 `[容器名] ` 前缀；原来容器为空时多容器 Pod 会直接报
+    "a container name must be specified"，导致“聚合日志”实际只跟一个容器。
+    """
+    pname = pod.get("name")
     async with _AGG_SEMAPHORE:
-        r = await executor_client.acall(
-            executor_client.get_pod_logs, cluster_id, namespace, pod.get("name"), container, tail, False)
-    return pod, r
+        if container:
+            r = await executor_client.acall(
+                executor_client.get_pod_logs, cluster_id, namespace, pname, container, tail, False)
+            return pod, r
+        names = await _pod_container_names(cluster_id, namespace, pname)
+        if not names:
+            r = await executor_client.acall(
+                executor_client.get_pod_logs, cluster_id, namespace, pname, "", tail, False)
+            return pod, r
+        parts: list[str] = []
+        errors: list[str] = []
+        multi = len(names) > 1
+        for cname in names:
+            r = await executor_client.acall(
+                executor_client.get_pod_logs, cluster_id, namespace, pname, cname, tail, False)
+            if (r or {}).get("success"):
+                text = (r or {}).get("logs") or ""
+                if multi:
+                    text = "\n".join(f"[{cname}] {ln}" for ln in text.split("\n") if ln)
+                if text:
+                    parts.append(text)
+            else:
+                errors.append(f"{cname}: {str((r or {}).get('error'))[:80]}")
+        return pod, {"success": bool(parts) or not errors, "logs": "\n".join(parts),
+                     "error": "；".join(errors)}
 
 
 def _iter_gzip(text: str, chunk_size: int = _GZIP_CHUNK) -> Iterator[bytes]:

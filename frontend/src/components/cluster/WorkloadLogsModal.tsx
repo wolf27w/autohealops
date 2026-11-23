@@ -150,6 +150,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   // 开始跟随：为每个容器各开一条 SSE（SSE 先推快照，再每 2s 增量）
   const startFollow = useCallback(() => {
     setLines([])
+    setTruncated(false)   // 实时态没有“截断”概念，清掉快照遗留标记
     const targets = effectiveContainers
     for (const c of targets) {
       const es = new EventSource(buildStreamUrl(clusterId, namespace, kind, name, c))
@@ -188,8 +189,9 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       .then((d) => {
         const list = (d?.containers || []).map((c) => c.name)
         setContainers(list)
-        const def = pickDefaultContainer(list)
-        setSelected(def ? [def] : [])
+        // 2026-11-23 老板口径：聚合日志默认「留空=全部容器」——
+        // 后端按 Pod 实际容器逐个拉取并加 [容器名] 前缀（含模板里看不到的 sidecar）
+        setSelected([])
       })
       .catch(() => setContainers([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -322,7 +324,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
           ● {following ? (connected ? '实时中' : '连接中…') : '最近 200 行'}
         </span>
-        {truncated && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
+        {truncated && !following && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
         <span style={{ color: '#8c8c8c', fontSize: 12 }}>{shown.length}/{lines.length} 行</span>
       </Space>}>
       <Space wrap style={{ marginBottom: 8 }}>
