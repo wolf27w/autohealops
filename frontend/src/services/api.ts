@@ -455,6 +455,12 @@ export const batchWorkloadOp = (clusterId: number, data: {
 }) => http.post<BatchWorkloadResult>(`/resources/clusters/${clusterId}/workloads/batch`, data)
 export const rolloutWorkload = (clusterId: number, data: Payload) =>
   http.post(`/resources/clusters/${clusterId}/workloads/rollout`, data)
+// 2026-11-23 R70：把集群里的 Deployment 直接切回上一个 revision（平台回滚 RPC，不走 Jenkins）
+export const rollbackWorkloadImage = (clusterId: number, ns: string, kind: string, name: string, toRevision = 0) =>
+  http.post<{ message: string; from_revision: number; to_revision: number; image: string }>(
+    `/resources/clusters/${clusterId}/namespaces/${ns}/workloads/${kind}/${name}/rollback`,
+    { to_revision: toRevision },
+  )
 export const getRolloutHistory = (clusterId: number, ns: string, name: string) =>
   http.get(`/resources/clusters/${clusterId}/workloads/${ns}/${name}/history`)
 export const updateWorkloadProbe = (clusterId: number, data: Payload) =>

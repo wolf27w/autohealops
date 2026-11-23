@@ -1,7 +1,7 @@
 // 发布历史（R19）：构建记录列表 → 点开看 Blue Ocean 式阶段/日志
 import { useEffect, useState } from 'react'
 import { Card, Table, Tag, Button, Space, Select, Modal, Popconfirm, message } from 'antd'
-import { getReleaseBuilds, getClusters, rollbackRelease } from '../services/api'
+import { getReleaseBuilds, getClusters, rollbackRelease, rollbackWorkloadImage } from '../services/api'
 import type { ReleaseBuild } from '../services/api'
 import type { Cluster } from '../types'
 import PipelineView from '../components/PipelineView'
@@ -26,6 +26,21 @@ export default function ReleaseHistory() {
   const [loading, setLoading] = useState(false)
   const [sel, setSel] = useState<ReleaseBuild | null>(null)
   const [rolling, setRolling] = useState<number | null>(null)
+  const [imgRolling, setImgRolling] = useState<number | null>(null)
+
+  // 2026-11-23 R70：直接回滚集群里的镜像（走平台回滚 RPC，不重新构建）
+  const doImageRollback = async (r: ReleaseBuild) => {
+    setImgRolling(r.id)
+    try {
+      const res = await rollbackWorkloadImage(r.cluster_id, r.namespace, 'deployment', r.service_name, 0)
+      message.success(`已回滚：${r.namespace}/${r.service_name} revision ${res.from_revision} → ${res.to_revision}`)
+      load()
+    } catch (e) {
+      message.error(`回滚失败：${(e as Error).message}`)
+    } finally {
+      setImgRolling(null)
+    }
+  }
 
   const doRollback = async (r: ReleaseBuild) => {
     setRolling(r.id)
@@ -70,12 +85,21 @@ export default function ReleaseHistory() {
       <Space size={4}>
         <Button size="small" type="link" onClick={() => setSel(r)}>查看</Button>
         <Popconfirm
-          title={`回滚到构建 #${r.build_number}？`}
-          description={`将以 ${r.service_name} 的分支「${r.branch || '默认'}」重新触发 ${r.job_name}`}
-          okText="回滚" cancelText="取消" onConfirm={() => doRollback(r)}
+          title={`重发构建 #${r.build_number}？`}
+          description={`将以 ${r.service_name} 的分支「${r.branch || '默认'}」重新触发 ${r.job_name}（会走 Jenkins 重新构建）`}
+          okText="重发" cancelText="取消" onConfirm={() => doRollback(r)}
         >
-          <Button size="small" type="link" danger loading={rolling === r.id}
-            disabled={r.status === 'queued' || r.status === 'running'}>回滚</Button>
+          <Button size="small" type="link" loading={rolling === r.id}
+            disabled={r.status === 'queued' || r.status === 'running'}>重发</Button>
+        </Popconfirm>
+        {/* 2026-11-23 R70：集群侧镜像回滚（不重新构建，直接切回上一个 revision） */}
+        <Popconfirm
+          title={`把 ${r.namespace}/${r.service_name} 回滚到上一个版本？`}
+          description="直接修改集群 Deployment 回到上一个 revision（不重新构建，立即生效）"
+          okText="回滚" cancelText="取消" onConfirm={() => doImageRollback(r)}
+        >
+          <Button size="small" type="link" danger loading={imgRolling === r.id}
+            disabled={r.status === 'queued' || r.status === 'running'}>回滚镜像</Button>
         </Popconfirm>
       </Space>
     ) },
