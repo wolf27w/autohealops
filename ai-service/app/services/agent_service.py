@@ -146,6 +146,8 @@ async def decide_next_step(
 
     decision = _parse_decision(resp.content)
     decision["model_used"] = model_used
+    decision["model_fallback"] = bool(getattr(resp, "model_fallback", False))
+    decision["fallback_from"] = list(getattr(resp, "fallback_from", []) or [])
     return decision
 
 
@@ -179,5 +181,7 @@ async def diagnose_once(
     decision = _parse_decision(resp.content)
     decision["action"] = "final_answer"
     decision["model_used"] = model_used
+    decision["model_fallback"] = bool(getattr(resp, "model_fallback", False))
+    decision["fallback_from"] = list(getattr(resp, "fallback_from", []) or [])
     decision["_once"] = True
     return decision

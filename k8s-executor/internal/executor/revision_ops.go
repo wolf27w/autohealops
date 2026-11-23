@@ -3,6 +3,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 )
 
@@ -189,22 +191,33 @@ type RollbackResult struct {
 
 // RollbackWorkload 工作负载回滚执行通道（等价 kubectl rollout undo）
 //
-// 仅支持 deployment（statefulset/daemonset 明确返回不支持）。
+// 支持 deployment / statefulset / daemonset。
 // toRevision=0 → 回滚到「当前 revision 之前最近的一个 revision」；
 // toRevision>0 → 回滚到指定 revision。
 //
-// 实现：列出该 Deployment 的 ReplicaSet（按 deployment.kubernetes.io/revision 注解排序）→
-// 把目标 RS 的 spec.template 复制到 Deployment 的 spec.template，清空 template 注解里的
-// deployment.kubernetes.io/revision（让控制器重新分配），selector 保持不动。
+// deployment：列出 ReplicaSet（按 deployment.kubernetes.io/revision 注解排序）→
+// 把目标 RS 的 spec.template 复制到 Deployment 的 spec.template。
+// statefulset/daemonset：列出 ControllerRevision（按 ownerRef UID 过滤、cr.Revision 排序）→
+// 从目标 ControllerRevision.Data 还原 Pod 模板写回 spec.template，PVC/数据卷不动。
 func (e *Executor) RollbackWorkload(ctx context.Context, kind, namespace, name string, toRevision int64) (*RollbackResult, error) {
-	if WorkloadKind(kind) != KindDeployment {
-		return nil, fmt.Errorf("回滚仅支持 deployment，%s 暂不支持（请使用 restart）", kind)
-	}
-
-	// 超时 20s：整个回滚链路（读 dep / 列 RS / 写回）共享一个 deadline
+	// 超时 20s：整个回滚链路（读对象 / 列历史 / 写回）共享一个 deadline
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
+	switch WorkloadKind(kind) {
+	case KindDeployment:
+		return e.rollbackDeployment(ctx, namespace, name, toRevision)
+	case KindStatefulSet:
+		return e.rollbackStatefulSet(ctx, namespace, name, toRevision)
+	case KindDaemonSet:
+		return e.rollbackDaemonSet(ctx, namespace, name, toRevision)
+	default:
+		return nil, fmt.Errorf("回滚仅支持 deployment/statefulset/daemonset，%s 暂不支持（请使用 restart）", kind)
+	}
+}
+
+// rollbackDeployment 回滚 Deployment（原有实现，语义不变）
+func (e *Executor) rollbackDeployment(ctx context.Context, namespace, name string, toRevision int64) (*RollbackResult, error) {
 	dep, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("deployment %s/%s 不存在或获取失败: %w", namespace, name, err)
@@ -290,6 +303,146 @@ func (e *Executor) RollbackWorkload(ctx context.Context, kind, namespace, name s
 		res.Image = imgs[0]
 	}
 	return res, nil
+}
+
+// rollbackStatefulSet 回滚 StatefulSet（用 ControllerRevision，不动 volumeClaimTemplates）
+func (e *Executor) rollbackStatefulSet(ctx context.Context, namespace, name string, toRevision int64) (*RollbackResult, error) {
+	sts, err := e.clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("statefulset %s/%s 不存在或获取失败: %w", namespace, name, err)
+	}
+	return e.rollbackViaControllerRevision(ctx, string(KindStatefulSet), namespace, name, sts.UID, toRevision,
+		func(pt *corev1.PodTemplateSpec) error {
+			// 只回写 Pod 模板；spec.volumeClaimTemplates（PVC 模板）保持不动
+			sts.Spec.Template = *pt
+			if _, err := e.clientset.AppsV1().StatefulSets(namespace).Update(ctx, sts, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("回写 statefulset %s/%s 失败: %w", namespace, name, err)
+			}
+			return nil
+		})
+}
+
+// rollbackDaemonSet 回滚 DaemonSet（用 ControllerRevision）
+func (e *Executor) rollbackDaemonSet(ctx context.Context, namespace, name string, toRevision int64) (*RollbackResult, error) {
+	ds, err := e.clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("daemonset %s/%s 不存在或获取失败: %w", namespace, name, err)
+	}
+	return e.rollbackViaControllerRevision(ctx, string(KindDaemonSet), namespace, name, ds.UID, toRevision,
+		func(pt *corev1.PodTemplateSpec) error {
+			ds.Spec.Template = *pt
+			if _, err := e.clientset.AppsV1().DaemonSets(namespace).Update(ctx, ds, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("回写 daemonset %s/%s 失败: %w", namespace, name, err)
+			}
+			return nil
+		})
+}
+
+// rollbackViaControllerRevision 用 ControllerRevision 回滚 STS/DS 的 Pod 模板（kubectl rollout undo 语义）
+func (e *Executor) rollbackViaControllerRevision(ctx context.Context, kind, namespace, name string, uid types.UID, toRevision int64, apply func(pt *corev1.PodTemplateSpec) error) (*RollbackResult, error) {
+	crs, err := e.ownedControllerRevisions(ctx, namespace, uid)
+	if err != nil {
+		return nil, fmt.Errorf("列出 %s %s/%s 的 ControllerRevision 失败: %w", kind, namespace, name, err)
+	}
+	if len(crs) == 0 {
+		return nil, fmt.Errorf("%s %s/%s 未找到任何 ControllerRevision，无法回滚", kind, namespace, name)
+	}
+	// current = 最新 revision（kubectl rollout undo 对 STS/DS 的「上一个版本」= 次新版本）
+	current := crs[len(crs)-1].Revision
+	target, targetRev, err := pickControllerRevision(crs, toRevision, current)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s/%s 回滚失败: %w", kind, namespace, name, err)
+	}
+	pt, err := templateFromControllerRevision(target)
+	if err != nil {
+		return nil, err
+	}
+	if err := apply(pt); err != nil {
+		return nil, err
+	}
+	res := &RollbackResult{FromRevision: current, ToRevision: targetRev}
+	if imgs := podTemplateImages(pt); len(imgs) > 0 {
+		res.Image = imgs[0]
+	}
+	return res, nil
+}
+
+// ownedControllerRevisions 列出属于指定工作负载（按 ownerRef UID 过滤）的 ControllerRevision，按 revision 升序
+func (e *Executor) ownedControllerRevisions(ctx context.Context, namespace string, uid types.UID) ([]*appsv1.ControllerRevision, error) {
+	crList, err := e.clientset.AppsV1().ControllerRevisions(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var owned []*appsv1.ControllerRevision
+	for i := range crList.Items {
+		cr := &crList.Items[i]
+		for _, o := range cr.OwnerReferences {
+			if o.UID == uid {
+				owned = append(owned, cr)
+				break
+			}
+		}
+	}
+	sort.Slice(owned, func(i, j int) bool { return owned[i].Revision < owned[j].Revision })
+	return owned, nil
+}
+
+// pickControllerRevision 从 ControllerRevision 列表里选出回滚目标（内部按 revision 升序排序）。
+// toRevision==0 → 取「小于 current 的最大版本」（上一个版本）；
+// toRevision>0  → 精确命中该版本；命中 current 视为「无需回滚」报错。
+func pickControllerRevision(revisions []*appsv1.ControllerRevision, toRevision, current int64) (*appsv1.ControllerRevision, int64, error) {
+	if len(revisions) == 0 {
+		return nil, 0, fmt.Errorf("未找到任何历史版本")
+	}
+	sort.Slice(revisions, func(i, j int) bool { return revisions[i].Revision < revisions[j].Revision })
+	if current == 0 {
+		current = revisions[len(revisions)-1].Revision
+	}
+	if toRevision == 0 {
+		for i := len(revisions) - 1; i >= 0; i-- {
+			if revisions[i].Revision < current {
+				return revisions[i], revisions[i].Revision, nil
+			}
+		}
+		return nil, 0, fmt.Errorf("当前仅有一个版本（%d），无可回滚的历史版本", current)
+	}
+	for i := range revisions {
+		if revisions[i].Revision == toRevision {
+			if toRevision == current {
+				return nil, 0, fmt.Errorf("目标 revision %d 即当前 revision，无需回滚", toRevision)
+			}
+			return revisions[i], toRevision, nil
+		}
+	}
+	return nil, 0, fmt.Errorf("未找到 revision %d", toRevision)
+}
+
+// templateFromControllerRevision 从 ControllerRevision.Data 还原 Pod 模板。
+// STS/DS 的 Data.Raw 是「替换 spec.template」的 strategic merge patch：
+// {"spec":{"template":{...完整 PodTemplateSpec..., "$patch":"replace"}}}
+// spec.template 即历史模板，$patch 标记字段在 json.Unmarshal 时被忽略。
+func templateFromControllerRevision(cr *appsv1.ControllerRevision) (*corev1.PodTemplateSpec, error) {
+	var patch struct {
+		Spec struct {
+			Template corev1.PodTemplateSpec `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(cr.Data.Raw, &patch); err != nil {
+		return nil, fmt.Errorf("解析 ControllerRevision %s 的模板失败: %w", cr.Name, err)
+	}
+	return &patch.Spec.Template, nil
+}
+
+// podTemplateImages 收集 Pod 模板内所有容器镜像（containers + initContainers）
+func podTemplateImages(pt *corev1.PodTemplateSpec) []string {
+	var out []string
+	for _, c := range pt.Spec.Containers {
+		out = append(out, c.Image)
+	}
+	for _, c := range pt.Spec.InitContainers {
+		out = append(out, c.Image)
+	}
+	return out
 }
 
 // parseRevision 解析 revision 注解为 int64（解析失败返回 0）

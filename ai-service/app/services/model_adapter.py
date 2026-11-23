@@ -2,7 +2,7 @@
 """统一模型适配器：severity 分级 + 降级链 + 成本控制"""
 import ipaddress
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from urllib.parse import urlparse
 
@@ -25,6 +25,9 @@ class AIResponse:
     cost: float
     model_name: str
     provider: str
+    # R75.1：是否发生模型降级（高能力模型失败后回落到下一个模型）
+    model_fallback: bool = False
+    fallback_from: list[str] = field(default_factory=list)
 
 
 # severity 等级顺序（用于分级选模型）
@@ -183,6 +186,7 @@ async def call_with_fallback(
         pass
 
     last_err = ""
+    failed_models: list[str] = []
     for cfg in filtered:
         try:
             adapter = ModelFactory.get_adapter(cfg)
@@ -192,13 +196,17 @@ async def call_with_fallback(
             # 空返回视为失败：否则会存下一份空诊断（root_cause 空）并当成成功
             if not (resp.content or "").strip():
                 last_err = "模型返回内容为空"
+                failed_models.append(cfg.model_name)
                 await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, latency_ms, "failed", last_err)
                 continue
+            resp.model_fallback = bool(failed_models)
+            resp.fallback_from = list(failed_models)
             await _log_call(cfg.id, request_type, system_prompt, user_prompt, resp, latency_ms, "success")
             return resp, cfg.model_name
         except Exception as e:  # noqa: BLE001
             # 2026-11-23：空消息异常（如 TimeoutError）原来只记录空串，无法排查；记录类型+repr
             last_err = str(e) or f"{type(e).__name__} (empty message) repr={e!r}"
+            failed_models.append(cfg.model_name)
             logger.warning("模型调用失败 %s/%s: %s", cfg.model_name, request_type, last_err)
             await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, 0, "failed", last_err)
             continue

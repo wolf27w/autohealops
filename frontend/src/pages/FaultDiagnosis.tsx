@@ -151,6 +151,7 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
               <p style={{ color: '#999', marginTop: 8 }}>
                 {j.risk_level ? `风险：${j.risk_level} ｜ ` : ''}{j.root_cause_layer ? `层面：${j.root_cause_layer} ｜ ` : ''}
                 置信度：{detail.confidence} ｜ 诊断时间：{detail.created_at}
+                {(j as any).model_fallback && <Tag color="orange" style={{ marginLeft: 8 }}>降级模型</Tag>}
               </p>
               <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
                 <Space>

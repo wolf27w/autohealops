@@ -1563,8 +1563,34 @@ async def platform_health(user=Depends(require_any_user)):
     from app.services.platform_health_service import check_dependencies
 
     dep = await check_dependencies(with_executor=True)
+    # R75.1：近 15 分钟模型调用失败统计（异常类型/降级可视化）
+    ai_models = {"window_minutes": 15, "failed": 0, "calls": 0, "degraded": False, "detail": []}
+    try:
+        since15 = datetime.now() - timedelta(minutes=15)
+        async with async_session() as session:
+            rows = (await session.execute(
+                select(AICallLog.model_config_id, AICallLog.status, func.count(AICallLog.id))
+                .where(AICallLog.created_at >= since15)
+                .group_by(AICallLog.model_config_id, AICallLog.status)
+            )).all()
+            models = {m.id: m.model_name for m in (await session.execute(select(AIModelConfig))).scalars()}
+        agg: dict = {}
+        for mid, status, n in rows:
+            name = models.get(mid, f"未知({mid})")
+            item = agg.setdefault(name, {"model": name, "calls": 0, "failed": 0})
+            item["calls"] += int(n or 0)
+            if status == "failed":
+                item["failed"] += int(n or 0)
+        detail = list(agg.values())
+        failed = sum(x["failed"] for x in detail)
+        calls = sum(x["calls"] for x in detail)
+        ai_models.update({"failed": failed, "calls": calls,
+                          "degraded": bool(failed > 0), "detail": detail})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("统计模型健康失败: %s", e)
     return {"code": 200, "message": "success", "data": {
         "api_server": True, "database": dep["database"], "redis": dep["redis"],
         "executor": dep.get("executor"), "executor_detail": dep.get("executor_detail"),
+        "ai_models": ai_models,
         "time": datetime.now().isoformat(),
     }}

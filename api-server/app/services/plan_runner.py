@@ -44,17 +44,19 @@ def _run_update_probe(cluster_id: int, params: dict, trace_id: str = "") -> tupl
 
 
 def _run_rollback(cluster_id: int, params: dict, trace_id: str = "") -> tuple[bool, str]:
-    """2026-11-23 R70：回滚到上一个版本（平台动作，走 executor RollbackWorkload RPC）。
+    """2026-11-23 R70/R75.5：回滚到指定/上一个版本（平台动作，走 executor RollbackWorkload RPC）。
 
-    params: {namespace, deployment, to_revision(可选，0=上一个)}
+    params: {namespace, deployment, to_revision(可选，0=上一个), kind(可选，默认 deployment；支持 statefulset/daemonset)}
+    注：deployment 键为工作负载名（沿用历史命名，兼容已有计划），kind 非 deployment 时同名键即 STS/DS 名。
     """
     ns = params.get("namespace", "")
-    dep = params.get("deployment", "")
+    name = params.get("deployment", "") or params.get("name", "")
+    kind = str(params.get("kind") or "deployment").lower()
     to_rev = int(params.get("to_revision") or 0)
-    r = executor_client.rollback_workload(cluster_id, ns, dep, to_rev, trace_id)
+    r = executor_client.rollback_workload(cluster_id, kind, ns, name, to_rev, trace_id)
     if not r.get("success"):
         return False, (r.get("message") or r.get("error") or "回滚失败")[:300]
-    return True, (r.get("message") or f"已回滚 {ns}/{dep} 到 revision {r.get('to_revision')}")[:300]
+    return True, (r.get("message") or f"已回滚 {ns}/{name} 到 revision {r.get('to_revision')}")[:300]
 
 
 _PLATFORM_ACTIONS = {"update_probe": _run_update_probe, "rollback_deployment": _run_rollback}

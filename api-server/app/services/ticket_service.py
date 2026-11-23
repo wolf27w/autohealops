@@ -319,10 +319,10 @@ def _render_diagnosis_sections(j: dict) -> str:
     return "\n".join(parts)
 
 
-async def _diagnosis_sections(alert_id: int) -> str:
-    """取告警最近一条诊断，渲染成四段；无诊断/解析失败返回空串（不阻断建单）。"""
+async def _diagnosis_data(alert_id: int) -> dict:
+    """取告警最近一条诊断 JSON（原始 dict）；无诊断/解析失败返回 {}（不阻断建单）。"""
     if not alert_id:
-        return ""
+        return {}
     try:
         from app.models import AIDiagnosisResult
         async with async_session() as session:
@@ -331,16 +331,57 @@ async def _diagnosis_sections(alert_id: int) -> str:
                 .order_by(AIDiagnosisResult.id.desc()).limit(1)
             )).scalar_one_or_none()
         if not row or not row.diagnosis_json:
-            return ""
+            return {}
         data = json.loads(row.diagnosis_json)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取诊断 JSON 失败 alert=%s: %s", alert_id, e)
+        return {}
+
+
+async def _diagnosis_sections(alert_id: int) -> str:
+    """取告警最近一条诊断，渲染成四段；无诊断/解析失败返回空串（不阻断建单）。"""
+    data = await _diagnosis_data(alert_id)
+    if not data:
+        return ""
+    try:
         return _render_diagnosis_sections(data)[:3500]
     except Exception as e:  # noqa: BLE001
         logger.debug("渲染诊断四段失败 alert=%s: %s", alert_id, e)
         return ""
 
 
+def _render_patch_suggestions(patches: list[dict]) -> str:
+    """配置补丁建议 → 工单文本（键级 + 状态 + 建议 + 修复）。"""
+    lines: list[str] = []
+    for p in patches or []:
+        if not isinstance(p, dict):
+            continue
+        key = p.get("key") or "-"
+        status = p.get("status") or "unknown"
+        source = p.get("source") or "unknown"
+        lines.append(f"  - {key}（状态：{status}，来源：{source}）")
+        if p.get("suggestion"):
+            lines.append(f"    建议：{p['suggestion']}")
+        if p.get("how_to_fix"):
+            lines.append(f"    修复：{p['how_to_fix']}")
+    return "\n".join(lines)
+
+
+def _render_evidence_gaps(gaps: list[dict]) -> str:
+    """证据缺口 → 工单文本（缺失项 + 补采命令）。"""
+    lines: list[str] = []
+    for g in gaps or []:
+        if not isinstance(g, dict):
+            continue
+        lines.append(f"  - {g.get('missing') or '-'}")
+        if g.get("how_to_collect"):
+            lines.append(f"    补采：{g['how_to_collect']}")
+    return "\n".join(lines)
+
+
 async def _build_alert_ticket_payload(alert: Alert) -> dict:
-    """告警 → 工单自动带出的字段（含诊断四段：结论/分析过程/建议/证据）"""
+    """告警 → 工单自动带出的字段（含诊断四段 + B 层配置补丁建议 + 缺失证据）。"""
     desc = (
         f"故障类型：{alert.fault_type}\n"
         f"资源：{alert.resource_type}/{alert.resource_name}\n"
@@ -348,9 +389,32 @@ async def _build_alert_ticket_payload(alert: Alert) -> dict:
         f"严重级别：{alert.severity}\n"
         f"详情：{(alert.message or '')[:1000]}"
     )
-    sections = await _diagnosis_sections(alert.id)
+    diag_data = await _diagnosis_data(alert.id)
+    sections = _render_diagnosis_sections(diag_data)[:3500] if diag_data else ""
     if sections:
         desc += "\n\n" + sections
+
+    # R75.2：B 层诊断 → 追加「配置补丁建议」（只建议不执行；异常/无线索静默降级）
+    if str(diag_data.get("root_cause_layer") or "").strip().upper() == "B":
+        try:
+            from app.services.config_patch_suggestion_service import suggest_config_patches
+            patches = await suggest_config_patches(alert, diag_data)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("配置补丁建议生成失败 alert=%s: %s", alert.id, e)
+            patches = []
+        if patches:
+            desc += "\n\n【配置补丁建议】\n" + _render_patch_suggestions(patches)
+
+    # R75.6：证据缺口显式化 → 追加「缺失证据」（无缺口则不追加）
+    try:
+        from app.services.evidence_gap_service import collect_evidence_gaps
+        gaps = collect_evidence_gaps(alert.message or "", {}, diag_data)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("证据缺口收集失败 alert=%s: %s", alert.id, e)
+        gaps = []
+    if gaps:
+        desc += "\n\n【缺失证据】\n" + _render_evidence_gaps(gaps)
+
     return {
         "title": f"[告警] {alert.fault_type} - {alert.resource_name}",
         "description": desc,

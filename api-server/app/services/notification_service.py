@@ -401,12 +401,18 @@ def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: s
     except Exception:  # noqa: BLE001
         tmpl = ""
     tmpl = (tmpl or "").strip()
+    content = ""
     if tmpl:
         try:
-            return tmpl.format(**ctx)
+            content = tmpl.format(**ctx)
         except (KeyError, IndexError, ValueError):
-            pass  # 模板占位符非法 → 退回内置默认
-    return format_alert_message(alert, project_name, cluster_name, env, diag)
+            content = ""  # 模板占位符非法 → 退回内置默认
+    if not content:
+        content = format_alert_message(alert, project_name, cluster_name, env, diag)
+    # R75.1：模型降级时明确提示，避免把低能力模型结论当高可信
+    if diag and isinstance(diag, dict) and diag.get("model_fallback"):
+        content += "\n⚠️ 本次诊断使用降级模型（低能力），结论可信度可能下降"
+    return content
 
 
 async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: str, env: str = "",

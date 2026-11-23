@@ -912,7 +912,7 @@ func (s *Server) RollbackWorkload(ctx context.Context, req *pb.RollbackWorkloadR
 	}
 	return &pb.RollbackWorkloadResponse{
 		Success:      true,
-		Message:      fmt.Sprintf("deployment %s 已回滚：revision %d → %d", req.Name, res.FromRevision, res.ToRevision),
+		Message:      fmt.Sprintf("%s %s 已回滚：revision %d → %d", req.Kind, req.Name, res.FromRevision, res.ToRevision),
 		FromRevision: res.FromRevision,
 		ToRevision:   res.ToRevision,
 		Image:        res.Image,

@@ -247,6 +247,8 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "suggestions_detail": parsed.get("suggestions_detail",
                                          {"immediate": [], "root_fix": [], "verification": [], "prevention": []}),
         "model_used": model_used,
+        "model_fallback": bool(getattr(resp, "model_fallback", False)),
+        "fallback_from": list(getattr(resp, "fallback_from", []) or []),
         "template_name": template_name,
         "template_missed": not matched,
         "fallback_used": fallback_used,

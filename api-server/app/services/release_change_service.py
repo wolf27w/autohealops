@@ -258,12 +258,20 @@ def _empty_result(deployment: str = "") -> dict:
     }
 
 
-async def detect_release_change(cluster_id, namespace, deployment, lookback_hours: int = 6) -> dict:
+async def detect_release_change(cluster_id, namespace, deployment, lookback_hours: int = 6,
+                               kind: str = "deployment") -> dict:
     """反查 Deployment 最近发布变更，返回 {changed, recent, deployment, current_revision,
     rollback_to, change_time, summary, diff}。任何异常 / 无 Deployment / 只有 1 个 revision
     → 返回 changed=False，绝不抛异常。
+
+    kind：工作负载类型（deployment/statefulset/daemonset）。当前仅 deployment 有发布历史
+    通道（list_revisions 走 ReplicaSet），STS/DS 的变更检测未实现 → 直接返回 changed=False
+    （已知限制，不报错）。
     """
     if not deployment or not namespace:
+        return _empty_result(deployment)
+    if kind and kind.lower() != "deployment":
+        # STS/DS 的 list_revisions 仅支持 deployment，变更检测未实现（已知限制）
         return _empty_result(deployment)
     try:
         revs = await executor_client.acall(

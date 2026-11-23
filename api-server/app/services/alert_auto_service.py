@@ -107,6 +107,141 @@ def _fill_kb_steps(steps: list, alert: Alert) -> list:
     return filled
 
 
+# ============ R74 知识库定位重构（诊断参考注入 + 条件复用 + 可疑标记） ============
+# ============ R75.7 集群自愈开关可见 ============
+
+KB_REF_MARK = "【历史参考（需本次证据验证，不可直接当结论）】"
+KB_SUSPECT_THRESHOLD = 2  # 复用动作连续失败 ≥2 次 → 该条目只作参考，不再复用动作
+
+
+def _mark_autoheal_off(message: str) -> str:
+    """集群关闭自愈时给告警 message 追加标记（幂等，不重复追加）。"""
+    mark = "（集群已关闭自愈：仅通知，不自动处置）"
+    msg = message or ""
+    if mark in msg:
+        return msg
+    return msg + mark
+
+
+def _kb_tokenize(text: str) -> list:
+    """中文按 2-gram / 英文按词切分（供 Jaccard 相似度计算）。"""
+    t = (text or "").strip().lower()
+    if not t:
+        return []
+    if any("\u4e00" <= c <= "\u9fff" for c in t):
+        grams: list = []
+        for part in re.split(r"([\u4e00-\u9fff]+)", t):
+            part = part.strip()
+            if not part:
+                continue
+            if any("\u4e00" <= c <= "\u9fff" for c in part):
+                if len(part) == 1:
+                    grams.append(part)
+                else:
+                    grams += [part[i:i + 2] for i in range(len(part) - 1)]
+            else:
+                grams += [w for w in re.split(r"[^a-z0-9]+", part) if w]
+        return grams
+    return [w for w in re.split(r"[^a-z0-9]+", t) if w]
+
+
+def _kb_root_matches(diag_root: str, kb_root: str, threshold: float = 0.5) -> bool:
+    """判断本次诊断根因与知识库根因是否「同一根因」（Jaccard 相似度 ≥ threshold）。
+
+    中文按 2-gram / 英文按词切分后取集合，Jaccard = |交集| / |并集|；空串一律不匹配。
+    """
+    a = set(_kb_tokenize(diag_root))
+    b = set(_kb_tokenize(kb_root))
+    if not a or not b:
+        return False
+    inter = a & b
+    union = a | b
+    return len(inter) / len(union) >= threshold
+
+
+def _should_reuse_kb(diag_root: str, kb_root: str, is_suspect: bool, kb_has_steps: bool) -> tuple:
+    """纯逻辑：是否复用 KB 动作（供单测；is_suspect 由调用方查 Redis 后传入）。
+
+    返回 (是否复用, 原因)。原因取值：no_steps / suspect / root_mismatch / reuse。
+    """
+    if not kb_has_steps:
+        return False, "no_steps"
+    if is_suspect:
+        return False, "suspect"
+    if not _kb_root_matches(diag_root, kb_root):
+        return False, "root_mismatch"
+    return True, "reuse"
+
+
+def _kb_reference_text(kb: dict) -> str:
+    """把 KB 命中条目拼成「历史参考」注入文本（成功结果/时间字段若缺失则省略）。"""
+    lines = [KB_REF_MARK]
+    if kb.get("fault_type"):
+        lines.append(f"故障类型：{kb['fault_type']}")
+    if kb.get("root_cause"):
+        lines.append(f"根因：{kb['root_cause']}")
+    if kb.get("repair_steps"):
+        lines.append(f"修复建议：{kb['repair_steps']}")
+    success = kb.get("success_result") or kb.get("success")
+    if success:
+        lines.append(f"历史成功结果：{success}")
+    if kb.get("created_at") or kb.get("time"):
+        lines.append(f"时间：{kb.get('created_at') or kb.get('time')}")
+    return "\n".join(lines)
+
+
+def _kb_suspect_key(kb_id) -> str:
+    return f"kb:suspect:{kb_id}"
+
+
+async def _kb_is_suspect(kb_id) -> bool:
+    """该知识条目是否已被判「可疑」（复用动作反复失败 ≥ KB_SUSPECT_THRESHOLD 次）。"""
+    if not kb_id:
+        return False
+    try:
+        return int(await redis_pool.get(_kb_suspect_key(kb_id)) or 0) >= KB_SUSPECT_THRESHOLD
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _mark_kb_suspect(kb_id) -> None:
+    """复用 KB 动作验证失败 → 可疑计数 +1；≥阈值后后续命中只作参考、不再复用动作。"""
+    if not kb_id:
+        return
+    try:
+        await redis_pool.incr(_kb_suspect_key(kb_id))
+        await redis_pool.expire(_kb_suspect_key(kb_id), 86400 * 30)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("知识条目可疑计数失败 kb=%s: %s", kb_id, e)
+
+
+async def _resolve_kb_reuse(kb_ref: dict | None, diag_root: str, alert: Alert) -> tuple:
+    """诊断完成后决定是否复用 KB 动作。
+
+    - kb_ref 为 None → 无参考，不复用
+    - 可疑条目 → 只作参考，不复用（日志标注）
+    - 根因不匹配 → 丢弃 KB 动作，走 AI 方案生成
+    - 根因匹配 → 用 _fill_kb_steps 校验占位符/白名单，可用才复用
+    返回 (kb_hit_steps, 原因)。
+    """
+    if not kb_ref:
+        return [], "no_reference"
+    try:
+        raw_steps = json.loads(kb_ref.get("execution_steps") or "[]")
+        if not isinstance(raw_steps, list):
+            raw_steps = []
+    except (json.JSONDecodeError, TypeError):
+        raw_steps = []
+    reuse, reason = _should_reuse_kb(
+        diag_root, kb_ref.get("root_cause", ""), await _kb_is_suspect(kb_ref.get("id")), bool(raw_steps))
+    if not reuse:
+        return [], reason
+    steps = _fill_kb_steps(raw_steps, alert)
+    if not steps:
+        return [], "steps_unusable"
+    return steps, "reuse"
+
+
 def _is_not_found(message) -> bool:
     """判断 executor 返回的错误是否为「资源不存在」（而非查询失败/超时）
 
@@ -790,7 +925,8 @@ async def _persist_react_diagnosis(alert: Alert, diagnosis: dict, alert_data: di
         payload = {k: diagnosis.get(k) for k in (
             "root_cause", "root_cause_chain", "analysis", "suggestions", "suggestions_detail",
             "root_cause_layer", "handling_advice", "impact", "risk_level", "category",
-            "confidence", "evidence_refs", "model_used", "degraded", "degrade_reason",
+            "confidence", "evidence_refs", "model_used", "model_fallback", "fallback_from",
+            "degraded", "degrade_reason",
         )}
         payload["_source"] = "react"
         async with async_session() as session:
@@ -1604,9 +1740,11 @@ async def _process_one(alert: Alert) -> bool:
         "status_info": alert.message,
     }
 
-    # 3. 诊断：有则复用；无则「知识库优先」检索（命中则零 AI 复用历史解决方法）
+    # 3. 诊断：有则复用；无则「知识库优先」检索（命中只作参考注入，不再零 AI 预填结论）
     diagnosis = None
-    kb_hit_steps = []  # 知识库命中的可执行步骤
+    kb_hit_steps = []  # 知识库可复用动作（诊断后根因匹配才填）
+    kb_ref = None      # 知识库命中条目（top1，相似度≥KB_REF_SIMILARITY 且 fault_type 相同）
+    kb_reused_id = None  # 本次实际复用的 KB 条目 id（验证失败时标可疑）
     root_cause = ""
     repair_steps_text = ""
     root_cause_layer = ""
@@ -1713,23 +1851,17 @@ async def _process_one(alert: Alert) -> bool:
         except Exception as e:  # noqa: BLE001
             logger.debug("知识库检索失败: %s", e)
             kb_results = []
-        hit = next((r for r in kb_results if r.get("similarity", 0) >= KB_HIT_SIMILARITY
-                    and r.get("fault_type") == alert.fault_type), None)
-        if hit:
-            root_cause = hit.get("root_cause", "")
-            repair_steps_text = hit.get("repair_steps", "")
+        # R74：知识库命中只作「历史参考」注入（不得预填本次结论），诊断仍走 AI。
+        # 命中口径 = similarity≥KB_REF_SIMILARITY 且 fault_type 相同（top1）。
+        kb_ref = next((r for r in kb_results if r.get("similarity", 0) >= KB_REF_SIMILARITY
+                       and r.get("fault_type") == alert.fault_type), None)
+        if kb_ref:
+            alert_data["recent_events"] = _kb_reference_text(kb_ref) + "\n\n" + (alert_data.get("recent_events") or "")
             try:
-                raw_steps = json.loads(hit.get("execution_steps") or "[]")
-                if not isinstance(raw_steps, list):
-                    raw_steps = []
-            except (json.JSONDecodeError, TypeError):
-                raw_steps = []
-            kb_hit_steps = _fill_kb_steps(raw_steps, alert)
-            if kb_hit_steps:
-                logger.info("告警 %d 知识库命中，零 AI 复用历史方案", alert.id)
-                await knowledge_service.record_usage(hit.get("id"))  # 命中统计（C3 治理）
-            elif raw_steps:
-                logger.info("告警 %d 知识库命中但命令模板不可用（占位符/白名单校验失败），降级 AI 诊断", alert.id)
+                await knowledge_service.record_usage(kb_ref.get("id"))  # 命中统计（hit）
+            except Exception as e:  # noqa: BLE001
+                logger.debug("知识库命中统计失败: %s", e)
+            logger.info("告警 %d 知识库命中（hit），注入历史参考供本次诊断验证", alert.id)
 
     # 3.1 镜像类故障：知识库未命中 → 规则化修复（镜像认证问题非服务问题，不调 AI 诊断）
     if alert.fault_type in ("ImagePullBackOff", "ErrImagePull") and not kb_hit_steps:
@@ -1882,9 +2014,23 @@ async def _process_one(alert: Alert) -> bool:
                 "confidence": diag_confidence,
                 "impact": impact,
                 "root_cause_layer": root_cause_layer,
+                "model_fallback": bool(diagnosis.get("model_fallback")) if diagnosis else False,
+                "fallback_from": (diagnosis.get("fallback_from") or []) if diagnosis else [],
             })
         except Exception as e:  # noqa: BLE001
             logger.warning("告警 %d 结论通知失败: %s", alert.id, e)
+
+    # R74：诊断完成后比较本次根因与 KB 根因，匹配才复用 KB 动作（不匹配/可疑/无步骤 → 丢弃，走 AI 方案生成）
+    kb_hit_steps, kb_reuse_reason = await _resolve_kb_reuse(kb_ref, root_cause, alert)
+    if kb_hit_steps:
+        kb_reused_id = kb_ref.get("id")
+        try:
+            await knowledge_service.record_usage(kb_reused_id)  # 复用统计（reuse）
+        except Exception as e:  # noqa: BLE001
+            logger.debug("知识库复用统计失败: %s", e)
+        logger.info("告警 %d 知识库动作复用（reuse）", alert.id)
+    elif kb_reuse_reason != "no_reference":
+        logger.info("告警 %d 未复用知识库动作（%s），走 AI 方案生成", alert.id, kb_reuse_reason)
 
     # 3.25 探针配置问题（平台可直接修）：AI 常把它判成 B 层「需改代码」就转人工，
     # 但实测已证明是探针参数问题 → 生成调参方案走审批链，不让人为踢回。
@@ -2038,11 +2184,17 @@ async def _process_one(alert: Alert) -> bool:
 
     # 8. 按操作风险分流：风险评分决定自愈/审批（单人/双人）
     action = await _decide_action(alert, steps)
-    if (release_steps or probe_steps) and action == "auto":
-        # 改探针/回滚都会滚动重启或切换版本，属影响面动作：至少单人放行（自愈规则仍可 force_auto 覆盖）
+    # 2026-11-23 R75.4 收口：任何平台动作（回滚/调探针，含 6.5 发布路径）都属影响面动作，
+    # 非生产阈值内被判 auto 时也至少单人放行（自愈规则仍可 force_auto 覆盖）。
+    _platform_actions = {
+        str(s.get("platform_action")) for s in (steps or [])
+        if isinstance(s, dict) and s.get("platform_action")
+    }
+    if (_platform_actions or release_steps or probe_steps) and action == "auto":
         action = "approval_1"
-        logger.info("告警 %d %s方案强制走审批（影响面动作）", alert.id,
-                    "回滚" if release_steps else "探针调参")
+        _what = "回滚" if ("rollback_deployment" in _platform_actions or release_steps) else "平台动作"
+        logger.info("告警 %d %s方案强制走审批（影响面动作：%s）", alert.id, _what,
+                    ",".join(sorted(_platform_actions)) or "probe")
 
     # 9. 场景规则覆盖（策略层规则库）：force_manual 强制审批 / force_auto 强制自动 / shadow 仅记录
     rule = await match_rule(alert)
@@ -2108,6 +2260,9 @@ async def _process_one(alert: Alert) -> bool:
         await _record_suppression(alert)
         # 等待 + 验证修复（Pod 重建需时间，验证通过才标记已解决）
         repaired = await _verify_auto_repair(alert)
+        # R74：复用 KB 动作执行后验证未通过/计划失败 → 该条目可疑计数 +1（≥2 次后续只作参考，不再复用动作）
+        if kb_reused_id and (not repaired or exec_result == "failed"):
+            await _mark_kb_suspect(kb_reused_id)
         # A-3（2026-10-29）：隐式反馈 —— 自动修复验证结果反推诊断质量
         try:
             from app.services import diagnosis_feedback_service as _dfb
@@ -2215,6 +2370,12 @@ async def process_alert(alert_id: int) -> bool:
             return False
         if not cluster_auto_heal:
             logger.info("集群 %s 已关闭自动自愈，跳过告警 %s 的自动处理（仅通知）", alert.cluster_id, alert_id)
+            # R75.7：关闭自愈时给告警 message 追加标记（幂等，落库）；通知走 message，即带该标记
+            async with async_session() as session:
+                a = await session.get(Alert, alert_id)
+                if a is not None:
+                    a.message = _mark_autoheal_off(a.message or "")
+                    await session.commit()
             return False
         return await _process_one(alert)
     finally:

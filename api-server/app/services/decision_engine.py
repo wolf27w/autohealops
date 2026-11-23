@@ -50,8 +50,10 @@ _NS_FLAG_RE = re.compile(r"(--namespace(=|\s+)\S+)|(--all-namespaces\b)|(-n\s+\S
 
 
 def _steps_text(steps: list) -> str:
-    """把 steps 里的命令拼成小写文本"""
-    return " ".join((s.get("command", "") if isinstance(s, dict) else str(s)).lower() for s in steps)
+    """把 steps 里的命令拼成小写文本（跳过无 command 的平台动作步骤，避免产生尾部空格）"""
+    parts = [(s.get("command", "") if isinstance(s, dict) else str(s)).lower().strip()
+             for s in steps]
+    return " ".join(p for p in parts if p)
 
 
 def has_high_risk_command(steps: list) -> bool:
@@ -72,6 +74,22 @@ DEFAULT_RISK_POLICY = {
     "approval_threshold": 4,      # 等级 >= 阈值需审核（1/2/3 单人，4/5 双人）
     "timeout_minutes": 20,        # 审批超时（分钟）
 }
+
+
+# 平台内置动作 → 风险映射（R75.4，2026-11-23）
+# 平台动作没有 command 字段，原 score_steps 只认 command → 操作风险分=0，
+# 非生产环境可能被判 auto 直接执行。这里按动作语义补风险分。
+#   operation_type：动作操作类型（小写，区别于 analyze_operation_type 的 READ/UPDATE/...）；
+#   policy_key：risk_policy["operation"] 里的键（管理员可在 risk_policy 里覆盖分数）；
+#   default_score：policy 未配该键时的兜底分。
+#   兜底分口径：rollback=15 → qa(env0) 下 deployment(25)+unknown(5)+15=45 → level3（单人审批档）；
+#               update=12 → qa 下 12+25+5=42 → level3。
+PLATFORM_ACTION_RISK: dict = {
+    "rollback_deployment": {"operation_type": "rollback", "policy_key": "rollback", "default_score": 15},
+    "update_probe": {"operation_type": "update", "policy_key": "update", "default_score": 12},
+}
+# 未知平台动作按 update 处理（保守，不按 0）
+_UNKNOWN_PLATFORM_ACTION_RISK = {"operation_type": "update", "policy_key": "update", "default_score": 12}
 
 
 async def get_risk_policy() -> dict:
@@ -102,7 +120,38 @@ def analyze_operation_type(command: str) -> str:
     return "READ"
 
 
-def _identify_resource(steps: list) -> str:
+def platform_action_risk(platform_action: str, policy: dict | None = None) -> dict:
+    """单个平台动作 → {operation_type, score}（纯函数，便于单测）
+
+    policy["operation"] 里配了对应键（如 rollback / update）时用配置分，
+    否则用映射表里的兜底分（rollback=15 / update=12）。未知动作按 update 处理。
+    """
+    policy = policy or DEFAULT_RISK_POLICY
+    entry = PLATFORM_ACTION_RISK.get(platform_action, _UNKNOWN_PLATFORM_ACTION_RISK)
+    op_scores = policy.get("operation", {})
+    score = op_scores.get(entry["policy_key"], entry["default_score"])
+    return {"operation_type": entry["operation_type"], "score": score}
+
+
+# 平台动作 params 里可用于推断目标资源类型的键，按优先级排（deployment 优先，
+# namespace 仅是位置/命名空间参数，放最后兜底，避免把「位置」误判成「操作 namespace 资源」）。
+_PLATFORM_RESOURCE_PARAMS = ("deployment", "statefulset", "daemonset", "service",
+                             "ingress", "configmap", "secret", "namespace")
+
+
+def _platform_resource(steps: list) -> str:
+    """平台动作 params → 目标资源类型（沿用 resource 键口径）；无平台动作返回空串"""
+    for s in steps:
+        if not (isinstance(s, dict) and s.get("platform_action")):
+            continue
+        params = s.get("params") or {}
+        for key in _PLATFORM_RESOURCE_PARAMS:
+            if params.get(key):
+                return key
+    return ""
+
+
+def _identify_resource(steps: list, policy: dict | None = None) -> str:
     """从 steps 命令识别目标资源类型（取最高风险资源）
 
     注意：必须先剔除 `-n {namespace}` / `--namespace xxx` 这类**命名空间参数**，
@@ -122,10 +171,18 @@ def _identify_resource(steps: list) -> str:
         ("configmap", ["configmap", "cm "]),
         ("pod", ["pod"]),
     ]
+    best = None
     for res, keys in checks:
         if any(k in cmd_text for k in keys):
-            return res
-    return "pod"
+            best = res
+            break
+    # 平台动作目标资源（R75.4）：从 params.deployment/... 推断，与命令资源取更高风险者
+    plat = _platform_resource(steps)
+    if plat:
+        resource_scores = (policy or DEFAULT_RISK_POLICY).get("resource", {})
+        if best is None or resource_scores.get(plat, 5) > resource_scores.get(best, 5):
+            best = plat
+    return best or "pod"
 
 
 def score_to_level(score: int, levels: list) -> int:
@@ -139,13 +196,32 @@ def score_to_level(score: int, levels: list) -> int:
 def score_steps(steps: list, env_tag: str = "prod", impact: str = "unknown", policy: dict | None = None) -> dict:
     """四维风险评分 → {score, level, operation, resource, impact, env}"""
     policy = policy or DEFAULT_RISK_POLICY
-    op_scores = [policy["operation"].get(analyze_operation_type(
-        s.get("command", "") if isinstance(s, dict) else str(s)), 0) for s in steps]
-    operation_score = max(op_scores) if op_scores else 0
-    operation_type = analyze_operation_type(" ".join(
-        s.get("command", "") if isinstance(s, dict) else str(s) for s in steps))
 
-    resource = _identify_resource(steps)
+    # 命令侧操作分（原有口径，只统计带 command 的步骤）
+    command_steps = [s for s in steps if not (isinstance(s, dict) and s.get("platform_action"))]
+    op_scores = [policy["operation"].get(analyze_operation_type(
+        s.get("command", "") if isinstance(s, dict) else str(s)), 0) for s in command_steps]
+    command_score = max(op_scores) if op_scores else 0
+
+    # 平台动作侧操作分（R75.4）：任一步含 platform_action 时，取映射分并与命令分取最大
+    platform_entries = [platform_action_risk(s["platform_action"], policy)
+                        for s in steps if isinstance(s, dict) and s.get("platform_action")]
+    platform_score = 0
+    platform_type = None
+    if platform_entries:
+        top = max(platform_entries, key=lambda e: e["score"])
+        platform_score = top["score"]
+        platform_type = top["operation_type"]
+
+    if platform_entries:
+        operation_score = max(command_score, platform_score)
+        operation_type = platform_type
+    else:
+        operation_score = command_score
+        operation_type = analyze_operation_type(" ".join(
+            s.get("command", "") if isinstance(s, dict) else str(s) for s in steps))
+
+    resource = _identify_resource(steps, policy)
     resource_score = policy["resource"].get(resource, 5)
 
     env_score = policy["env"].get(env_tag, policy["env"].get("prod", 20))
