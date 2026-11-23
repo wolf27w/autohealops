@@ -13,7 +13,11 @@ logger = get_logger("api-server.pod_logs")
 # 关键错误/告警行特征
 _LOG_ERR_HINTS = ("error", "exception", "warn", "caused by", "timeout", "timed out",
                   "failed", "refused", "unhealthy", "503", "oom", "killed",
-                  "startup", "liveness", "readiness")
+                  "startup", "liveness", "readiness",
+                  # 2026-11-23：Spring Boot 启动失败三段（否则只能拿到"APPLICATION FAILED TO START"标题，
+                  # 拿不到 Description/Action 里的具体失败项）
+                  "application failed to start", "description:", "action:",
+                  "error creating bean", "beancreationexception", "failed to bind")
 
 
 async def fetch_pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: int = 200) -> str:

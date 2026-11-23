@@ -110,7 +110,7 @@ class TestDiagnosisSummary(unittest.TestCase):
 
 class TestLaborSaved(unittest.TestCase):
     def test_calc(self):
-        self.assertEqual(_labor_saved_minutes(5), 150)
+        self.assertEqual(_labor_saved_minutes(5), 15)  # R53（2026-11-23）：工时基准 30→3 分钟/起
         self.assertEqual(_labor_saved_minutes(0), 0)
         self.assertEqual(_labor_saved_minutes(-1), 0)
 

@@ -11,8 +11,12 @@
 3. 排除：
    - 手动重启：Pod 带 kubectl.kubernetes.io/restartedAt 注解（kubectl rollout restart）
    - 正常滚动发布新 Pod：首次发现（无基线）→ 只记基线不报（新 Pod 名称天然不同，首次见即排除）
-4. 增量原因判定：容器 lastState.terminated.reason == OOMKilled → PodRestartOOM；
-   否则 describe pod 事件含探针失败特征 → PodRestartProbeFail；其余（非 OOM/探针）不在 N5 范围
+4. 增量原因判定（2026-11-23 老板反馈：启动失败不能只归因探针）：
+   - 容器 lastState.terminated.reason == OOMKilled → PodRestartOOM；
+   - 否则仅当 last_terminated_exit_code ∈ {137,143} 且 describe 事件含 liveness 探针失败特征
+     → PodRestartProbeFail（消息为事实描述，不写「疑似原因：探针失败」）；
+   - 其余（readiness-only / exitCode=1,2 / reason=Error 但非 137/143 / 无终止信息）→ 不在 N5 范围，
+     交给 watcher 的 CrashLoopBackOff 链路，避免「探针失败」误判与重复告警
 5. 建/聚合告警（manual_required=False）→ AI 诊断（ai_client.diagnose，结论落 AIDiagnosisResult）→
    诊断结论写入告警 message → 复用 notification_service.notify_alert 发通知
 6. 恢复：Pod ready 且重启计数不再增长 → 关闭在途 PodRestart* 告警
@@ -65,6 +69,10 @@ PROBE_MARKERS = (
     "unhealthy",
 )
 
+# 仅「存活探针连续失败被 kubelet 杀死」才判 PodRestartProbeFail 的事件特征（2026-11-23）
+# （readiness/startup/unhealthy 失败不算——readiness connection refused 是应用没起来的伴随现象）
+LIVENESS_MARKERS = ("liveness probe failed", "failed liveness probe")
+
 
 from app.utils.pod import infer_deployment_name  # 去重：统一实现（原三处各一份）
 from app.utils.pod_logs import fetch_pod_logs
@@ -99,15 +107,66 @@ def _probe_evidence(events_text: str) -> str:
     return ""
 
 
+def _first_exit_code(pod: dict) -> str:
+    """取第一个有退出码的容器退出码（字符串）；都没有返回 '?'（纯函数）"""
+    for c in pod.get("containers", []):
+        code = c.get("last_terminated_exit_code")
+        if code is not None and code != "":
+            return str(code)
+    return "?"
+
+
+def _is_liveness_kill(pod: dict, events: str) -> bool:
+    """纯函数：判断是否为「存活探针连续失败被 kubelet 杀死」。
+
+    2026-11-23 老板反馈：readiness/startup/unhealthy 的探针失败是应用未启动/未监听端口的
+    伴随现象，不是根因。只有「exitCode ∈ {137,143} 且 describe 事件含 liveness 探针失败特征」
+    才判为探针失败（kubelet 因存活探针失败强制 kill 容器）。
+    """
+    codes = []
+    for c in pod.get("containers", []):
+        raw = c.get("last_terminated_exit_code")
+        if raw is None or raw == "":
+            continue
+        try:
+            codes.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not any(code in (137, 143) for code in codes):
+        return False
+    low = (events or "").lower()
+    return any(m in low for m in LIVENESS_MARKERS)
+
+
+def _container_facts(pod: dict) -> str:
+    """纯函数：汇总容器退出事实（reason/exitCode），供日志与判定用。"""
+    facts = []
+    for c in pod.get("containers", []):
+        name = c.get("name") or "-"
+        reason = c.get("last_terminated_reason") or "-"
+        code = c.get("last_terminated_exit_code")
+        code = "-" if code is None or code == "" else str(code)
+        facts.append(f"{name}(reason={reason},exitCode={code})")
+    return "; ".join(facts) if facts else "无容器信息"
+
+
 def _build_message(pod: dict, fault_type: str, prev_r: int, restart: int, extra: str = "") -> str:
-    reason = "OOMKilled" if fault_type == POD_RESTART_OOM else "探针失败"
-    msg = (
+    if fault_type == POD_RESTART_OOM:
+        msg = (
+            f"Pod {pod['namespace']}/{pod['name']} 重启次数由 {prev_r} 增加到 {restart}，"
+            f"疑似原因：OOMKilled"
+        )
+        if extra:
+            msg += f"（{extra}）"
+        return msg
+    # PodRestartProbeFail：事实描述，不再写「疑似原因：探针失败」（2026-11-23 老板反馈：
+    # 探针失败只是现象，真正原因在容器退出原因里，提示去看上次实例日志）
+    code = _first_exit_code(pod)
+    return (
         f"Pod {pod['namespace']}/{pod['name']} 重启次数由 {prev_r} 增加到 {restart}，"
-        f"疑似原因：{reason}"
+        f"存活探针连续失败被 kubelet 杀死（exitCode={code}），"
+        f"应用自身是否启动失败需看上次实例日志"
     )
-    if extra:
-        msg += f"（{extra}）"
-    return msg
 
 
 # 连续异常重启达到 N 次 → 进入宽限期（抑制告警，避免风暴）；恢复后解除
@@ -219,6 +278,25 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
 
     events_text = await _describe_pod(cluster_id, pod["namespace"], pod["name"])
     logs_text = await fetch_pod_logs(cluster_id, pod["namespace"], pod["name"])
+    recent_logs = (logs_text or "")[:4000]
+    # 2026-11-23 老板反馈：把「容器退出证据」与「首次异常」前置进 recent_logs，
+    # 让诊断看到真实退出原因（exitCode/Reason），而不是只看 events 猜「探针失败」。
+    term_summary = ""
+    first_err = ""
+    try:
+        from app.services.termination_evidence import first_error_line, parse_describe_termination
+        term = parse_describe_termination(events_text or "")
+        term_summary = term.get("summary") or ""
+        first_err = first_error_line(logs_text or "")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("解析容器退出证据失败: %s", e)
+    if term_summary or first_err:
+        prefix = ""
+        if term_summary:
+            prefix += "【容器退出证据】\n" + term_summary + "\n\n"
+        if first_err:
+            prefix += "【首次异常】\n" + first_err + "\n\n"
+        recent_logs = prefix + recent_logs
     alert_data = {
         "alert_id": alert_id,
         "cluster_name": str(cluster_id),
@@ -229,8 +307,10 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         "restart_count": str(restart),
         "status_info": f"重启次数 {prev_r} -> {restart}",
         "recent_events": (events_text or "")[:3000],
-        "recent_logs": (logs_text or "")[:4000],
+        "recent_logs": recent_logs,
     }
+    if term_summary:
+        alert_data["termination_evidence"] = term_summary
     # 指标趋势（2026-10-29）：同一 Pod 的 CPU/内存/重启/limit 使用率，避免 AI 只能看日志猜
     try:
         from app.services import diagnosis_metrics
@@ -305,11 +385,16 @@ async def _process_increment(cluster_id: int, pod: dict, restart: int, prev_r: i
         extra = "OOM 容器：" + "、".join(oom_names)
     else:
         events = await _describe_pod(cluster_id, pod["namespace"], pod["name"])
-        evidence = _probe_evidence(events)
-        if not evidence:
-            return 0  # 非 OOM/探针 → 不在 N5 范围
-        fault_type = POD_RESTART_PROBE
-        extra = "探针失败证据：" + evidence
+        if _is_liveness_kill(pod, events):
+            fault_type = POD_RESTART_PROBE
+            extra = ""  # 消息已由 _build_message 按事实描述生成（含 exitCode）
+        else:
+            # 2026-11-23 老板反馈：readiness-only / exitCode=1,2 / reason=Error 但非 137/143 /
+            # 无终止信息 → 不再建 N5 告警（交给 watcher 的 CrashLoopBackOff 链路），
+            # 避免「探针失败」误判与重复告警。
+            logger.debug("Pod %s 重启增量不判为探针失败（跳过 N5，交给 CrashLoop 链路）：%s",
+                         field, _container_facts(pod))
+            return 0
 
     alert_id = await _upsert_alert(cluster_id, pod, fault_type, restart, prev_r, extra)
     if alert_id == 0:

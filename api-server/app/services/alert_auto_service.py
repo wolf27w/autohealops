@@ -790,13 +790,11 @@ async def _collect_container_diagnostics(alert: Alert) -> str:
     # 从 describe 解析每个容器的 lastState reason/exitCode（get_pod_status 不含该字段）
     term_by_name: dict = {}
     try:
-        from app.services.termination_evidence import parse_describe_termination
-        desc = await executor_client.acall(
-            executor_client.execute_command, alert.cluster_id, ns, f"describe pod {pod}")
-        describe_text = desc.get("output", "") if desc.get("success") else ""
-        term_by_name = {c.get("name", ""): c for c in parse_describe_termination(describe_text).get("containers", [])}
+        from app.services.termination_evidence import collect_pod_termination
+        term = await collect_pod_termination(alert.cluster_id, ns, pod)
+        term_by_name = {c.get("name", ""): c for c in term.get("containers", [])}
     except Exception as e:  # noqa: BLE001
-        logger.debug("解析容器 describe 退出证据失败: %s", e)
+        logger.debug("采集容器退出证据失败: %s", e)
 
     parts = []
     for c in containers:
@@ -1600,8 +1598,8 @@ async def _process_one(alert: Alert) -> bool:
         # 2026-11-23 老板反馈：解析 describe 的容器退出事实（Last State/exitCode），
         # 写入 termination_evidence 并前置到 recent_events，让诊断看到真实退出原因。
         try:
-            from app.services.termination_evidence import parse_describe_termination
-            term = parse_describe_termination(recent_events or "")
+            from app.services.termination_evidence import collect_pod_termination
+            term = await collect_pod_termination(alert.cluster_id, alert.namespace or "", alert.resource_name or "")
             if term.get("summary"):
                 alert_data["termination_evidence"] = term["summary"]
                 alert_data["recent_events"] = "【容器退出证据】\n" + term["summary"] + "\n\n" + (recent_events or "")

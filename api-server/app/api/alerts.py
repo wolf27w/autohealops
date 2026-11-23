@@ -349,7 +349,12 @@ async def batch_resolve(payload: dict, user=Depends(require_operator)):
 
 @router.post("/{alert_id}/diagnose")
 async def diagnose_alert(alert_id: int, user=Depends(require_operator)):
-    """触发 AI 诊断"""
+    """触发 AI 诊断
+
+    2026-11-23 老板反馈：服务启动失败只诊断出「探针问题」。原来这里只传告警基本信息，
+    events/日志/退出码/探针/指标全为空 → 模型只能猜探针。现在按自动诊断同一口径采集
+    容器退出证据（Last State/exitCode）、容器日志（含 --previous）、探针实测、指标趋势。
+    """
     async with async_session() as session:
         a = await session.get(Alert, alert_id)
         if not a:
@@ -362,10 +367,57 @@ async def diagnose_alert(alert_id: int, user=Depends(require_operator)):
             "fault_type": a.fault_type, "severity": a.severity,
             "status_info": a.message,
         }
+        cluster_id, namespace, resource_type = a.cluster_id, a.namespace, a.resource_type
+        resource_name = a.resource_name
 
     trace_id = generate_trace_id()
+    diag_ctx: dict = {}
+    if resource_type == "pod" and resource_name:
+        first_error_line = None
+        try:
+            from app.services.termination_evidence import collect_pod_termination, first_error_line
+            desc = await executor_client.acall(
+                executor_client.execute_command, cluster_id, namespace, f"describe pod {resource_name}")
+            recent_events = desc.get("output", "") if desc.get("success") else ""
+            # 2026-11-23：Pod YAML 的 lastState.exitCode 最可靠，YAML 拿不到再回退 describe 文本
+            term = await collect_pod_termination(cluster_id, namespace or "", resource_name)
+            term_summary = term.get("summary") or ""
+            if term_summary:
+                alert_data["termination_evidence"] = term_summary
+                diag_ctx["termination_evidence"] = term_summary
+                recent_events = "【容器退出证据】\n" + term_summary + "\n\n" + recent_events
+            if recent_events:
+                alert_data["recent_events"] = recent_events[:4000]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("手动诊断采集 describe/退出证据失败: %s", e)
+        try:
+            from app.utils.pod_logs import fetch_pod_logs
+            logs_text = await fetch_pod_logs(cluster_id, namespace or "", resource_name)
+            if logs_text:
+                _err = first_error_line(logs_text) if first_error_line else ""
+                alert_data["recent_logs"] = ((f"【首次异常】\n{_err}\n\n" if _err else "") + logs_text)[:4000]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("手动诊断采集容器日志失败: %s", e)
+        try:
+            from app.services import diagnosis_metrics
+            metrics_text = await diagnosis_metrics.alert_metrics_trend(
+                cluster_id, resource_type, namespace or "", resource_name or "")
+            if metrics_text:
+                alert_data["metrics_trend"] = metrics_text
+                diag_ctx["metrics_trend"] = metrics_text
+        except Exception as e:  # noqa: BLE001
+            logger.debug("手动诊断采集指标失败: %s", e)
+        try:
+            from app.services import probe_audit
+            probe = await probe_audit.audit_pod(cluster_id, namespace or "", resource_name)
+            if probe.get("text"):
+                alert_data["probe_evidence"] = probe["text"]
+                diag_ctx["probe_evidence"] = probe["text"]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("手动诊断采集探针证据失败: %s", e)
+
     try:
-        diagnosis = await ai_client.diagnose(alert_id, alert_data, {}, trace_id)
+        diagnosis = await ai_client.diagnose(alert_id, alert_data, diag_ctx, trace_id)
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"诊断失败: {e}", "data": None}
 
