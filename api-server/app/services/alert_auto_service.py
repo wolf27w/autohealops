@@ -221,6 +221,12 @@ def _infer_layer(fault_type: str) -> str:
 
 def _gate_action_for(alert: Alert, steps: list) -> str:
     """从修复步骤反推「动作库」里的动作 key（映射不到就返回空，跳过闸门）。"""
+    # 平台内置动作（2026-11-23 R70）：step 里的 platform_action 优先
+    for s in (steps or []):
+        if isinstance(s, dict) and s.get("platform_action"):
+            pa = str(s["platform_action"])
+            if pa in ("rollback_deployment", "update_probe"):
+                return "rollback_deployment" if pa == "rollback_deployment" else ""
     cmds = " ".join(str(s.get("command") or "") for s in (steps or []) if isinstance(s, dict)).lower()
     ft = alert.fault_type or ""
     if ft == "TerminatingStuck" and "delete pod" in cmds:

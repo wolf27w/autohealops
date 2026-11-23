@@ -43,7 +43,21 @@ def _run_update_probe(cluster_id: int, params: dict, trace_id: str = "") -> tupl
     return bool(r.get("success")), (r.get("message") or r.get("error") or "")[:300]
 
 
-_PLATFORM_ACTIONS = {"update_probe": _run_update_probe}
+def _run_rollback(cluster_id: int, params: dict, trace_id: str = "") -> tuple[bool, str]:
+    """2026-11-23 R70：回滚到上一个版本（平台动作，走 executor RollbackWorkload RPC）。
+
+    params: {namespace, deployment, to_revision(可选，0=上一个)}
+    """
+    ns = params.get("namespace", "")
+    dep = params.get("deployment", "")
+    to_rev = int(params.get("to_revision") or 0)
+    r = executor_client.rollback_workload(cluster_id, ns, dep, to_rev, trace_id)
+    if not r.get("success"):
+        return False, (r.get("message") or r.get("error") or "回滚失败")[:300]
+    return True, (r.get("message") or f"已回滚 {ns}/{dep} 到 revision {r.get('to_revision')}")[:300]
+
+
+_PLATFORM_ACTIONS = {"update_probe": _run_update_probe, "rollback_deployment": _run_rollback}
 
 
 def _run_platform_action(cluster_id: int, step: dict, trace_id: str) -> tuple[bool, str]:
