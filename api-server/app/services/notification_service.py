@@ -160,9 +160,15 @@ async def _record_log(config_id: int, alert_id: int | None, status: str, message
         await session.commit()
 
 
-async def _notify_limited(alert_id: int) -> bool:
-    """限频：同告警 30 分钟内不重复通知"""
-    key = f"notify_limit:{alert_id}"
+async def _notify_limited(alert_id: int, kind: str = "") -> bool:
+    """限频：同告警 30 分钟内不重复通知。
+
+    kind 用于区分不同通知阶段（2026-11-23 R68 两段式）：
+    - 默认空 → 结论通知键 notify_limit:{id}
+    - kind="discovered" → 第一段「已发现故障」键 notify_limit:discovered:{id}
+      两段用不同键，避免第一段把结论限频掉（保证「先发现 → 后结论」都能发出）。
+    """
+    key = f"notify_limit:{alert_id}" if not kind else f"notify_limit:{kind}:{alert_id}"
     ok = await redis_pool.set(key, "1", nx=True, ex=1800)
     return not ok  # 已存在则限频
 
@@ -361,8 +367,12 @@ async def _alert_in_silence(alert: Alert, policy: dict) -> bool:
     return False
 
 
-def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: str, cluster_name: str, env: str = "") -> str:
-    """按渠道渲染告警内容：im_template（按渠道）优先，缺失/渲染失败退回内置默认"""
+def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: str, cluster_name: str, env: str = "", diag: dict | None = None) -> str:
+    """按渠道渲染告警内容：im_template（按渠道）优先，缺失/渲染失败退回内置默认。
+
+    R68（2026-11-23）：ctx 增加七字段占位（phenomenon/first_occurrence/root_cause/evidence/
+    confidence/handling/impact），自定义模板可直接引用；diag 为诊断结论（None 时用占位）。
+    """
     ctx = {
         "project": project_name or "",
         "cluster": cluster_name or str(alert.cluster_id or "-"),
@@ -374,6 +384,14 @@ def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: s
         "message": alert.message or "",
         "source": _alert_source(alert),
         "alert_id": str(alert.id),
+        # R68 七字段占位（2026-11-23）
+        "phenomenon": (alert.message or "").strip() or (alert.fault_type or ""),
+        "first_occurrence": _first_occurrence(alert),
+        "root_cause": _render_root_cause(diag, alert),
+        "evidence": _render_evidence(diag),
+        "confidence": _render_confidence(diag),
+        "handling": _handling_status_label(alert),
+        "impact": _render_impact(diag),
     }
     tmpl = ""
     try:
@@ -388,17 +406,18 @@ def _render_alert_content(cfg: NotificationConfig, alert: Alert, project_name: s
             return tmpl.format(**ctx)
         except (KeyError, IndexError, ValueError):
             pass  # 模板占位符非法 → 退回内置默认
-    return format_alert_message(alert, project_name, cluster_name, env)
+    return format_alert_message(alert, project_name, cluster_name, env, diag)
 
 
-async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: str, env: str = "") -> None:
+async def _notify_alert_in_app(alert: Alert, project_name: str, cluster_name: str, env: str = "",
+                               diag: dict | None = None, content_override: str = "") -> None:
     """站内消息渠道（平台内置）：告警写入站内消息中心，给所有启用中的管理员。"""
     from app.models import User
     async with async_session() as session:
         admins = (await session.execute(
             select(User).where(User.role == "admin", User.is_active.is_(True))
         )).scalars().all()
-    content = format_alert_message(alert, project_name, cluster_name, env)
+    content = content_override or format_alert_message(alert, project_name, cluster_name, env, diag)
     title = f"告警：{alert.fault_type or '未知类型'}"
     for a in admins:
         await write_in_app_message(a.id, title, content, kind="alert", link="/alert-handling")
@@ -430,7 +449,8 @@ def _send_email_sync(host: str, port: int, username: str, password: str, sender:
             pass
 
 
-async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str, env: str = "") -> None:
+async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str, env: str = "",
+                               diag: dict | None = None, body_override: str = "") -> None:
     """邮件渠道：告警邮件发给所有启用中的管理员（配好 SMTP 才发；未配静默跳过）"""
     from app.models import User
     from app.services.system_setting_service import get_setting
@@ -456,7 +476,7 @@ async def _notify_alert_email(alert: Alert, project_name: str, cluster_name: str
         return
 
     subject = f"[AutoHealOps 告警] {alert.fault_type or '未知类型'} - {alert.resource_name or ''}"
-    body = format_alert_message(alert, project_name, cluster_name, env)
+    body = body_override or format_alert_message(alert, project_name, cluster_name, env, diag)
     try:
         await asyncio.to_thread(_send_email_sync, host, port, username, password,
                                 sender, recipients, subject, body, use_ssl)
@@ -577,8 +597,179 @@ async def _alert_matched_silence(alert) -> bool:
     return False
 
 
+# ============ R68 告警七字段 + 紧急故障两段式（2026-11-23） ============
+
+# 紧急故障（服务不可用类）fault_type 集合：需先发「已发现故障，正在分析」再补发结论。
+# 只收真正「服务起不来」的类型；PodEvicted/InvalidImageName/镜像类转人工等终态或特殊类型不在此列。
+_EMERGENCY_FAULT_TYPES = {
+    "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull",
+    "NodeNotReady", "PendingTimeout",
+}
+
+
+def is_emergency_alert(alert: Alert) -> bool:
+    """判断告警是否「紧急故障」（服务不可用类）—— 2026-11-23 R68 两段式。
+
+    以 fault_type 为主（CrashLoopBackOff / ImagePullBackOff / Pod 全部不可用等）；
+    pod/node 类告警 severity=critical 也视为紧急（覆盖未登记的 fault_type）。
+    其它来源（log/db）即使 critical 也不走两段式，避免「只通知不诊断」的告警发完第一段就没了下文。
+    """
+    if (alert.fault_type or "") in _EMERGENCY_FAULT_TYPES:
+        return True
+    return ((alert.severity or "").lower() == "critical"
+            and (alert.resource_type or "") in ("pod", "node"))
+
+
+async def _load_alert_diagnosis(alert: Alert) -> dict | None:
+    """加载告警最新一条 AI 诊断结论（七字段来源）—— 2026-11-23 R68。
+
+    从 ai_diagnosis_results 取 root_cause / evidence_refs / confidence / impact；
+    无诊断或解析失败返回 None（调用方据此写「分析中 / 未能确定根因」占位，不允许留空）。
+    """
+    if not alert or not alert.id:
+        return None
+    try:
+        from app.models import AIDiagnosisResult
+        from app.services.diagnosis_impact import extract_impact
+        async with async_session() as session:
+            d = (await session.execute(
+                select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert.id)
+                .order_by(AIDiagnosisResult.id.desc())
+            )).scalars().first()
+        if not d:
+            return None
+        data: dict = {}
+        if d.diagnosis_json:
+            try:
+                data = json.loads(d.diagnosis_json)
+                if not isinstance(data, dict):
+                    data = {}
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+        refs = data.get("evidence_refs")
+        if not isinstance(refs, list):
+            refs = []
+        return {
+            "root_cause": str(data.get("root_cause", "") or "").strip(),
+            "evidence_refs": [str(x).strip() for x in refs if str(x).strip()],
+            "confidence": d.confidence if d.confidence is not None else data.get("confidence"),
+            "impact": extract_impact(data),
+            "root_cause_layer": str(data.get("root_cause_layer", "") or "").strip(),
+            "suggestions": data.get("suggestions", []),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.debug("加载告警 %s 诊断失败: %s", getattr(alert, "id", "?"), e)
+        return None
+
+
+def _diag_has_conclusion(diag: dict | None) -> bool:
+    """诊断是否有可用结论（root_cause 非空）—— 2026-11-23 R68"""
+    return bool((diag or {}).get("root_cause"))
+
+
+def _fmt_dt(v) -> str:
+    """时间安全格式化（datetime 或字符串）→ %Y-%m-%d %H:%M:%S"""
+    if not v:
+        return ""
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    return str(v)[:19]
+
+
+def _first_occurrence(alert: Alert) -> str:
+    """首次出现时间：优先 occurred_at（故障实际发生时间），其次 detected_at，最后 created_at"""
+    return (_fmt_dt(getattr(alert, "occurred_at", None))
+            or _fmt_dt(getattr(alert, "detected_at", None))
+            or _fmt_dt(getattr(alert, "created_at", None)) or "-")
+
+
+# 告警状态 → 「已做处置」文案（R68 七字段之一）
+_HANDLING_STATUS_LABELS = {
+    "self_healed": "已自愈（AI 自动修复成功）",
+    "ticketed": "已转工单（待人工处理）",
+    "awaiting_approval": "已转审批（待人工放行）",
+    "resolved": "已解决",
+    "pending": "待人工（分析/自动处置中）",
+}
+
+
+def _handling_status_label(alert: Alert) -> str:
+    """已做处置：告警状态 → 中文处置文案（2026-11-23 R68）"""
+    return _HANDLING_STATUS_LABELS.get((alert.status or "").strip(), (alert.status or "待人工"))
+
+
+def _render_root_cause(diag: dict | None, alert: Alert) -> str:
+    """原因：诊断根因；无结论时写「分析中 / 未能确定根因」占位（不允许留空）—— 2026-11-23 R68"""
+    rc = ((diag or {}).get("root_cause") or "").strip()
+    if rc:
+        return rc
+    if (alert.status or "").strip() == "pending" and not getattr(alert, "manual_required", False):
+        return "分析中"
+    return "未能确定根因（缺失证据）"
+
+
+def _render_evidence(diag: dict | None) -> str:
+    """证据：诊断依据（evidence_refs）；无 → 明确占位（不允许留空）"""
+    refs = (diag or {}).get("evidence_refs") or []
+    return "；".join(refs) if refs else "暂无（分析中）"
+
+
+def _render_confidence(diag: dict | None) -> str:
+    """把握度：诊断置信度（0~1 转百分比）；缺失 → 未知"""
+    conf = (diag or {}).get("confidence")
+    if conf is None:
+        return "未知"
+    try:
+        f = float(conf)
+        if 0 <= f <= 1:
+            return f"{f:.0%}"
+    except (TypeError, ValueError):
+        pass
+    return str(conf)
+
+
+def _render_impact(diag: dict | None) -> str:
+    """影响面：结构化 impact → 摘要；缺失回退根因层级，再缺 → 未知"""
+    imp = (diag or {}).get("impact")
+    if isinstance(imp, dict) and imp:
+        # 优先用诊断自带的摘要（AI 直接给的一句人话）
+        summary = str(imp.get("summary") or "").strip()
+        if summary:
+            return summary
+        try:
+            from app.services.diagnosis_impact import summarize_impact
+            s = summarize_impact(imp)
+            if s:
+                # 2026-11-23 R68：summarize_impact 自带「影响面：」前缀，字段名已有，去重
+                for p in ("影响面：", "影响面:"):
+                    if s.startswith(p):
+                        s = s[len(p):].strip()
+                        break
+                return s
+        except Exception:  # noqa: BLE001
+            pass
+    layer = ((diag or {}).get("root_cause_layer") or "").strip()
+    return layer if layer else "未知"
+
+
+def _render_seven_fields(alert: Alert, diag: dict | None) -> str:
+    """R68 七字段（现象/首次出现时间/原因/证据/把握度/已做处置/影响面）—— 2026-11-23"""
+    phenomenon = ((alert.message or "").strip()
+                  or f"{alert.fault_type}（{alert.resource_name}）")
+    return (
+        f"现象: {phenomenon}\n"
+        f"首次出现时间: {_first_occurrence(alert)}\n"
+        f"原因: {_render_root_cause(diag, alert)}\n"
+        f"证据: {_render_evidence(diag)}\n"
+        f"把握度: {_render_confidence(diag)}\n"
+        f"已做处置: {_handling_status_label(alert)}\n"
+        f"影响面: {_render_impact(diag)}"
+    )
+
+
 async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = False,
-                       override_config_id: int | None = None) -> dict:
+                       override_config_id: int | None = None,
+                       diag_override: dict | None = None) -> dict:
     """统一告警通知入口（全平台一份策略）——所有告警来源共用。
 
     流程：策略开关 → 严重级别分级 → 静默/维护窗口 → 限频 → 风暴抑制
@@ -588,6 +779,9 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
     返回 {"sent": int, "reason": str}：reason ∈ policy_disabled/severity_<sev>/silenced/
     rate_limited/storm_suppressed/policy_route/project_route/scene_route/no_channel。
     dry_run=True 时只计算渠道计划、不真实发送、不写日志（验证用）。
+
+    R68（2026-11-23）：内容带七字段；紧急故障（is_emergency_alert）且诊断未完成时，
+    先发「已发现故障，正在分析」（第一段），分析完成后再由调用方补发结论。
     """
     severity = (alert.severity or "").lower()
     policy = await get_alert_notify_policy()
@@ -595,6 +789,16 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
         return {"sent": 0, "reason": "policy_disabled"}
     if await _alert_matched_silence(alert):
         return {"sent": 0, "reason": "alert_silenced"}
+
+    diag = diag_override if diag_override is not None else await _load_alert_diagnosis(alert)
+
+    # R68 两段式：
+    # - 紧急故障 + 诊断未完成 → 先发「已发现故障，正在分析」（第一段）
+    # - 非紧急 + 诊断未完成 → 本次不发，等诊断完成后一次性发（避免先甩一条「分析中」再发一条结论）
+    if not _diag_has_conclusion(diag):
+        if is_emergency_alert(alert):
+            return await _notify_discovered(alert, at_all=at_all, dry_run=dry_run)
+        return {"sent": 0, "reason": "awaiting_diagnosis"}
 
     # 规则级指定通知渠道（日志告警规则「套用通知源」）——优先于分级/项目/场景路由
     if override_config_id:
@@ -610,7 +814,7 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
             _pcfg, _pname = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
             _cname = await _cluster_name(alert.cluster_id)
             _env = await _cluster_env(alert.cluster_id)
-            _content = _render_alert_content(rcfg, alert, _pname, _cname, _env)
+            _content = _render_alert_content(rcfg, alert, _pname, _cname, _env, diag)
             if dry_run:
                 return {"sent": 1, "reason": "rule_route"}
             await _send_webhook_with_retry(rcfg, _content, alert.id, at_all=at_all, receiver="规则指定渠道")
@@ -636,13 +840,13 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
     # 站内消息渠道（平台内置，非 IM webhook）：告警同时写入站内消息中心（给所有管理员）
     if "in_app" in allowed:
         if not dry_run:
-            await _notify_alert_in_app(alert, project_name, cluster_name, cluster_env)
+            await _notify_alert_in_app(alert, project_name, cluster_name, cluster_env, diag)
         sent += 1
 
     # 邮件渠道：告警邮件发给所有管理员（配好 SMTP 才发；未配静默跳过）
     if "email" in allowed:
         if not dry_run:
-            await _notify_alert_email(alert, project_name, cluster_name, cluster_env)
+            await _notify_alert_email(alert, project_name, cluster_name, cluster_env, diag)
         sent += 1
 
     async def _dispatch(cfg: NotificationConfig, receiver: str) -> None:
@@ -651,7 +855,7 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
             return
         if not _source_match(cfg, alert.resource_type):
             return  # 告警来源不匹配（配置了 sources 时）
-        content = _render_alert_content(cfg, alert, project_name, cluster_name, cluster_env)
+        content = _render_alert_content(cfg, alert, project_name, cluster_name, cluster_env, diag)
         if dry_run:
             sent += 1
             return
@@ -683,6 +887,80 @@ async def notify_alert(alert: Alert, *, at_all: bool = False, dry_run: bool = Fa
             continue  # namespace 不匹配
         await _dispatch(cfg, "")
     return {"sent": sent, "reason": "scene_route" if sent else "no_channel"}
+
+
+async def _notify_discovered(alert: Alert, *, at_all: bool = False, dry_run: bool = False) -> dict:
+    """紧急故障第一段通知：已发现故障，正在分析 —— 2026-11-23 R68 两段式。
+
+    复用告警统一策略（分级 / 静默 / 渠道 / 项目路由），但与结论通知的关键区别：
+    - 内容用「已发现故障，正在分析」（不含七字段结论，避免与结论重复）；
+    - 限频用独立键 notify_limit:discovered:{id}，不与结论的 notify_limit:{id} 互斥，
+      保证「先发现 → 后结论」两段都能发出（不会连发两次同内容）。
+    """
+    severity = (alert.severity or "").lower()
+    policy = await get_alert_notify_policy()
+    if not policy.get("enabled", True):
+        return {"sent": 0, "reason": "policy_disabled"}
+    if await _alert_matched_silence(alert):
+        return {"sent": 0, "reason": "alert_silenced"}
+
+    allowed = policy.get("severity_routes", {}).get(severity, [])
+    if not allowed:
+        return {"sent": 0, "reason": f"severity_{severity or 'unknown'}"}
+    if await _alert_in_silence(alert, policy):
+        return {"sent": 0, "reason": "silenced"}
+    if await _notify_limited(alert.id, "discovered"):
+        return {"sent": 0, "reason": "rate_limited"}
+    if await _storm_suppressed(alert):
+        return {"sent": 0, "reason": "storm_suppressed"}
+
+    project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
+    cluster_name = await _cluster_name(alert.cluster_id)
+    cluster_env = await _cluster_env(alert.cluster_id)
+    content = format_alert_discovered_message(alert, project_name, cluster_name, cluster_env)
+    sent = 0
+
+    if "in_app" in allowed:
+        if not dry_run:
+            await _notify_alert_in_app(alert, project_name, cluster_name, cluster_env,
+                                       diag=None, content_override=content)
+        sent += 1
+
+    if "email" in allowed:
+        if not dry_run:
+            await _notify_alert_email(alert, project_name, cluster_name, cluster_env,
+                                      diag=None, body_override=content)
+        sent += 1
+
+    async def _dispatch(cfg: NotificationConfig, receiver: str) -> None:
+        nonlocal sent
+        if cfg.channel_type not in allowed:
+            return
+        if not _source_match(cfg, alert.resource_type):
+            return
+        if dry_run:
+            sent += 1
+            return
+        await _send_webhook_with_retry(cfg, content, alert.id, at_all=at_all, receiver=receiver)
+        sent += 1
+
+    if project_cfg:
+        await _dispatch(project_cfg, f"项目:{project_name}")
+        return {"sent": sent, "reason": "project_route"}
+    configs = await _get_configs(SCENE_ALERT)
+    for cfg in configs:
+        if not _ns_match(cfg, alert.namespace):
+            continue
+        await _dispatch(cfg, "")
+    return {"sent": sent, "reason": "scene_route" if sent else "no_channel"}
+
+
+async def notify_alert_discovered(alert: Alert, *, at_all: bool = False, dry_run: bool = False) -> dict:
+    """显式发送「已发现故障，正在分析」第一段（供 alert_auto_service 等调用方在诊断前触发）。
+
+    2026-11-23 R68：紧急故障两段式的第一段。与 notify_alert（结论）用不同限频键，互不干扰。
+    """
+    return await _notify_discovered(alert, at_all=at_all, dry_run=dry_run)
 
 
 async def send_alert_notification(alert: Alert) -> None:
@@ -735,13 +1013,17 @@ async def _cluster_env(cluster_id: int) -> str:
     return (c.env_tag or "") if c else ""
 
 
-def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str = "", env: str = "") -> str:
+def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str = "", env: str = "", diag: dict | None = None) -> str:
     """格式化告警消息：按资源类型自动选模板（数据库告警没有命名空间/集群）。
 
-    - 应用/集群类：项目 + 集群 + 环境 + 资源 + 命名空间 + 故障 + 级别 + 详情
-    - 数据库类：环境 + 数据库 + 故障 + 级别 + 详情（不输出项目/集群/命名空间，避免出现空白项）
+    - 应用/集群类：项目 + 集群 + 环境 + 资源 + 命名空间 + 故障 + 级别 + R68 七字段
+    - 数据库类：环境 + 数据库 + 故障 + 级别 + R68 七字段（不输出项目/集群/命名空间）
+
+    R68（2026-11-23）：内容必须包含七字段（现象/首次出现时间/原因/证据/把握度/已做处置/影响面），
+    诊断缺失时原因写「分析中 / 未能确定根因」，不允许留空。
     """
     env_val = (getattr(alert, "env", "") or env or "")
+    seven = _render_seven_fields(alert, diag)
     if (alert.resource_type or "") == "db":
         env_line = f"环境: {env_val}\n" if env_val else ""
         return (
@@ -750,7 +1032,7 @@ def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str
             f"数据库: {alert.resource_name}\n"
             f"故障类型: {alert.fault_type}\n"
             f"严重级别: {alert.severity}\n"
-            f"详情: {alert.message}"
+            f"{seven}"
         )
 
     proj = f"项目: {project_name}\n" if project_name else ""
@@ -765,7 +1047,32 @@ def format_alert_message(alert: Alert, project_name: str = "", cluster_name: str
         f"命名空间: {alert.namespace or '-'}\n"
         f"故障类型: {alert.fault_type}\n"
         f"严重级别: {alert.severity}\n"
-        f"详情: {alert.message}"
+        f"{seven}"
+    )
+
+
+def format_alert_discovered_message(alert: Alert, project_name: str = "", cluster_name: str = "", env: str = "") -> str:
+    """紧急故障第一段通知内容：已发现故障，正在分析 —— 2026-11-23 R68 两段式。
+
+    只给「现象 + 首次出现时间 + 正在分析」的抢响应信息，不含七字段结论，
+    结论由 notify_alert 在分析完成后补发。
+    """
+    env_val = (getattr(alert, "env", "") or env or "")
+    proj = f"项目: {project_name}\n" if project_name else ""
+    cluster = cluster_name or str(alert.cluster_id or "-")
+    env_line = f"环境: {env_val}\n" if env_val else ""
+    return (
+        f"【AutoHealOps 告警·紧急】\n"
+        f"{proj}"
+        f"集群: {cluster}\n"
+        f"{env_line}"
+        f"资源: {alert.resource_type}/{alert.resource_name}\n"
+        f"命名空间: {alert.namespace or '-'}\n"
+        f"故障类型: {alert.fault_type}\n"
+        f"严重级别: {alert.severity}\n"
+        f"现象: {(alert.message or '').strip() or alert.fault_type or ''}\n"
+        f"首次出现时间: {_first_occurrence(alert)}\n"
+        f"状态: ⚠️ 已发现故障，正在分析，结论稍后推送"
     )
 
 

@@ -1564,6 +1564,20 @@ async def _process_one(alert: Alert) -> bool:
             except Exception as e:  # noqa: BLE001
                 logger.debug("诊断结论沉淀知识库失败: %s", e)
 
+        # 2026-11-23 R68：诊断已完成 → 补发带结论的通知（两段式第二段）。
+        # 非紧急告警创建时那条会被 awaiting_diagnosis 抑制，就在这里一次性发出。
+        try:
+            from app.services import notification_service as _notif
+            await _notif.notify_alert(alert, diag_override={
+                "root_cause": root_cause,
+                "evidence_refs": evidence_refs,
+                "confidence": diag_confidence,
+                "impact": impact,
+                "root_cause_layer": root_cause_layer,
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.warning("告警 %d 结论通知失败: %s", alert.id, e)
+
     # 3.25 探针配置问题（平台可直接修）：AI 常把它判成 B 层「需改代码」就转人工，
     # 但实测已证明是探针参数问题 → 生成调参方案走审批链，不让人为踢回。
     probe_steps = await _build_probe_fix_steps(alert, probe_result)

@@ -1,6 +1,7 @@
 // 告警列表页：筛选 + 表格 + 批量解决 + 行展开诊断 + 日志查看（诊断已自动，保留手动重试）
 import { envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge } from 'antd'
 import { getAlertsPaged, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
@@ -199,7 +200,7 @@ export default function AlertList() {
         pagination={{ current: page, pageSize: PAGE_SIZE, total: alertTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => setPage(p) }}
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
         expandable={{
-          expandedRowRender: (record) => <DiagnosisPanel alertId={record.id} />,
+          expandedRowRender: (record) => <DiagnosisPanel alert={record} />,
         }}
         columns={[
           { title: '来源', dataIndex: 'source', render: (v, r: Alert) => v || r.cluster_name || '-' },
@@ -317,37 +318,92 @@ export default function AlertList() {
   )
 }
 
-// 诊断结果面板（行展开）
+// 诊断结果面板（行展开）—— R68（2026-11-23）：展示七字段（现象/首次出现时间/原因/证据/把握度/已做处置/影响面），缺字段占位不空白
 interface DiagnosisData {
-  confidence?: number
-  diagnosis_json: string
+  confidence?: number | string | null
+  diagnosis_json?: string
+  created_at?: string
+  root_cause?: string
+  evidence_refs?: string[]
+  impact?: unknown
+  root_cause_layer?: string
+  suggestions?: unknown
 }
 
-function DiagnosisPanel({ alertId }: { alertId: number }) {
+// 告警状态 → 「已做处置」文案（与后端 _handling_status_label 对齐）
+const HANDLING_LABELS: Record<string, string> = {
+  self_healed: '已自愈（AI 自动修复成功）',
+  ticketed: '已转工单（待人工处理）',
+  awaiting_approval: '已转审批（待人工放行）',
+  resolved: '已解决',
+  pending: '待人工（分析/自动处置中）',
+}
+
+function renderConfidence(c?: number | string | null): string {
+  if (c === null || c === undefined || c === '') return '未知'
+  const n = Number(c)
+  if (!Number.isNaN(n) && n >= 0 && n <= 1) return `${(n * 100).toFixed(0)}%`
+  return String(c)
+}
+
+function renderImpact(d: DiagnosisData): string {
+  const imp = d.impact as any
+  if (imp && typeof imp === 'object') {
+    const objs = Array.isArray(imp.affected_objects) ? imp.affected_objects.map(String) : []
+    const scopeMap: Record<string, string> = { single_instance: '单实例', whole_service: '整个服务', cross_service: '跨服务', unknown: '未知影响面' }
+    const percMap: Record<string, string> = { none: '无感知', slight: '轻微', partial: '部分不可用', full: '全不可用', unknown: '感知程度未知' }
+    const parts: string[] = []
+    if (objs.length) parts.push(`影响对象：${objs.join('、')}`)
+    parts.push(`影响面：${scopeMap[imp.scope] || '未知影响面'}`)
+    parts.push(`用户感知：${percMap[imp.perceptibility] || '感知程度未知'}`)
+    return parts.join('；')
+  }
+  if (typeof imp === 'string' && imp.trim()) return imp
+  return d.root_cause_layer || '未知'
+}
+
+function renderRootCause(d: DiagnosisData, alert: Alert): string {
+  if (d.root_cause) return d.root_cause
+  if (alert.status === 'pending' && !alert.manual_required) return '分析中'
+  return '未能确定根因（缺失证据）'
+}
+
+function DiagnosisPanel({ alert }: { alert: Alert }) {
   const [data, setData] = useState<DiagnosisData | null>(null)
   const [loading, setLoading] = useState(true)
   useEffect(() => {
-    getDiagnosis(alertId).then((d) => setData(d as DiagnosisData)).catch(() => setData(null)).finally(() => setLoading(false))
-  }, [alertId])
+    getDiagnosis(alert.id).then((d) => setData(d as DiagnosisData)).catch(() => setData(null)).finally(() => setLoading(false))
+  }, [alert.id])
   if (loading) return <div>加载中...</div>
   if (!data) return <div>暂无诊断结果（告警写入后系统立即自动诊断/修复，已恢复的会自动解决）</div>
-  let rc = ''
-  let sug: unknown = ''
-  try {
-    const j = JSON.parse(data.diagnosis_json || '{}')
-    rc = String(j.root_cause || j.conclusion || '')
-    sug = j.suggestions || j.handling_advice || ''
-  } catch { /* 非 JSON 直接展示原文 */ }
+
+  const phenomenon = (alert.message || '').trim() || `${alert.fault_type || ''}（${alert.resource_name || ''}）`
+  const firstOccurrence = alert.occurred_at || alert.detected_at || '-'
+  const handling = HANDLING_LABELS[alert.status] || alert.status || '待人工'
+  const rootCause = renderRootCause(data, alert)
+  const evidence = data.evidence_refs?.length ? data.evidence_refs.join('；') : '无'
+  const confidence = renderConfidence(data.confidence)
+  const impact = renderImpact(data)
+  const sug = data.suggestions || ''
+
+  const field = (label: string, value: ReactNode, warn = false) => (
+    <div style={{ marginTop: 6 }}>
+      <b>{label}：</b>
+      <span style={warn ? { color: '#faad14' } : undefined}>{value || '—'}</span>
+    </div>
+  )
+
   return (
-    <div>
-      <div>置信度：{data.confidence}</div>
-      {rc
-        ? <>
-            <div style={{ marginTop: 4 }}><b>根因：</b>{rc}</div>
-            {!!sug && <div style={{ marginTop: 4 }}><b>处理意见：</b>{Array.isArray(sug) ? sug.join('；') : String(sug)}</div>}
-          </>
-        : <div style={{ marginTop: 4, color: '#faad14' }}>AI 未给出结论（模型返回为空/失败，可在告警操作里点「重新诊断」）</div>}
-      <CodeBlock code={data.diagnosis_json} />
+    <div style={{ padding: '4px 0' }}>
+      {field('现象', phenomenon)}
+      {field('首次出现时间', firstOccurrence)}
+      {field('原因', rootCause, !data.root_cause)}
+      {field('证据', evidence)}
+      {field('把握度', confidence)}
+      {field('已做处置', handling)}
+      {field('影响面', impact)}
+      {!!sug && <div style={{ marginTop: 6 }}><b>处理意见：</b>{Array.isArray(sug) ? sug.join('；') : String(sug)}</div>}
+      {data.diagnosis_json ? <CodeBlock code={data.diagnosis_json} /> : null}
     </div>
   )
 }

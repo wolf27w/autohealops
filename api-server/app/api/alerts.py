@@ -485,8 +485,28 @@ async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
         d = result.scalars().first()
     if not d:
         return {"code": 404, "message": "无诊断结果", "data": None}
+    # R68（2026-11-23）：解析 diagnosis_json 出七字段相关项（原因/证据/把握度/影响面），
+    # 前端直接渲染，避免每个页面各自手写 JSON 解析；解析失败降级为原始字段。
+    import json as _json
+    data: dict = {}
+    if d.diagnosis_json:
+        try:
+            data = _json.loads(d.diagnosis_json)
+            if not isinstance(data, dict):
+                data = {}
+        except (ValueError, TypeError):
+            data = {}
+    refs = data.get("evidence_refs")
+    if not isinstance(refs, list):
+        refs = []
     return {"code": 200, "message": "success", "data": {
         "diagnosis_json": d.diagnosis_json, "confidence": d.confidence, "created_at": str(d.created_at),
+        # R68 七字段（诊断侧）
+        "root_cause": str(data.get("root_cause", "") or "").strip(),
+        "evidence_refs": [str(x).strip() for x in refs if str(x).strip()],
+        "impact": data.get("impact"),
+        "root_cause_layer": str(data.get("root_cause_layer", "") or "").strip(),
+        "suggestions": data.get("suggestions", []),
     }}
 
 
