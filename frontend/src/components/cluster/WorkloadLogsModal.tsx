@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, Space, Button, Select, Switch, Input, message, Tag, DatePicker } from 'antd'
 import type { Dayjs } from 'dayjs'
-import { DownloadOutlined, PlayCircleOutlined, PauseCircleOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
+import { DownloadOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
 import { getWorkloadContainers } from '../../services/api'
 import { buildLogFilename } from '../../utils/logFilename'
 import { applyHighlight, loadRules, saveRules, LogHighlightSettings, type HighlightRule } from '../LogHighlightSettings'
@@ -79,9 +79,8 @@ async function gzipBlob(text: string): Promise<Blob> {
 export default function WorkloadLogsModal({ clusterId, namespace, kind, name, open, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [selected, setSelected] = useState<string[]>([])
-  const [following, setFollowing] = useState(true)   // R65：打开即实时（原默认暂停快照）
-  const [paused, setPaused] = useState(false)          // 暂停=停渲染但后台继续收
-  const pausedRef = useRef(false)
+  // 2026-11-23：与 Pod 日志一致，实时改成单一开关（开=跟随，关=停在最近 200 行）
+  const [following, setFollowing] = useState(false)
   const pendingRows = useRef<LogRow[]>([])
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -96,7 +95,6 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
 
   const onChangeRules = useCallback((r: HighlightRule[]) => { setRules(r); saveRules(r) }, [])
 
-  useEffect(() => { pausedRef.current = paused }, [paused])
 
   const esMapRef = useRef<Map<string, EventSource>>(new Map())
   const boxRef = useRef<HTMLPreElement | null>(null)
@@ -162,8 +160,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
           const j = JSON.parse((ev as MessageEvent).data as string) as { pod?: string; line?: string }
           if (j && typeof j.pod === 'string' && typeof j.line === 'string') {
             const row: LogRow = { pod: j.pod, container: c, line: j.line }
-            if (pausedRef.current) pendingRows.current.push(row)
-            else appendRows([row])
+            appendRows([row])
           }
         } catch { /* 忽略坏帧 */ }
       })
@@ -217,10 +214,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   useEffect(() => {
     if (!open) {
       closeStreams()
-      setFollowing(true)   // R65：再次打开仍默认实时
-      setPaused(false)
-      pausedRef.current = false
-      pendingRows.current = []
+      setFollowing(false)  // 再次打开仍默认显示最近 200 行（实时需手动开）
     }
   }, [open, closeStreams])
 
@@ -326,7 +320,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       title={<Space>聚合日志：{name}
         <Tag color="default" style={{ fontSize: 11 }}>{kind}</Tag>
         <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
-          ● {following ? (paused ? '已暂停（后台继续接收）' : (connected ? '实时' : '连接中…')) : '最近 200 行'}
+          ● {following ? (connected ? '实时中' : '连接中…') : '最近 200 行'}
         </span>
         {truncated && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
         <span style={{ color: '#8c8c8c', fontSize: 12 }}>{shown.length}/{lines.length} 行</span>
@@ -341,16 +335,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         <Input style={{ width: 220 }} allowClear value={keyword} onChange={(e) => setKeyword(e.target.value)}
           placeholder="关键字过滤（空格=同时包含）" />
         <Space size={4}><span>只看错误</span><Switch checked={onlyErrors} onChange={setOnlyErrors} /></Space>
-        {(!following || paused)
-          ? <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => {
-            if (!following) { setPaused(false); pausedRef.current = false; setFollowing(true) }
-            else {
-              setPaused(false); pausedRef.current = false
-              const rest = pendingRows.current; pendingRows.current = []
-              if (rest.length) appendRows(rest)
-            }
-          }}>{following ? '恢复' : '实时日志'}</Button>
-          : <Button icon={<PauseCircleOutlined />} onClick={() => { pausedRef.current = true; setPaused(true) }}>暂停</Button>}
+        <Space size={4}><span>实时</span><Switch checked={following} onChange={setFollowing} /></Space>
         <Space size={4}><span>自动滚动</span><Switch checked={autoScroll} onChange={setAutoScroll} /></Space>
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>贴底</Button>
         <LogHighlightSettings rules={rules} onChange={onChangeRules} />

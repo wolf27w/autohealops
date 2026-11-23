@@ -1,7 +1,7 @@
 // 实时日志跟随弹窗（P1-R5）：浏览器 ↔ api-server(WS) ↔ executor 日志流 HTTP（apiserver follow）
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, Space, Input, Button, Select, Switch, message } from 'antd'
-import { PauseCircleOutlined, PlayCircleOutlined, ClearOutlined, VerticalAlignBottomOutlined, DownloadOutlined } from '@ant-design/icons'
+import { ClearOutlined, VerticalAlignBottomOutlined, DownloadOutlined } from '@ant-design/icons'
 import { getPodContainers, downloadPodLogs } from '../services/api'
 
 interface LogPod { clusterId: number; namespace: string; name: string }
@@ -58,20 +58,17 @@ function saveBlob(blob: Blob, filename: string) {
 export default function PodLogStreamModal({ pod, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [selected, setSelected] = useState<string[]>([])
-  const [live, setLive] = useState(false)   // false=最近 2 分钟快照(暂停) / true=实时跟随
+  // 2026-11-23 老板反馈：改成单一开关——开=实时跟随，关=停止（显示最近 200 行）
+  const [live, setLive] = useState(false)
   const [previous, setPrevious] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [rows, setRows] = useState<LogRow[]>([])
-  const [paused, setPaused] = useState(false)
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
   const wsMapRef = useRef<Map<string, WebSocket>>(new Map())
   const boxRef = useRef<HTMLPreElement>(null)
   const bufRef = useRef<Map<string, string>>(new Map())       // 每容器未完成行的缓冲
-  const pendingRef = useRef<Map<string, string>>(new Map())   // 每容器暂停期间后台继续收的缓冲
-  const pausedRef = useRef(false)
   const openCountRef = useRef(0)
-  useEffect(() => { pausedRef.current = paused }, [paused])
 
   // 留空 = 全部容器
   const effectiveContainers = useMemo(
@@ -95,17 +92,11 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     setRows((r) => { const n = [...r, ...newRows]; return n.length > MAX_LINES ? n.slice(n.length - MAX_LINES) : n })
   }
 
-  const flushPending = () => {
-    pendingRef.current.forEach((text, c) => { if (text) appendContainerText(c, text) })
-    pendingRef.current.clear()
-  }
-
   const connect = () => {
     if (!pod) return
     closeAllWs()
     setRows([])
     bufRef.current.clear()
-    pendingRef.current.clear()
     const targets = effectiveContainers
     for (const c of targets) {
       const ws = new WebSocket(buildWsUrl(
@@ -129,13 +120,11 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
             if (j.message) {
               // info = 服务端提示（如「该范围无日志」），error = 真实错误
               const errText = j.type === 'info' ? `— ${j.message}\n` : `[错误] ${j.message}\n`
-              if (pausedRef.current) pendingRef.current.set(c, (pendingRef.current.get(c) || '') + errText)
-              else appendContainerText(c, errText)
+              appendContainerText(c, errText)
             }
           } catch { /* ignore */ }
           return
         }
-        if (pausedRef.current) { pendingRef.current.set(c, (pendingRef.current.get(c) || '') + text); return }
         appendContainerText(c, text)
       }
     }
@@ -143,7 +132,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
 
   useEffect(() => {
     if (!pod) return
-    setContainers([]); setSelected([]); setRows([]); setKeyword(''); bufRef.current.clear(); pendingRef.current.clear()
+    setContainers([]); setSelected([]); setRows([]); setKeyword(''); bufRef.current.clear()
     getPodContainers(pod.clusterId, pod.namespace, pod.name)
       .then((d) => {
         const list = (d as unknown as { containers?: string[] }).containers || []
@@ -154,9 +143,22 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod])
 
-  // pod / 容器 / 跟随 / 重启前 变化 → 重连
+  // pod / 容器 / 重启前 变化 → 拉一次快照（最近 200 行，不跟随）
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (pod && effectiveContainers.length) connect(); return () => closeAllWs() }, [pod, effectiveContainers, live, previous])
+  useEffect(() => {
+    if (!pod || !effectiveContainers.length) return
+    if (live) return  // 实时态由下面的 effect 负责
+    connect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pod, effectiveContainers, previous])
+
+  // 实时开关：开 → 建流；关 → 断开（保留屏幕内容）
+  useEffect(() => {
+    if (!pod || !effectiveContainers.length) return
+    if (live) { connect() } else { closeAllWs() }
+    return () => closeAllWs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live])
 
   useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [rows, autoScroll])
 
@@ -203,32 +205,18 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
           options={containers.map((c) => ({ value: c, label: c }))} maxTagCount="responsive" />
         <Space size={4}><span>重启前</span><Switch checked={previous} onChange={setPrevious} /></Space>
         <Input placeholder="关键字过滤" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: 150 }} allowClear />
-        <Button icon={<ClearOutlined />} onClick={() => { setRows([]); bufRef.current.clear(); pendingRef.current.clear() }}>清空</Button>
-        {(!live || paused)
-          ? <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => {
-            // 进入/恢复实时：暂停期间的缓冲一次性补齐，再继续渲染
-            setPaused(false)
-            pausedRef.current = false
-            if (!live) setLive(true)
-            flushPending()
-          }}>{live ? '恢复' : '实时日志'}</Button>
-          : <Button icon={<PauseCircleOutlined />} onClick={() => {
-            // 暂停 = 停渲染但后台继续收（socket 不断开）
-            pausedRef.current = true
-            setPaused(true)
-          }}>暂停</Button>}
+        <Button icon={<ClearOutlined />} onClick={() => { setRows([]); bufRef.current.clear() }}>清空</Button>
+        {/* 2026-11-23：实时从「实时/暂停/恢复」三按钮改为一个开关 */}
+        <Space size={4}><span>实时</span><Switch checked={live} onChange={setLive} /></Space>
         <Button icon={<VerticalAlignBottomOutlined />} onClick={() => setAutoScroll((v) => !v)}>{autoScroll ? '取消贴底' : '自动贴底'}</Button>
         <Button icon={<DownloadOutlined />} onClick={download}>下载</Button>
-        <Button type="primary" onClick={connect}>重连</Button>
       </Space>
       <pre ref={boxRef} style={{ maxHeight: '66vh', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'monospace' }}>
         {shown.length === 0
           ? <span style={{ color: '#888' }}>
-            {!connected
-              ? '(连接中…)'
-              : live
-                ? '(实时跟随中，等待新日志…)'
-                : '(最近 200 行内没有日志，点「实时日志」持续跟随)'}
+            {live
+              ? (connected ? '(实时跟随中，等待新日志…)' : '(连接中…)')
+              : '(最近 200 行内没有日志，打开「实时」可持续跟随)'}
           </span>
           : shown.map((r, i) => (
             <div key={i} style={colorize(r.line)}>
