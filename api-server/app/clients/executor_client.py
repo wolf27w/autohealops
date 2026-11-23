@@ -168,10 +168,12 @@ _FEATURE_REQUIRED: dict[str, frozenset] = {
 _FEATURE_LABEL: dict[str, str] = {
     "hpa": "HPA 管理",
     "log_time_range": "日志时间段下载",
+    "rollback": "版本回滚",
 }
 # 方法名 → 特性（错误转义时按方法名反查特性）
 _METHOD_TO_FEATURE: dict[str, str] = {
     "ListHPA": "hpa", "GetHPA": "hpa", "ApplyHPA": "hpa", "DeleteHPA": "hpa",
+    "RollbackWorkload": "rollback",  # 2026-11-23 R70：老 agent 缺该 RPC 时给友好升级提示
 }
 # gRPC「方法不存在」错误特征串（大小写不敏感匹配）
 _UNKNOWN_METHOD_MARKERS = ("unknown method", "unknown service", "unimplemented")
@@ -1363,6 +1365,29 @@ class ExecutorClient:
         except Exception as e:  # noqa: BLE001
             logger.error("recreate_workload 失败: %s", e)
             return {"success": False, "message": "", "error": str(e)}
+
+    def rollback_workload(self, cluster_id: int, kind: str, namespace: str, name: str,
+                          to_revision: int = 0, trace_id: str = "") -> dict:
+        """工作负载回滚执行通道（等价 kubectl rollout undo，仅 deployment）
+
+        返回 {success, message, from_revision, to_revision, image, error}
+        """
+        try:
+            resp = _get_stub().RollbackWorkload(
+                executor_pb2.RollbackWorkloadRequest(
+                    cluster_id=cluster_id, kind=kind, namespace=namespace, name=name,
+                    to_revision=to_revision,
+                ),
+                timeout=20,
+                metadata=_metadata(trace_id),
+            )
+            return {"success": resp.success, "message": resp.message,
+                    "from_revision": resp.from_revision, "to_revision": resp.to_revision,
+                    "image": resp.image, "error": resp.error}
+        except Exception as e:  # noqa: BLE001
+            logger.error("rollback_workload 失败: %s", e)
+            return {"success": False, "message": "", "from_revision": 0,
+                    "to_revision": 0, "image": "", "error": str(e)}
 
 
 # ============ 进程级单例（去重：原 14 处各自实例化，导致 14 条 gRPC 通道） ============

@@ -260,6 +260,11 @@ class ExecutorServiceStub(object):
                 request_serializer=executor__pb2.RecreateWorkloadRequest.SerializeToString,
                 response_deserializer=executor__pb2.RecreateWorkloadResponse.FromString,
                 _registered_method=True)
+        self.RollbackWorkload = channel.unary_unary(
+                '/executor.ExecutorService/RollbackWorkload',
+                request_serializer=executor__pb2.RollbackWorkloadRequest.SerializeToString,
+                response_deserializer=executor__pb2.RollbackWorkloadResponse.FromString,
+                _registered_method=True)
         self.ExecPodStream = channel.stream_stream(
                 '/executor.ExecutorService/ExecPodStream',
                 request_serializer=executor__pb2.ExecPodStreamFrame.SerializeToString,
@@ -586,6 +591,13 @@ class ExecutorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RollbackWorkload(self, request, context):
+        """工作负载回滚执行通道（R70 前置）：等价 kubectl rollout undo，仅 deployment
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ExecPodStream(self, request_iterator, context):
         """交互式终端（TTY）：双向流（stdin/stdout/resize）
         """
@@ -834,6 +846,11 @@ def add_ExecutorServiceServicer_to_server(servicer, server):
                     servicer.RecreateWorkload,
                     request_deserializer=executor__pb2.RecreateWorkloadRequest.FromString,
                     response_serializer=executor__pb2.RecreateWorkloadResponse.SerializeToString,
+            ),
+            'RollbackWorkload': grpc.unary_unary_rpc_method_handler(
+                    servicer.RollbackWorkload,
+                    request_deserializer=executor__pb2.RollbackWorkloadRequest.FromString,
+                    response_serializer=executor__pb2.RollbackWorkloadResponse.SerializeToString,
             ),
             'ExecPodStream': grpc.stream_stream_rpc_method_handler(
                     servicer.ExecPodStream,
@@ -2067,6 +2084,33 @@ class ExecutorService(object):
             '/executor.ExecutorService/RecreateWorkload',
             executor__pb2.RecreateWorkloadRequest.SerializeToString,
             executor__pb2.RecreateWorkloadResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RollbackWorkload(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/executor.ExecutorService/RollbackWorkload',
+            executor__pb2.RollbackWorkloadRequest.SerializeToString,
+            executor__pb2.RollbackWorkloadResponse.FromString,
             options,
             channel_credentials,
             insecure,

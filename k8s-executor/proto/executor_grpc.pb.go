@@ -66,6 +66,7 @@ const (
 	ExecutorService_GetRevisionTemplate_FullMethodName   = "/executor.ExecutorService/GetRevisionTemplate"
 	ExecutorService_UpdateProbe_FullMethodName           = "/executor.ExecutorService/UpdateProbe"
 	ExecutorService_RecreateWorkload_FullMethodName      = "/executor.ExecutorService/RecreateWorkload"
+	ExecutorService_RollbackWorkload_FullMethodName      = "/executor.ExecutorService/RollbackWorkload"
 	ExecutorService_ExecPodStream_FullMethodName         = "/executor.ExecutorService/ExecPodStream"
 	ExecutorService_JvmDiagnose_FullMethodName           = "/executor.ExecutorService/JvmDiagnose"
 	ExecutorService_JvmParams_FullMethodName             = "/executor.ExecutorService/JvmParams"
@@ -157,6 +158,8 @@ type ExecutorServiceClient interface {
 	GetRevisionTemplate(ctx context.Context, in *GetRevisionTemplateRequest, opts ...grpc.CallOption) (*GetRevisionTemplateResponse, error)
 	UpdateProbe(ctx context.Context, in *UpdateProbeRequest, opts ...grpc.CallOption) (*UpdateProbeResponse, error)
 	RecreateWorkload(ctx context.Context, in *RecreateWorkloadRequest, opts ...grpc.CallOption) (*RecreateWorkloadResponse, error)
+	// 工作负载回滚执行通道（R70 前置）：等价 kubectl rollout undo，仅 deployment
+	RollbackWorkload(ctx context.Context, in *RollbackWorkloadRequest, opts ...grpc.CallOption) (*RollbackWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
 	ExecPodStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecPodStreamFrame, ExecPodStreamFrame], error)
 	// JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
@@ -641,6 +644,16 @@ func (c *executorServiceClient) RecreateWorkload(ctx context.Context, in *Recrea
 	return out, nil
 }
 
+func (c *executorServiceClient) RollbackWorkload(ctx context.Context, in *RollbackWorkloadRequest, opts ...grpc.CallOption) (*RollbackWorkloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RollbackWorkloadResponse)
+	err := c.cc.Invoke(ctx, ExecutorService_RollbackWorkload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *executorServiceClient) ExecPodStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecPodStreamFrame, ExecPodStreamFrame], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ExecutorService_ServiceDesc.Streams[2], ExecutorService_ExecPodStream_FullMethodName, cOpts...)
@@ -760,6 +773,8 @@ type ExecutorServiceServer interface {
 	GetRevisionTemplate(context.Context, *GetRevisionTemplateRequest) (*GetRevisionTemplateResponse, error)
 	UpdateProbe(context.Context, *UpdateProbeRequest) (*UpdateProbeResponse, error)
 	RecreateWorkload(context.Context, *RecreateWorkloadRequest) (*RecreateWorkloadResponse, error)
+	// 工作负载回滚执行通道（R70 前置）：等价 kubectl rollout undo，仅 deployment
+	RollbackWorkload(context.Context, *RollbackWorkloadRequest) (*RollbackWorkloadResponse, error)
 	// 交互式终端（TTY）：双向流（stdin/stdout/resize）
 	ExecPodStream(grpc.BidiStreamingServer[ExecPodStreamFrame, ExecPodStreamFrame]) error
 	// JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
@@ -910,6 +925,9 @@ func (UnimplementedExecutorServiceServer) UpdateProbe(context.Context, *UpdatePr
 }
 func (UnimplementedExecutorServiceServer) RecreateWorkload(context.Context, *RecreateWorkloadRequest) (*RecreateWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecreateWorkload not implemented")
+}
+func (UnimplementedExecutorServiceServer) RollbackWorkload(context.Context, *RollbackWorkloadRequest) (*RollbackWorkloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RollbackWorkload not implemented")
 }
 func (UnimplementedExecutorServiceServer) ExecPodStream(grpc.BidiStreamingServer[ExecPodStreamFrame, ExecPodStreamFrame]) error {
 	return status.Error(codes.Unimplemented, "method ExecPodStream not implemented")
@@ -1737,6 +1755,24 @@ func _ExecutorService_RecreateWorkload_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExecutorService_RollbackWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackWorkloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExecutorServiceServer).RollbackWorkload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExecutorService_RollbackWorkload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExecutorServiceServer).RollbackWorkload(ctx, req.(*RollbackWorkloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ExecutorService_ExecPodStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(ExecutorServiceServer).ExecPodStream(&grpc.GenericServerStream[ExecPodStreamFrame, ExecPodStreamFrame]{ServerStream: stream})
 }
@@ -1958,6 +1994,10 @@ var ExecutorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecreateWorkload",
 			Handler:    _ExecutorService_RecreateWorkload_Handler,
+		},
+		{
+			MethodName: "RollbackWorkload",
+			Handler:    _ExecutorService_RollbackWorkload_Handler,
 		},
 		{
 			MethodName: "JvmDiagnose",

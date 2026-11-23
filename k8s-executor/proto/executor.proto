@@ -92,6 +92,8 @@ service ExecutorService {
   rpc GetRevisionTemplate(GetRevisionTemplateRequest) returns (GetRevisionTemplateResponse);
   rpc UpdateProbe(UpdateProbeRequest) returns (UpdateProbeResponse);
   rpc RecreateWorkload(RecreateWorkloadRequest) returns (RecreateWorkloadResponse);
+  // 工作负载回滚执行通道（R70 前置）：等价 kubectl rollout undo，仅 deployment
+  rpc RollbackWorkload(RollbackWorkloadRequest) returns (RollbackWorkloadResponse);
 
   // 交互式终端（TTY）：双向流（stdin/stdout/resize）
   rpc ExecPodStream(stream ExecPodStreamFrame) returns (stream ExecPodStreamFrame);
@@ -743,6 +745,23 @@ message RolloutHistoryResponse {
   bool success = 1;
   repeated int64 revisions = 2;
   string error = 3;
+}
+
+// ---------- RollbackWorkload（工作负载回滚执行通道，R70 前置） ----------
+message RollbackWorkloadRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string kind = 3;        // 仅支持 deployment
+  string name = 4;
+  int64 to_revision = 5;  // 目标 revision；0 = 回滚到上一个 revision
+}
+message RollbackWorkloadResponse {
+  bool success = 1;
+  string message = 2;
+  int64 from_revision = 3;  // 回滚前的当前 revision
+  int64 to_revision = 4;    // 回滚到的目标 revision
+  string image = 5;         // 目标 revision 的主容器镜像
+  string error = 6;
 }
 
 // ==================== R57：HPA 管理 ====================

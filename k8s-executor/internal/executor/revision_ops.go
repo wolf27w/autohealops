@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -177,6 +178,130 @@ func (e *Executor) ListRevisions(ctx context.Context, namespace, name string) ([
 
 	sort.Slice(items, func(i, j int) bool { return items[i].Revision > items[j].Revision })
 	return items, curRev, nil
+}
+
+// RollbackResult 回滚执行结果（对应 proto RollbackWorkloadResponse）
+type RollbackResult struct {
+	FromRevision int64
+	ToRevision   int64
+	Image        string
+}
+
+// RollbackWorkload 工作负载回滚执行通道（等价 kubectl rollout undo）
+//
+// 仅支持 deployment（statefulset/daemonset 明确返回不支持）。
+// toRevision=0 → 回滚到「当前 revision 之前最近的一个 revision」；
+// toRevision>0 → 回滚到指定 revision。
+//
+// 实现：列出该 Deployment 的 ReplicaSet（按 deployment.kubernetes.io/revision 注解排序）→
+// 把目标 RS 的 spec.template 复制到 Deployment 的 spec.template，清空 template 注解里的
+// deployment.kubernetes.io/revision（让控制器重新分配），selector 保持不动。
+func (e *Executor) RollbackWorkload(ctx context.Context, kind, namespace, name string, toRevision int64) (*RollbackResult, error) {
+	if WorkloadKind(kind) != KindDeployment {
+		return nil, fmt.Errorf("回滚仅支持 deployment，%s 暂不支持（请使用 restart）", kind)
+	}
+
+	// 超时 20s：整个回滚链路（读 dep / 列 RS / 写回）共享一个 deadline
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	dep, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("deployment %s/%s 不存在或获取失败: %w", namespace, name, err)
+	}
+
+	curRev := parseRevision(dep.Annotations[revisionAnnotation])
+	if curRev == 0 {
+		return nil, fmt.Errorf("deployment %s/%s 无 revision 注解，无法回滚", namespace, name)
+	}
+
+	rsList, err := e.clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("列出 ReplicaSet 失败: %w", err)
+	}
+
+	// 收集属于该 deployment、且有 revision 注解的 RS，按 revision 升序
+	type rsRev struct {
+		rev int64
+		rs  *appsv1.ReplicaSet
+	}
+	var owned []rsRev
+	for i := range rsList.Items {
+		rs := &rsList.Items[i]
+		if !ownedByDeployment(rs, name) {
+			continue
+		}
+		rev := parseRevision(rs.Annotations[revisionAnnotation])
+		if rev == 0 {
+			continue
+		}
+		owned = append(owned, rsRev{rev: rev, rs: rs})
+	}
+	if len(owned) == 0 {
+		return nil, fmt.Errorf("deployment %s/%s 未找到任何历史 ReplicaSet，无法回滚", namespace, name)
+	}
+	sort.Slice(owned, func(i, j int) bool { return owned[i].rev < owned[j].rev })
+
+	// 确定目标 revision
+	var target *appsv1.ReplicaSet
+	var targetRev int64
+	if toRevision == 0 {
+		// 取「当前 revision 之前最近的一个 revision」
+		for i := len(owned) - 1; i >= 0; i-- {
+			if owned[i].rev < curRev {
+				target, targetRev = owned[i].rs, owned[i].rev
+				break
+			}
+		}
+		if target == nil {
+			return nil, fmt.Errorf("deployment %s/%s 当前仅有一个 revision（%d），无可回滚的历史版本", namespace, name, curRev)
+		}
+	} else {
+		for i := range owned {
+			if owned[i].rev == toRevision {
+				target, targetRev = owned[i].rs, owned[i].rev
+				break
+			}
+		}
+		if target == nil {
+			return nil, fmt.Errorf("deployment %s/%s 未找到 revision %d", namespace, name, toRevision)
+		}
+		if targetRev == curRev {
+			return nil, fmt.Errorf("目标 revision %d 即当前 revision，无需回滚", targetRev)
+		}
+	}
+
+	// 把目标 RS 的 spec.template 复制到 deployment，并清空 template 上的 revision 注解
+	dep.Spec.Template = *target.Spec.Template.DeepCopy()
+	if dep.Spec.Template.Annotations != nil {
+		delete(dep.Spec.Template.Annotations, revisionAnnotation)
+		if len(dep.Spec.Template.Annotations) == 0 {
+			dep.Spec.Template.Annotations = nil
+		}
+	}
+	// selector 保持不动（dep.Spec.Selector 未触碰）
+
+	if _, err := e.clientset.AppsV1().Deployments(namespace).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		return nil, fmt.Errorf("回写 deployment 失败: %w", err)
+	}
+
+	res := &RollbackResult{FromRevision: curRev, ToRevision: targetRev}
+	if imgs := rsImages(target); len(imgs) > 0 {
+		res.Image = imgs[0]
+	}
+	return res, nil
+}
+
+// parseRevision 解析 revision 注解为 int64（解析失败返回 0）
+func parseRevision(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // GetRevisionTemplate 返回指定 revision 的 PodTemplateSpec YAML + 对应 ReplicaSet 名

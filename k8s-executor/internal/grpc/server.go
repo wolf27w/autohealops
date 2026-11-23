@@ -897,6 +897,28 @@ func (s *Server) GetRevisionTemplate(ctx context.Context, req *pb.GetRevisionTem
 	return &pb.GetRevisionTemplateResponse{Success: true, Yaml: y, Replicaset: rsName}, nil
 }
 
+// RollbackWorkload 工作负载回滚执行通道（等价 kubectl rollout undo，仅 deployment）
+func (s *Server) RollbackWorkload(ctx context.Context, req *pb.RollbackWorkloadRequest) (*pb.RollbackWorkloadResponse, error) {
+	if req == nil {
+		return &pb.RollbackWorkloadResponse{Success: false, Error: "请求为空"}, nil
+	}
+	ex, err := s.getExecutor(ctx, req.ClusterId)
+	if err != nil {
+		return &pb.RollbackWorkloadResponse{Success: false, Error: err.Error()}, nil
+	}
+	res, err := ex.RollbackWorkload(ctx, req.Kind, req.Namespace, req.Name, req.ToRevision)
+	if err != nil {
+		return &pb.RollbackWorkloadResponse{Success: false, Message: err.Error(), Error: err.Error()}, nil
+	}
+	return &pb.RollbackWorkloadResponse{
+		Success:      true,
+		Message:      fmt.Sprintf("deployment %s 已回滚：revision %d → %d", req.Name, res.FromRevision, res.ToRevision),
+		FromRevision: res.FromRevision,
+		ToRevision:   res.ToRevision,
+		Image:        res.Image,
+	}, nil
+}
+
 // hpaToPb 将 executor 侧 HPAInfo 转成 proto HPAInfo
 func hpaToPb(in *executor.HPAInfo) *pb.HPAInfo {
 	out := &pb.HPAInfo{

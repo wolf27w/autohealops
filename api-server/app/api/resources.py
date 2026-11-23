@@ -1393,6 +1393,59 @@ async def rollout_workload(cluster_id: int, payload: dict, user=Depends(require_
     return {"code": 200, "message": "success", "data": {"message": r.get("message")}}
 
 
+@router.post("/clusters/{cluster_id}/namespaces/{namespace}/workloads/{kind}/{name}/rollback")
+async def rollback_workload(cluster_id: int, namespace: str, kind: str, name: str,
+                            payload: dict, user=Depends(require_operator)):
+    """工作负载回滚执行通道（等价 kubectl rollout undo，仅 deployment）。
+
+    body: {to_revision: int}（0 = 回滚到上一个 revision）
+    """
+    if denied := await _deny_cluster(user, cluster_id, namespace, required="operate"):
+        return denied
+    if not namespace or not kind or not name:
+        return {"code": 400, "message": "namespace/kind/name 必填", "data": None}
+    if kind.lower() != "deployment":
+        return {"code": 400, "message": "回滚仅支持 deployment", "data": None}
+    to_revision = payload.get("to_revision", 0) if isinstance(payload, dict) else 0
+    try:
+        to_revision = int(to_revision or 0)
+    except (TypeError, ValueError):
+        return {"code": 400, "message": "to_revision 必须是整数", "data": None}
+    if to_revision < 0:
+        return {"code": 400, "message": "to_revision 不能为负", "data": None}
+    r = await executor_client.acall(
+        executor_client.rollback_workload, cluster_id, kind, namespace, name, to_revision,
+    )
+    if not r.get("success"):
+        return {"code": 500, "message": r.get("error") or r.get("message") or "回滚失败", "data": None}
+    # 审计（哈希链；失败不影响主流程）
+    try:
+        from app.core.security import generate_trace_id
+        from app.services import audit_service
+        await audit_service.create_audit_record(
+            generate_trace_id(),
+            decision_detail=json.dumps({
+                "action": "workload_rollback",
+                "operator": getattr(user, "username", ""),
+                "cluster_id": cluster_id,
+                "kind": kind,
+                "namespace": namespace,
+                "name": name,
+                "from_revision": r.get("from_revision"),
+                "to_revision": r.get("to_revision"),
+                "image": r.get("image", ""),
+            }, ensure_ascii=False),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("工作负载回滚审计写入失败: %s", e)
+    return {"code": 200, "message": "success", "data": {
+        "message": r.get("message"),
+        "from_revision": r.get("from_revision"),
+        "to_revision": r.get("to_revision"),
+        "image": r.get("image", ""),
+    }}
+
+
 @router.post("/clusters/{cluster_id}/workloads/recreate")
 async def recreate_workload(cluster_id: int, payload: dict, user=Depends(require_operator)):
     """重新创建服务（deployment=先建新后删旧；statefulset/daemonset=滚动重启）"""
