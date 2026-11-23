@@ -53,13 +53,24 @@ async def _pump_agent_logs(websocket: WebSocket, cluster_id: int, namespace: str
     poll_tail = max(int(tail or 200), 300)
 
     async def _fetch(n: int) -> tuple[str, str]:
-        """agent 集群直接走 gRPC（平台 9099 必 502）；返回 (text, error)。"""
+        """agent 集群直接走 gRPC（平台 9099 必 502）；返回 (text, error)。
+
+        2026-11-23：与 kubeconfig 直连保持一致——直连的日志流会带 RFC3339 行首时间戳，
+        agent 侧原来不带，导致两边显示不一样。这里同样请求 timestamps=True；
+        老 agent 不支持时自动退回无时间戳（保证还能看）。
+        """
         r = await executor_client.acall(
-            executor_client.get_pod_logs, cluster_id, namespace, pod, container, n, previous,
+            executor_client.get_pod_logs, cluster_id, namespace, pod, container, n, previous, True,
         )
-        if not r.get("success"):
-            return "", str(r.get("error", "") or "日志获取失败")
-        return str(r.get("logs", "") or ""), ""
+        if not (r or {}).get("success"):
+            err = str((r or {}).get("error") or "")
+            if "版本过低" in err or "not support" in err.lower() or "unsupported" in err.lower():
+                r = await executor_client.acall(
+                    executor_client.get_pod_logs, cluster_id, namespace, pod, container, n, previous, False,
+                )
+            if not (r or {}).get("success"):
+                return "", str((r or {}).get("error") or "日志获取失败")
+        return str((r or {}).get("logs") or ""), ""
 
     text, err = await _fetch(poll_tail)
     if err:
