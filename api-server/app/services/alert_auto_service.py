@@ -28,6 +28,12 @@ logger = get_logger("api-server.alert_auto")
 # 可自动判定"已恢复"的 Pod 故障类型（观察期外兜底）
 POD_RECOVERABLE_FAULTS = {"CrashLoopBackOff", "OOMKilled", "ImagePullBackOff", "ErrImagePull", "PendingTimeout", "TerminatingStuck"}
 
+# 2026-11-23 发布变更关联：启动失败类 Pod 故障（诊断前反查 Deployment 最近发布变更）
+RELEASE_CHANGE_FAULT_TYPES = {
+    "CrashLoopBackOff", "PodRestartProbeFail", "PodRestartOOM", "OOMKilled",
+    "CreateContainerError", "RunContainerError", "ContainerCannotRun",
+}
+
 # K8s 资源名/命名空间合法性（DNS label：小写字母/数字开头结尾，中缀仅小写字母数字和连字符）
 # 用于命令拼接前的严格校验，防 kubectl 参数注入
 _K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -1562,6 +1568,20 @@ async def _process_one(alert: Alert) -> bool:
                 alert.cluster_id, alert.namespace or "", alert.resource_name)
         except Exception as e:  # noqa: BLE001
             logger.debug("采集探针证据失败: %s", e)
+    # 2026-11-23 发布变更关联：CrashLoop/启动失败类 Pod 告警，诊断前反查 Deployment 最近发布变更。
+    # 命中「最近发布变更」→ 证据注入诊断上下文 + 落 alert_data；后面 B 层判定优先回滚而非转人工。
+    release_change: dict = {"changed": False, "recent": False, "rollback_to": 0, "summary": "", "deployment": ""}
+    if alert.resource_type == "pod" and alert.fault_type in RELEASE_CHANGE_FAULT_TYPES:
+        try:
+            _rc_dep = await _resolve_deployment(alert)
+            if _rc_dep:
+                from app.services.release_change_service import detect_release_change
+                release_change = await detect_release_change(
+                    alert.cluster_id, alert.namespace or "", _rc_dep, lookback_hours=6)
+                if release_change.get("changed") and release_change.get("summary"):
+                    alert_data["release_change_evidence"] = release_change["summary"]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("告警 %d 发布变更检测失败: %s", alert.id, e)
     if not diag_cached:
         # 诊断去重（2026-10-29 老板反馈「同一个问题诊断有很多」）：
         # 同集群+namespace+资源名+fault_type 在窗口内已有**有结论**的诊断 → 直接复用，
@@ -1605,6 +1625,10 @@ async def _process_one(alert: Alert) -> bool:
                 alert_data["recent_events"] = "【容器退出证据】\n" + term["summary"] + "\n\n" + (recent_events or "")
         except Exception as e:  # noqa: BLE001
             logger.debug("解析容器退出证据失败: %s", e)
+        # 2026-11-23 发布变更关联：把「最近发布变更」证据前置到 recent_events，让诊断看到
+        if alert_data.get("release_change_evidence"):
+            alert_data["recent_events"] = ("【最近发布变更】\n" + alert_data["release_change_evidence"]
+                                           + "\n\n" + (alert_data.get("recent_events") or ""))
         # 诊断必须同时看「容器 stdout 日志」（不走 ES）
         if alert.resource_type == "pod" and alert.resource_name:
             try:
@@ -1684,6 +1708,9 @@ async def _process_one(alert: Alert) -> bool:
             # 2026-11-23：容器退出证据也进 ReAct 上下文（首轮即可见，避免把 readiness 失败当根因）
             if alert_data.get("termination_evidence"):
                 diag_ctx["termination_evidence"] = alert_data["termination_evidence"]
+            # 2026-11-23 发布变更关联：最近发布变更证据也进诊断上下文
+            if alert_data.get("release_change_evidence"):
+                diag_ctx["release_change_evidence"] = alert_data["release_change_evidence"]
             # 探针专项（2026-10-29）：探针真实参数 + 健康端点实测，让结论落到
             # 「探针配置不合理」还是「端点真的挂了」，而不是笼统的「探针失败」。
             if probe_result.get("text"):
@@ -1821,7 +1848,22 @@ async def _process_one(alert: Alert) -> bool:
     if probe_steps and not _is_probe_root_cause(root_cause):
         probe_steps = []
         logger.info("告警 %d 诊断根因未指向探针配置，放弃调参动作（避免拿表象当根因）", alert.id)
-    if layer == "B":
+    # 2026-11-23 发布变更关联：B 层（应用/配置）且最近有发布变更 → 优先回滚，不转人工。
+    # 仅 B 层触发（C/D 层仍转人工；A 层无变更时逻辑不变）。
+    release_steps: list = []
+    if (layer == "B" and release_change.get("changed") and release_change.get("recent")
+            and release_change.get("rollback_to")):
+        ns = alert.namespace or ""
+        dep = release_change.get("deployment") or ""
+        rollback_to = release_change.get("rollback_to")
+        release_steps = [{
+            "platform_action": "rollback_deployment",
+            "description": f"最近发布变更导致启动失败，回滚 {ns}/{dep} 到 revision {rollback_to}",
+            "params": {"namespace": ns, "deployment": dep, "to_revision": rollback_to},
+        }]
+        logger.info("告警 %d 命中最近发布变更（rev %s→%s），改用回滚动作",
+                    alert.id, release_change.get("current_revision"), rollback_to)
+    if layer == "B" and not release_steps:
         await _mark_manual_and_notify(
             alert, "根因在应用层（需改代码走发布）",
             f"诊断：{root_cause}。需改代码/配置走发布流程，平台不自动执行。",
@@ -1844,7 +1886,14 @@ async def _process_one(alert: Alert) -> bool:
         return True
 
     # 4. 方案：有则复用 → 知识库命中直接复用（零 AI）→ 无则 AI 生成
-    if probe_steps:
+    # 2026-11-23 发布变更关联：B 层命中最近发布变更 → 用回滚动作替代重建/改代码。
+    if release_steps:
+        if plan_row and _plan_is_platform(plan_row):
+            plan_id = plan_row.id
+        else:
+            plan_id = await _create_probe_plan(alert, diag_row, release_steps)
+        steps = release_steps
+    elif probe_steps:
         # 已有平台动作方案（上轮生成但未走完）→ 复用，不重复建单
         if plan_row and _plan_is_platform(plan_row):
             plan_id = plan_row.id
@@ -1916,10 +1965,11 @@ async def _process_one(alert: Alert) -> bool:
 
     # 8. 按操作风险分流：风险评分决定自愈/审批（单人/双人）
     action = await _decide_action(alert, steps)
-    if probe_steps and action == "auto":
-        # 改探针会滚动重启 Pod，属影响面动作：至少单人放行（自愈规则仍可 force_auto 覆盖）
+    if (release_steps or probe_steps) and action == "auto":
+        # 改探针/回滚都会滚动重启或切换版本，属影响面动作：至少单人放行（自愈规则仍可 force_auto 覆盖）
         action = "approval_1"
-        logger.info("告警 %d 探针调参方案强制走审批（影响面动作）", alert.id)
+        logger.info("告警 %d %s方案强制走审批（影响面动作）", alert.id,
+                    "回滚" if release_steps else "探针调参")
 
     # 9. 场景规则覆盖（策略层规则库）：force_manual 强制审批 / force_auto 强制自动 / shadow 仅记录
     rule = await match_rule(alert)

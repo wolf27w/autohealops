@@ -49,6 +49,21 @@ class BaseAIModelAdapter:
         raise NotImplementedError
 
 
+# 质量优先的请求类型：诊断/决策（analysis 质量直接决定处置是否正确）
+_QUALITY_REQUEST_TYPES = ("diagnosis", "agent_decide", "agent_decide_once", "multi_diagnosis", "repair_plan")
+
+
+def order_model_configs(configs, request_type: str = ""):
+    """按请求类型排序候选模型（纯函数，便于单测）。
+
+    - 诊断/决策类：按 priority 升序（数字小=高能力），跳过 is_default 覆盖；
+    - 其它请求：默认模型优先（老板 2026-09-23 口径），再按 priority。
+    """
+    if request_type in _QUALITY_REQUEST_TYPES:
+        return sorted(configs, key=lambda c: c.priority)
+    return sorted(configs, key=lambda c: (not c.is_default, c.priority))
+
+
 def _validate_api_base(api_base: str) -> None:
     """校验模型 API 地址（防 SSRF）：禁止内网/回环/链路本地/保留/组播/云元数据地址"""
     if not api_base:
@@ -151,7 +166,9 @@ async def call_with_fallback(
         filtered = configs  # 无匹配时回退全部
 
     # 默认模型优先：is_default 排最前，不可用再降级到 priority 链其他模型（老板 2026-09-23）
-    filtered = sorted(filtered, key=lambda c: (not c.is_default, c.priority))
+    # 2026-11-23 老板反馈「分析不深」：诊断/决策类请求不走默认模型覆盖，按 priority 取高能力模型
+    # （实测近 48h 86 次诊断里 84 次落到 flash；pro 的 priority=10 自然排最前）。
+    filtered = order_model_configs(filtered, request_type)
 
     # 成本上限：超限降级到最便宜（priority 最大 = 最便宜）
     today_cost = await _today_cost()

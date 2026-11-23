@@ -20,6 +20,36 @@ _LOG_ERR_HINTS = ("error", "exception", "warn", "caused by", "timeout", "timed o
                   "error creating bean", "beancreationexception", "failed to bind")
 
 
+# 启动失败关键段落（Spring Boot / 通用异常栈）：从触发行起截取后续行，保留完整 Description/Action/Caused by
+_STARTUP_MARKERS = (
+    "application failed to start", "failed to start", "error creating bean",
+    "beancreationexception", "unsatisfieddependencyexception", "failed to bind",
+    "duplicatekeyexception", "invalid or corrupt jarfile", "no such file or directory",
+)
+
+
+def extract_startup_window(lines: list[str], window: int = 40, max_windows: int = 2) -> list[str]:
+    """从日志行中截取「启动失败现场」：命中标记行起后续 window 行（最多 max_windows 段）。
+
+    2026-11-23 老板反馈「分析不到主要原因」：原来只留关键错误行 + 末尾 30 行，
+    Spring 的 Description/Action/首个 Caused by 常被截掉；这里保留完整上下文窗口。
+    """
+    out: list[str] = []
+    taken = 0
+    i = 0
+    n = len(lines)
+    while i < n and taken < max_windows:
+        low = lines[i].lower()
+        if any(m in low for m in _STARTUP_MARKERS):
+            out.append("…（启动失败现场）")
+            out.extend(ln[:400] for ln in lines[i:i + window])
+            taken += 1
+            i += window
+            continue
+        i += 1
+    return out
+
+
 async def fetch_pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: int = 200) -> str:
     """拉取容器 stdout 日志（含上次崩溃实例）作为诊断上下文；返回精简文本（无则空串）。"""
     if not pod_name:
@@ -40,7 +70,10 @@ async def fetch_pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: i
         err_lines = [ln[:300] for ln in lines
                      if len(ln) <= 400 and any(h in ln.lower() for h in _LOG_ERR_HINTS)][-25:]
         tail_lines = [ln[:300] for ln in lines[-30:]]
+        startup_lines = extract_startup_window(lines)
         seg = f"【{label}】"
+        if startup_lines:
+            seg += "\n启动失败详情：\n" + "\n".join(startup_lines)
         if err_lines:
             seg += "\n关键错误/告警行：\n" + "\n".join(err_lines)
         seg += "\n日志末尾：\n" + "\n".join(tail_lines)
