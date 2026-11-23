@@ -608,6 +608,33 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
         await audit_service.update_audit_record(trace_id, "execution_detail", json.dumps({
             "plan_id": plan_id, "alert_id": alert.id, "mode": "auto", "result": "failed", "error": str(e),
         }, ensure_ascii=False))
+    if result == "success":
+        # 2026-11-23 R73：动作级验证 + 结果沉淀；验证不通过 → 立即停手转人工（不再试第二个动作）
+        try:
+            _steps = json.loads(plan_json or "{}").get("steps") or []
+        except (json.JSONDecodeError, TypeError):
+            _steps = []
+        try:
+            from app.services.action_verify import record_result, verify_action
+            _action_key = _gate_action_for(alert, _steps) if _steps else ""
+            if _action_key:
+                _root_cause = ""
+                try:
+                    from app.services.notification_service import _load_alert_diagnosis
+                    _root_cause = ((await _load_alert_diagnosis(alert)) or {}).get("root_cause") or ""
+                except Exception:  # noqa: BLE001
+                    pass
+                _ok, _detail, _elapsed = await verify_action(_action_key, alert)
+                await record_result(alert, action_key=_action_key, ok=_ok, detail=_detail,
+                                    elapsed=_elapsed, root_cause=_root_cause, trace_id=trace_id)
+                if not _ok:
+                    logger.warning("告警 %d 动作 %s 执行完成但验证未通过：%s", alert.id, _action_key, _detail)
+                    result = "failed"
+                else:
+                    logger.info("告警 %d 动作 %s 验证通过（%.1fs）", alert.id, _action_key, _elapsed)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("告警 %d 动作验证链路异常（不影响执行结果记录）: %s", alert.id, e)
+
     if result == "failed":
         await _set_plan_status(plan_id, "failed")
     return result
