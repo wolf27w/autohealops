@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ============================================================
+# AutoHealOps 统一管理入口
+#
+#   ./autohealops start      启动全部服务
+#   ./autohealops stop       停止全部服务
+#   ./autohealops restart    重启
+#   ./autohealops status     查看状态（无参数时默认显示）
+#   ./autohealops logs [api|ai|exec|fe]
+#
+# 实际启停逻辑统一由 start.sh 承担（单一实现，避免两套逻辑分叉）。
+# start.sh 已处理已知坑：api-server 8080/9095 必须同进程、executor 9090+9099
+# 就绪等待、只杀监听进程不误杀 vite 等。
+# ============================================================
+set -uo pipefail
+
+# 解析脚本真实路径（支持软链调用）
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  SELF="$(cd -P "$(dirname "$SELF")" && pwd)/$(readlink "$SELF")"
+done
+ROOT="$(cd -P "$(dirname "$SELF")" && pwd)"
+START="$ROOT/start.sh"
+
+usage() {
+  cat <<'USAGE'
+用法: ./autohealops {start|stop|restart|status|logs}
+
+  start        启动全部服务（k8s-executor → api-server → ai-service → frontend）
+  stop         停止全部服务（含 :8080/:9095 残留清理）
+  restart      重启（stop + start）
+  status       查看各服务与端口状态
+  logs [目标]  实时跟踪日志，目标 = api | ai | exec | fe（默认 api）
+
+无参数时显示状态。
+USAGE
+}
+
+if [ ! -f "$START" ]; then
+  echo "[错误] 找不到 $START" >&2
+  exit 1
+fi
+if [ ! -x "$START" ]; then
+  echo "[错误] $START 没有执行权限，请先 chmod +x start.sh" >&2
+  exit 1
+fi
+
+show_logs() {
+  local target="${1:-api}" file
+  case "$target" in
+    api|api-server)      file="$ROOT/logs/api-server.log" ;;
+    ai|ai-service)       file="$ROOT/logs/ai-service.log" ;;
+    exec|executor|k8s)   file="$ROOT/logs/executor.log" ;;
+    fe|frontend|vite)    file="$ROOT/logs/frontend.log" ;;
+    *) echo "未知日志目标: $target（可选 api|ai|exec|fe）" >&2; exit 1 ;;
+  esac
+  if [ ! -f "$file" ]; then
+    echo "[错误] 日志不存在: $file" >&2
+    exit 1
+  fi
+  echo "== tail -f $file（Ctrl-C 退出）=="
+  exec tail -n 100 -f "$file"
+}
+
+case "${1:-}" in
+  start|stop|restart|status)
+    exec "$START" "$1"
+    ;;
+  logs)
+    show_logs "${2:-api}"
+    ;;
+  ""|help|-h|--help)
+    usage
+    echo
+    exec "$START" status
+    ;;
+  *)
+    echo "未知命令: $1" >&2
+    echo >&2
+    usage >&2
+    exit 1
+    ;;
+esac
