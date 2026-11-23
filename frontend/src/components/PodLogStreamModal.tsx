@@ -8,17 +8,20 @@ interface LogPod { clusterId: number; namespace: string; name: string }
 interface Props { pod: LogPod | null; onClose: () => void }
 interface LogRow { container: string; line: string }
 
-// 默认窗口：最近 2 分钟（点「实时日志」才持续跟随）
-const DEFAULT_WINDOW_SECONDS = 120
+// 默认（暂停态）取最近 200 行、不限时间；点「实时日志」才切到 2 分钟增量跟随。
+// 2026-11-23 修复：原默认 since_seconds=120 对「2 分钟内无输出」的服务返回 0 字节，
+// 弹窗会一直卡在「等待日志…」，看起来像日志功能坏了。
+const DEFAULT_TAIL = 200
+const LIVE_WINDOW_SECONDS = 120
 
 function buildWsUrl(clusterId: number, ns: string, pod: string, container: string, follow: boolean,
-  previous: boolean, sinceSeconds: number) {
+  previous: boolean, sinceSeconds: number, tail: number) {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token') || ''
   const p = new URLSearchParams({
-    token, container, follow: String(follow), previous: String(previous),
-    since_seconds: String(sinceSeconds),
+    token, container, follow: String(follow), previous: String(previous), tail: String(tail),
   })
+  if (sinceSeconds > 0) p.set('since_seconds', String(sinceSeconds))
   return `${proto}//${window.location.host}/api/v1/logs/ws/clusters/${clusterId}/namespaces/${ns}/pods/${pod}/logs?${p.toString()}`
 }
 
@@ -105,7 +108,10 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     pendingRef.current.clear()
     const targets = effectiveContainers
     for (const c of targets) {
-      const ws = new WebSocket(buildWsUrl(pod.clusterId, pod.namespace, pod.name, c, live, previous, DEFAULT_WINDOW_SECONDS))
+      const ws = new WebSocket(buildWsUrl(
+        pod.clusterId, pod.namespace, pod.name, c, live, previous,
+        live ? LIVE_WINDOW_SECONDS : 0, DEFAULT_TAIL,
+      ))
       wsMapRef.current.set(c, ws)
       ws.onopen = () => { openCountRef.current++; setConnected(true) }
       ws.onclose = () => {
@@ -121,7 +127,8 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
           try {
             const j = JSON.parse(text)
             if (j.message) {
-              const errText = `[错误] ${j.message}\n`
+              // info = 服务端提示（如「该范围无日志」），error = 真实错误
+              const errText = j.type === 'info' ? `— ${j.message}\n` : `[错误] ${j.message}\n`
               if (pausedRef.current) pendingRef.current.set(c, (pendingRef.current.get(c) || '') + errText)
               else appendContainerText(c, errText)
             }
@@ -186,7 +193,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   return (
     <Modal open title={<Space>实时日志：{pod.name}
       <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
-        ● {live ? (connected ? '实时' : '连接中…') : '已暂停（最近 2 分钟）'}
+        ● {live ? (connected ? '实时' : '连接中…') : '最近 200 行'}
       </span>
     </Space>} footer={null} onCancel={onClose} width={1000} destroyOnClose>
       <Space wrap style={{ marginBottom: 8 }}>
@@ -216,7 +223,13 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
       </Space>
       <pre ref={boxRef} style={{ maxHeight: '66vh', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'monospace' }}>
         {shown.length === 0
-          ? <span style={{ color: '#888' }}>{connected ? '(等待日志…)' : '(未连接)'}</span>
+          ? <span style={{ color: '#888' }}>
+            {!connected
+              ? '(连接中…)'
+              : live
+                ? '(实时跟随中，等待新日志…)'
+                : '(最近 200 行内没有日志，点「实时日志」持续跟随)'}
+          </span>
           : shown.map((r, i) => (
             <div key={i} style={colorize(r.line)}>
               {multi && <span style={{ color: containerColor(r.container), marginRight: 4 }}>[{r.container}]</span>}

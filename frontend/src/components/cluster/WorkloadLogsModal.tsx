@@ -122,7 +122,8 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   }, [])
 
   // 快照加载（非跟随态）：逐容器拉取并合并到同一列表
-  const DEFAULT_WINDOW_SECONDS = 120
+  // 2026-11-23 修复：默认不限时间窗口，取最近 200 行（原 since_seconds=120 对安静服务返回空）
+  const SNAPSHOT_TAIL = 200
   const loadSnapshot = useCallback(async () => {
     const targets = effectiveContainers
     if (!targets.length) { setLines([]); setTruncated(false); return }
@@ -130,7 +131,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     const allRows: LogRow[] = []
     let anyTruncated = false
     for (const c of targets) {
-      const p = new URLSearchParams({ container: c, since_seconds: String(DEFAULT_WINDOW_SECONDS), tail: String(200) })
+      const p = new URLSearchParams({ container: c, tail: String(SNAPSHOT_TAIL) })
       const url = `/api/v1/resources/clusters/${clusterId}/namespaces/${encodeURIComponent(namespace)}/workloads/${kind}/${name}/logs?${p.toString()}`
       try {
         const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
@@ -325,7 +326,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       title={<Space>聚合日志：{name}
         <Tag color="default" style={{ fontSize: 11 }}>{kind}</Tag>
         <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
-          ● {following ? (paused ? '已暂停（后台继续接收）' : (connected ? '实时' : '连接中…')) : '已暂停（最近 2 分钟）'}
+          ● {following ? (paused ? '已暂停（后台继续接收）' : (connected ? '实时' : '连接中…')) : '最近 200 行'}
         </span>
         {truncated && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
         <span style={{ color: '#8c8c8c', fontSize: 12 }}>{shown.length}/{lines.length} 行</span>
@@ -360,7 +361,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       </Space>
       <pre ref={boxRef} style={{ maxHeight: '66vh', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'monospace', borderRadius: 6 }}>
         {shown.length === 0
-          ? <span style={{ color: '#888' }}>{following ? '(等待日志…)' : '(无日志)'}</span>
+          ? <span style={{ color: '#888' }}>{following ? '(实时跟随中，等待新日志…)' : '(最近 200 行内没有日志)'}</span>
           : shown.map((l, i) => (
             <div key={i} style={{ display: 'flex' }}>
               <span onClick={() => toggleCollapse(l.pod)} title="点击折叠/展开该 Pod"

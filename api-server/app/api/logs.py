@@ -41,6 +41,8 @@ async def search_logs(cluster_name: str = "", namespace: str = "", pod: str = ""
 
 async def _pump_logs(websocket: WebSocket, params: dict) -> None:
     base = getattr(settings, "EXECUTOR_LOGSTREAM_ADDR", "http://localhost:9099")
+    sent_any = False
+    follow = str(params.get("follow", "true")).lower() not in ("false", "0")
     try:
         async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
             async with client.stream("GET", f"{base.rstrip('/')}/logs", params=params) as resp:
@@ -50,7 +52,20 @@ async def _pump_logs(websocket: WebSocket, params: dict) -> None:
                     return
                 async for chunk in resp.aiter_text():
                     if chunk:
+                        sent_any = True
                         await websocket.send_text(chunk)
+        # 2026-11-23 修复：空结果必须明确告知，否则前端永远卡在「等待日志…」
+        if not sent_any:
+            await websocket.send_json({
+                "type": "info",
+                "message": "该时间范围内没有日志（点「实时日志」可持续跟随）",
+            })
+        # 非跟随模式流已结束 → 主动关闭，避免连接悬着
+        if not follow:
+            try:
+                await websocket.close(code=1000)
+            except Exception:  # noqa: BLE001
+                pass
     except asyncio.CancelledError:
         raise
     except Exception as e:  # noqa: BLE001
@@ -86,7 +101,7 @@ async def ws_pod_logs(websocket: WebSocket, cluster_id: int, namespace: str, pod
             msg = await websocket.receive()
             if msg["type"] == "websocket.disconnect":
                 break
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         task.cancel()
