@@ -214,6 +214,93 @@ def _infer_layer(fault_type: str) -> str:
     return FAULT_TYPE_LAYER.get(ft, "A")
 
 
+# ============ R71/R72：自主处置三条件闸门接线（2026-11-23） ============
+# 设计口径：闸门只“收紧”、不“放松”——它可以把 auto 降为审批/转人工，
+# 但永远不会绕过现有风险评分/审批链（原有 decision_engine 先跑，闸门在其后判定）。
+
+
+def _gate_action_for(alert: Alert, steps: list) -> str:
+    """从修复步骤反推「动作库」里的动作 key（映射不到就返回空，跳过闸门）。"""
+    cmds = " ".join(str(s.get("command") or "") for s in (steps or []) if isinstance(s, dict)).lower()
+    ft = alert.fault_type or ""
+    if ft == "TerminatingStuck" and "delete pod" in cmds:
+        return "delete_stuck_pod"
+    if "delete pod" in cmds:
+        return "rebuild_pod"
+    if ft in ("ImagePullBackOff", "ErrImagePull"):
+        return "fix_image_pull_secret"
+    if "rollback" in cmds or "rollout undo" in cmds:
+        return "rollback_deployment"
+    if "rollout restart" in cmds:
+        return "rolling_restart"
+    return ""
+
+
+async def _gate_workload_spec(alert: Alert) -> tuple[str, dict]:
+    """取工作负载关键属性供「用户感知」判定；取不到返回空 spec（闸门会按有感知处理）。"""
+    kind = (alert.resource_type or "").lower()
+    if kind not in ("deployment", "statefulset", "daemonset"):
+        return "", {}
+    ns, name = alert.namespace or "", alert.resource_name or ""
+    if not ns or not name:
+        return kind, {}
+    try:
+        import yaml
+        r = await executor_client.acall(
+            executor_client.get_workload_yaml, alert.cluster_id, kind, ns, name
+        )
+        if not (r or {}).get("success"):
+            return kind, {}
+        doc = yaml.safe_load((r or {}).get("yaml") or "") or {}
+        spec = doc.get("spec") or {}
+        tpl = ((spec.get("template") or {}).get("spec") or {})
+        containers = tpl.get("containers") or []
+        strategy_obj = spec.get("strategy") or {}
+        out = {
+            "replicas": int(spec.get("replicas", 1) or 1),
+            "strategy": strategy_obj.get("type") or "RollingUpdate",
+            "max_unavailable": str((strategy_obj.get("rollingUpdate") or {}).get("maxUnavailable", "25%")),
+            "readiness_probe": any(bool(c.get("readinessProbe")) for c in containers),
+        }
+        return kind, out
+    except Exception as e:  # noqa: BLE001
+        logger.debug("告警 %d 取工作负载规格失败（按有感知处理）: %s", alert.id, e)
+        return kind, {}
+
+
+async def _evaluate_autonomy_gate(alert: Alert, steps: list, confidence) -> dict | None:
+    """返回闸门判定；映射不到动作时返回 None（不干预原链路）。"""
+    from app.services.action_registry import get_action
+    from app.services.autonomy_gate import evaluate
+    from app.services.user_impact import judge_user_impact
+
+    action_key = _gate_action_for(alert, steps)
+    if not action_key or not get_action(action_key):
+        return None
+    kind, spec = await _gate_workload_spec(alert)
+    impact = judge_user_impact(spec, kind) if spec else {
+        "impacting": True, "reasons": ["缺少工作负载规格，按有用户感知处理"], "checked": {},
+    }
+    res = evaluate(
+        action_key=action_key,
+        confidence=None if confidence is None else float(confidence),
+        env=(alert.env or ""),
+        user_impacting=bool(impact.get("impacting")),
+    )
+    # 既定口径例外（2026-09-22）：卡 Terminating 的 Pod「审不审都要删」→ 免审批
+    if action_key == "delete_stuck_pod":
+        res = {"decision": "auto", "level": "L1",
+               "reasons": ["卡 Terminating 的 Pod 按既定口径免审批（审不审都要删）"]}
+    return {
+        "action": action_key,
+        "decision": res.get("decision"),
+        "level": res.get("level"),
+        "reasons": (res.get("reasons") or []) + (impact.get("reasons") or []),
+        "user_impacting": bool(impact.get("impacting")),
+        "impact_checked": impact.get("checked") or {},
+    }
+
+
 # ============ R44-P3：低置信度转人工闸门 ============
 
 def confidence_below_threshold(confidence, threshold: float | None = None) -> bool:
@@ -1690,6 +1777,30 @@ async def _process_one(alert: Alert) -> bool:
             logger.info("告警 %d 命中规则[%s] 强制自动", alert.id, rule.name)
 
     plan_json = json.dumps({"steps": steps}, ensure_ascii=False)
+
+    # 8.5 自主处置三条件闸门（R71/R72，2026-11-23）：只收紧、不放松
+    try:
+        gate = await _evaluate_autonomy_gate(alert, steps, diag_confidence)
+    except Exception as _ge:  # noqa: BLE001
+        logger.debug("告警 %d 自主闸门判定失败（跳过，沿用原决策）: %s", alert.id, _ge)
+        gate = None
+    if gate:
+        try:
+            await audit_service.update_audit_record(
+                trace_id, "autonomy_gate", json.dumps(gate, ensure_ascii=False))
+        except Exception:  # noqa: BLE001
+            pass
+        if gate["decision"] == "manual" and action == "auto":
+            await _mark_manual_and_notify(
+                alert, "自主闸门拦截（不满足自主条件）",
+                "；".join(gate.get("reasons") or []) or "未给出原因",
+            )
+            logger.info("告警 %d 自主闸门拦截：%s", alert.id, "；".join(gate.get("reasons") or []))
+            return True
+        if gate["decision"] == "approve" and action == "auto":
+            action = "approval_1"
+            logger.info("告警 %d 自主闸门要求人工放行：%s", alert.id, "；".join(gate.get("reasons") or []))
+
     if action == "auto":
         # R44-P3：低置信度转人工闸门——AI 诊断置信度不足 → 不自动执行，转工单/待人工
         # （diag_confidence=None 表示缺失，confidence_below_threshold 返回 False，退回原有行为）
