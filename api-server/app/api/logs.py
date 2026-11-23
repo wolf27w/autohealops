@@ -39,11 +39,72 @@ async def search_logs(cluster_name: str = "", namespace: str = "", pod: str = ""
 # 浏览器 ↔ api-server(WS) ↔ executor 日志流 HTTP（apiserver follow）单向流式推送。
 
 
+async def _pump_agent_logs(websocket: WebSocket, cluster_id: int, namespace: str, pod: str,
+                          container: str, tail: int, since_seconds: int, previous: bool,
+                          follow: bool) -> None:
+    """agent 接入集群：平台侧无 kubeconfig，日志流 9099 必 502 → 改走 gRPC 隧道。
+
+    非跟随：取一次（since_seconds 优先，否则 tail 行），空结果发 info 后关闭。
+    跟随：每 2s 拉 tail 窗口，按行数增量推送（与聚合日志同一套增量口径）。
+    """
+    from app.api.workload_logs import incremental_new_lines
+    from app.clients.executor_client import executor_client
+
+    poll_tail = max(int(tail or 200), 300)
+
+    async def _fetch(n: int) -> tuple[str, str]:
+        """agent 集群直接走 gRPC（平台 9099 必 502）；返回 (text, error)。"""
+        r = await executor_client.acall(
+            executor_client.get_pod_logs, cluster_id, namespace, pod, container, n, previous,
+        )
+        if not r.get("success"):
+            return "", str(r.get("error", "") or "日志获取失败")
+        return str(r.get("logs", "") or ""), ""
+
+    text, err = await _fetch(poll_tail)
+    if err:
+        await websocket.send_json({"type": "error", "message": f"日志获取失败：{err}"})
+        return
+    if text:
+        await websocket.send_text(text)
+    if not follow:
+        if not text:
+            await websocket.send_json({
+                "type": "info",
+                "message": "该时间范围内没有日志（点「实时日志」可持续跟随）",
+            })
+        try:
+            await websocket.close(code=1000)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    pushed = len(text.split("\n")) if text else 0
+    while True:
+        await asyncio.sleep(2)
+        t2, e2 = await _fetch(poll_tail)
+        if e2:
+            continue
+        lines = t2.split("\n") if t2 else []
+        new_lines, pushed = incremental_new_lines(lines, pushed)
+        if new_lines:
+            await websocket.send_text("\n".join(new_lines) + "\n")
+
+
 async def _pump_logs(websocket: WebSocket, params: dict) -> None:
     base = getattr(settings, "EXECUTOR_LOGSTREAM_ADDR", "http://localhost:9099")
     sent_any = False
     follow = str(params.get("follow", "true")).lower() not in ("false", "0")
     try:
+        from app.services.logstream_client import is_agent_cluster
+        if await is_agent_cluster(int(params["cluster_id"])):
+            await _pump_agent_logs(
+                websocket, int(params["cluster_id"]), str(params["namespace"]), str(params["pod"]),
+                str(params.get("container") or ""), int(params.get("tail") or 200),
+                int(params.get("since_seconds") or 0),
+                str(params.get("previous", "false")).lower() in ("true", "1"), follow,
+            )
+            return
         async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
             async with client.stream("GET", f"{base.rstrip('/')}/logs", params=params) as resp:
                 if resp.status_code != 200:
