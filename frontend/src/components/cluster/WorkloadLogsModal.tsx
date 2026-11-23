@@ -123,7 +123,8 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   // 2026-11-23 修复：默认不限时间窗口，取最近 200 行（原 since_seconds=120 对安静服务返回空）
   const SNAPSHOT_TAIL = 200
   const loadSnapshot = useCallback(async () => {
-    const targets = effectiveContainers
+    // 2026-11-23：未选容器 = 请求 container=''（后端按 Pod 实际容器聚合，含 sidecar）
+    const targets = selected.length ? selected : ['']
     if (!targets.length) { setLines([]); setTruncated(false); return }
     const token = localStorage.getItem('token') || ''
     const allRows: LogRow[] = []
@@ -145,13 +146,14 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     }
     setLines(allRows.slice(-MAX_LINES))
     setTruncated(anyTruncated)
-  }, [clusterId, namespace, kind, name, effectiveContainers])
+  }, [clusterId, namespace, kind, name, selected])
 
   // 开始跟随：为每个容器各开一条 SSE（SSE 先推快照，再每 2s 增量）
   const startFollow = useCallback(() => {
     setLines([])
     setTruncated(false)   // 实时态没有“截断”概念，清掉快照遗留标记
-    const targets = effectiveContainers
+    // 未选容器 → 一条流 + container=''，后端按 Pod 实际容器逐个拉取（含 sidecar）
+    const targets = selected.length ? selected : ['']
     for (const c of targets) {
       const es = new EventSource(buildStreamUrl(clusterId, namespace, kind, name, c))
       esMapRef.current.set(c, es)
@@ -179,7 +181,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         }
       })
     }
-  }, [clusterId, namespace, kind, name, effectiveContainers, appendRows])
+  }, [clusterId, namespace, kind, name, selected, appendRows])
 
   // 容器列表
   useEffect(() => {

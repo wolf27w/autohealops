@@ -143,22 +143,14 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod])
 
-  // pod / 容器 / 重启前 变化 → 拉一次快照（最近 200 行，不跟随）
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // 2026-11-23 老板口径：开关与「看一段/实时」一一对应——
+  // 打开=实时跟随；关闭=重新拉一段（最近 200 行快照）。
   useEffect(() => {
     if (!pod || !effectiveContainers.length) return
-    if (live) return  // 实时态由下面的 effect 负责
     connect()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pod, effectiveContainers, previous])
-
-  // 实时开关：开 → 建流；关 → 断开（保留屏幕内容）
-  useEffect(() => {
-    if (!pod || !effectiveContainers.length) return
-    if (live) { connect() } else { closeAllWs() }
     return () => closeAllWs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live])
+  }, [pod, effectiveContainers, previous, live])
 
   useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [rows, autoScroll])
 
