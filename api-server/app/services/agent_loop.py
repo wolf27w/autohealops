@@ -228,6 +228,10 @@ def _normalize_final(decision: dict, state: dict, start: float) -> dict:
     return {
         "root_cause": decision.get("root_cause", "") or "",
         "suggestions": decision.get("suggestions") or [],
+        # R75.8：诊断深度与结构化输出（缺失给空结构，向后兼容）
+        "root_cause_chain": decision.get("root_cause_chain") or {},
+        "analysis": decision.get("analysis") or {},
+        "suggestions_detail": decision.get("suggestions_detail") or {},
         "root_cause_layer": decision.get("root_cause_layer", "") or "",
         "handling_advice": decision.get("handling_advice", "") or "",
         "model_used": decision.get("model_used", "") or "",
@@ -270,6 +274,10 @@ async def _degrade(
         return {
             "root_cause": fallback_result.get("root_cause", "") or "",
             "suggestions": fallback_result.get("suggestions") or [],
+            # R75.8：透传结构化字段（单次兜底结果已含）
+            "root_cause_chain": fallback_result.get("root_cause_chain") or {},
+            "analysis": fallback_result.get("analysis") or {},
+            "suggestions_detail": fallback_result.get("suggestions_detail") or {},
             "root_cause_layer": fallback_result.get("root_cause_layer", "") or "",
             "handling_advice": fallback_result.get("handling_advice", "") or "",
             "model_used": fallback_result.get("model_used", "") or "",
@@ -368,6 +376,10 @@ async def _wrap_up(
             return {
                 "root_cause": decision.get("root_cause", "") or "",
                 "suggestions": decision.get("suggestions") or [],
+                # R75.8：透传结构化字段（缺失给空结构）
+                "root_cause_chain": decision.get("root_cause_chain") or {},
+                "analysis": decision.get("analysis") or {},
+                "suggestions_detail": decision.get("suggestions_detail") or {},
                 "root_cause_layer": decision.get("root_cause_layer", "") or "",
                 "handling_advice": decision.get("handling_advice", "") or "",
                 "model_used": decision.get("model_used", "") or "",

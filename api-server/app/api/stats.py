@@ -1512,6 +1512,51 @@ async def ai_dashboard(range_days: int = 7, user=Depends(require_any_user)):
     }}
 
 
+@router.get("/repair-quality")
+async def repair_quality(days: int = 7, user=Depends(require_any_user)):
+    """修复质量（R75.3）：近 N 天计划状态 + 复发失败数 + 复发率。
+
+    recurrence_rate = failed(recurred) / (completed + failed)，分母为 0 时为 0。
+    """
+    from datetime import timedelta
+
+    from app.models import RepairPlan
+
+    since = datetime.now() - timedelta(days=max(1, min(int(days or 7), 90)))
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(RepairPlan.status, func.count(RepairPlan.id))
+            .where(RepairPlan.created_at >= since)
+            .group_by(RepairPlan.status)
+        )).all()
+        by_status = {r[0] or "unknown": int(r[1] or 0) for r in rows}
+
+        recurred = (await session.execute(
+            select(func.count(RepairPlan.id)).where(
+                RepairPlan.created_at >= since,
+                RepairPlan.status == "failed",
+                func.json_unquote(func.json_extract(RepairPlan.plan_json, "$.meta.failed_reason")) == "recurred",
+            )
+        )).scalar() or 0
+
+        action_rows = (await session.execute(
+            select(RepairPlan.operation_types, func.count(RepairPlan.id))
+            .where(RepairPlan.created_at >= since)
+            .group_by(RepairPlan.operation_types)
+        )).all()
+
+    completed = by_status.get("completed", 0)
+    failed = by_status.get("failed", 0)
+    denom = completed + failed
+    return {"code": 200, "message": "success", "data": {
+        "range_days": days,
+        "by_status": by_status,
+        "failed_recurred": int(recurred),
+        "recurrence_rate": round(float(recurred) / denom, 4) if denom else 0.0,
+        "by_operation": [{"operation": r[0] or "unknown", "count": int(r[1] or 0)} for r in action_rows],
+    }}
+
+
 @router.get("/platform-health")
 async def platform_health(user=Depends(require_any_user)):
     """平台自身健康探活（api-server / 数据库 / Redis / executor）—— 与 /ready 共用探测实现。"""

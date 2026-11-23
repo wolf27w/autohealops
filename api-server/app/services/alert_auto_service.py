@@ -767,6 +767,50 @@ async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
         await _end_repair(alert.id)
 
 
+async def _persist_react_diagnosis(alert: Alert, diagnosis: dict, alert_data: dict, diag_ctx: dict) -> int:
+    """R75.8：把 ReAct 诊断结果落 `ai_diagnosis_results`（原来只在内存，四段展示/工单/复盘拿不到）。
+
+    单次诊断（ai-service）已自行落库（带 diagnosis_id）→ 直接跳过，避免重复。
+    失败只告警不影响主链路。
+    """
+    if not isinstance(diagnosis, dict) or diagnosis.get("diagnosis_id"):
+        return int(diagnosis.get("diagnosis_id") or 0) if isinstance(diagnosis, dict) else 0
+    try:
+        snapshot = {
+            "source": "react",
+            "termination_evidence": alert_data.get("termination_evidence") or "",
+            "release_change_evidence": alert_data.get("release_change_evidence") or "",
+            "probe_evidence": alert_data.get("probe_evidence") or "",
+            "metrics_trend": alert_data.get("metrics_trend") or "",
+            "tool_steps": diagnosis.get("tool_steps") or [],
+            "rounds": diagnosis.get("rounds"),
+            "degraded": diagnosis.get("degraded"),
+            "degrade_reason": diagnosis.get("degrade_reason"),
+        }
+        payload = {k: diagnosis.get(k) for k in (
+            "root_cause", "root_cause_chain", "analysis", "suggestions", "suggestions_detail",
+            "root_cause_layer", "handling_advice", "impact", "risk_level", "category",
+            "confidence", "evidence_refs", "model_used", "degraded", "degrade_reason",
+        )}
+        payload["_source"] = "react"
+        async with async_session() as session:
+            rec = AIDiagnosisResult(
+                alert_id=alert.id,
+                context_snapshot=json.dumps(snapshot, ensure_ascii=False, default=str)[:60000],
+                diagnosis_json=json.dumps(payload, ensure_ascii=False, default=str),
+                confidence=float(diagnosis.get("confidence") or 0),
+            )
+            session.add(rec)
+            await session.commit()
+            await session.refresh(rec)
+        diagnosis["diagnosis_id"] = rec.id
+        logger.info("告警 %d ReAct 诊断已落库 #%d", alert.id, rec.id)
+        return rec.id
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d ReAct 诊断落库失败（不影响主链路）: %s", alert.id, e)
+        return 0
+
+
 async def _collect_pod_events(alert: Alert) -> str:
     """采集 Pod describe events 作为诊断上下文（替代服务日志）"""
     if alert.resource_type != "pod":
@@ -1515,6 +1559,20 @@ async def _process_one(alert: Alert) -> bool:
     if alert.manual_required or "已转人工" in (alert.message or ""):
         return False
 
+    # R75.3 修复后复发判定（2026-11-23）：同服务同故障在「上次修复完成」后 10 分钟内再次告警
+    # → 上次计划标记 failed（工单升级），并统计同类动作次数（≥2 次则禁止再重复）。
+    rec: dict = {"recurred": False, "block_actions": [], "action": "", "plan_id": 0, "attempts": 0}
+    try:
+        from app.services import repair_recurrence_service as _recur
+        rec = await _recur.detect_recurrence(alert)
+        if rec.get("recurred"):
+            logger.warning("告警 %d 判定为修复后复发（上次计划 #%s，动作=%s，%s 分钟内）",
+                           alert.id, rec.get("plan_id"), rec.get("action"), _recur.WINDOW_MINUTES)
+            await _recur.mark_plan_failed(rec.get("plan_id"), alert.id)
+            await _recur.escalate_ticket(alert, rec)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("修复后复发判定失败（跳过，不影响主链路）: %s", e)
+
     # 2. 复用已有诊断 + 方案（断点续传：诊断/方案失败后下次继续）
     async with async_session() as session:
         diag_row = (await session.execute(
@@ -1742,6 +1800,8 @@ async def _process_one(alert: Alert) -> bool:
                         await asyncio.sleep(2)
             if diagnosis is None:
                 raise _diag_err  # 交给外层 except → 转人工 + 通知
+            # R75.8：ReAct 结果补落库（单次诊断自带 diagnosis_id，会跳过）
+            await _persist_react_diagnosis(alert, diagnosis, alert_data, diag_ctx)
             root_cause = diagnosis.get("root_cause", "")
             # 2026-11-23：优先用三层结论拼根因（机制 + 触发），避免只有表象
             _mech = (diagnosis.get("mechanism") or "").strip()
@@ -1939,6 +1999,19 @@ async def _process_one(alert: Alert) -> bool:
     # 6. 其他故障：需要 steps（AI 方案为空用内置步骤兜底）
     if not steps:
         steps = build_standard_steps(alert)
+
+    # R75.3：同类动作已连续失败 ≥2 次且复发 → 禁止第 3 次同动作（避免"删 Pod → 复发 → 再删"）
+    if steps and rec.get("block_actions"):
+        _cur_action = _gate_action_for(alert, steps)
+        if _cur_action and _cur_action in rec["block_actions"]:
+            await _mark_manual_and_notify(
+                alert, "修复后复发（同类动作已失败 2 次）",
+                f"上次动作「{_cur_action}」完成后 10 分钟内同故障复发（计划 #{rec.get('plan_id')}）。"
+                "已停止重复该动作，需人工确认根因（发布/配置）后再处置。",
+            )
+            logger.warning("告警 %d 复发且同类动作已达 %s 次，禁止重复 %s", alert.id,
+                           rec.get("attempts"), _cur_action)
+            return True
 
     # 6.5 发布相关性 → 优先「回滚」（R70，2026-11-23）
     # 口径：诊断结论命中发布/版本/镜像类表述且目标是无状态 Deployment 时，

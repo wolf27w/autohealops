@@ -11,6 +11,7 @@ import type { AiFeedbackData, FaultDiagnosisItem, DiagnosisFailureItem, Diagnosi
 import SeverityTag from '../components/SeverityTag'
 import StatusTag from '../components/StatusTag'
 import Markdown from '../components/Markdown'
+import DiagnosisSections from '../components/DiagnosisSections'
 
 export default function FaultDiagnosis({ category = '' }: { category?: string }) {
   // N3 诊断分离：category = cluster / app / ''（空=全部）
@@ -143,21 +144,11 @@ export default function FaultDiagnosis({ category = '' }: { category?: string })
       <Modal title="诊断结果" open={!!detail} onCancel={() => setDetail(null)} footer={null} width={720}>
         {detail && (() => {
           const j = parse(detail.diagnosis_json || '{}')
-          const sug = j.suggestions
           return (
             <div>
-              <div><b>根因</b></div>
-              <Markdown text={typeof j.root_cause === 'string' ? j.root_cause : JSON.stringify(j.root_cause || '')} />
-              {sug && (
-                <>
-                  <div style={{ marginTop: 8 }}><b>处理意见</b></div>
-                  {Array.isArray(sug)
-                    ? <ul style={{ paddingLeft: 20 }}>{sug.map((s: unknown, i: number) => <li key={i}>{String(s)}</li>)}</ul>
-                    : <Markdown text={String(sug)} />}
-                </>
-              )}
+              <DiagnosisSections j={j} />
               {j.handling_advice && <div style={{ background: '#fffbe6', padding: 8, marginTop: 8 }}><Markdown text={String(j.handling_advice)} /></div>}
-              <p style={{ color: '#999' }}>
+              <p style={{ color: '#999', marginTop: 8 }}>
                 {j.risk_level ? `风险：${j.risk_level} ｜ ` : ''}{j.root_cause_layer ? `层面：${j.root_cause_layer} ｜ ` : ''}
                 置信度：{detail.confidence} ｜ 诊断时间：{detail.created_at}
               </p>

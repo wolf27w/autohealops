@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.core.database import async_session
 from app.models import AIDiagnosisResult, ModelAccuracyStat, PromptTemplate
 from app.services import fault_taxonomy, prompt_engine, template_routing
-from app.services.diagnosis_contract_prompt import CATEGORY_FIELD_SPEC
+from app.services.diagnosis_contract_prompt import CATEGORY_FIELD_SPEC, DEPTH_ANALYSIS_SPEC
 from app.services.es_client import ESClient
 from app.services.model_adapter import call_with_fallback
 from app.services.prometheus_client import PrometheusClient
@@ -180,7 +180,7 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         "probe_evidence": _sanitize_external(ctx.get("probe_evidence") or alert_data.get("probe_evidence", "")),
     }
     # R44-P2：三字段契约（category/confidence/evidence_refs）运行时追加，不依赖具体模板
-    system_prompt = await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD + CATEGORY_FIELD_SPEC + PROBE_SYMPTOM_SPEC + _OUTPUT_CONCISE_SPEC
+    system_prompt = await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD + CATEGORY_FIELD_SPEC + PROBE_SYMPTOM_SPEC + _OUTPUT_CONCISE_SPEC + DEPTH_ANALYSIS_SPEC
     user_prompt = await prompt_engine.render(tpl.user_prompt_template, render_ctx)
     # 模板里没有探针段（存量模板未改）→ 统一追加在末尾，不依赖改库里的提示词
     _probe_text = (ctx.get("probe_evidence") or alert_data.get("probe_evidence") or "").strip()
@@ -202,7 +202,7 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
             try:
                 fb_user = prompt_engine.render_template(fallback_tpl.user_prompt_template, render_ctx)
                 fb_resp, fb_model = await call_with_fallback(
-                    fallback_tpl.system_prompt + _INPUT_BOUNDARY_GUARD + CATEGORY_FIELD_SPEC + PROBE_SYMPTOM_SPEC + _OUTPUT_CONCISE_SPEC, fb_user, "diagnosis", severity)
+                    fallback_tpl.system_prompt + _INPUT_BOUNDARY_GUARD + CATEGORY_FIELD_SPEC + PROBE_SYMPTOM_SPEC + _OUTPUT_CONCISE_SPEC + DEPTH_ANALYSIS_SPEC, fb_user, "diagnosis", severity)
                 fb_parsed = _parse_diagnosis_json(fb_resp.content)
                 if (fb_parsed.get("root_cause") or "").strip() or fb_parsed.get("suggestions"):
                     parsed = fb_parsed
@@ -241,6 +241,11 @@ async def diagnose_alert(alert_data: dict, context_data: dict | None = None) -> 
         # R44-P2：三字段契约
         "category": parsed.get("category", fault_taxonomy.UNKNOWN),
         "evidence_refs": parsed.get("evidence_refs", []),
+        # R75.8：诊断深度与结构化输出
+        "root_cause_chain": parsed.get("root_cause_chain", {"trigger": "", "direct": "", "root": ""}),
+        "analysis": parsed.get("analysis", {"hypotheses": [], "eliminated": [], "evidence_gaps": []}),
+        "suggestions_detail": parsed.get("suggestions_detail",
+                                         {"immediate": [], "root_fix": [], "verification": [], "prevention": []}),
         "model_used": model_used,
         "template_name": template_name,
         "template_missed": not matched,
@@ -288,7 +293,7 @@ async def multi_diagnose(alert_data: dict, context_data: dict | None = None) -> 
         from app.services.model_adapter import ModelFactory
         try:
             adapter = ModelFactory.get_adapter(cfg)
-            resp = await adapter.chat_completion(await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD + PROBE_SYMPTOM_SPEC + _OUTPUT_CONCISE_SPEC, user_prompt)
+            resp = await adapter.chat_completion(await prompt_engine.expand_fragments(tpl.system_prompt) + _INPUT_BOUNDARY_GUARD + PROBE_SYMPTOM_SPEC + _OUTPUT_CONCISE_SPEC + DEPTH_ANALYSIS_SPEC, user_prompt)
             return cfg, resp, None
         except Exception as e:  # noqa: BLE001
             return cfg, None, str(e)
@@ -420,6 +425,147 @@ def _normalize_confidence(v) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+# ---- R75.8：诊断深度与结构化输出归一化（机制链/多假设/已排除/证据缺口/建议四分）----
+_SUGGESTION_KEYS = ("immediate", "root_fix", "verification", "prevention")
+_VERDICTS = {"adopted", "eliminated", "unverified"}
+
+
+def _str_list(v) -> list[str]:
+    """把任意值归一化为字符串列表（容忍 None/str/list/dict 混入）。"""
+    if v is None:
+        return []
+    if isinstance(v, list):
+        out: list[str] = []
+        for x in v:
+            if x is None:
+                continue
+            if isinstance(x, str):
+                s = x.strip()
+                if s:
+                    out.append(s)
+            elif isinstance(x, dict):
+                # dict 项（hypothesis/evidence_gap 被误塞进列表）→ 取可读字段
+                s = str(x.get("cause") or x.get("missing") or x.get("title")
+                        or x.get("detail") or x.get("how_to_collect") or "").strip()
+                if s:
+                    out.append(s)
+            elif isinstance(x, (int, float, bool)):
+                out.append(str(x))
+            else:
+                s = str(x).strip()
+                if s:
+                    out.append(s)
+        return out
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        # 可能是 JSON 字符串数组
+        try:
+            p = json.loads(s)
+            return _str_list(p)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return [s]
+    if isinstance(v, dict):
+        return _str_list(list(v.values()))
+    s = str(v).strip()
+    return [s] if s else []
+
+
+def _normalize_chain(value) -> dict:
+    """归一化 root_cause_chain → {"trigger","direct","root"}（缺字段给空串）。"""
+    out = {"trigger": "", "direct": "", "root": ""}
+    if isinstance(value, dict):
+        for k in out:
+            out[k] = str(value.get(k) or "").strip()
+    return out
+
+
+def _normalize_analysis(value) -> dict:
+    """归一化 analysis → {"hypotheses","eliminated","evidence_gaps"}（缺失给空结构）。"""
+    hypotheses: list[dict] = []
+    eliminated: list[str] = []
+    evidence_gaps: list[dict] = []
+    if isinstance(value, dict):
+        for h in value.get("hypotheses") or []:
+            if isinstance(h, dict):
+                verdict = str(h.get("verdict") or "unverified").strip().lower()
+                if verdict not in _VERDICTS:
+                    verdict = "unverified"
+                hypotheses.append({
+                    "cause": str(h.get("cause") or "").strip(),
+                    "evidence_for": _str_list(h.get("evidence_for")),
+                    "evidence_against": _str_list(h.get("evidence_against")),
+                    "verdict": verdict,
+                })
+            elif isinstance(h, str) and h.strip():
+                hypotheses.append({"cause": h.strip(), "evidence_for": [],
+                                   "evidence_against": [], "verdict": "unverified"})
+        eliminated = _str_list(value.get("eliminated"))
+        for g in value.get("evidence_gaps") or []:
+            if isinstance(g, dict):
+                evidence_gaps.append({
+                    "missing": str(g.get("missing") or "").strip(),
+                    "how_to_collect": str(g.get("how_to_collect") or "").strip(),
+                })
+            elif isinstance(g, str) and g.strip():
+                evidence_gaps.append({"missing": g.strip(), "how_to_collect": ""})
+    return {"hypotheses": hypotheses, "eliminated": eliminated, "evidence_gaps": evidence_gaps}
+
+
+def _normalize_suggestions_detail(value) -> dict:
+    """归一化 suggestions_detail → {immediate/root_fix/verification/prevention} 各为字符串列表。"""
+    out = {k: [] for k in _SUGGESTION_KEYS}
+    if isinstance(value, dict):
+        for k in _SUGGESTION_KEYS:
+            out[k] = _str_list(value.get(k))
+    return out
+
+
+def _normalize_suggestions(value) -> list[str]:
+    """归一化 suggestions → list[str]（兼容 list/str/dict）。
+
+    - dict → 取 immediate + root_fix 拍平（保证旧消费方 `"; ".join(...)` 不崩）
+    - str → 可能是 JSON 数组字符串，否则整条
+    - list → 逐项字符串化（dict 项拍平其字符串值）
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        out: list[str] = []
+        for x in value:
+            if x is None:
+                continue
+            if isinstance(x, str):
+                s = x.strip()
+                if s:
+                    out.append(s)
+            elif isinstance(x, dict):
+                out.extend(_normalize_suggestions(x))
+            else:
+                s = str(x).strip()
+                if s:
+                    out.append(s)
+        return out
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        try:
+            p = json.loads(s)
+            return _normalize_suggestions(p)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return [s]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for k in ("immediate", "root_fix"):
+            out.extend(_normalize_suggestions(value.get(k)))
+        return out
+    s = str(value).strip()
+    return [s] if s else []
+
 
 
 # ---- R52：诊断「影响范围判断」impact 字段归一化 ----
@@ -585,6 +731,20 @@ def _parse_diagnosis_json(content: str, penalize_unknown_category: bool = True) 
     parsed["root_cause_layer"] = _normalize_layer(parsed.get("root_cause_layer"))
     # R52：归一化影响范围判断（独立 impact 字段；缺失为 {}，由 api-server 回退根因层级）
     parsed["impact"] = _normalize_impact(parsed.get("impact"))
+    # R75.8：诊断深度与结构化输出（机制链/多假设对比/已排除/证据缺口/建议四分）
+    suggestions_raw = parsed.get("suggestions")
+    detail_raw = parsed.get("suggestions_detail")
+    detail = _normalize_suggestions_detail(detail_raw)
+    # 模型若把 suggestions 返回成对象 → 拆到 suggestions_detail，同时拍平回 suggestions
+    if isinstance(suggestions_raw, dict):
+        _d = _normalize_suggestions_detail(suggestions_raw)
+        for _k in _SUGGESTION_KEYS:
+            if not detail[_k]:
+                detail[_k] = _d[_k]
+    parsed["suggestions"] = _normalize_suggestions(suggestions_raw)
+    parsed["suggestions_detail"] = detail
+    parsed["root_cause_chain"] = _normalize_chain(parsed.get("root_cause_chain"))
+    parsed["analysis"] = _normalize_analysis(parsed.get("analysis"))
     return parsed
 
 

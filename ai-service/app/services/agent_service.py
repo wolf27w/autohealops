@@ -36,7 +36,10 @@ SYSTEM_PROMPT = """你是一个 Kubernetes 应用层故障诊断专家助手。
  "mechanism": "<机制：为什么表象会成立，如 容器启动 240s 仍未监听 8080>",
  "trigger": "<触发：谁导致机制发生，如 启动脚本等待 DB，连接超时 5x30s>",
  "root_cause": "<机制+触发合成的一句话根因>",
+ "root_cause_chain": {"trigger": "<触发事件>", "direct": "<直接原因>", "root": "<根因>"},
+ "analysis": {"hypotheses": [{"cause": "<候选原因>", "evidence_for": ["支持证据"], "evidence_against": ["反证"], "verdict": "adopted|eliminated|unverified"}], "eliminated": ["已排除项及依据"], "evidence_gaps": [{"missing": "缺失证据", "how_to_collect": "补采命令/手段"}]},
  "suggestions": ["<处理意见1>", "<处理意见2>"],
+ "suggestions_detail": {"immediate": ["立即止血"], "root_fix": ["根因修复"], "verification": ["如何验证"], "prevention": ["防复发"]},
  "handling_advice": "<面向运维的完整处理步骤说明>"}
 
 **诊断深度硬要求（违反即视为未完成）：**
@@ -48,6 +51,7 @@ SYSTEM_PROMPT = """你是一个 Kubernetes 应用层故障诊断专家助手。
 - 只诊断，不做修复；不要修改应用代码/业务配置。**但容器内缺少诊断命令时可自行安装诊断工具**（按基础镜像选 `apt-get install -y` / `yum install -y` / `apk add`，加 -y 非交互；分步执行——先 update 再 install，不能用 && 连接），装完继续采集信息——安装诊断工具是采集手段，不是修复。
 - 优先用工具采集真实数据，不要凭空猜测；同一工具连续失败两次就换思路或下结论。
 - **必须用工具采集的真实数据支撑根因**；证据不够就继续调工具，不要凭空猜测。禁止用「建议检查近期变更」「请进一步排查」这类空话收尾。
+- **诊断深度硬要求（R75.8）**：`final_answer` 必须带 `root_cause_chain`（触发→直接原因→根因，禁止只给异常类名/表象词）、`analysis`（2~4 个假设对比，每个给支持/反证/结论；已排除项；证据缺口含补采命令）、`suggestions_detail`（immediate/root_fix/verification/prevention 四分）；`suggestions` 保持字符串数组 = immediate+root_fix 拍平。
 - **达到工具上限或关键证据缺失时必须结构化交代，不得编造结论**：`root_cause` 写「未能确定根因」，`suggestions` 依次列出「① 已排除：A/B/C」「② 缺失证据：D」「③ 建议补充采集：E（用什么手段取）」三项，`handling_advice` 说明已排查范围与建议的下一步（必要时转人工）。宁可如实说查不出来，也不允许给没有证据支撑的推测。
 - **同一工具不要重复调用**：如果某工具的结果已经出现在对话历史中，不要用相同参数再次调用；信息足够立即给出 final_answer，不要追求调满工具。
 - **exec_in_pod 只诊断容器本身，严禁查宿主机资源**：可执行 ps/env/cat/ls/ss/netstat 等命令，但**不要用 free/top/df**（它们在容器内读宿主机 /proc，会显示节点资源而非容器资源）。查容器真实内存用 `cat /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory/memory.usage_in_bytes`（cgroup v1；v2 用 memory.max/memory.current）。不要使用管道符（|）、重定向（>）、grep 等复杂语法（会被拦截）。
@@ -70,7 +74,9 @@ SYSTEM_PROMPT_ONCE = """你是 Kubernetes 应用层故障诊断专家。
 你的任务：**基于已有证据一次性给出诊断结论**，不要再请求工具。
 
 **只输出一个 JSON 对象：**
-{"action": "final_answer", "root_cause": "<根因，简洁明确>", "suggestions": ["<处理意见1>", "<处理意见2>"], "handling_advice": "<面向运维的完整处理步骤说明>"}
+{"action": "final_answer", "root_cause": "<根因，简洁明确>", "root_cause_chain": {"trigger": "<触发>", "direct": "<直接原因>", "root": "<根因>"}, "analysis": {"hypotheses": [{"cause": "<候选原因>", "evidence_for": ["支持"], "evidence_against": ["反证"], "verdict": "adopted|eliminated|unverified"}], "eliminated": ["已排除项"], "evidence_gaps": [{"missing": "缺失证据", "how_to_collect": "补采命令"}]}, "suggestions": ["<处理意见1>", "<处理意见2>"], "suggestions_detail": {"immediate": ["立即止血"], "root_fix": ["根因修复"], "verification": ["如何验证"], "prevention": ["防复发"]}, "handling_advice": "<面向运维的完整处理步骤说明>"}
+
+**诊断深度硬要求（R75.8）**：必须带 `root_cause_chain`（触发→直接原因→根因，禁止只给异常类名/表象词）、`analysis`（2~4 个假设对比，每个给支持/反证/结论；已排除项；证据缺口含补采命令）、`suggestions_detail`（immediate/root_fix/verification/prevention 四分）；`suggestions` 保持字符串数组 = immediate+root_fix 拍平。
 
 **约束：**
 - 只诊断，不做修复；不要建议任何修改代码/配置写入类操作，只给排查结论和处理意见。

@@ -391,5 +391,72 @@ class TestTaskMemory(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text, "")
 
 
+class TestDepthContractPassthrough(unittest.IsolatedAsyncioTestCase):
+    """R75.8：final_answer 携带结构化字段（root_cause_chain/analysis/suggestions_detail）透传。"""
+
+    _CHAIN = {"trigger": "新发布", "direct": "SnakeYAML 解析失败", "root": "重复 key"}
+    _ANALYSIS = {
+        "hypotheses": [{"cause": "重复 key", "verdict": "adopted", "evidence_for": ["DuplicateKeyException"], "evidence_against": []}],
+        "eliminated": ["非 OOM"],
+        "evidence_gaps": [{"missing": "完整栈", "how_to_collect": "kubectl logs --previous"}],
+    }
+    _DETAIL = {"immediate": ["回滚"], "root_fix": ["删重复 key"], "verification": ["观察日志"], "prevention": ["CI 校验"]}
+
+    async def test_normalize_final_passthrough(self):
+        decision = _final_answer(
+            root_cause_chain=self._CHAIN, analysis=self._ANALYSIS, suggestions_detail=self._DETAIL,
+        )
+        res = agent_loop._normalize_final(decision, {"tool_steps": [], "rounds": 0}, 0.0)
+        self.assertEqual(res["root_cause_chain"], self._CHAIN)
+        self.assertEqual(res["analysis"], self._ANALYSIS)
+        self.assertEqual(res["suggestions_detail"], self._DETAIL)
+        self.assertEqual(res["suggestions"], ["调 limit"])
+
+    async def test_normalize_final_missing_fields_empty(self):
+        """final_answer 不带新字段 → 透传为空 dict，不抛异常。"""
+        res = agent_loop._normalize_final(_final_answer(), {"tool_steps": [], "rounds": 0}, 0.0)
+        self.assertEqual(res["root_cause_chain"], {})
+        self.assertEqual(res["analysis"], {})
+        self.assertEqual(res["suggestions_detail"], {})
+
+    async def test_run_react_loop_passthrough(self):
+        decide = AsyncMock(side_effect=[
+            _tool_call("search_logs"),
+            _final_answer(root_cause_chain=self._CHAIN, analysis=self._ANALYSIS, suggestions_detail=self._DETAIL),
+        ])
+        execute = AsyncMock(return_value={"success": True, "output": "DuplicateKeyException"})
+
+        res = await run_react_loop(
+            {"fault_type": "CrashLoopBackOff"}, {"cluster_id": 1},
+            policy=_policy(), decide=decide, execute=execute, fallback=None,
+        )
+        self.assertFalse(res["degraded"])
+        self.assertEqual(res["root_cause_chain"], self._CHAIN)
+        self.assertEqual(res["analysis"], self._ANALYSIS)
+        self.assertEqual(res["suggestions_detail"], self._DETAIL)
+
+    async def test_wrapup_passthrough(self):
+        """max_rounds 收口决策给出 final_answer → 新字段透传。"""
+        calls = {"n": 0}
+
+        def _decide(messages, tools, context):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return _tool_call("describe_pod")
+            return _final_answer(root_cause_chain=self._CHAIN, analysis=self._ANALYSIS, suggestions_detail=self._DETAIL)
+
+        decide = AsyncMock(side_effect=_decide)
+        execute = AsyncMock(return_value={"success": True, "output": "ok"})
+
+        res = await run_react_loop(
+            {"fault_type": "x"}, {"cluster_id": 1},
+            policy=_policy(max_rounds=2), decide=decide, execute=execute, fallback=None,
+        )
+        self.assertTrue(res["degraded"])
+        self.assertEqual(res["root_cause_chain"], self._CHAIN)
+        self.assertEqual(res["analysis"], self._ANALYSIS)
+        self.assertEqual(res["suggestions_detail"], self._DETAIL)
+
+
 if __name__ == "__main__":
     unittest.main()

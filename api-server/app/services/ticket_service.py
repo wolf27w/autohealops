@@ -11,6 +11,7 @@
 - admin 全量可见；operator/viewer/developer 仅可见「有权限集群」工单 + 自己创建/被指派的工单
 - 处理/流转/指派走 require_operator（admin/operator）
 """
+import json
 import secrets
 import time
 from datetime import datetime
@@ -254,17 +255,105 @@ async def _check_visible(ticket: Ticket, user) -> bool:
 
 # ============ 建单 ============
 
+def _fmt_list(items, limit: int = 5) -> str:
+    if not items:
+        return ""
+    out = []
+    for x in list(items)[:limit]:
+        if isinstance(x, dict):
+            # hypotheses 之类的结构
+            cause = x.get("cause") or x.get("missing") or json.dumps(x, ensure_ascii=False)
+            extra = []
+            if x.get("verdict"):
+                extra.append(str(x["verdict"]))
+            for e in (x.get("evidence_for") or [])[:2]:
+                extra.append(f"支持:{e}")
+            for e in (x.get("evidence_against") or [])[:2]:
+                extra.append(f"反证:{e}")
+            if x.get("how_to_collect"):
+                extra.append(f"补采:{x['how_to_collect']}")
+            out.append(f"  - {cause}" + (f"（{'；'.join(extra)}）" if extra else ""))
+        else:
+            out.append(f"  - {x}")
+    return "\n".join(out)
+
+
+def _render_diagnosis_sections(j: dict) -> str:
+    """把诊断 JSON 渲染成「结论 / 分析过程 / 建议 / 证据」四段（R75.8）。
+
+    兼容旧数据：没有新字段时只输出结论与建议。
+    """
+    if not isinstance(j, dict) or not j:
+        return ""
+    parts = ["【结论】", str(j.get("root_cause") or "-")]
+    chain = j.get("root_cause_chain") or {}
+    if isinstance(chain, dict) and any(chain.get(k) for k in ("trigger", "direct", "root")):
+        parts.append(f"  触发：{chain.get('trigger') or '-'} → 直接原因：{chain.get('direct') or '-'} → 根因：{chain.get('root') or '-'}")
+    analysis = j.get("analysis") or {}
+    if isinstance(analysis, dict) and (analysis.get("hypotheses") or analysis.get("eliminated") or analysis.get("evidence_gaps")):
+        parts.append("【分析过程】")
+        hyp = _fmt_list(analysis.get("hypotheses"), 4)
+        if hyp:
+            parts.append("  假设对比：\n" + hyp)
+        elim = _fmt_list(analysis.get("eliminated"), 8)
+        if elim:
+            parts.append("  已排除：\n" + elim)
+        gaps = _fmt_list(analysis.get("evidence_gaps"), 5)
+        if gaps:
+            parts.append("  缺失证据：\n" + gaps)
+    detail = j.get("suggestions_detail") or {}
+    if isinstance(detail, dict) and any(detail.get(k) for k in ("immediate", "root_fix", "verification", "prevention")):
+        parts.append("【建议】")
+        for key, label in (("immediate", "立即处置"), ("root_fix", "根因修复"),
+                           ("verification", "验证方法"), ("prevention", "防复发")):
+            text = _fmt_list(detail.get(key), 5)
+            if text:
+                parts.append(f"  {label}：\n{text}")
+    else:
+        sug = j.get("suggestions")
+        if sug:
+            parts.append("【建议】\n" + (_fmt_list(sug, 8) if isinstance(sug, list) else f"  - {sug}"))
+    refs = j.get("evidence_refs") or []
+    if refs:
+        parts.append("【证据】\n" + _fmt_list(refs, 10))
+    return "\n".join(parts)
+
+
+async def _diagnosis_sections(alert_id: int) -> str:
+    """取告警最近一条诊断，渲染成四段；无诊断/解析失败返回空串（不阻断建单）。"""
+    if not alert_id:
+        return ""
+    try:
+        from app.models import AIDiagnosisResult
+        async with async_session() as session:
+            row = (await session.execute(
+                select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert_id)
+                .order_by(AIDiagnosisResult.id.desc()).limit(1)
+            )).scalar_one_or_none()
+        if not row or not row.diagnosis_json:
+            return ""
+        data = json.loads(row.diagnosis_json)
+        return _render_diagnosis_sections(data)[:3500]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("渲染诊断四段失败 alert=%s: %s", alert_id, e)
+        return ""
+
+
 async def _build_alert_ticket_payload(alert: Alert) -> dict:
-    """告警 → 工单自动带出的字段"""
+    """告警 → 工单自动带出的字段（含诊断四段：结论/分析过程/建议/证据）"""
+    desc = (
+        f"故障类型：{alert.fault_type}\n"
+        f"资源：{alert.resource_type}/{alert.resource_name}\n"
+        f"命名空间：{alert.namespace or '-'}\n"
+        f"严重级别：{alert.severity}\n"
+        f"详情：{(alert.message or '')[:1000]}"
+    )
+    sections = await _diagnosis_sections(alert.id)
+    if sections:
+        desc += "\n\n" + sections
     return {
         "title": f"[告警] {alert.fault_type} - {alert.resource_name}",
-        "description": (
-            f"故障类型：{alert.fault_type}\n"
-            f"资源：{alert.resource_type}/{alert.resource_name}\n"
-            f"命名空间：{alert.namespace or '-'}\n"
-            f"严重级别：{alert.severity}\n"
-            f"详情：{(alert.message or '')[:1000]}"
-        ),
+        "description": desc,
         "cluster_id": alert.cluster_id,
         "namespace": alert.namespace or "",
         "resource_name": alert.resource_name or "",

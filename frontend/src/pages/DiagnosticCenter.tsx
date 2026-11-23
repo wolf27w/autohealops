@@ -292,9 +292,11 @@ function ReportsTab() {
       <Drawer title={`诊断报告 #${detail?.id}`} open={!!detail} onClose={() => setDetail(null)} width={720}>
         {detail && (
           <div>
-            <div style={{ marginBottom: 12 }}><b>结论</b><Markdown text={detail.conclusion} /></div>
-            <div style={{ marginBottom: 12 }}><b>根因</b><Markdown text={detail.root_cause} /></div>
-            <div style={{ marginBottom: 12 }}><b>优化建议</b>
+            <div style={{ marginBottom: 12 }}><b>结论</b>
+              <Markdown text={detail.conclusion} />
+              {detail.root_cause && detail.root_cause !== detail.conclusion && <Markdown text={detail.root_cause} />}
+            </div>
+            <div style={{ marginBottom: 12 }}><b>建议</b>
               {(() => {
                 try {
                   const arr = JSON.parse(detail.suggestion || '[]')
