@@ -69,12 +69,20 @@ def merge_log_lines(entries: list[tuple[str, list[str]]], prefix: bool = False) 
     return rows
 
 
-def incremental_new_lines(lines: list[str], pushed: int) -> tuple[list[str], int]:
-    """增量行数计算（跟随轮询）：返回 (新增行列表, 新已推送行数)。
+def incremental_new_lines(lines: list[str], pushed: int, last_line: str = "") -> tuple[list[str], int]:
+    """增量行计算（跟随轮询）：返回 (新增行列表, 新已推送行数)。
 
-    lines 是本次拉到的 tail 窗口，pushed 是上次已推送行数。
-    窗口行数 >= pushed 时只推 lines[pushed:]；日志被截断/轮转（行数变小）时从头重推。
+    ⚠️ 2026-11-23 修 bug：原来只比对行数。tail 窗口固定 500 行时，
+    窗口一旦填满（len==pushed==500）就永远算不出新增 → 实时日志涨到窗口上限后不再更新
+    （实测 400 多行就停住）。现在优先用「上次推过的最后一行」定位，窗口滑动也能正确增量；
+    找不到该行（日志轮转/重启）时回退行数比较。
     """
+    if not lines:
+        return [], pushed
+    if last_line:
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i] == last_line:
+                return lines[i + 1:], len(lines)
     start = pushed if len(lines) >= pushed else 0
     return lines[start:], len(lines)
 
@@ -158,18 +166,32 @@ def _is_log_collector(name: str) -> bool:
     return (name or "").strip().lower() in LOG_COLLECTOR_CONTAINERS
 
 
-async def _pod_container_names(cluster_id: int, namespace: str, pod_name: str) -> list[str]:
-    """取 Pod 实际容器名（含 sidecar；模板里可能看不到注入的 sidecar）。"""
+async def _workload_containers(cluster_id: int, kind: str, namespace: str, name: str) -> list[str]:
+    """取工作负载模板里的业务容器名（排除日志采集 sidecar）。
+
+    用模板而不是逐 Pod 查详情：模板已是业务容器（filebeat 这类注入容器不在里面），
+    且一次调用搞定，避免 N 个 Pod × get_pod_detail 把聚合拖到超时
+    （2026-11-23 实测：逐 Pod 详情会让聚合接口 40s 不返回、前端只能显示一行）。
+    """
+    if not kind or not name:
+        return []
     try:
-        r = await executor_client.acall(executor_client.get_pod_detail, cluster_id, namespace, pod_name)
-        d = (r or {}).get("detail") or {}
-        return [c.get("name") for c in (d.get("containers") or []) if c.get("name")]
+        r = await executor_client.acall(
+            executor_client.get_workload_yaml, cluster_id, kind, namespace, name)
+        if not (r or {}).get("success"):
+            return []
+        import yaml as _yaml
+        doc = _yaml.safe_load((r or {}).get("yaml") or "") or {}
+        tpl = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {})
+        names = [str(c.get("name")) for c in (tpl.get("containers") or []) if c.get("name")]
+        business = [n for n in names if not _is_log_collector(n)]
+        return business or names
     except Exception:  # noqa: BLE001
         return []
 
 
 async def _fetch_pod_tail(cluster_id: int, namespace: str, pod: dict, container: str,
-                          tail: int) -> tuple[dict, dict]:
+                          tail: int, kind: str = "", name: str = "") -> tuple[dict, dict]:
     """拉单个 Pod 的 tail 日志（受 _AGG_SEMAPHORE 限流）。返回 (pod, result_dict)。
 
     2026-11-23：`container` 为空 = **聚合该 Pod 所有容器**（含 sidecar），
@@ -182,11 +204,7 @@ async def _fetch_pod_tail(cluster_id: int, namespace: str, pod: dict, container:
             r = await executor_client.acall(
                 executor_client.get_pod_logs, cluster_id, namespace, pname, container, tail, False)
             return pod, r
-        names = await _pod_container_names(cluster_id, namespace, pname)
-        # 排除日志采集 sidecar（filebeat 等），但全被过滤时回退全部，避免什么都看不到
-        business = [n for n in names if not _is_log_collector(n)]
-        if business:
-            names = business
+        names = await _workload_containers(cluster_id, kind, namespace, name)
         if not names:
             r = await executor_client.acall(
                 executor_client.get_pod_logs, cluster_id, namespace, pname, "", tail, False)
@@ -232,6 +250,7 @@ async def _stream_events(request: Request, cluster_id: int, namespace: str, kind
                          name: str, container: str) -> AsyncIterator[str]:
     """SSE 事件生成器：先推快照，再每 2s 轮询增量；15s 心跳；客户端断开即退出。"""
     pushed: dict[str, int] = {}   # pod → 已推送行数
+    last_pushed: dict[str, str] = {}   # pod → 上次推送的最后一行（窗口滑动的增量锚点）
     last_heartbeat = time.monotonic()
     first = True
     try:
@@ -240,7 +259,7 @@ async def _stream_events(request: Request, cluster_id: int, namespace: str, kind
                 break
             pods = await _list_workload_pods(cluster_id, namespace, kind, name)
             results = await asyncio.gather(
-                *[_fetch_pod_tail(cluster_id, namespace, p, container, STREAM_TAIL) for p in pods])
+                *[_fetch_pod_tail(cluster_id, namespace, p, container, STREAM_TAIL, kind, name) for p in pods])
             current: set[str] = set()
             for pod, r in results:
                 pname = pod.get("name") or ""
@@ -250,14 +269,18 @@ async def _stream_events(request: Request, cluster_id: int, namespace: str, kind
                         yield _sse_event("error", {"pod": pname, "error": r.get("error") or "日志获取失败"})
                     continue
                 lines = (r.get("logs") or "").splitlines()
-                new_lines, new_pushed = incremental_new_lines(lines, pushed.get(pname, 0))
+                new_lines, new_pushed = incremental_new_lines(
+                    lines, pushed.get(pname, 0), last_pushed.get(pname, ""))
                 for line in new_lines:
                     yield _sse_event("log", {"pod": pname, "line": line})
                 pushed[pname] = new_pushed
+                if new_lines:
+                    last_pushed[pname] = new_lines[-1]
             # 清理已消失的 pod（避免内存里残留无意义条目）
             for pname in list(pushed.keys()):
                 if pname not in current:
                     pushed.pop(pname, None)
+                    last_pushed.pop(pname, None)
             first = False
             if time.monotonic() - last_heartbeat >= STREAM_HEARTBEAT:
                 yield ": keepalive\n\n"

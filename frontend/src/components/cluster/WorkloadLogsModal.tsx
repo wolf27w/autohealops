@@ -93,6 +93,8 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   // 2026-11-23：实时续接去重（开实时时用屏幕已有行初始化）
   const seenRef = useRef<Set<string>>(new Set())
   const followPrevRef = useRef(false)
+  const linesRef = useRef<LogRow[]>([])
+  useEffect(() => { linesRef.current = lines }, [lines])
   const [rules, setRules] = useState<HighlightRule[]>(() => loadRules())
   const [timeRange, setTimeRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
 
@@ -155,7 +157,9 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const startFollow = useCallback((preserve = false) => {
     // 2026-11-23：开实时=从当前内容末位继续追加（不清空）；关实时=重新拉最近 200 行
     if (!preserve) setLines([])
-    seenRef.current = preserve ? new Set(lines.map((l) => l.pod + '|' + l.container + '|' + l.line)) : new Set()
+    seenRef.current = preserve
+      ? new Set(linesRef.current.map((l) => l.pod + '|' + l.container + '|' + l.line))
+      : new Set()
     setTruncated(false)   // 实时态没有“截断”概念，清掉快照遗留标记
     // 未选容器 → 一条流 + container=''，后端按 Pod 实际容器逐个拉取（含 sidecar）
     const targets = selected.length ? selected : ['']
@@ -190,7 +194,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         }
       })
     }
-  }, [clusterId, namespace, kind, name, selected, appendRows, lines])
+  }, [clusterId, namespace, kind, name, selected, appendRows])
 
   // 容器列表
   useEffect(() => {
@@ -213,18 +217,25 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
     if (!open) return
     if (following) return
     loadSnapshot()
-  }, [open, following, loadSnapshot])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selected])
 
   // 跟随态：开启 / 切换容器 → (重)开 SSE，切换时先关闭旧连接
   useEffect(() => {
-    if (!open || !following) return
-    closeStreams()
-    const turningOn = !followPrevRef.current
-    followPrevRef.current = true
-    startFollow(turningOn)
+    if (!open) return
+    if (following) {
+      closeStreams()
+      const turningOn = !followPrevRef.current
+      followPrevRef.current = true
+      startFollow(turningOn)
+    } else {
+      // 2026-11-23：关闭实时 = 直接暂停（不清空、不重新拉取，避免闪一下）
+      closeStreams()
+      followPrevRef.current = false
+    }
     return () => closeStreams()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, following, closeStreams])
+  }, [open, following, closeStreams, startFollow])
 
   // 关闭弹窗 → 关闭所有 SSE 并复位状态
   useEffect(() => {
@@ -337,7 +348,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
       title={<Space>聚合日志：{name}
         <Tag color="default" style={{ fontSize: 11 }}>{kind}</Tag>
         <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
-          ● {following ? (connected ? '实时中' : '连接中…') : '最近 200 行'}
+          ● {following ? (connected ? '实时中' : '连接中…') : '已暂停'}
         </span>
         {truncated && !following && <Tag color="orange" style={{ fontSize: 11 }}>已截断</Tag>}
         <span style={{ color: '#8c8c8c', fontSize: 12 }}>{shown.length}/{lines.length} 行</span>

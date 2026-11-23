@@ -167,14 +167,23 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
 
   // 2026-11-23 老板口径：开关与「看一段/实时」一一对应——
   // 打开=实时跟随；关闭=重新拉一段（最近 200 行快照）。
+  // A: Pod / 容器 / 重启前 变化 → 按当前状态重建（快照或实时）
   useEffect(() => {
     if (!pod || !effectiveContainers.length) return
-    const turningOn = live && !livePrevRef.current
-    livePrevRef.current = live
-    connect(turningOn)   // 开实时=续接；关实时/切 Pod=重新拉一段
+    connect(false)
     return () => closeAllWs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pod, effectiveContainers, previous, live])
+  }, [pod, effectiveContainers, previous])
+
+  // B: 实时开关 → 开=从末位续接；关=**直接停住**（不清空、不重连、不闪）
+  useEffect(() => {
+    const was = livePrevRef.current
+    livePrevRef.current = live
+    if (was === live) return   // 首次挂载由 A 负责
+    if (live) connect(true)
+    else closeAllWs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live])
 
   useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [rows, autoScroll])
 
@@ -211,7 +220,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   return (
     <Modal open maskClosable={false} title={<Space>实时日志：{pod.name}
       <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
-        ● {live ? (connected ? '实时' : '连接中…') : '最近 200 行'}
+        ● {live ? (connected ? '实时' : '连接中…') : '已暂停'}
       </span>
     </Space>} footer={null} onCancel={onClose} width={1000} destroyOnClose>
       <Space wrap style={{ marginBottom: 8 }}>

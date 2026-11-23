@@ -2331,7 +2331,7 @@ async def workload_aggregated_logs(cluster_id: int, namespace: str, kind: str, n
         # 多容器加 [容器名] 前缀）；否则多容器 Pod 会报 "container name must be specified"。
         from app.api.workload_logs import _fetch_pod_tail
         for p in pods:
-            _p, r = await _fetch_pod_tail(cluster_id, namespace, p, container, tail)
+            _p, r = await _fetch_pod_tail(cluster_id, namespace, p, container, tail, kind, name)
             results.append({"pod": p.get("name"), "phase": p.get("phase"),
                             "success": r.get("success"), "logs": r.get("logs", ""), "error": r.get("error", "")})
     # 2026-11-16（R5）：额外返回合并后的列式 rows（前端聚合日志弹窗用），pods 保持兼容
