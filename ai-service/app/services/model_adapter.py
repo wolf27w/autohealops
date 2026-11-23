@@ -8,8 +8,12 @@ from urllib.parse import urlparse
 
 from sqlalchemy import func, select
 
+import logging
+
 from app.core.database import async_session
 from app.models import AICallLog, AIModelConfig
+
+logger = logging.getLogger("ai-service.model_adapter")
 
 
 @dataclass
@@ -193,7 +197,9 @@ async def call_with_fallback(
             await _log_call(cfg.id, request_type, system_prompt, user_prompt, resp, latency_ms, "success")
             return resp, cfg.model_name
         except Exception as e:  # noqa: BLE001
-            last_err = str(e)
+            # 2026-11-23：空消息异常（如 TimeoutError）原来只记录空串，无法排查；记录类型+repr
+            last_err = str(e) or f"{type(e).__name__} (empty message) repr={e!r}"
+            logger.warning("模型调用失败 %s/%s: %s", cfg.model_name, request_type, last_err)
             await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, 0, "failed", last_err)
             continue
     raise RuntimeError(f"所有模型调用失败: {last_err}")
