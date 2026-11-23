@@ -137,6 +137,9 @@ export default function TerminalModal({ pod, onClose }: { pod: TerminalPod | nul
       onCancel={onClose}
       footer={null}
       width={900}
+      // 2026-11-23 R67：禁止点遮罩/ESC 误关（终端会话销毁后找不回）
+      maskClosable={false}
+      keyboard={false}
       destroyOnClose
     >
       <div style={{ marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center' }}>

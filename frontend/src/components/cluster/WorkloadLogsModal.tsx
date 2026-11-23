@@ -79,7 +79,7 @@ async function gzipBlob(text: string): Promise<Blob> {
 export default function WorkloadLogsModal({ clusterId, namespace, kind, name, open, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
   const [selected, setSelected] = useState<string[]>([])
-  const [following, setFollowing] = useState(false)
+  const [following, setFollowing] = useState(true)   // R65：打开即实时（原默认暂停快照）
   const [paused, setPaused] = useState(false)          // 暂停=停渲染但后台继续收
   const pausedRef = useRef(false)
   const pendingRows = useRef<LogRow[]>([])
@@ -217,7 +217,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   useEffect(() => {
     if (!open) {
       closeStreams()
-      setFollowing(false)
+      setFollowing(true)   // R65：再次打开仍默认实时
       setPaused(false)
       pausedRef.current = false
       pendingRows.current = []
@@ -322,7 +322,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const multi = effectiveContainers.length > 1
 
   return (
-    <Modal open={open} onCancel={onClose} footer={null} width={1100} destroyOnClose
+    <Modal open={open} onCancel={onClose} footer={null} width={1100} destroyOnClose maskClosable={false}
       title={<Space>聚合日志：{name}
         <Tag color="default" style={{ fontSize: 11 }}>{kind}</Tag>
         <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>

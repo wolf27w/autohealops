@@ -299,13 +299,14 @@ export default function WorkloadDetail() {
         return (
         <Dropdown trigger={['click']} menu={{
           items: [
-            { key: 'metrics', label: '监控' },
-            { key: 'logs', label: '日志' },
+            // 2026-11-23 R64：统一下拉顺序（与 PodsList 一致）——进容器→日志→监控→JVM→事件→隔离→YAML→删除
             { key: 'exec', label: '进容器' },
+            { key: 'logs', label: '日志' },
+            { key: 'metrics', label: '监控' },
             { key: 'jvm', label: 'JVM 诊断' },
             { key: 'events', label: '事件' },
-            { key: 'yaml', label: '编辑 YAML' },
             isolated.has(key) ? { key: 'unisolate', label: '取消隔离' } : { key: 'isolate', label: '隔离' },
+            { key: 'yaml', label: '编辑 YAML' },
             { type: 'divider' as const },
             { key: 'delete', label: '删除', danger: true },
           ],

@@ -191,7 +191,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     } catch (e) { message.error(String((e as Error)?.message || e)) }
   }
   return (
-    <Modal open title={<Space>实时日志：{pod.name}
+    <Modal open maskClosable={false} title={<Space>实时日志：{pod.name}
       <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
         ● {live ? (connected ? '实时' : '连接中…') : '最近 200 行'}
       </span>

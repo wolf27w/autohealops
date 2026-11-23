@@ -175,12 +175,12 @@ export default function PodsList({ clusterId }: { clusterId: number }) {
       return (
         <Dropdown trigger={['click']} menu={{
           items: [
-            // 顺序按 2026-11-13 17:52 定稿：日志 → 进容器 → JVM 诊断 → 隔离 → 监控 → 查看 YAML
-            { key: 'logs', label: '日志' },
+            // 2026-11-23 R64：统一顺序（与 WorkloadDetail 一致）——进容器→日志→监控→JVM→隔离→YAML→删除
             { key: 'exec', label: '进容器' },
+            { key: 'logs', label: '日志' },
+            { key: 'metrics', label: '监控' },
             { key: 'jvm', label: 'JVM 诊断' },
             isolated.has(key) ? { key: 'unisolate', label: '取消隔离' } : { key: 'isolate', label: '隔离' },
-            { key: 'metrics', label: '监控' },
             { key: 'yaml', label: '查看 YAML' },
             { type: 'divider' as const },
             { key: 'delete', label: '删除', danger: true },

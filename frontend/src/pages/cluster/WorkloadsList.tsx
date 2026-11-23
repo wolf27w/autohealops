@@ -444,12 +444,10 @@ export default function WorkloadsList({ clusterId, kind }: { clusterId: number; 
             trigger={['click']}
             menu={{
               items: [
+                // 2026-11-23 R63：列表页只留低风险/唯一的动作；
+                // 编辑设置、编辑 YAML、伸缩副本、滚动重启 统一收敛到详情页（原与详情页 5 项全重复）
                 { key: 'info', label: '编辑信息' },
-                { key: 'yaml', label: '编辑 YAML' },
                 { key: 'recreate', label: '重新创建' },
-                { key: 'edit', label: '编辑设置' },
-                ...(scaleable ? [{ key: 'scale', label: '伸缩副本' }] : []),
-                ...(restartable ? [{ key: 'rollout', label: '滚动重启' }] : []),
                 ...(kind === 'deployment' ? [{ key: 'history', label: '发布历史' }] : []),
                 { type: 'divider' as const },
                 { key: 'delete', label: '删除', danger: true },
