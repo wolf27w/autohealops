@@ -356,7 +356,18 @@ def start_server(addr: str) -> None:
         _loop = asyncio.get_running_loop()
     except RuntimeError:
         _loop = None
-    _server = grpc.server(ThreadPoolExecutor(max_workers=20))
+    # 2026-11-23：允许 agent 侧 keepalive ping（无活跃流也允许），
+    # 否则默认策略会把客户端心跳判为“too many pings”直接断开 → agent 反复掉线。
+    _server = grpc.server(
+        ThreadPoolExecutor(max_workers=20),
+        options=[
+            ("grpc.keepalive_permit_without_calls", 1),
+            ("grpc.http2.min_time_between_pings_ms", 10000),
+            ("grpc.http2.max_pings_without_data", 0),
+            ("grpc.keepalive_time_ms", 30000),
+            ("grpc.keepalive_timeout_ms", 10000),
+        ],
+    )
     agent_pb2_grpc.add_AgentServiceServicer_to_server(_Servicer(), _server)
     tls_enabled = bool(getattr(settings, "AGENT_TLS_ENABLED", True))
     if tls_enabled:

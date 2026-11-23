@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -188,6 +189,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[agent] 警告：未配置 -ca-file/-cert-file/-key-file，隧道为明文（仅限本地调试）")
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
+	// 2026-11-23：开启 gRPC keepalive。平台重启/网络闪断时 TCP 可能半开，
+	// 没有 keepalive 时客户端永远等不到错误 → 不触发下面的 3s 重连，表现为
+	// “平台显示已接入，但随后所有 RPC 都不通、只能重启 agent Pod”。
+	dialOpts = append(dialOpts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                30 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true,
+	}))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
