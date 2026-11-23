@@ -84,9 +84,10 @@ class Settings(BaseSettings):
     REGISTRY_PASSWORD: str = ""
     REGISTRY_CREDS: str = ""
 
-    # 阶段 7：ReAct 决策循环开关（默认关闭，避免影响现有单次 AI 诊断链路）。
-    #   开启后报警自愈诊断走「多轮自主调工具」循环；超限/异常自动降级回单次诊断（不阻塞闭环）。
-    AGENT_REACT_LOOP_ENABLED: bool = False
+    # 阶段 7：ReAct 决策循环开关。2026-11-23 R69 起默认开启：
+    #   报警自愈诊断走「多轮自主调工具」循环（默认 ≤8 步、总时限 90s）；
+    #   超限/超时按 R60-9 新口径结构化收口（证据不足），内部异常才降级回单次诊断。
+    AGENT_REACT_LOOP_ENABLED: bool = True
 
     # 诊断置信度阈值（R44-P3）：AI 诊断 confidence < 阈值 → 不自动执行，转人工（转工单/待人工）
     DIAGNOSIS_CONFIDENCE_THRESHOLD: float = 0.6

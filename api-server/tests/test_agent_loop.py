@@ -91,8 +91,8 @@ class TestLoopNormal(unittest.IsolatedAsyncioTestCase):
 
 
 class TestLoopLimits(unittest.IsolatedAsyncioTestCase):
-    async def test_max_rounds_degrades(self):
-        """达到 max_rounds → 强制收敛（降级 + 单次兜底）。"""
+    async def test_max_rounds_wraps_up(self):
+        """达到 max_rounds → 收口（2026-11-23 R69）：结构化证据不足，不降级单次兜底。"""
         decide = AsyncMock(side_effect=lambda *a, **k: _tool_call("describe_pod"))
         execute = AsyncMock(return_value={"success": True, "output": "ok"})
         fallback = AsyncMock(return_value={"root_cause": "兜底结论", "suggestions": []})
@@ -105,11 +105,57 @@ class TestLoopLimits(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res["degraded"])
         self.assertEqual(res["degrade_reason"], "max_rounds")
         self.assertEqual(res["rounds"], 2)
-        fallback.assert_awaited_once()
-        self.assertEqual(res["root_cause"], "兜底结论")
+        self.assertEqual(res["root_cause"], "未能确定根因")
+        # 收口不再调用单次兜底（不给无证据推测）
+        fallback.assert_not_awaited()
+        joined = "|".join(res["suggestions"])
+        self.assertIn("已排除", joined)
+        self.assertIn("缺失证据", joined)
+        self.assertIn("建议补充采集", joined)
 
-    async def test_total_timeout_degrades(self):
-        """整个循环超时 → 降级（wait_for 包裹）。"""
+    async def test_max_rounds_wrapup_final_answer(self):
+        """达到 max_rounds 且收口决策给出 final_answer → 用其结构化结论（仍标 degraded）。"""
+        calls = {"n": 0}
+
+        def _decide(messages, tools, context):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return _tool_call("describe_pod")
+            return _final_answer(
+                root_cause="未能确定根因",
+                suggestions=["① 已排除：A", "② 缺失证据：D", "③ 建议补充采集：E"],
+            )
+
+        decide = AsyncMock(side_effect=_decide)
+        execute = AsyncMock(return_value={"success": True, "output": "ok"})
+        fallback = AsyncMock()
+
+        res = await run_react_loop(
+            {"fault_type": "x"}, {"cluster_id": 1},
+            policy=_policy(max_rounds=2), decide=decide, execute=execute, fallback=fallback,
+        )
+
+        self.assertTrue(res["degraded"])
+        self.assertEqual(res["degrade_reason"], "max_rounds")
+        self.assertEqual(res["root_cause"], "未能确定根因")
+        self.assertIn("已排除", res["suggestions"][0])
+        fallback.assert_not_awaited()
+
+    async def test_max_rounds_hard_cap(self):
+        """2026-11-23 R69：调用方传 max_rounds > 12 → 被钳到硬上限 12。"""
+        decide = AsyncMock(side_effect=lambda *a, **k: _tool_call("describe_pod"))
+        execute = AsyncMock(return_value={"success": True, "output": "ok"})
+
+        res = await run_react_loop(
+            {"fault_type": "x"}, {"cluster_id": 1},
+            policy=_policy(max_rounds=99), decide=decide, execute=execute, fallback=None,
+        )
+
+        self.assertEqual(res["rounds"], 12)
+        self.assertEqual(res["degrade_reason"], "max_rounds")
+
+    async def test_total_timeout_wraps_up(self):
+        """整个循环超时 → 确定性结构化收口（不调用单次兜底）。"""
         async def _slow_execute(tool_name, args, context):
             await asyncio.sleep(0.3)
             return {"success": True, "output": "slow"}
@@ -126,7 +172,12 @@ class TestLoopLimits(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(res["degraded"])
         self.assertEqual(res["degrade_reason"], "total_timeout")
-        fallback.assert_awaited_once()
+        self.assertEqual(res["root_cause"], "未能确定根因")
+        fallback.assert_not_awaited()
+        joined = "|".join(res["suggestions"])
+        self.assertIn("已排除", joined)
+        self.assertIn("缺失证据", joined)
+        self.assertIn("建议补充采集", joined)
 
     async def test_per_tool_timeout_counts_as_failure(self):
         """单工具超时 → 记为失败，连续失败 → 降级 consecutive_tool_failures。"""
@@ -246,11 +297,11 @@ class TestSafetyAndSwitch(unittest.TestCase):
 
 class TestPolicy(unittest.IsolatedAsyncioTestCase):
     async def test_default_policy(self):
-        """未配置 agent_policy → 用文档默认值。"""
+        """未配置 agent_policy → 用文档默认值（2026-11-23 R69：步数默认 8）。"""
         with patch("app.services.agent_loop.load_agent_policy") as lp:
             lp.return_value = AgentPolicy()
             p = await lp()
-        self.assertEqual(p.max_rounds, 5)
+        self.assertEqual(p.max_rounds, 8)
         self.assertEqual(p.per_tool_timeout, 15.0)
         self.assertEqual(p.total_timeout, 90.0)
         self.assertEqual(p.tool_output_truncate, 6000)
@@ -268,12 +319,20 @@ class TestPolicy(unittest.IsolatedAsyncioTestCase):
         # 未覆盖字段回退默认
         self.assertEqual(p.tool_output_truncate, 6000)
 
+    async def test_policy_json_max_rounds_clamped(self):
+        """2026-11-23 R69：agent_policy JSON max_rounds > 12 → 钳到硬上限 12。"""
+        raw = json.dumps({"max_rounds": 20})
+        with patch("app.services.system_setting_service.get_setting",
+                   AsyncMock(return_value=raw)):
+            p = await agent_loop.load_agent_policy()
+        self.assertEqual(p.max_rounds, 12)
+
     async def test_policy_invalid_json_falls_back(self):
-        """非法 JSON / 非 dict → 回退默认。"""
+        """非法 JSON / 非 dict → 回退默认（2026-11-23 R69：步数默认 8）。"""
         with patch("app.services.system_setting_service.get_setting",
                    AsyncMock(return_value="{bad json")):
             p = await agent_loop.load_agent_policy()
-        self.assertEqual(p.max_rounds, 5)
+        self.assertEqual(p.max_rounds, 8)
         self.assertEqual(p.total_timeout, 90.0)
 
 

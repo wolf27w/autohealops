@@ -8,18 +8,19 @@
 - 工具调用统一走 `tool_registry.execute_tool`（内置存在性 + 参数 schema 护栏）。
 - 任务记忆（7.3 方案 B）：按 resource_key 实时聚合现有 alerts 表，注入结论性摘要。
 - 安全约束：只暴露 `readonly` 工具；operate 类（重启/删 Pod/apply yaml）不暴露给 LLM。
-- 降级策略：任何异常（解析失败/超时/工具连续失败）→ 降级为现有单次诊断，告警闭环不中断，
-  并记录 `degrade_reason` 供审计/后续优化。
+- 降级策略：内部异常（解析失败/决策报错/工具连续失败）→ 降级为现有单次诊断，告警闭环不中断；
+  预算耗尽（步数上限/总超时）→ 按 R60-9 新口径结构化收口（证据不足），不给无证据推测。
 
-开关：`settings.AGENT_REACT_LOOP_ENABLED`（默认 False，关闭，不影响现有诊断链路）。
-可调参数：`system_settings` 的 `agent_policy` JSON（缺省用 DEFAULT_AGENT_POLICY）。
+开关：`settings.AGENT_REACT_LOOP_ENABLED`（2026-11-23 R69 起默认 True）。
+可调参数：`system_settings` 的 `agent_policy` JSON（缺省用 DEFAULT_AGENT_POLICY；
+步数默认 8、硬上限 12，总时限默认 90s）。
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from sqlalchemy import select
@@ -37,14 +38,17 @@ logger = get_logger("api-server.agent_loop")
 @dataclass(frozen=True)
 class AgentPolicy:
     """ReAct 循环可调参数（可配 `agent_policy` JSON，缺省用文档默认值）。"""
-    max_rounds: int = 5               # 最多 5 轮工具调用（不含最终回答）
+    max_rounds: int = 8               # 最多 8 轮工具调用（不含最终回答；2026-11-23 R69 默认）
     per_tool_timeout: float = 15.0    # 单次工具执行超时（秒）
-    total_timeout: float = 90.0       # 整个循环超时（秒）
+    total_timeout: float = 90.0       # 整个循环超时（秒；2026-11-23 R69 单次诊断总时限）
     tool_output_truncate: int = 6000  # 单次工具输出截断长度（防上下文爆炸）
     max_consecutive_failures: int = 2  # 工具连续失败达到此值 → 降级
 
 
 DEFAULT_AGENT_POLICY = AgentPolicy()
+
+# 步数硬上限（2026-11-23 R69）：无论 agent_policy JSON 或调用方传值，最多 12 步。
+MAX_ROUNDS_HARD_LIMIT = 12
 
 # 哨兵：区分「未传 fallback（用默认单次诊断）」与「显式传 None（不要兜底）」
 _UNSET = object()
@@ -92,7 +96,9 @@ async def load_agent_policy() -> AgentPolicy:
         if isinstance(parsed, dict):
             data = parsed
     return AgentPolicy(
-        max_rounds=_to_int(data.get("max_rounds"), DEFAULT_AGENT_POLICY.max_rounds),
+        # 2026-11-23 R69：步数默认 8、硬上限 12（下限 1）。
+        max_rounds=max(1, min(_to_int(data.get("max_rounds"), DEFAULT_AGENT_POLICY.max_rounds),
+                              MAX_ROUNDS_HARD_LIMIT)),
         per_tool_timeout=_to_float(data.get("per_tool_timeout"), DEFAULT_AGENT_POLICY.per_tool_timeout),
         total_timeout=_to_float(data.get("total_timeout"), DEFAULT_AGENT_POLICY.total_timeout),
         tool_output_truncate=_to_int(data.get("tool_output_truncate"), DEFAULT_AGENT_POLICY.tool_output_truncate),
@@ -101,8 +107,8 @@ async def load_agent_policy() -> AgentPolicy:
 
 
 def is_react_loop_enabled() -> bool:
-    """阶段 7 开关（默认 False，关闭，不影响现有诊断链路）。"""
-    return bool(getattr(settings, "AGENT_REACT_LOOP_ENABLED", False))
+    """阶段 7 开关（2026-11-23 R69 起默认 True，开启）。"""
+    return bool(getattr(settings, "AGENT_REACT_LOOP_ENABLED", True))
 
 
 # ============ 任务记忆（7.3 方案 B：零迁移，实时聚合现有 alerts 表） ============
@@ -257,6 +263,91 @@ async def _degrade(
     }
 
 
+def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, detail: str = "") -> dict:
+    """预算耗尽收口（2026-11-23 R69）：确定性「证据不足」结构化输出，不给无证据推测。
+
+    对齐 R60-9 ai-service 新口径：root_cause=未能确定根因，suggestions 依次为
+    ① 已排除 ② 缺失证据 ③ 建议补充采集。不调用 LLM（总时限已耗尽，避免再拖时间）。
+    """
+    steps = state["tool_steps"]
+    succeeded = [t for t in steps if t.get("success")]
+    failed = [t for t in steps if not t.get("success")]
+    ran = "、".join(dict.fromkeys(t.get("tool", "") or "" for t in succeeded)) or "无"
+    missed = "、".join(dict.fromkeys(t.get("tool", "") or "" for t in failed)) or "无"
+
+    suggestions = [
+        f"① 已排除：已采集 {ran} 数据，未发现可定位根因的直接证据",
+        f"② 缺失证据：关键证据不足（" + (f"失败项：{missed}" if missed != "无" else "已采集项仍不足以锁定根因") + "）",
+        "③ 建议补充采集：人工复核已采集原始数据，或转工单补充采集后再诊断",
+    ]
+    return {
+        "root_cause": "未能确定根因",
+        "suggestions": suggestions,
+        "root_cause_layer": "",
+        "handling_advice": (
+            f"诊断在 {reason} 处收口（已达步数/时限上限），未给无证据推测；"
+            "已排查范围与缺失证据见 suggestions，建议转人工或工单补充采集。"
+        ),
+        "model_used": "",
+        "degraded": True,
+        "degrade_reason": reason,
+        "tool_steps": list(state["tool_steps"]),
+        "rounds": state["rounds"],
+        "elapsed_ms": int((time.monotonic() - start) * 1000),
+    }
+
+
+async def _wrap_up(
+    *,
+    reason: str,
+    detail: str,
+    decide: Callable,
+    messages: list[dict],
+    tools: list[dict],
+    context: dict,
+    state: dict,
+    start: float,
+    audit,
+) -> dict:
+    """预算耗尽收口（2026-11-23 R69）：先试一次收口决策（复用 R60-9 提示词，结构化交代），
+    失败或仍要工具 → 确定性「证据不足」输出。步数上限场景用（总时限场景已无时间，直接确定性收口）。
+    """
+    if audit is not None:
+        try:
+            await audit({"type": "degrade", "reason": reason, "detail": detail})
+        except Exception:  # noqa: BLE001 审计失败不影响主链路
+            pass
+    logger.info("ReAct 循环收口（%s）：%s", reason, detail)
+
+    # 收口决策：让 LLM 基于已采集证据给出最终结论（prompt 已含「证据不足→结构化交代」）
+    try:
+        messages.append({
+            "role": "user",
+            "content": (
+                f"已达到诊断预算上限（{reason}）。请不要再调用工具，基于已采集证据给出最终诊断。"
+                "若证据不足以锁定根因，必须按结构化格式交代：root_cause 写「未能确定根因」，"
+                "suggestions 依次列出「① 已排除」「② 缺失证据」「③ 建议补充采集」，不得给无证据推测。"
+            ),
+        })
+        decision = await decide(messages, tools, context)
+        if isinstance(decision, dict) and decision.get("action") == "final_answer":
+            return {
+                "root_cause": decision.get("root_cause", "") or "",
+                "suggestions": decision.get("suggestions") or [],
+                "root_cause_layer": decision.get("root_cause_layer", "") or "",
+                "handling_advice": decision.get("handling_advice", "") or "",
+                "model_used": decision.get("model_used", "") or "",
+                "degraded": True,
+                "degrade_reason": reason,
+                "tool_steps": list(state["tool_steps"]),
+                "rounds": state["rounds"],
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+            }
+    except Exception as e:  # noqa: BLE001 收口决策失败 → 确定性输出
+        logger.warning("收口决策失败，回退确定性证据不足输出: %s", e)
+    return _wrap_up_insufficient_evidence(state, reason, start, detail=detail)
+
+
 async def _default_decide(messages: list[dict], tools: list[dict], context: dict) -> dict:
     """默认 LLM 决策：复用 ai-service 的 agent_decide。"""
     return await ai_client.agent_decide(
@@ -373,10 +464,12 @@ async def _run_loop_body(
         else:
             state["consecutive_failures"] = 0
 
-    # 8. 达到 max_rounds → 强制收敛（降级单次兜底）
-    return await _degrade("max_rounds", f"达到最大轮数 {policy.max_rounds}",
-                          fallback=fallback, alert_data=alert_data, context=context,
-                          state=state, start=start, audit=audit)
+    # 8. 达到 max_rounds → 收口（2026-11-23 R69）：按 R60-9 新口径结构化交代，不给无证据推测
+    return await _wrap_up(
+        reason="max_rounds", detail=f"达到最大轮数 {policy.max_rounds}",
+        decide=decide, messages=messages, tools=tools, context=context,
+        state=state, start=start, audit=audit,
+    )
 
 
 async def run_react_loop(
@@ -403,6 +496,9 @@ async def run_react_loop(
     """
     if policy is None:
         policy = await load_agent_policy()
+    # 2026-11-23 R69：步数硬上限 12，无论 agent_policy JSON 或调用方传值都不超过（下限 1）。
+    if policy.max_rounds > MAX_ROUNDS_HARD_LIMIT or policy.max_rounds < 1:
+        policy = replace(policy, max_rounds=max(1, min(policy.max_rounds, MAX_ROUNDS_HARD_LIMIT)))
     if tools is None:
         # 安全约束（7.1）：只暴露 readonly 工具；operate 类不暴露给 LLM
         tools = tool_registry.list_tools(permission="readonly")
@@ -427,17 +523,20 @@ async def run_react_loop(
             timeout=policy.total_timeout,
         )
     except asyncio.TimeoutError:
-        return await _degrade("total_timeout", f"超过整个循环超时 {policy.total_timeout}s",
-                              fallback=fallback, alert_data=alert_data, context=context,
-                              state=state, start=start, audit=audit)
+        # 2026-11-23 R69：总时限耗尽 → 确定性「证据不足」结构化收口（不再调用 LLM，避免超时后再拖时间）
+        return _wrap_up_insufficient_evidence(
+            state, "total_timeout", start,
+            detail=f"超过整个循环超时 {policy.total_timeout}s",
+        )
 
 
-# ============ 编排入口（报警自愈诊断用；开关默认关，接线处自行判断） ============
+# ============ 编排入口（报警自愈诊断用；2026-11-23 R69 起开关默认开，接线处自行判断） ============
 
 async def diagnose_alert_react(alert, alert_data: dict, context: dict,
                                severity: str = "high", trace_id: str = "") -> dict:
-    """报警自愈诊断的 ReAct 入口：读策略 + 建任务记忆 + 只读工具 → 跑循环（异常自动降级单次）。
+    """报警自愈诊断的 ReAct 入口：读策略 + 建任务记忆 + 只读工具 → 跑循环。
 
+    内部异常自动降级单次诊断；步数/时限耗尽按 R60-9 新口径结构化收口（证据不足）。
     调用方（未来 alert_auto_service）应先判 `is_react_loop_enabled()`，关闭则仍走单次诊断。
     """
     policy = await load_agent_policy()

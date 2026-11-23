@@ -1466,25 +1466,12 @@ async def _process_one(alert: Alert) -> bool:
     if not kb_hit_steps and not diag_cached:
         try:
             container_diag = await _collect_container_diagnostics(alert)
-            # 应用问题识别：崩溃日志显示代码异常 → 不走 AI 诊断，直接转人工（改代码走发布）
-            crash_hit = _match_app_crash(container_diag)
-            if crash_hit:
-                await _dedup_knowledge(
-                    alert.fault_type, "应用代码异常导致崩溃",
-                    "分析崩溃日志、修复应用代码后重新发布", execution_steps="",
-                )
-                await _mark_manual_and_notify(
-                    alert, "应用代码问题（崩溃日志代码异常）",
-                    "崩溃日志显示代码异常，需修复应用代码后重新发布，平台不自动执行。",
-                )
-                logger.info("告警 %d 识别为应用代码问题（命中特征 %r），跳过 AI 诊断，转人工", alert.id, crash_hit)
-                return True
-            # CrashLoopBackOff：先试一次「删 Pod 重建」（很多是依赖抖动/偶发，重建即恢复），
-            # 失败再往下走 AI 诊断/转人工（老板 2026-10-21 口径）
-            if alert.fault_type == "CrashLoopBackOff" and not _has_tried_rebuild(alert):
-                if await _try_rebuild_once(alert, trace_id):
-                    return True
-
+            # 2026-11-23 R69：下线两处违反「先分析后处置」的旧逻辑——
+            #   ① 崩溃日志命中代码特征就跳过诊断直接转人工；
+            #   ② CrashLoop 先盲试一次重建再分析。
+            # 现在统一交给 AI 诊断（容器诊断文本已作为证据注入 diag_ctx），
+            # 由诊断结论决定处置；确实无可用手段时才转人工，并附上原因与证据。
+            logger.info("告警 %d 先采集证据再诊断（禁止盲试）", alert.id)
             # AI 诊断失败自动重试 1 次（老板 2026-10-21 口径），两次都失败才转人工
             # 指标趋势（2026-10-29）：ai-service 自己的 PROMETHEUS_URL 是空的，
             # 由 api-server 采好指标注入上下文（否则 AI 只能看日志/事件，结论停在表层）。
@@ -1508,11 +1495,22 @@ async def _process_one(alert: Alert) -> bool:
                 diag_ctx["probe_evidence"] = probe_result["text"]
             diagnosis = None
             _diag_err = None
+            # 2026-11-23 R69：默认走 ReAct 自主诊断循环（只读工具、≤8 步/90s，超限按「证据不足」结构化收口）；
+            # 第一次失败后重试用的是原来的单次诊断（降级路径），避免循环反复失败拖时间。
+            from app.services import agent_loop as _agent_loop
+            _react_on = _agent_loop.is_react_loop_enabled()
             for _attempt in (1, 2):
                 try:
-                    diagnosis = await ai_client.diagnose(
-                        alert.id, alert_data, diag_ctx, trace_id
-                    )
+                    if _react_on and _attempt == 1:
+                        diagnosis = await _agent_loop.diagnose_alert_react(
+                            alert, alert_data, diag_ctx,
+                            severity=getattr(alert, "severity", "") or "high",
+                            trace_id=trace_id,
+                        )
+                    else:
+                        diagnosis = await ai_client.diagnose(
+                            alert.id, alert_data, diag_ctx, trace_id
+                        )
                     break
                 except Exception as e:  # noqa: BLE001
                     _diag_err = e
