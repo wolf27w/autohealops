@@ -141,8 +141,8 @@ _SEVERITY_LEVEL = {"critical": "P0", "high": "P1", "medium": "P2", "low": "P3"}
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 # 处置状态映射（告警 status → 大屏 chips 文案）
 _DISPOSAL_LABEL = {"pending": "待处理", "awaiting_approval": "待审批", "ticketed": "已转工单"}
-# 节省人工估算：每起成功自动处置按节省 30 分钟人工估算（无历史工时基准，行业常用值）
-_LABOR_MINUTES_PER_HEAL = 30
+# 节省人工估算：每起成功自动处置按「不超过 3 分钟」人工处理估算（2026-11-23 老板定口径）
+_LABOR_MINUTES_PER_HEAL = 3
 
 
 def _severity_level(severity: str) -> str:

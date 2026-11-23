@@ -311,3 +311,103 @@ async def resolve_digest(image: str) -> str:
             return "" if err else (digest or "")
     except Exception:  # noqa: BLE001
         return ""
+
+
+# ============ 集群内模式（2026-11-23 老板口径）============
+# 「直接对比已经拉取的两个镜像，不需要去 harbor 拉」——改为对比集群内两个 revision 的
+# PodTemplate 实际运行配置（镜像 tag / command/args / env / resources / 探针），
+# 数据全部来自集群本身（kubeconfig 或 agent 隧道），不访问任何镜像仓库，无需凭据。
+
+def _container_map(tpl: dict) -> dict:
+    """PodTemplateSpec → {容器名: 关键配置}"""
+    spec = (tpl or {}).get("spec") or {}
+    out: dict = {}
+    for c in (spec.get("containers") or []):
+        name = str(c.get("name") or "")
+        if not name:
+            continue
+        res = c.get("resources") or {}
+        out[name] = {
+            "image": str(c.get("image") or ""),
+            "command": [str(x) for x in (c.get("command") or [])],
+            "args": [str(x) for x in (c.get("args") or [])],
+            "env": {str(e.get("name")): str(e.get("value", "")) for e in (c.get("env") or []) if e.get("name")},
+            "limits": (res.get("limits") or {}),
+            "requests": (res.get("requests") or {}),
+            "readiness": bool(c.get("readinessProbe")),
+            "liveness": bool(c.get("livenessProbe")),
+        }
+    return out
+
+
+async def compare_cluster_revisions(cluster_id: int, namespace: str, workload: str,
+                                    revision_a: int, revision_b: int) -> dict:
+    """对比集群内两个 revision 的运行配置（不访问镜像仓库）。
+
+    返回 {ok, error, a, b, diff}；diff 逐容器列出 image/command/args/env/resources/探针 差异。
+    任何失败返回 ok=False + 明确 error，绝不抛异常。
+    """
+    import yaml as _yaml
+
+    from app.clients.executor_client import executor_client
+
+    try:
+        ra = await executor_client.acall(
+            executor_client.get_revision_template, cluster_id, namespace, workload, int(revision_a))
+        rb = await executor_client.acall(
+            executor_client.get_revision_template, cluster_id, namespace, workload, int(revision_b))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"取 revision 模板失败：{e}", "a": {}, "b": {}, "diff": {}}
+
+    def _load(r, rev):
+        if not (r or {}).get("success"):
+            return None, f"revision {rev}：{(r or {}).get('error') or (r or {}).get('message') or '获取失败'}"
+        raw = (r or {}).get("template") or (r or {}).get("yaml") or ""
+        try:
+            tpl = _yaml.safe_load(raw) or {}
+        except Exception as e:  # noqa: BLE001
+            return None, f"revision {rev} 模板 YAML 解析失败：{e}"
+        return _container_map(tpl), ""
+
+    map_a, err_a = _load(ra, revision_a)
+    map_b, err_b = _load(rb, revision_b)
+    if err_a or err_b:
+        return {"ok": False, "error": "；".join(x for x in (err_a, err_b) if x), "a": {}, "b": {}, "diff": {}}
+
+    containers = sorted(set(map_a) | set(map_b))
+    diff = {"containers": [], "image_changed": False, "summary": []}
+    for name in containers:
+        ca = map_a.get(name, {})
+        cb = map_b.get(name, {})
+        item = {
+            "container": name,
+            "image": {"a": ca.get("image", ""), "b": cb.get("image", ""),
+                      "changed": ca.get("image") != cb.get("image")},
+            "command": {"a": ca.get("command", []), "b": cb.get("command", []),
+                        "changed": ca.get("command") != cb.get("command")},
+            "args": {"a": ca.get("args", []), "b": cb.get("args", []),
+                     "changed": ca.get("args") != cb.get("args")},
+            "env": {"a": ca.get("env", {}), "b": cb.get("env", {}),
+                    "changed": ca.get("env") != cb.get("env")},
+            "resources": {"a": {"limits": ca.get("limits", {}), "requests": ca.get("requests", {})},
+                          "b": {"limits": cb.get("limits", {}), "requests": cb.get("requests", {})},
+                          "changed": (ca.get("limits"), ca.get("requests")) != (cb.get("limits"), cb.get("requests"))},
+            "probes": {"readiness": {"a": ca.get("readiness"), "b": cb.get("readiness")},
+                       "liveness": {"a": ca.get("liveness"), "b": cb.get("liveness")},
+                       "changed": (ca.get("readiness"), ca.get("liveness")) != (cb.get("readiness"), cb.get("liveness"))},
+        }
+        if item["image"]["changed"]:
+            diff["image_changed"] = True
+        for key in ("image", "command", "args", "env", "resources", "probes"):
+            if item[key]["changed"]:
+                diff["summary"].append(f"{name}.{key} 有变化")
+        diff["containers"].append(item)
+
+    return {
+        "ok": True,
+        "error": "",
+        "source": "cluster-revisions",
+        "a": {"revision": revision_a, "workload": workload, "namespace": namespace},
+        "b": {"revision": revision_b, "workload": workload, "namespace": namespace},
+        "diff": diff,
+    }

@@ -867,6 +867,52 @@ async def _h_compare_images(args: dict, context: dict) -> dict:
     return {"success": True, "output": str(result), "error": ""}
 
 
+async def _h_compare_cluster_images(args: dict, context: dict) -> dict:
+    """集群内两个 revision 的运行配置对比（2026-11-23 老板口径：不访问 harbor）。"""
+    cluster_id = args.get("cluster_id")
+    ns = (args.get("namespace") or "").strip()
+    wl = (args.get("workload") or "").strip()
+    ra, rb = args.get("revision_a"), args.get("revision_b")
+    if cluster_id is None or not ns or not wl or ra is None or rb is None:
+        return {"success": False, "output": "",
+                "error": "缺少参数：cluster_id / namespace / workload / revision_a / revision_b"}
+    try:
+        from app.services.image_compare_service import compare_cluster_revisions
+        res = await compare_cluster_revisions(int(cluster_id), ns, wl, int(ra), int(rb))
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"集群内对比失败：{e}"}
+    if not res.get("ok"):
+        return {"success": False, "output": "", "error": str(res.get("error") or "对比失败")}
+
+    diff = res.get("diff") or {}
+    lines = [f"集群内 revision 对比：{ns}/{wl}  rev {ra} → rev {rb}",
+             "（数据来源：集群运行配置，不访问镜像仓库）"]
+    if not diff.get("summary"):
+        lines.append("无差异（两次发布运行配置完全一致）")
+    for item in diff.get("containers") or []:
+        name = item.get("container")
+        img = item.get("image") or {}
+        if img.get("changed"):
+            lines.append(f"[{name}] image: {img.get('a')} → {img.get('b')}（变化）")
+        else:
+            lines.append(f"[{name}] image: {img.get('a')}（未变）")
+        if (item.get("command") or {}).get("changed"):
+            lines.append(f"  command: {item['command']['a']} → {item['command']['b']}")
+        if (item.get("args") or {}).get("changed"):
+            lines.append(f"  args: {item['args']['a']} → {item['args']['b']}")
+        env = item.get("env") or {}
+        if env.get("changed"):
+            ea, eb = env.get("a") or {}, env.get("b") or {}
+            for k in sorted(set(ea) | set(eb)):
+                if ea.get(k) != eb.get(k):
+                    lines.append(f"  env {k}: {ea.get(k, '(无)')} → {eb.get(k, '(无)')}")
+        if (item.get("resources") or {}).get("changed"):
+            lines.append(f"  resources: {item['resources']['a']} → {item['resources']['b']}")
+        if (item.get("probes") or {}).get("changed"):
+            lines.append(f"  探针: {item['probes']}")
+    return {"success": True, "output": "\n".join(lines)[:6000], "error": ""}
+
+
 # ============ 注册表 ============
 
 TOOL_REGISTRY: dict[str, dict] = {}
@@ -1126,6 +1172,26 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_compare_images,
+})
+
+_register({
+    "name": "compare_cluster_images",
+    "label": "集群内版本配置对比",
+    "description": (
+        "对比同一工作负载两个 revision 的**运行配置**（镜像 tag / command/args / env / resources / 探针）。"
+        "数据直接取自集群（含 agent 接入集群），**不访问镜像仓库、不需要仓库凭据**。"
+        "用于诊断「新版本起不来/行为不同」时判断这次发布到底改了什么。"
+    ),
+    "args_schema": {
+        "cluster_id": {"type": "int", "required": True, "description": "集群 ID"},
+        "namespace": {"type": "string", "required": True, "description": "命名空间"},
+        "workload": {"type": "string", "required": True, "description": "工作负载名（deployment）"},
+        "revision_a": {"type": "int", "required": True, "description": "基准 revision（旧）"},
+        "revision_b": {"type": "int", "required": True, "description": "对比 revision（新）"},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_compare_cluster_images,
 })
 
 
