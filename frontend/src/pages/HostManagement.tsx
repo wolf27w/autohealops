@@ -82,6 +82,9 @@ export default function HostManagement() {
     [groups],
   )
 
+  // 2026-11-23 R62：主机/分组/凭据管理统一入口权限 = 平台 admin 或任一分组的组 admin
+  const canManageHosts = isAdmin || groups.some((g) => g.my_role === 'admin')
+
   const loadGroups = () => {
     getHostGroups().then((d) => { setGroups(d?.groups || []); setIsAdmin(!!d?.is_admin) }).catch(() => {})
   }
@@ -238,10 +241,10 @@ export default function HostManagement() {
       extra={<Space>
         {!noPerm && <Button icon={<CodeOutlined />} onClick={() => window.open('/terminal', '_blank', 'noopener')}>Web 终端</Button>}
         <Button icon={<ReloadOutlined />} onClick={() => { load(); loadGroups() }}>刷新</Button>
-        {isAdmin && <Button onClick={() => { setCredOpen(true); credForm.resetFields() }}>凭据管理</Button>}
-        {isAdmin && <Button icon={<TeamOutlined />} onClick={() => setGroupDrawer(true)}>分组管理</Button>}
-        {(isAdmin || createableGroups.length > 0) && <Button icon={<ImportOutlined />} onClick={openImport}>批量导入</Button>}
-        {(isAdmin || createableGroups.length > 0) && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加主机</Button>}
+        {canManageHosts && <Button onClick={() => { setCredOpen(true); credForm.resetFields() }}>凭据管理</Button>}
+        {canManageHosts && <Button icon={<TeamOutlined />} onClick={() => setGroupDrawer(true)}>分组管理</Button>}
+        {canManageHosts && <Button icon={<ImportOutlined />} onClick={openImport}>批量导入</Button>}
+        {canManageHosts && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>添加主机</Button>}
       </Space>}>
       <Tabs
         activeKey={tab}
@@ -261,7 +264,7 @@ export default function HostManagement() {
             onChange={(e) => setKwInput(e.target.value)}
             style={{ marginBottom: 8 }}
           />
-          {isAdmin && (
+          {canManageHosts && (
             <Button size="small" block icon={<PlusOutlined />} style={{ marginBottom: 8 }}
               onClick={() => { setGroupEdit(null); groupForm.resetFields(); setGroupModalOpen(true) }}>新建分组</Button>
           )}
@@ -492,15 +495,17 @@ export default function HostManagement() {
 
       {/* 分组管理 */}
       <Drawer title="主机分组管理" open={groupDrawer} onClose={() => setGroupDrawer(false)} width={480}>
-        {isAdmin && <Button type="primary" icon={<PlusOutlined />} block style={{ marginBottom: 12 }} onClick={() => { setGroupEdit(null); groupForm.resetFields(); setGroupModalOpen(true) }}>新建分组</Button>}
+        {canManageHosts && <Button type="primary" icon={<PlusOutlined />} block style={{ marginBottom: 12 }} onClick={() => { setGroupEdit(null); groupForm.resetFields(); setGroupModalOpen(true) }}>新建分组</Button>}
         <List
           dataSource={groups}
           renderItem={(g) => (
             <List.Item
               actions={[
                 (g.my_role === 'admin' || isAdmin) && <a key="m" onClick={() => setMemberModal(g)}>成员</a>,
-                (g.my_role === 'admin' || isAdmin) && <a key="e" onClick={() => { setGroupEdit(g); groupForm.setFieldsValue({ name: g.name, description: g.description, sort: g.sort }); setGroupModalOpen(true) }}>编辑</a>,
-                isAdmin && !g.is_default && <Popconfirm key="d" title="删除分组？组内主机会转为未分组" onConfirm={() => delGroup(g.id)}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>,
+                // 2026-11-23 R62：分组编辑入口与后端 require_host_admin 对齐（平台 admin 或任一组 admin）
+                canManageHosts && <a key="e" onClick={() => { setGroupEdit(g); groupForm.setFieldsValue({ name: g.name, description: g.description, sort: g.sort }); setGroupModalOpen(true) }}>编辑</a>,
+                // 2026-11-23 R61：默认分组也可删除；二次确认写明转未分组的主机数
+                canManageHosts && <Popconfirm key="d" title={`删除分组？组内 ${g.host_count} 台主机将转为未分组`} onConfirm={() => delGroup(g.id)}><a style={{ color: '#cf1322' }}>删除</a></Popconfirm>,
               ].filter(Boolean)}
             >
               <List.Item.Meta

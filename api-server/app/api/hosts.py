@@ -8,6 +8,7 @@ from sqlalchemy import or_, select
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.core.security import encrypt_aes256_gcm, generate_trace_id
+from app.middleware.auth import get_current_active_user
 from app.middleware.permission import require_any_user
 from app.models import Host, HostCredential, HostGroup, User
 from app.services import host_group_service as hgs
@@ -16,6 +17,17 @@ from app.services.audit_service import create_audit_record
 
 router = APIRouter(prefix="/api/v1/hosts")
 logger = get_logger("api-server.hosts")
+
+
+async def require_host_admin(user: User = Depends(get_current_active_user)) -> User:
+    """2026-11-23 R62：主机/分组/凭据管理权限统一为「平台 admin 或任一分组的组 admin」；
+    组 operator / viewer 及普通用户一律拒绝。"""
+    if hgs.is_platform_admin(user):
+        return user
+    roles = await hgs.get_group_roles(user)
+    if any(r == "admin" for r in roles.values()):
+        return user
+    raise HTTPException(status_code=403, detail="无主机管理权限（需平台管理员或任一分组的组管理角色）")
 
 
 def _row(h: Host, group_name: str = "", can: dict | None = None) -> dict:
@@ -137,7 +149,7 @@ async def _validate_group(user: User, group_id):
 
 
 @router.post("")
-async def create_host(payload: dict, user=Depends(require_any_user)):
+async def create_host(payload: dict, user=Depends(require_host_admin)):  # 2026-11-23 R62
     name = (payload.get("name") or "").strip()
     address = (payload.get("address") or "").strip()
     if not name or not address:
@@ -307,7 +319,7 @@ async def import_template(user=Depends(require_any_user)):
 
 
 @router.post("/import")
-async def import_hosts(payload: dict, user=Depends(require_any_user)):
+async def import_hosts(payload: dict, user=Depends(require_host_admin)):  # 2026-11-23 R62
     """批量导入主机（CSV / 粘贴表格）。
 
     body: {content, format: csv|table, on_duplicate: skip|update, default_group_id, dry_run}
@@ -315,11 +327,6 @@ async def import_hosts(payload: dict, user=Depends(require_any_user)):
     content = payload.get("content") or ""
     if not content.strip():
         return {"code": 400, "message": "content 不能为空", "data": None}
-    is_admin = hgs.is_platform_admin(user)
-    if not is_admin:
-        roles = await hgs.get_group_roles(user)
-        if not any(r in ("admin", "operator") for r in roles.values()):
-            raise HTTPException(status_code=403, detail="无导入权限（需要某个分组的操作权限）")
     fmt = (payload.get("format") or "csv").strip().lower()
     on_dup = (payload.get("on_duplicate") or "skip").strip().lower()
     if on_dup not in ("skip", "update"):

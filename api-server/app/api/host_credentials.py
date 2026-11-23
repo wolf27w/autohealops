@@ -5,7 +5,8 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.security import generate_trace_id
-from app.middleware.permission import require_admin, require_operator
+from app.api.hosts import require_host_admin
+from app.middleware.permission import require_operator
 from app.models import User
 from app.services import host_credential_service as hcs
 from app.services.audit_service import create_audit_record
@@ -28,7 +29,7 @@ async def list_credentials(user=Depends(require_operator)):
 
 
 @router.post("")
-async def create_credential(payload: dict, user: User = Depends(require_admin)):
+async def create_credential(payload: dict, user: User = Depends(require_host_admin)):  # 2026-11-23 R62
     try:
         row = await hcs.create_credential(payload, user.id)
     except ValueError as e:
@@ -39,7 +40,7 @@ async def create_credential(payload: dict, user: User = Depends(require_admin)):
 
 
 @router.put("/{credential_id}")
-async def update_credential(credential_id: int, payload: dict, user: User = Depends(require_admin)):
+async def update_credential(credential_id: int, payload: dict, user: User = Depends(require_host_admin)):  # 2026-11-23 R62
     try:
         row = await hcs.update_credential(credential_id, payload)
     except KeyError:
@@ -52,7 +53,7 @@ async def update_credential(credential_id: int, payload: dict, user: User = Depe
 
 
 @router.delete("/{credential_id}")
-async def delete_credential(credential_id: int, user: User = Depends(require_admin)):
+async def delete_credential(credential_id: int, user: User = Depends(require_host_admin)):  # 2026-11-23 R62
     try:
         ok, msg = await hcs.delete_credential(credential_id)
     except KeyError:

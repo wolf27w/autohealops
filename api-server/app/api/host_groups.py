@@ -3,10 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, select, update
 
+from app.api.hosts import require_host_admin
 from app.core.database import async_session
 from app.core.security import generate_trace_id
 from app.middleware.auth import get_current_active_user
-from app.middleware.permission import require_any_user, require_admin
+from app.middleware.permission import require_any_user
 from app.models import Host, HostGroup, HostGroupMember, User
 from app.services import host_group_service as hgs
 from app.services.audit_service import create_audit_record
@@ -56,7 +57,7 @@ async def list_groups(user=Depends(require_any_user)):
 
 
 @router.post("")
-async def create_group(payload: dict, user=Depends(require_admin)):
+async def create_group(payload: dict, user=Depends(require_host_admin)):  # 2026-11-23 R62
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="分组名必填")
@@ -84,8 +85,7 @@ async def _require_manage(user: User, group_id: int):
 
 
 @router.put("/{group_id}")
-async def update_group(group_id: int, payload: dict, user: User = Depends(get_current_active_user)):
-    await _require_manage(user, group_id)
+async def update_group(group_id: int, payload: dict, user: User = Depends(require_host_admin)):  # 2026-11-23 R62
     async with async_session() as s:
         g = await s.get(HostGroup, group_id)
         if not g:
@@ -108,25 +108,22 @@ async def update_group(group_id: int, payload: dict, user: User = Depends(get_cu
 
 
 @router.delete("/{group_id}")
-async def delete_group(group_id: int, user=Depends(require_admin)):
+async def delete_group(group_id: int, user=Depends(require_host_admin)):  # 2026-11-23 R62
     async with async_session() as s:
         g = await s.get(HostGroup, group_id)
         if not g:
             raise HTTPException(status_code=404, detail="分组不存在")
-        if g.is_default:
-            raise HTTPException(status_code=400, detail="默认分组不可删除")
-        vm_count = (await s.execute(
-            select(func.count()).select_from(Host).where(Host.group_id == group_id, Host.kind == "vm")
+        # 2026-11-23 R61：默认分组亦可删除；组内所有主机（含 vm）统一转未分组，不再阻断
+        host_count = (await s.execute(
+            select(func.count()).select_from(Host).where(Host.group_id == group_id)
         )).scalar_one()
-        if vm_count > 0:
-            raise HTTPException(status_code=400, detail="组内存在虚拟机，请先移走再删除（虚拟机不允许无组）")
-        # 组内主机转「未分组」
         await s.execute(update(Host).where(Host.group_id == group_id).values(group_id=None))
         await s.execute(delete(HostGroupMember).where(HostGroupMember.group_id == group_id))
         await s.delete(g)
         await s.commit()
-    await _audit(generate_trace_id(), f"删除主机分组：{group_id}", {"action": "delete_group", "group_id": group_id})
-    return {"code": 200, "message": "success", "data": {"id": group_id}}
+    await _audit(generate_trace_id(), f"删除主机分组：{group_id}（转未分组主机 {host_count} 台）",
+                 {"action": "delete_group", "group_id": group_id, "ungrouped_hosts": host_count})
+    return {"code": 200, "message": "success", "data": {"id": group_id, "ungrouped_hosts": host_count}}
 
 
 @router.get("/{group_id}/members")
