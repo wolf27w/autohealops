@@ -146,6 +146,18 @@ async def _list_workload_pods(cluster_id: int, namespace: str, kind: str, name: 
     return _sort_pods(matched)
 
 
+# 2026-11-23 老板口径：日志采集类 sidecar 不属于业务日志，默认不聚合
+# （需要在日志里排查采集器本身时，可在容器下拉里显式选择）。
+LOG_COLLECTOR_CONTAINERS = {
+    "filebeat", "filebeat-sidecar", "fluent-bit", "fluentd", "logstash",
+    "vector", "logtail", "log-pilot", "promtail",
+}
+
+
+def _is_log_collector(name: str) -> bool:
+    return (name or "").strip().lower() in LOG_COLLECTOR_CONTAINERS
+
+
 async def _pod_container_names(cluster_id: int, namespace: str, pod_name: str) -> list[str]:
     """取 Pod 实际容器名（含 sidecar；模板里可能看不到注入的 sidecar）。"""
     try:
@@ -171,6 +183,10 @@ async def _fetch_pod_tail(cluster_id: int, namespace: str, pod: dict, container:
                 executor_client.get_pod_logs, cluster_id, namespace, pname, container, tail, False)
             return pod, r
         names = await _pod_container_names(cluster_id, namespace, pname)
+        # 排除日志采集 sidecar（filebeat 等），但全被过滤时回退全部，避免什么都看不到
+        business = [n for n in names if not _is_log_collector(n)]
+        if business:
+            names = business
         if not names:
             r = await executor_client.acall(
                 executor_client.get_pod_logs, cluster_id, namespace, pname, "", tail, False)
