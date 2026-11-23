@@ -68,6 +68,9 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   const wsMapRef = useRef<Map<string, WebSocket>>(new Map())
   const boxRef = useRef<HTMLPreElement>(null)
   const bufRef = useRef<Map<string, string>>(new Map())       // 每容器未完成行的缓冲
+  // 2026-11-23：实时续接用的去重集合（开实时时用屏幕已有行初始化，只追加"末位之后"的新行）
+  const seenRef = useRef<Set<string>>(new Set())
+  const livePrevRef = useRef(false)
   const openCountRef = useRef(0)
 
   // 留空 = 全部容器
@@ -83,20 +86,39 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     setConnected(false)
   }
 
-  const appendContainerText = (c: string, text: string) => {
+  const appendContainerText = (c: string, text: string, dedupe = false) => {
     const prev = bufRef.current.get(c) || ''
     const arr = (prev + text).split('\n')
     bufRef.current.set(c, arr.pop() || '')
-    if (!arr.length) return
-    const newRows: LogRow[] = arr.map((line) => ({ container: c, line }))
+    let lines = arr
+    if (dedupe) {
+      const fresh: string[] = []
+      for (const ln of lines) {
+        const key = c + '|' + ln
+        if (seenRef.current.has(key)) continue
+        seenRef.current.add(key)
+        fresh.push(ln)
+      }
+      if (seenRef.current.size > 20000) seenRef.current = new Set()  // 兜底防无限增长
+      lines = fresh
+    }
+    if (!lines.length) return
+    const newRows: LogRow[] = lines.map((line) => ({ container: c, line }))
     setRows((r) => { const n = [...r, ...newRows]; return n.length > MAX_LINES ? n.slice(n.length - MAX_LINES) : n })
   }
 
-  const connect = () => {
+  const connect = (preserve = false) => {
     if (!pod) return
     closeAllWs()
-    setRows([])
-    bufRef.current.clear()
+    if (preserve) {
+      // 实时续接：保留现有内容，把它记为"已见过"，后续只追加末位之后的新行
+      seenRef.current = new Set(rows.map((r) => r.container + '|' + r.line))
+      bufRef.current.clear()
+    } else {
+      setRows([])
+      bufRef.current.clear()
+      seenRef.current = new Set()
+    }
     const targets = effectiveContainers
     for (const c of targets) {
       const ws = new WebSocket(buildWsUrl(
@@ -125,7 +147,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
           } catch { /* ignore */ }
           return
         }
-        appendContainerText(c, text)
+        appendContainerText(c, text, live)
       }
     }
   }
@@ -147,7 +169,9 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   // 打开=实时跟随；关闭=重新拉一段（最近 200 行快照）。
   useEffect(() => {
     if (!pod || !effectiveContainers.length) return
-    connect()
+    const turningOn = live && !livePrevRef.current
+    livePrevRef.current = live
+    connect(turningOn)   // 开实时=续接；关实时/切 Pod=重新拉一段
     return () => closeAllWs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod, effectiveContainers, previous, live])

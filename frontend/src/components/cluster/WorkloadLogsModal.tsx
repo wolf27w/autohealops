@@ -90,6 +90,9 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   const [onlyErrors, setOnlyErrors] = useState(false) // 只看错误/异常
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [truncated, setTruncated] = useState(false)
+  // 2026-11-23：实时续接去重（开实时时用屏幕已有行初始化）
+  const seenRef = useRef<Set<string>>(new Set())
+  const followPrevRef = useRef(false)
   const [rules, setRules] = useState<HighlightRule[]>(() => loadRules())
   const [timeRange, setTimeRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
 
@@ -149,8 +152,10 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   }, [clusterId, namespace, kind, name, selected])
 
   // 开始跟随：为每个容器各开一条 SSE（SSE 先推快照，再每 2s 增量）
-  const startFollow = useCallback(() => {
-    setLines([])
+  const startFollow = useCallback((preserve = false) => {
+    // 2026-11-23：开实时=从当前内容末位继续追加（不清空）；关实时=重新拉最近 200 行
+    if (!preserve) setLines([])
+    seenRef.current = preserve ? new Set(lines.map((l) => l.pod + '|' + l.container + '|' + l.line)) : new Set()
     setTruncated(false)   // 实时态没有“截断”概念，清掉快照遗留标记
     // 未选容器 → 一条流 + container=''，后端按 Pod 实际容器逐个拉取（含 sidecar）
     const targets = selected.length ? selected : ['']
@@ -162,6 +167,10 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         try {
           const j = JSON.parse((ev as MessageEvent).data as string) as { pod?: string; line?: string }
           if (j && typeof j.pod === 'string' && typeof j.line === 'string') {
+            const key = j.pod + '|' + c + '|' + j.line
+            if (seenRef.current.has(key)) return   // 已在屏幕上的不重复追加
+            seenRef.current.add(key)
+            if (seenRef.current.size > 20000) seenRef.current = new Set()
             const row: LogRow = { pod: j.pod, container: c, line: j.line }
             appendRows([row])
           }
@@ -181,7 +190,7 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
         }
       })
     }
-  }, [clusterId, namespace, kind, name, selected, appendRows])
+  }, [clusterId, namespace, kind, name, selected, appendRows, lines])
 
   // 容器列表
   useEffect(() => {
@@ -210,15 +219,19 @@ export default function WorkloadLogsModal({ clusterId, namespace, kind, name, op
   useEffect(() => {
     if (!open || !following) return
     closeStreams()
-    startFollow()
+    const turningOn = !followPrevRef.current
+    followPrevRef.current = true
+    startFollow(turningOn)
     return () => closeStreams()
-  }, [open, following, startFollow, closeStreams])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, following, closeStreams])
 
   // 关闭弹窗 → 关闭所有 SSE 并复位状态
   useEffect(() => {
     if (!open) {
       closeStreams()
       setFollowing(false)  // 再次打开仍默认显示最近 200 行（实时需手动开）
+      followPrevRef.current = false
     }
   }, [open, closeStreams])
 
