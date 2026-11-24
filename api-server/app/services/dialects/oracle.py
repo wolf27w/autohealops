@@ -4,12 +4,15 @@
 连接写法与 `app.services.db_collector.test_db_connection` 里的 Oracle 分支保持一致：
 service_name / sid / tns 三选一 + SYSDBA/SYSOPER 的 AUTH_MODE 处理，勿另起炉灶。
 
-能力覆盖（最小可用）：connect / query / exec_sql / schema / ddl / list_databases / probe。
-导出 / 导入 / 备份 / 建库 / 删库 暂不支持（由 base.Dialect 的 require() 明确报错）。
+能力覆盖：connect / query / exec_sql / schema / ddl / list_databases / probe，以及逻辑导出
+（export）/ 导入（import）/ 脚本导入（import_sql）/ 逻辑备份（backup，method=logical）。
+建库 / 删库仍不支持（Oracle 无「库」概念，由 base.Dialect 的 require() 明确报错）。
 """
 import asyncio
+import csv
 from datetime import datetime
 from decimal import Decimal
+import io
 import re
 
 from app.core.logging import get_logger
@@ -50,6 +53,13 @@ def _dsn(info: dict) -> str:
 
 
 MAX_ROWS = 5000
+
+# 导出/导入/备份的边界（与 mysql 侧对齐）
+_MAX_STMT_LEN = 10 * 1024 * 1024     # 单条语句超过 10MB 跳过
+_BATCH_SIZE = 200                    # import_sql 每批最多处理的语句数
+_CSV_BATCH = 1000                    # CSV/批量 INSERT 每批行数
+_PAGE_SIZE = 1000                    # 导出/备份分页每页行数
+_MAX_EXPORT_BYTES = 5 * 1024 * 1024  # 导出 SQL 总大小上限（与 mysql 一致）
 
 # 数据字典里跳过明显的系统 schema（避免 all_tables 里 SYS/CTXSYS 等淹没业务表）
 # APEX/ORDS 等内置组件 schema 前缀（业务上无关，列表里滤掉）
@@ -284,10 +294,334 @@ def _norm_oracle_default(d):
     return d
 
 
+# ============ 导出 / 导入 / 备份（逻辑备份）辅助 ============
+
+def _q(v) -> str:
+    """Oracle SQL 字面量：NULL / 数字 / TIMESTAMP / HEXTORAW / 字符串（单引号双写转义）。
+
+    Oracle 字符串转义与 MySQL 不同：单引号用 `''` 双写，反斜杠是普通字符（不转义）。
+    """
+    if v is None:
+        return "NULL"
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, Decimal):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, datetime):
+        # DATE/TIMESTAMP 统一用 TIMESTAMP 字面量（DATE 列可隐式转换）
+        return "TIMESTAMP '" + v.strftime("%Y-%m-%d %H:%M:%S.%f") + "'"
+    if isinstance(v, (bytes, bytearray)):
+        return "HEXTORAW('" + bytes(v).hex().upper() + "')"
+    s = str(v)
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _paginated_select(owner: str, table: str, offset: int, limit: int,
+                      columns: list[str] | None = None) -> str:
+    """生成 Oracle 分页查询（ROWNUM 包裹，兼容 11g+）。
+
+    - offset 从 0 起，返回第 [offset, offset+limit) 行；limit 上限控制单页行数。
+    - columns 提供时按列清单投影（外层不泄露 ROWNUM 别名列）；未提供时退化为 `*`。
+    - 12c+ 可用 `OFFSET n ROWS FETCH NEXT m ROWS ONLY`，此处统一 ROWNUM 包裹以兼容旧版本。
+    """
+    check_ident(owner, "库名")
+    check_ident(table, "表名")
+    offset = max(0, int(offset))
+    limit = max(1, int(limit))
+    sel = ", ".join(f'"{x}"' for x in columns) if columns else "*"
+    base = f'SELECT {sel} FROM "{owner}"."{table}"'
+    if offset <= 0:
+        return f"SELECT {sel} FROM ({base}) WHERE ROWNUM <= {limit}"
+    end = offset + limit
+    if columns:
+        out = ", ".join(f'a."{x}"' for x in columns)
+        return (f"SELECT {out} FROM ("
+                f"SELECT {sel}, ROWNUM AS rn__ FROM ({base}) WHERE ROWNUM <= {end}"
+                f") a WHERE rn__ > {offset}")
+    return (f"SELECT * FROM (SELECT a.*, ROWNUM AS rn__ FROM ({base}) a "
+            f"WHERE ROWNUM <= {end}) WHERE rn__ > {offset}")
+
+
+def _split_oracle_sql(text: str) -> list[str]:
+    """Oracle 脚本语句切分（在 base.split_sql_statements 基础上补 DECLARE 声明段）。
+
+    规则：
+    - 单引号字符串 / 行注释(`-- `、`#`) / 块注释(`/* */`) 内的分号不切分。
+    - `BEGIN ... END;` / `DECLARE ... BEGIN ... END;` PL/SQL 块作为单条语句：
+      块内（含 DECLARE 声明段，如 `v_x NUMBER;`）的分号不切分；独立一行的 `/`
+      （SQL*Plus 执行符）作为块终止符被丢弃。
+    - 其余按 `;` 切分。
+
+    局限（刻意不完整解析）：不处理 `CREATE OR REPLACE PROCEDURE/FUNCTION/PACKAGE/TRIGGER`
+    这类带 `IS/AS ... BEGIN ... END` 的存储程序体，也不处理 MySQL 的 DELIMITER。
+    """
+    stmts: list[str] = []
+    cur: list[str] = []
+    i, n = 0, len(text)
+    depth = 0          # PL/SQL 块嵌套深度（DECLARE/BEGIN 各 +1，END -1；>0 时 `;` 不切分）
+    declared = False   # 刚见过 DECLARE、尚未见到其 BEGIN（其 BEGIN 不再 +1）
+    saw_block = False
+    line_start = True
+
+    def _flush() -> None:
+        nonlocal cur, depth, declared, saw_block, line_start
+        s = "".join(cur).strip()
+        if s:
+            stmts.append(s)
+        cur = []
+        depth = 0
+        declared = False
+        saw_block = False
+        line_start = True
+
+    def _word_at(idx: int) -> str | None:
+        j = idx
+        while j < n and (text[j].isalnum() or text[j] in "_$#"):
+            j += 1
+        return text[idx:j] if j > idx else None
+
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch == "#":
+            line_start = False
+            while i < n and text[i] not in "\r\n":
+                cur.append(text[i])
+                i += 1
+            continue
+        if ch == "-" and nxt == "-" and (i + 2 >= n or text[i + 2] in " \t\r\n"):
+            line_start = False
+            while i < n and text[i] not in "\r\n":
+                cur.append(text[i])
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            line_start = False
+            cur.append(ch)
+            cur.append(nxt)
+            i += 2
+            while i < n:
+                cur.append(text[i])
+                if text[i] == "*" and i + 1 < n and text[i + 1] == "/":
+                    cur.append(text[i + 1])
+                    i += 2
+                    break
+                i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            line_start = False
+            quote = ch
+            cur.append(ch)
+            i += 1
+            while i < n:
+                cur.append(text[i])
+                if text[i] == "\\" and quote != "`" and i + 1 < n:
+                    cur.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    if i + 1 < n and text[i + 1] == quote:
+                        cur.append(text[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "/" and line_start and nxt in ("\r", "\n", ""):
+            if saw_block and not "".join(cur).rstrip().endswith(";"):
+                cur.append(";")
+            _flush()
+            i += 1
+            continue
+        if ch.isalpha():
+            w = _word_at(i)
+            uw = (w or "").upper()
+            if uw in ("BEGIN", "END", "DECLARE", "IF", "LOOP", "CASE"):
+                j = i + len(w)
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                w2 = _word_at(j)
+                uw2 = (w2 or "").upper()
+                if uw == "DECLARE":
+                    depth += 1
+                    declared = True
+                    saw_block = True
+                elif uw == "BEGIN":
+                    if declared:
+                        declared = False
+                    else:
+                        depth += 1
+                    saw_block = True
+                elif uw == "END":
+                    if uw2 in ("IF", "LOOP", "CASE"):
+                        pass  # END IF / END LOOP / END CASE：不改变块深度
+                    elif depth > 0:
+                        depth -= 1
+                for _ in range(len(w)):
+                    cur.append(text[i])
+                    i += 1
+                line_start = False
+                continue
+            cur.append(ch)
+            i += 1
+            line_start = False
+            continue
+        if ch == ";":
+            line_start = False
+            if depth > 0:
+                cur.append(ch)
+                i += 1
+                continue
+            if saw_block:
+                cur.append(ch)
+            _flush()
+            i += 1
+            continue
+        if ch in "\r\n":
+            line_start = True
+            cur.append(ch)
+            i += 1
+            continue
+        if ch in " \t":
+            cur.append(ch)
+            i += 1
+            continue
+        line_start = False
+        cur.append(ch)
+        i += 1
+    _flush()
+    return stmts
+
+
+def _sql_blank(s: str) -> bool:
+    """去掉注释后是否无实际内容（纯注释语句跳过用）。"""
+    out: list[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "#":
+            while i < n and s[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "-" and i + 1 < n and s[i + 1] == "-" and (i + 2 >= n or s[i + 2] in " \t\r\n"):
+            while i < n and s[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and s[i + 1] == "*":
+            i += 2
+            while i < n and not (s[i] == "*" and i + 1 < n and s[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out).strip() == ""
+
+
+def _executemany_batched(conn, stmt: str, args: list[list], batch_size: int = _CSV_BATCH) -> int:
+    """分批 executemany（单事务）：任一批失败即整体回滚并报错行号区间（1-based 数据行）。"""
+    cur = conn.cursor()
+    executed = 0
+    start = 0
+    total = len(args)
+    try:
+        while start < total:
+            batch = args[start:start + batch_size]
+            cur.executemany(stmt, batch)
+            executed += len(batch)
+            start += batch_size
+        conn.commit()
+    except Exception as e:  # noqa: BLE001
+        conn.rollback()
+        first = start + 1
+        last = min(start + batch_size, total)
+        raise RuntimeError(f"第 {first}~{last} 行批量插入失败：{e}") from e
+    return executed
+
+
+def _list_tables_sync(conn, owner: str) -> list[str]:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT * FROM (SELECT table_name FROM all_tables "
+            "WHERE owner = :1 ORDER BY table_name) WHERE ROWNUM <= 3000", [owner])
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        cur.close()
+
+
+def _table_columns_sync(conn, owner: str, table: str) -> list[str]:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT column_name FROM all_tab_columns "
+            "WHERE owner = :1 AND table_name = :2 ORDER BY column_id", [owner, table])
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        cur.close()
+
+
+def _get_table_ddl_sync(conn, owner: str, table: str) -> str:
+    """DBMS_METADATA.GET_DDL 取建表语句；无权限/对象不存在时返回空串（调用方标注跳过）。"""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT DBMS_METADATA.GET_DDL('TABLE', :1, :2) FROM DUAL", [table, owner])
+        row = cur.fetchone()
+        val = row[0] if row and row[0] is not None else ""
+        if hasattr(val, "read"):  # 老版本驱动可能返回 LOB 对象
+            val = val.read()
+        text = str(val).strip()
+        return (text + ("" if text.endswith(";") else ";")) if text else ""
+    finally:
+        cur.close()
+
+
+def _table_backup_sync(conn, owner: str, table: str, schema_only: bool) -> str:
+    """单表逻辑备份文本：结构 DDL（DBMS_METADATA，尽力）+ 数据 INSERT（分页 SELECT 拼接）。"""
+    out = io.StringIO()
+    out.write(f"-- ---------- table: {table} ----------\n")
+    ddl = _get_table_ddl_sync(conn, owner, table)
+    if ddl:
+        out.write(ddl + "\n")
+    else:
+        out.write("-- (结构 DDL 不可用：DBMS_METADATA 无权限或对象不存在)\n")
+    if schema_only:
+        out.write("\n")
+        return out.getvalue()
+    cols = _table_columns_sync(conn, owner, table)
+    if not cols:
+        out.write("-- (无列信息，跳过数据)\n\n")
+        return out.getvalue()
+    col_list = ", ".join(f'"{x}"' for x in cols)
+    prefix = f'INSERT INTO "{owner}"."{table}" ({col_list}) VALUES '
+    offset = 0
+    while True:
+        sql = _paginated_select(owner, table, offset, _PAGE_SIZE, cols)
+        cur = conn.cursor()
+        try:
+            cur.execute(sql)
+            batch = cur.fetchall()
+        finally:
+            cur.close()
+        if not batch:
+            break
+        for r in batch:
+            out.write(prefix + "(" + ", ".join(_q(v) for v in r) + ");\n")
+        if len(batch) < _PAGE_SIZE:
+            break
+        offset += len(batch)
+    out.write("\n")
+    return out.getvalue()
+
+
 class OracleDialect(Dialect):
     db_type = "oracle"
     PROBE_SQL = "select 1 from dual"
-    CAPABILITIES = frozenset({"query", "exec", "schema", "ddl", "list_databases"})
+    CAPABILITIES = frozenset({"query", "exec", "schema", "ddl", "list_databases",
+                              "export", "import", "backup"})
 
     def _connect_sync(self, c, readonly: bool = True, database: str | None = None):
         if oracledb is None:
@@ -412,6 +746,176 @@ class OracleDialect(Dialect):
         finally:
             conn.close()
 
+    # ---- 导出 / 导入 / 备份（同步实现，异步包装丢线程池）----
+
+    def _export_sync(self, c, db: str, table: str, rows: int, mode: str) -> dict:
+        """逻辑导出：分页 SELECT 拼 INSERT（Oracle 无 mysqldump 对等物）。
+
+        - mode：structure（DBMS_METADATA DDL）/ data（INSERT）/ both。
+        - db=owner/schema；分页用 ROWNUM 包裹（兼容 11g+）；单表 ≤rows 行、总 ≤5MB。
+        """
+        mode = (mode or "both").lower()
+        if mode not in ("structure", "data", "both"):
+            raise RuntimeError(f"mode 仅支持 structure/data/both（当前 {mode}）")
+        rows = max(1, min(int(rows or 1000), MAX_ROWS))
+        db = (db or c.database or "").strip()
+        if not db:
+            raise RuntimeError("db 不能为空（Oracle 中 db=owner/schema）")
+        check_ident(db, "库名")
+        conn = self._connect_sync(c, readonly=True)
+        try:
+            tables = [check_ident(table, "表名")] if table else _list_tables_sync(conn, db)
+            buf = io.StringIO()
+            buf.write("-- AutoHealOps export (Oracle logical)\n")
+            buf.write(f"-- schema: {db}  time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            total, truncated = 0, False
+            for t in tables:
+                buf.write(f"-- ---------- table {t} ----------\n")
+                if mode != "data":
+                    ddl = _get_table_ddl_sync(conn, db, t)
+                    buf.write(ddl if ddl else "-- (结构 DDL 不可用：DBMS_METADATA 无权限或对象不存在)\n")
+                    buf.write("\n")
+                if mode == "structure":
+                    continue
+                cols = _table_columns_sync(conn, db, t)
+                if not cols:
+                    buf.write("-- (无列信息，跳过数据)\n\n")
+                    continue
+                col_list = ", ".join(f'"{x}"' for x in cols)
+                prefix = f'INSERT INTO "{db}"."{t}" ({col_list}) VALUES '
+                offset = 0
+                while offset < rows and not truncated:
+                    limit = min(_PAGE_SIZE, rows - offset)
+                    sql = _paginated_select(db, t, offset, limit, cols)
+                    cur = conn.cursor()
+                    try:
+                        cur.execute(sql)
+                        batch = cur.fetchall()
+                    finally:
+                        cur.close()
+                    if not batch:
+                        break
+                    for r in batch:
+                        buf.write(prefix + "(" + ", ".join(_q(v) for v in r) + ");\n")
+                        total += 1
+                    if len(batch) < limit:
+                        break
+                    offset += len(batch)
+                    if buf.tell() > _MAX_EXPORT_BYTES:
+                        truncated = True
+                buf.write("\n")
+                if truncated or buf.tell() > _MAX_EXPORT_BYTES:
+                    truncated = True
+                    break
+            return {"db": db, "table": table, "tables": len(tables), "rows": total,
+                    "bytes": buf.tell(), "truncated": truncated, "sql": buf.getvalue()}
+        finally:
+            conn.close()
+
+    def _import_content_sync(self, c, db: str, table: str, fmt: str, content: str) -> dict:
+        """导入（≤5MB）：CSV 走批量 INSERT（executemany 1000 行/批，失败回滚报错行）；SQL 走块切分逐条执行。
+
+        Oracle 无 USE 语义：CSV 必须指定 schema（db），按 `schema.table` 拼接；SQL 脚本
+        语句需自带 schema 前缀或依赖登录默认 schema（本实现不切换 CURRENT_SCHEMA）。
+        """
+        if len(content.encode("utf-8")) > _MAX_EXPORT_BYTES:
+            raise RuntimeError("文件超过 5MB，请拆分后导入")
+        db = (db or c.database or "").strip()
+        conn = self._connect_sync(c, readonly=False)
+        conn.autocommit = False
+        try:
+            executed = skipped = 0
+            if (fmt or "sql").lower() == "csv":
+                if not table:
+                    raise RuntimeError("CSV 导入必须指定表名")
+                check_ident(db, "库名")
+                check_ident(table, "表名")
+                rd = csv.reader(io.StringIO(content.lstrip("\ufeff")))
+                records = list(rd)
+                if len(records) < 2:
+                    raise RuntimeError("CSV 至少需要表头 + 1 行数据")
+                header = [h.strip() for h in records[0]]
+                for h in header:
+                    check_ident(h, "字段名")
+                cols = ", ".join(f'"{h}"' for h in header)
+                ph = ", ".join(f":{i + 1}" for i in range(len(header)))
+                stmt = f'INSERT INTO "{db}"."{table}" ({cols}) VALUES ({ph})'
+                args: list[list] = []
+                for rec in records[1:]:
+                    if not rec or all((v or "").strip() == "" for v in rec):
+                        skipped += 1
+                        continue
+                    args.append([rec[i] if i < len(rec) else "" for i in range(len(header))])
+                executed = _executemany_batched(conn, stmt, args, _CSV_BATCH)
+            else:
+                cur = conn.cursor()
+                try:
+                    for raw in _split_oracle_sql(content):
+                        s = raw.strip()
+                        if not s or _sql_blank(s):
+                            skipped += 1
+                            continue
+                        cur.execute(s)
+                        executed += 1
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    cur.close()
+            return {"format": fmt, "executed": executed, "skipped": skipped,
+                    "bytes": len(content.encode("utf-8"))}
+        finally:
+            conn.close()
+
+    def _import_sql_sync(self, c, db: str, sql: str, mode: str) -> dict:
+        """导入 SQL 脚本（不限大小）：Oracle 一次只执行一条语句，按块切分逐条执行。
+
+        - 用 `_split_oracle_sql` 切分（BEGIN...END / DECLARE...BEGIN...END 整体为一条）。
+        - mode=stop 遇错即停；skip 跳过错误继续；空/纯注释/超长语句跳过。
+        - 返回 {total, executed, skipped, failed, errors, stopped}。
+        """
+        mode = (mode or "stop").lower()
+        conn = self._connect_sync(c, readonly=False)
+        try:
+            stmts = _split_oracle_sql(sql or "")
+            executed = skipped = 0
+            errors: list[dict] = []
+            stopped = False
+            total = len(stmts)
+            cur = conn.cursor()
+            try:
+                for start in range(0, total, _BATCH_SIZE):
+                    batch = stmts[start:start + _BATCH_SIZE]
+                    for j, raw in enumerate(batch):
+                        idx = start + j
+                        s = raw.strip()
+                        if not s or _sql_blank(s):
+                            skipped += 1
+                            continue
+                        if len(s) > _MAX_STMT_LEN:
+                            skipped += 1
+                            errors.append({"index": idx, "statement_head": s[:120],
+                                           "error": "语句过长（>10MB），已跳过"})
+                            continue
+                        try:
+                            cur.execute(s)
+                            executed += 1
+                        except Exception as e:  # noqa: BLE001
+                            errors.append({"index": idx, "statement_head": s[:120],
+                                           "error": str(e)[:300]})
+                            if mode == "stop":
+                                stopped = True
+                                break
+                    if stopped:
+                        break
+            finally:
+                cur.close()
+            return {"total": total, "executed": executed, "skipped": skipped,
+                    "failed": len(errors), "errors": errors, "stopped": stopped}
+        finally:
+            conn.close()
+
 
     # ---- 异步包装：oracledb 是同步驱动（thick 模式不支持 connect_async），统一丢线程池 ----
     async def query(self, c, sql: str, limit: int = 200, database: str | None = None) -> dict:
@@ -431,6 +935,41 @@ class OracleDialect(Dialect):
 
     async def table_schema(self, c, db: str, table: str) -> dict:
         return await asyncio.to_thread(self._table_schema_sync, c, db, table)
+
+    async def export_sql(self, c, db: str = "", table: str = "", rows: int = 1000,
+                         mode: str = "both") -> dict:
+        return await asyncio.to_thread(self._export_sync, c, db, table, rows, mode)
+
+    async def import_content(self, c, db: str, table: str, fmt: str, content: str) -> dict:
+        return await asyncio.to_thread(self._import_content_sync, c, db, table, fmt, content)
+
+    async def import_sql(self, c, db: str, sql: str, mode: str = "stop") -> dict:
+        return await asyncio.to_thread(self._import_sql_sync, c, db, sql, mode)
+
+    async def backup_sql(self, c, databases: list[str], schema_only: bool = False):
+        """Oracle 逻辑备份（异步生成器，逐表 yield bytes，不落盘）。
+
+        Oracle 无 mysqldump 对等物（expdp 需数据库主机权限），故实现为逻辑备份：
+        按 schema 生成结构 DDL（DBMS_METADATA，尽力）+ 数据 INSERT（分页 SELECT）。
+        首块标注 `method=logical`；连接/查询失败会抛异常中断流，不假装成功。
+        同步驱动阻塞经 asyncio.to_thread 隔离（逐表），避免整库塞内存。
+        """
+        yield ("-- AutoHealOps backup (Oracle)\n"
+               "-- method: logical（INSERT 语句；非 expdp / Data Pump）\n"
+               f"-- time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n").encode("utf-8")
+        conn = self._connect_sync(c, readonly=False)
+        try:
+            for schema in databases:
+                check_ident(schema, "库名")
+                tables = await asyncio.to_thread(_list_tables_sync, conn, schema)
+                yield (f"\n-- ==================== schema: {schema} ({len(tables)} tables) ====================\n"
+                       ).encode("utf-8")
+                for t in tables:
+                    chunk = await asyncio.to_thread(_table_backup_sync, conn, schema, t, schema_only)
+                    if chunk:
+                        yield chunk.encode("utf-8")
+        finally:
+            conn.close()
 
     # ---- DDL 生成（纯函数，不连库）----
 

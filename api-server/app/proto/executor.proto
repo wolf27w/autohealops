@@ -40,6 +40,9 @@ service ExecutorService {
 
   rpc QueryPrometheus(QueryPrometheusRequest) returns (QueryPrometheusResponse);
 
+  // 高峰期资源采集（R1：工作负载 P80/P95 CPU/内存用量，Prometheus 聚合）
+  rpc GetPeakUsage(GetPeakUsageRequest) returns (GetPeakUsageResponse);
+
   // 查看 Pod 容器日志（logs）
   rpc GetPodLogs(GetPodLogsRequest) returns (GetPodLogsResponse);
   // 获取 Pod YAML（只读）
@@ -66,6 +69,8 @@ service ExecutorService {
   rpc CleanupEvicted(CleanupEvictedRequest) returns (CleanupEvictedResponse);
   // 命名空间列表（name + labels，R19 发布入口标签门控用）
   rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  // ServiceAccount 列表（含角色反查 + 关联 secret）
+  rpc ListServiceAccounts(ListServiceAccountsRequest) returns (ListServiceAccountsResponse);
 
   // 云原生 RBAC 接入：能力探测 + 下发三档 ClusterRole + 可选自举 automation SA
   rpc SetupRBAC(SetupRBACRequest) returns (SetupRBACResponse);
@@ -77,11 +82,26 @@ service ExecutorService {
   rpc ScaleWorkload(ScaleWorkloadRequest) returns (ScaleWorkloadResponse);
   rpc RolloutWorkload(RolloutWorkloadRequest) returns (RolloutWorkloadResponse);
   rpc RolloutHistory(RolloutHistoryRequest) returns (RolloutHistoryResponse);
+  // R57：HPA（水平自动扩缩容）管理
+  rpc ListHPA(ListHPARequest) returns (ListHPAResponse);
+  rpc GetHPA(GetHPARequest) returns (GetHPAResponse);
+  rpc ApplyHPA(ApplyHPARequest) returns (ApplyHPAResponse);
+  rpc DeleteHPA(DeleteHPARequest) returns (DeleteHPAResponse);
+  // R60：发布历史与版本对比
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
+  rpc GetRevisionTemplate(GetRevisionTemplateRequest) returns (GetRevisionTemplateResponse);
   rpc UpdateProbe(UpdateProbeRequest) returns (UpdateProbeResponse);
   rpc RecreateWorkload(RecreateWorkloadRequest) returns (RecreateWorkloadResponse);
+  // 工作负载回滚执行通道（R70 前置）：等价 kubectl rollout undo，仅 deployment
+  rpc RollbackWorkload(RollbackWorkloadRequest) returns (RollbackWorkloadResponse);
 
   // 交互式终端（TTY）：双向流（stdin/stdout/resize）
   rpc ExecPodStream(stream ExecPodStreamFrame) returns (stream ExecPodStreamFrame);
+
+  // JVM 深度诊断（jstack/jfr/heapdump/jcmd），R2
+  rpc JvmDiagnose(JvmDiagnoseRequest) returns (JvmDiagnoseResponse);
+  // 采集 JVM 启动参数（-Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize + java_version），R2
+  rpc JvmParams(JvmParamsRequest) returns (JvmParamsResponse);
 }
 
 // ---------- StartWatch ----------
@@ -317,14 +337,32 @@ message QueryPrometheusResponse {
   string error = 3;
 }
 
+// ---------- GetPeakUsage（R1 高峰期资源采集） ----------
+message GetPeakUsageRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string workload_kind = 3;   // deployment/statefulset/daemonset
+  string workload_name = 4;
+  string metric = 5;          // cpu/memory
+  int32 window_hours = 6;     // 高峰时段窗口（小时，默认 24）
+}
+message GetPeakUsageResponse {
+  bool success = 1;
+  double p80 = 2;   // P80 用量（cpu=核数，memory=字节）
+  double p95 = 3;   // P95 用量
+  string error = 4;
+}
+
 // ---------- GetPodLogs ----------
 message GetPodLogsRequest {
   int64 cluster_id = 1;
   string namespace = 2;
   string pod_name = 3;
   string container = 4;    // 空=第一个容器
-  int64 tail_lines = 5;    // 返回最近 N 行（默认 200）
+  int64 tail_lines = 5;    // 返回最近 N 行（默认 200；0=不限制，配合 timestamps/since_seconds 取整份）
   bool previous = 6;       // 是否取上一次崩溃日志
+  bool timestamps = 7;     // 行首带 RFC3339 时间戳（时间段过滤/整份下载用，R55）
+  int64 since_seconds = 8; // 只取最近 N 秒（0=不限，R55）
 }
 message GetPodLogsResponse {
   bool success = 1;
@@ -394,6 +432,24 @@ message NamespaceInfo {
 message ListNamespacesResponse {
   bool success = 1;
   repeated NamespaceInfo namespaces = 2;
+  string error = 3;
+}
+
+// ---------- ListServiceAccounts（ServiceAccount 列表：角色/关联 secret） ----------
+message ListServiceAccountsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;    // 空=全部命名空间
+}
+message ServiceAccountInfo {
+  string name = 1;
+  string namespace = 2;
+  string role = 3;              // 注解 kubesphere.io/role 或 rbac.authorization.k8s.io/*；取不到按 RoleBinding/ClusterRoleBinding 反查，仍无则空串
+  repeated string secrets = 4;  // SA 的 secrets[].name（旧版 K8s 才有；新版为空数组）
+  string created_at = 5;        // RFC3339
+}
+message ListServiceAccountsResponse {
+  bool success = 1;
+  repeated ServiceAccountInfo items = 2;
   string error = 3;
 }
 
@@ -483,6 +539,7 @@ message ServiceInfo {
   string cluster_ip = 4;
   string ports = 5;         // 端口串，如 "80:8080/TCP"
   string external_ip = 6;
+  string created_at = 7;    // RFC3339（创建时间）
 }
 message IngressInfo {
   string namespace = 1;
@@ -490,17 +547,20 @@ message IngressInfo {
   string hosts = 3;         // 逗号分隔
   string class = 4;         // ingressClass
   string address = 5;       // LB 地址
+  string created_at = 6;    // RFC3339（创建时间）
 }
 message ConfigMapInfo {
   string namespace = 1;
   string name = 2;
   int32 data_count = 3;     // data 键数
+  string created_at = 4;    // RFC3339（创建时间）
 }
 message SecretInfo {
   string namespace = 1;
   string name = 2;
   string type = 3;          // Opaque/kubernetes.io/tls/...
   int32 data_count = 4;
+  string created_at = 5;    // RFC3339（创建时间）
 }
 message PvcInfo {
   string namespace = 1;
@@ -510,6 +570,9 @@ message PvcInfo {
   string storage_class = 5;
   string volume_name = 6;   // 绑定的 PV
   string access_modes = 7;
+  string created_at = 8;    // RFC3339（创建时间）
+  bool mounted = 9;         // 是否已被 Pod 挂载
+  repeated string mounted_by = 10; // 挂载该 PVC 的 Pod 名（最多 10 个）
 }
 message ListMiscResourcesResponse {
   bool success = 1;
@@ -525,6 +588,11 @@ message StorageClassInfo {
   string name = 1;
   string provisioner = 2;
   bool is_default = 3;
+  string created_at = 4;    // RFC3339（创建时间）
+  int32 pvc_count = 5;      // 该存储类的 PVC 数量
+  bool allow_expansion = 6; // 允许扩容
+  bool supports_clone = 7;  // 支持克隆（按 provisioner 能力推断）
+  bool supports_snapshot = 8; // 支持快照（按 provisioner 能力推断）
 }
 
 // ---------- GetPodEvents（单个 Pod 的 k8s Event，按最后时间倒序） ----------
@@ -679,6 +747,150 @@ message RolloutHistoryResponse {
   string error = 3;
 }
 
+// ---------- RollbackWorkload（工作负载回滚执行通道，R70 前置） ----------
+message RollbackWorkloadRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string kind = 3;        // 仅支持 deployment
+  string name = 4;
+  int64 to_revision = 5;  // 目标 revision；0 = 回滚到上一个 revision
+}
+message RollbackWorkloadResponse {
+  bool success = 1;
+  string message = 2;
+  int64 from_revision = 3;  // 回滚前的当前 revision
+  int64 to_revision = 4;    // 回滚到的目标 revision
+  string image = 5;         // 目标 revision 的主容器镜像
+  string error = 6;
+}
+
+// ==================== R57：HPA 管理 ====================
+
+// 指标条目（一条 HPA 可有多个指标）
+message HPAMetricSpec {
+  string type = 1;                 // Resource / Pods / Object / External
+  string name = 2;                 // cpu / memory / 自定义指标名
+  string target_type = 3;          // Utilization / AverageValue / Value
+  int32 target_utilization = 4;    // 目标利用率百分比（target_type=Utilization）
+  string target_value = 5;         // 目标绝对值（如 500m / 100）
+  string current_value = 6;        // 当前值（只读回填）
+  int32 current_utilization = 7;   // 当前利用率百分比（只读回填，-1=无）
+  bool current_available = 8;      // 当前指标是否可用（false = unknown）
+}
+
+// HPA 完整信息（列表/详情共用）
+message HPAInfo {
+  string namespace = 1;
+  string name = 2;
+  string target_kind = 3;                    // Deployment / StatefulSet
+  string target_name = 4;
+  string target_api_version = 5;             // apps/v1
+  int32 min_replicas = 6;
+  int32 max_replicas = 7;
+  int32 current_replicas = 8;
+  int32 desired_replicas = 9;
+  repeated HPAMetricSpec metrics = 10;
+  repeated string conditions = 11;           // "ScalingActive=True (ValidMetricFound)"
+  string last_scale_time = 12;               // RFC3339，空=从未
+  int32 scale_up_stabilization_seconds = 13; // behavior.scaleUp.stabilizationWindowSeconds
+  int32 scale_down_stabilization_seconds = 14;
+}
+
+message ListHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;      // 必填（不跨 ns）
+  string target_kind = 3;    // 可选：只返回指向该 workload 的 HPA
+  string target_name = 4;
+}
+message ListHPAResponse {
+  bool success = 1;
+  repeated HPAInfo items = 2;
+  string error = 3;
+}
+
+message GetHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;
+}
+message GetHPAResponse {
+  bool success = 1;
+  HPAInfo item = 2;
+  string yaml = 3;
+  string error = 4;
+}
+
+message ApplyHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;
+  string target_kind = 4;      // deployment/statefulset（大小写不敏感）
+  string target_name = 5;
+  int32 min_replicas = 6;
+  int32 max_replicas = 7;
+  repeated HPAMetricSpec metrics = 8;
+  int32 scale_up_stabilization_seconds = 9;
+  int32 scale_down_stabilization_seconds = 10;
+  bool dry_run = 11;           // true = 只回 yaml 不落盘
+}
+message ApplyHPAResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+  string yaml = 4;             // 实际应用/预览的 YAML
+}
+
+// ==================== R60：发布历史 / 版本对比 ====================
+
+message RevisionInfo {
+  int64 revision = 1;
+  string replicaset = 2;
+  repeated string images = 3;      // 各容器镜像
+  int32 desired_replicas = 4;
+  int32 ready_replicas = 5;
+  string created_at = 6;           // RFC3339
+  bool is_current = 7;             // 是否为 Deployment 当前 revision
+  bool failed = 8;                 // 有期望副本但 0 就绪（或关联 Pod 处于 CrashLoop/ImagePull 等）
+  string change_cause = 9;         // deployment.kubernetes.io/change-cause 注解
+  string pod_template_hash = 10;
+}
+
+message ListRevisionsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;                 // deployment 名
+}
+message ListRevisionsResponse {
+  bool success = 1;
+  repeated RevisionInfo items = 2;
+  int64 current_revision = 3;
+  string error = 4;
+}
+
+message GetRevisionTemplateRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;                 // deployment 名
+  int64 revision = 4;
+}
+message GetRevisionTemplateResponse {
+  bool success = 1;
+  string yaml = 2;                 // PodTemplateSpec 的 YAML
+  string replicaset = 3;
+  string error = 4;
+}
+
+message DeleteHPARequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string name = 3;
+}
+message DeleteHPAResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
 message UpdateProbeRequest {
   int64 cluster_id = 1;
   string namespace = 2;
@@ -747,4 +959,34 @@ message CleanupEvictedResponse {
   int32 deleted = 2;        // 实际删除数量
   string message = 3;
   string error = 4;
+}
+
+// ---------- JvmDiagnose（R2 JVM 深度诊断） ----------
+message JvmDiagnoseRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod = 3;
+  string container = 4;   // 空=第一个容器
+  string action = 5;      // jstack/jfr/heapdump/jcmd
+  string args = 6;        // pid 或 "pid subcommand args"（jcmd 透传）
+}
+message JvmDiagnoseResponse {
+  bool success = 1;
+  string output = 2;      // 文本输出（jstack/jcmd 直接返回）
+  string file_path = 3;   // jfr/heapdump 产物落盘路径（executor 本地，供 api-server 下载）
+  string error = 4;
+}
+
+// ---------- JvmParams（R2 JVM 启动参数采集） ----------
+message JvmParamsRequest {
+  int64 cluster_id = 1;
+  string namespace = 2;
+  string pod = 3;
+  string container = 4;   // 空=第一个容器
+  string args = 5;        // pid（空=自动探测 Java 进程）
+}
+message JvmParamsResponse {
+  bool success = 1;
+  string params = 2;      // 采集结果（java_version + -Xms/-Xmx/-Xss/-XX:MaxMetaspaceSize）
+  string error = 3;
 }

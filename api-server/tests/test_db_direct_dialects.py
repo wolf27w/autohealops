@@ -50,8 +50,8 @@ class TestDialectRegistry(unittest.TestCase):
         self.assertTrue(supports("mysql", "export"))
         self.assertTrue(supports("oracle", "query"))
         self.assertTrue(supports("oracle", "schema"))
-        self.assertFalse(supports("oracle", "export"))
-        self.assertFalse(supports("oracle", "backup"))
+        self.assertTrue(supports("oracle", "export"))   # 2026-11-24 Oracle 方言补齐导出
+        self.assertTrue(supports("oracle", "backup"))   # 2026-11-24 Oracle 方言补齐逻辑备份
         self.assertTrue(supports("pg", "query"))
         self.assertTrue(supports("pg", "schema"))
         self.assertFalse(supports("pg", "export"))
@@ -249,10 +249,9 @@ class TestOracleDialect(unittest.IsolatedAsyncioTestCase):
 
     async def test_unsupported_capabilities_raise(self):
         c = _conn()
+        # 2026-11-24：Oracle 的 export/import/import_sql/backup 已实现，不再抛 UnsupportedError；
+        # 仅保留「建库/删库」这类 Oracle 语义上不支持的操作用于验证抛错口径。
         for coro in (
-            db_direct_service.export_sql(c, "", "", 10, "both"),
-            db_direct_service.import_content(c, "", "t", "sql", "x"),
-            db_direct_service.import_sql(c, "", "select 1", "stop"),
             db_direct_service.create_database(c, "foo"),
             db_direct_service.drop_database(c, "foo"),
         ):

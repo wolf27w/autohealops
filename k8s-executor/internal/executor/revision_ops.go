@@ -11,8 +11,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/yaml"
 )
 
@@ -133,12 +135,44 @@ func (e *Executor) findRevisionRS(ctx context.Context, namespace, name string, r
 	return nil, fmt.Errorf("未找到 deployment %s 的 revision %d", name, revision)
 }
 
-// ListRevisions 列出 Deployment 全部发布历史（按 revision 降序），并返回当前 revision
+// ListRevisions 列出工作负载全部发布历史（按 revision 降序），并返回当前 revision。
+//
+// 支持 deployment / statefulset / daemonset。proto 未携带 kind 字段，此处按
+// Deployment → StatefulSet → DaemonSet 顺序探测，命中即返回：
+//   - deployment：走 ReplicaSet + pod-template-hash + deployment.kubernetes.io/revision；
+//   - statefulset / daemonset：走 ControllerRevision（ownerRef UID 归属，按 .revision 排序）。
 func (e *Executor) ListRevisions(ctx context.Context, namespace, name string) ([]RevisionInfo, int64, error) {
+	// Deployment
 	dep, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
+	switch {
+	case err == nil:
+		return e.listDeploymentRevisions(ctx, namespace, name, dep)
+	case !k8serrors.IsNotFound(err):
 		return nil, 0, err
 	}
+	// StatefulSet
+	sts, err := e.clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		return listControllerRevisionRevisions(ctx, e.clientset, namespace, name, sts.UID,
+			parseRevision(sts.Annotations[revisionAnnotation]))
+	case !k8serrors.IsNotFound(err):
+		return nil, 0, err
+	}
+	// DaemonSet
+	ds, err := e.clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		return listControllerRevisionRevisions(ctx, e.clientset, namespace, name, ds.UID,
+			parseRevision(ds.Annotations[revisionAnnotation]))
+	case !k8serrors.IsNotFound(err):
+		return nil, 0, err
+	}
+	return nil, 0, fmt.Errorf("未找到工作负载 %s/%s（deployment/statefulset/daemonset）", namespace, name)
+}
+
+// listDeploymentRevisions 列出 Deployment 全部发布历史（原 ListRevisions 逻辑，语义不变）
+func (e *Executor) listDeploymentRevisions(ctx context.Context, namespace, name string, dep *appsv1.Deployment) ([]RevisionInfo, int64, error) {
 	var curRev int64
 	fmt.Sscanf(dep.Annotations[revisionAnnotation], "%d", &curRev)
 
@@ -178,6 +212,35 @@ func (e *Executor) ListRevisions(ctx context.Context, namespace, name string) ([
 		items = append(items, info)
 	}
 
+	sort.Slice(items, func(i, j int) bool { return items[i].Revision > items[j].Revision })
+	return items, curRev, nil
+}
+
+// listControllerRevisionRevisions 列出 STS/DS 的发布历史（ControllerRevision，按 revision 降序）。
+// 当前 revision 由调用方从工作负载注解解析传入（缺失/为 0 时取最大 revision）。
+// clientset 抽成参数（kubernetes.Interface），便于用 fake clientset 单测。
+func listControllerRevisionRevisions(ctx context.Context, clientset kubernetes.Interface, namespace, name string, uid types.UID, curRev int64) ([]RevisionInfo, int64, error) {
+	crs, err := ownedControllerRevisions(ctx, clientset, namespace, uid)
+	if err != nil {
+		return nil, 0, err
+	}
+	if curRev == 0 && len(crs) > 0 {
+		curRev = crs[len(crs)-1].Revision // 注解缺失 → 取最大 revision
+	}
+	items := make([]RevisionInfo, 0, len(crs))
+	for _, cr := range crs {
+		pt, err := templateFromControllerRevision(cr)
+		if err != nil {
+			continue // 跳过无法解析的 ControllerRevision（与 kubectl 行为一致，不中断整表）
+		}
+		items = append(items, RevisionInfo{
+			Revision:   cr.Revision,
+			Replicaset: cr.Name, // 该 revision 对应的 ControllerRevision 名
+			Images:     podTemplateImages(pt),
+			CreatedAt:  cr.CreationTimestamp.Time.Format(time.RFC3339),
+			IsCurrent:  cr.Revision == curRev,
+		})
+	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Revision > items[j].Revision })
 	return items, curRev, nil
 }
@@ -340,7 +403,7 @@ func (e *Executor) rollbackDaemonSet(ctx context.Context, namespace, name string
 
 // rollbackViaControllerRevision 用 ControllerRevision 回滚 STS/DS 的 Pod 模板（kubectl rollout undo 语义）
 func (e *Executor) rollbackViaControllerRevision(ctx context.Context, kind, namespace, name string, uid types.UID, toRevision int64, apply func(pt *corev1.PodTemplateSpec) error) (*RollbackResult, error) {
-	crs, err := e.ownedControllerRevisions(ctx, namespace, uid)
+	crs, err := ownedControllerRevisions(ctx, e.clientset, namespace, uid)
 	if err != nil {
 		return nil, fmt.Errorf("列出 %s %s/%s 的 ControllerRevision 失败: %w", kind, namespace, name, err)
 	}
@@ -368,8 +431,8 @@ func (e *Executor) rollbackViaControllerRevision(ctx context.Context, kind, name
 }
 
 // ownedControllerRevisions 列出属于指定工作负载（按 ownerRef UID 过滤）的 ControllerRevision，按 revision 升序
-func (e *Executor) ownedControllerRevisions(ctx context.Context, namespace string, uid types.UID) ([]*appsv1.ControllerRevision, error) {
-	crList, err := e.clientset.AppsV1().ControllerRevisions(namespace).List(ctx, metav1.ListOptions{})
+func ownedControllerRevisions(ctx context.Context, clientset kubernetes.Interface, namespace string, uid types.UID) ([]*appsv1.ControllerRevision, error) {
+	crList, err := clientset.AppsV1().ControllerRevisions(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -457,8 +520,32 @@ func parseRevision(s string) int64 {
 	return n
 }
 
-// GetRevisionTemplate 返回指定 revision 的 PodTemplateSpec YAML + 对应 ReplicaSet 名
+// GetRevisionTemplate 返回指定 revision 的 PodTemplateSpec YAML + 对应 revision 对象名。
+// 与 ListRevisions 同序探测 deployment → statefulset → daemonset。
 func (e *Executor) GetRevisionTemplate(ctx context.Context, namespace, name string, revision int64) (string, string, error) {
+	// Deployment
+	if _, err := e.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return e.getDeploymentRevisionTemplate(ctx, namespace, name, revision)
+	} else if !k8serrors.IsNotFound(err) {
+		return "", "", err
+	}
+	// StatefulSet
+	if sts, err := e.clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return getControllerRevisionTemplate(ctx, e.clientset, namespace, sts.UID, revision)
+	} else if !k8serrors.IsNotFound(err) {
+		return "", "", err
+	}
+	// DaemonSet
+	if ds, err := e.clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return getControllerRevisionTemplate(ctx, e.clientset, namespace, ds.UID, revision)
+	} else if !k8serrors.IsNotFound(err) {
+		return "", "", err
+	}
+	return "", "", fmt.Errorf("未找到工作负载 %s/%s（deployment/statefulset/daemonset）", namespace, name)
+}
+
+// getDeploymentRevisionTemplate 返回 Deployment 指定 revision 的 PodTemplateSpec YAML（原逻辑）
+func (e *Executor) getDeploymentRevisionTemplate(ctx context.Context, namespace, name string, revision int64) (string, string, error) {
 	rs, err := e.findRevisionRS(ctx, namespace, name, revision)
 	if err != nil {
 		return "", "", err
@@ -476,4 +563,35 @@ func (e *Executor) GetRevisionTemplate(ctx context.Context, namespace, name stri
 		return "", "", fmt.Errorf("YAML 序列化失败: %w", err)
 	}
 	return string(data), rs.Name, nil
+}
+
+// getControllerRevisionTemplate 返回 STS/DS 指定 revision 的 PodTemplateSpec YAML（ControllerRevision）。
+// clientset 抽成参数（kubernetes.Interface），便于用 fake clientset 单测。
+func getControllerRevisionTemplate(ctx context.Context, clientset kubernetes.Interface, namespace string, uid types.UID, revision int64) (string, string, error) {
+	crs, err := ownedControllerRevisions(ctx, clientset, namespace, uid)
+	if err != nil {
+		return "", "", err
+	}
+	for _, cr := range crs {
+		if cr.Revision != revision {
+			continue
+		}
+		pt, err := templateFromControllerRevision(cr)
+		if err != nil {
+			return "", "", err
+		}
+		// 去掉无意义字段，与 Deployment 路径口径一致
+		pt.ManagedFields = nil
+		pt.ResourceVersion = ""
+		pt.UID = ""
+		pt.SelfLink = ""
+		pt.Generation = 0
+		pt.CreationTimestamp = metav1.Time{}
+		data, err := yaml.Marshal(pt)
+		if err != nil {
+			return "", "", fmt.Errorf("YAML 序列化失败: %w", err)
+		}
+		return string(data), cr.Name, nil
+	}
+	return "", "", fmt.Errorf("未找到工作负载 revision %d", revision)
 }

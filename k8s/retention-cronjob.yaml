@@ -1,0 +1,87 @@
+# ============================================================
+# 小表保留策略 CronJob（M4/D2）
+#
+# 背景：quota_snapshots / slow_sql_records 不做分区（主键语义风险），
+#       改用定期删旧数据（见 docs/LEGACY-ITEMS-2026-11-23.md 第 2 节）。
+#
+# 脚本单一来源：scripts/retention_purge.py（本文件不复制脚本正文）
+# 部署前先生成脚本 ConfigMap：
+#
+#   kubectl -n autohealops create configmap retention-script \
+#     --from-file=retention_purge.py=scripts/retention_purge.py \
+#     --dry-run=client -o yaml > k8s/generated/retention-script-cm.yaml
+#   kubectl apply -f k8s/generated/retention-script-cm.yaml
+#   kubectl apply -f k8s/retention-cronjob.yaml
+#
+# 先手动跑一次 dry-run 看影响行数：
+#   kubectl -n autohealops create job --from=cronjob/retention-purge retention-dryrun-manual
+#   （默认就是 dry-run；要真删把 args 里的 --apply 加上）
+#
+# 默认保留期：quota_snapshots 30 天、slow_sql_records 90 天
+#   覆盖方式：改下面 env 的 RETENTION_*_DAYS，或 --quota-days/--slowsql-days
+# ============================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: retention-purge
+  namespace: autohealops
+  labels:
+    app: retention-purge
+spec:
+  schedule: "30 3 * * *"          # 每天 03:30
+  timeZone: "Asia/Shanghai"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800  # 最长 30 分钟，避免拖到业务高峰
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: retention-purge
+        spec:
+          restartPolicy: Never
+          # harbor.efreight.cn 为私有仓库：节点/命名空间内的 dockerconfigjson 凭据
+          # （测试集群 192.168.6.36 里已有 eft-image-auth；其它环境按实际名称改）
+          imagePullSecrets:
+            - name: eft-image-auth
+          # 与 api-server 同镜像（已含 sqlalchemy + aiomysql，不额外构建镜像）
+          containers:
+            - name: purge
+              # ⚠️ 与 k8s/deployments.yaml 里 api-server 的镜像保持一致（升级时同步改）
+              image: harbor.efreight.cn/ops/autohealops-api-server:r49-20261123
+              imagePullPolicy: IfNotPresent
+              command: ["python", "/scripts/retention_purge.py"]
+              args: ["--apply", "--batch", "5000"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: autohealops-secrets
+                      key: DATABASE_URL
+                - name: RETENTION_QUOTA_DAYS
+                  value: "30"
+                - name: RETENTION_SLOWSQL_DAYS
+                  value: "90"
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: retention-script
+                defaultMode: 0555

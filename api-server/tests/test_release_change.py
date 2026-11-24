@@ -176,6 +176,44 @@ class TestDetectReleaseChange(unittest.IsolatedAsyncioTestCase):
         res = await detect_release_change(1, "qa", "")
         self.assertFalse(res["changed"])
 
+    async def test_statefulset_kind_goes_through_diff(self):
+        """STS 不再短路：走同一 list_revisions + get_revision_template 流程生成 diff。"""
+        now = datetime.now(_TZ)
+        revs = {"success": True, "current_revision": 2, "error": "",
+                "items": [_rev_item(1, (now - timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%S%z")),
+                          _rev_item(2, (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S%z"), is_current=True)]}
+        templates = {2: {"success": True, "yaml": yaml.safe_dump(_pod_tpl(image="harbor:94")), "error": ""},
+                     1: {"success": True, "yaml": yaml.safe_dump(_pod_tpl(image="harbor:93")), "error": ""}}
+        with patch.object(rcs.executor_client, "acall", _mk_acall(revs, templates)):
+            res = await detect_release_change(1, "qa-bgs", "bgs-sts", kind="statefulset")
+        self.assertTrue(res["changed"])
+        self.assertEqual(res["current_revision"], 2)
+        self.assertEqual(res["rollback_to"], 1)
+        self.assertIn("harbor:93 → harbor:94", res["summary"])
+
+    async def test_daemonset_kind_goes_through_diff(self):
+        """DaemonSet 不再短路：走同一流程生成 diff。"""
+        now = datetime.now(_TZ)
+        revs = {"success": True, "current_revision": 3, "error": "",
+                "items": [_rev_item(2, (now - timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%S%z")),
+                          _rev_item(3, (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S%z"), is_current=True)]}
+        templates = {3: {"success": True, "yaml": yaml.safe_dump(_pod_tpl(image="harbor:94")), "error": ""},
+                     2: {"success": True, "yaml": yaml.safe_dump(_pod_tpl(image="harbor:93")), "error": ""}}
+        with patch.object(rcs.executor_client, "acall", _mk_acall(revs, templates)):
+            res = await detect_release_change(1, "qa-bgs", "bgs-ds", kind="daemonset")
+        self.assertTrue(res["changed"])
+        self.assertEqual(res["rollback_to"], 2)
+
+    async def test_sts_single_revision_returns_not_changed(self):
+        """STS 只有 1 个 revision → changed=False（与 Deployment 口径一致）。"""
+        now = datetime.now(_TZ)
+        revs = {"success": True, "current_revision": 1, "error": "",
+                "items": [_rev_item(1, (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S%z"), is_current=True)]}
+        with patch.object(rcs.executor_client, "acall", _mk_acall(revs, {})):
+            res = await detect_release_change(1, "qa", "bgs-sts", kind="statefulset")
+        self.assertFalse(res["changed"])
+        self.assertEqual(res["rollback_to"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

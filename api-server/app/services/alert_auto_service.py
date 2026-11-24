@@ -1397,6 +1397,31 @@ async def _resolve_deployment(alert: Alert) -> str:
     return infer_deployment_name(alert.resource_name)
 
 
+async def _resolve_workload(alert: Alert) -> tuple[str, str]:
+    """把 Pod 反查到「所属工作负载」的 (kind, name)，用于发布变更反查。
+
+    与 `_resolve_deployment` 的区别：后者只服务探针调参（只能改 Deployment），
+    这里要覆盖 STS/DS（R75.5 起回滚走 ControllerRevision，变更检测也已支持）。
+    """
+    if not alert.resource_name or not alert.namespace:
+        return "", ""
+    try:
+        d = await executor_client.acall(
+            executor_client.get_pod_detail, alert.cluster_id, alert.namespace, alert.resource_name)
+        if d.get("success"):
+            detail = d.get("detail") or {}
+            kind = (detail.get("owner_kind") or "").lower()
+            name = detail.get("owner_name") or ""
+            if kind == "replicaset" and name:
+                return "deployment", ("-".join(name.split("-")[:-1]) or "")
+            if kind in ("statefulset", "daemonset") and name:
+                return kind, name
+    except Exception as e:  # noqa: BLE001
+        logger.debug("反查 Pod owner 失败（工作负载）: %s", e)
+    from app.utils.pod import infer_deployment_name
+    return "deployment", (infer_deployment_name(alert.resource_name) or "")
+
+
 async def _build_probe_fix_steps(alert: Alert, probe_result: dict) -> list[dict]:
     """探针配置问题 → 平台内置动作步骤（update_probe）
 
@@ -1769,11 +1794,12 @@ async def _process_one(alert: Alert) -> bool:
     release_change: dict = {"changed": False, "recent": False, "rollback_to": 0, "summary": "", "deployment": ""}
     if alert.resource_type == "pod" and alert.fault_type in RELEASE_CHANGE_FAULT_TYPES:
         try:
-            _rc_dep = await _resolve_deployment(alert)
+            _rc_kind, _rc_dep = await _resolve_workload(alert)
             if _rc_dep:
                 from app.services.release_change_service import detect_release_change
                 release_change = await detect_release_change(
-                    alert.cluster_id, alert.namespace or "", _rc_dep, lookback_hours=6)
+                    alert.cluster_id, alert.namespace or "", _rc_dep, lookback_hours=6,
+                    kind=_rc_kind or "deployment")
                 if release_change.get("changed") and release_change.get("summary"):
                     alert_data["release_change_evidence"] = release_change["summary"]
         except Exception as e:  # noqa: BLE001
@@ -2062,10 +2088,12 @@ async def _process_one(alert: Alert) -> bool:
         ns = alert.namespace or ""
         dep = release_change.get("deployment") or ""
         rollback_to = release_change.get("rollback_to")
+        rc_kind = (release_change.get("kind") or "deployment").lower()
         release_steps = [{
             "platform_action": "rollback_deployment",
-            "description": f"最近发布变更导致启动失败，回滚 {ns}/{dep} 到 revision {rollback_to}",
-            "params": {"namespace": ns, "deployment": dep, "to_revision": rollback_to},
+            "description": f"最近发布变更导致启动失败，回滚 {ns}/{dep}（{rc_kind}）到 revision {rollback_to}",
+            "params": {"namespace": ns, "deployment": dep, "to_revision": rollback_to,
+                       "kind": rc_kind},
         }]
         logger.info("告警 %d 命中最近发布变更（rev %s→%s），改用回滚动作",
                     alert.id, release_change.get("current_revision"), rollback_to)

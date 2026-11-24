@@ -45,3 +45,6 @@ k8s/generated/
 # Agent 构建产物
 agent/build/
 api-server/data/
+
+# k8s-executor 本地构建产物（二进制不入库）
+k8s-executor/agent

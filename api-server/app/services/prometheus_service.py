@@ -2,7 +2,8 @@
 """集群监控数据源：查询集群自带的 Prometheus（复用 executor 的 apiserver Service Proxy）。
 
 - 即时查询：走 executor `QueryPrometheus`（无需 proto 改动）。
-- 趋势（range）：见 TODO —— executor 需补 range 端点（proto 只支持即时）。
+- 趋势（range）：自定义数据源直连 `/api/v1/query_range`；agent 隧道走 executor HTTP `/prom/range`；
+  其余走 executor 的 Prometheus Service Proxy（proto 仍只有即时查询，range 不走 gRPC）。
 - 数据源选择：默认自动发现集群 Prometheus（executor 内探测），后续支持按集群自定义地址覆盖。
 """
 import asyncio

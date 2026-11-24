@@ -855,7 +855,7 @@ func (s *Server) DeleteHPA(ctx context.Context, req *pb.DeleteHPARequest) (*pb.D
 	return &pb.DeleteHPAResponse{Success: true, Message: "已删除"}, nil
 }
 
-// ListRevisions 列出 Deployment 发布历史（按 revision 降序）
+// ListRevisions 列出工作负载发布历史（按 revision 降序，deployment/statefulset/daemonset）
 func (s *Server) ListRevisions(ctx context.Context, req *pb.ListRevisionsRequest) (*pb.ListRevisionsResponse, error) {
 	ex, err := s.getExecutor(ctx, req.ClusterId)
 	if err != nil {

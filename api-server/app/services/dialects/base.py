@@ -106,19 +106,19 @@ class Dialect:
         self.require("drop_database", "删库")
 
     async def export_sql(self, c, db: str, table: str = "", rows: int = 1000, mode: str = "both") -> dict:
-        # TODO(oracle): 后续支持时实现 Oracle 数据导出（DBMS_METADATA / 分页 SELECT）
+        # 默认实现：无此能力的方言抛 UnsupportedError。Oracle 已在 oracle.py 覆写（分页 SELECT + 逻辑导出）。
         self.require("export", "导出")
 
     async def import_content(self, c, db: str, table: str, fmt: str, content: str) -> dict:
-        # TODO(oracle): 后续支持时实现 Oracle 导入（sqlldr / INSERT 批量）
+        # 默认实现：无此能力的方言抛 UnsupportedError。Oracle 已在 oracle.py 覆写（批量 INSERT）。
         self.require("import", "导入")
 
     async def import_sql(self, c, db: str, sql: str, mode: str = "stop") -> dict:
-        # TODO(oracle): 后续支持时实现 Oracle 脚本导入（PL/SQL 块按 / 拆分执行）
+        # 默认实现：无此能力的方言抛 UnsupportedError。Oracle 已在 oracle.py 覆写（PL/SQL 块按 / 拆分执行）。
         self.require("import", "导入")
 
     async def backup_sql(self, c, databases: list[str], schema_only: bool = False):
-        # TODO(oracle): 后续支持时实现 Oracle 备份（expdp / Data Pump）
+        # 默认实现：无此能力的方言抛 UnsupportedError。Oracle 已在 oracle.py 覆写（逻辑备份，method=logical）。
         self.require("backup", "备份")
         if False:  # pragma: no cover - 仅保证本方法为异步生成器
             yield b""

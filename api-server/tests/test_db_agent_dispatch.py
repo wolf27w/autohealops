@@ -187,8 +187,8 @@ class TestDbReadyAndSupports(unittest.TestCase):
         self.assertTrue(db_connections._db_supports(_conn(db_type="pg"), "schema"))
         self.assertFalse(db_connections._db_supports(_conn(db_type="pg"), "export"))
         self.assertFalse(db_connections._db_supports(_conn(db_type="pg"), "backup"))
-        self.assertFalse(db_connections._db_supports(_conn(db_type="oracle"), "export"))
-        self.assertFalse(db_connections._db_supports(_conn(db_type="oracle"), "backup"))
+        self.assertTrue(db_connections._db_supports(_conn(db_type="oracle"), "export"))
+        self.assertTrue(db_connections._db_supports(_conn(db_type="oracle"), "backup"))
 
 
 class TestAgentUnsupportedReturn(unittest.IsolatedAsyncioTestCase):

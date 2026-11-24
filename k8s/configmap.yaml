@@ -35,6 +35,16 @@ data:
   POD_METRICS_RAW_RETENTION_HOURS: "24"
   POD_METRICS_ROLLUP_RETENTION_DAYS: "7"
 
+  # ---------- AI Agent 化（R69/R75） ----------
+  # 通用诊断循环开关（false = 回退旧的单次诊断链路）
+  AGENT_REACT_LOOP_ENABLED: "true"
+  # 置信度低于该值视为「证据不足」，走补采指引分支
+  DIAGNOSIS_CONFIDENCE_THRESHOLD: "0.6"
+
+  # ---------- Oracle thick 模式（可选，留空=thin） ----------
+  ORACLE_CLIENT_HOME: ""
+  ORACLE_CLIENT_LIB_DIR: ""
+
   # ---------- JVM 诊断（容器无 JDK 工具时注入 jattach）----------
   JVM_JATTACH_URL: "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
   JVM_JATTACH_PATH: "/tmp/.autohealops-jattach"

@@ -245,11 +245,12 @@ def diff_pod_templates(cur_yaml, prev_yaml) -> list[str]:
     return diffs
 
 
-def _empty_result(deployment: str = "") -> dict:
+def _empty_result(deployment: str = "", kind: str = "deployment") -> dict:
     return {
         "changed": False,
         "recent": False,
         "deployment": deployment,
+        "kind": (kind or "deployment").lower(),
         "current_revision": 0,
         "rollback_to": 0,
         "change_time": "",
@@ -260,32 +261,30 @@ def _empty_result(deployment: str = "") -> dict:
 
 async def detect_release_change(cluster_id, namespace, deployment, lookback_hours: int = 6,
                                kind: str = "deployment") -> dict:
-    """反查 Deployment 最近发布变更，返回 {changed, recent, deployment, current_revision,
-    rollback_to, change_time, summary, diff}。任何异常 / 无 Deployment / 只有 1 个 revision
+    """反查工作负载最近发布变更，返回 {changed, recent, deployment, current_revision,
+    rollback_to, change_time, summary, diff}。任何异常 / 无工作负载 / 只有 1 个 revision
     → 返回 changed=False，绝不抛异常。
 
-    kind：工作负载类型（deployment/statefulset/daemonset）。当前仅 deployment 有发布历史
-    通道（list_revisions 走 ReplicaSet），STS/DS 的变更检测未实现 → 直接返回 changed=False
-    （已知限制，不报错）。
+    kind：工作负载类型（deployment/statefulset/daemonset）。三者走同一发布历史通道
+    （list_revisions 在 executor 侧按 Deployment→StatefulSet→DaemonSet 顺序探测，
+    Deployment 走 ReplicaSet、STS/DS 走 ControllerRevision），本侧信任该探测结果、
+    统一生成 diff。kind 仅作意图标识，不参与 RPC 参数（proto 无 kind 字段）。
     """
     if not deployment or not namespace:
-        return _empty_result(deployment)
-    if kind and kind.lower() != "deployment":
-        # STS/DS 的 list_revisions 仅支持 deployment，变更检测未实现（已知限制）
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
     try:
         revs = await executor_client.acall(
             executor_client.list_revisions, cluster_id, namespace, deployment)
     except Exception as e:  # noqa: BLE001
         logger.debug("list_revisions 调用失败（%s/%s）: %s", namespace, deployment, e)
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
     if not (revs or {}).get("success"):
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
 
     items = [it for it in (revs.get("items") or [])
              if isinstance(it, dict) and it.get("revision") is not None]
     if not items:
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
     by_num = {it["revision"]: it for it in items}
     nums = sorted(by_num.keys())
 
@@ -300,7 +299,7 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
     smaller = [n for n in nums if n < current]
     if not smaller:
         # 只有 1 个 revision（无可回滚目标）
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
     prev = max(smaller)
 
     try:
@@ -310,9 +309,9 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
             executor_client.get_revision_template, cluster_id, namespace, deployment, prev)
     except Exception as e:  # noqa: BLE001
         logger.debug("get_revision_template 调用失败（%s/%s）: %s", namespace, deployment, e)
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
     if not (cur_tpl or {}).get("success") or not (prev_tpl or {}).get("success"):
-        return _empty_result(deployment)
+        return _empty_result(deployment, kind)
 
     cur_doc = yaml.safe_load((cur_tpl or {}).get("yaml") or "") or {}
     prev_doc = yaml.safe_load((prev_tpl or {}).get("yaml") or "") or {}
@@ -342,6 +341,7 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
         "current_revision": int(current),
         "rollback_to": int(prev),
         "change_time": change_time,
+        "kind": (kind or "deployment").lower(),
         "summary": summary,
         "diff": diff,
     }
