@@ -349,13 +349,15 @@ async def startup_tasks() -> None:
     # 慢 SQL 采集 + 快照清理 走独立维护循环
     import asyncio
     from app.services.approval_service import timeout_handler
-    from app.services.alert_auto_service import auto_process_alerts
+    from app.services.alert_auto_service import auto_process_alerts, escalate_stale_alerts
     from app.services.log_alert_service import scan_log_alerts
     from app.services.ticket_service import auto_close_tickets_for_resolved_alerts
     from app.services.repair_plan_service import close_stale_repair_plans
     for name, fn, timeout in (
         ("审批超时", timeout_handler, 60.0),
         ("告警自动处理", auto_process_alerts, 150.0),
+        # 修复超时转人工（2026-11-24）：pending 超过 N 分钟未恢复 → 建工单 + 通知
+        ("修复超时转人工", escalate_stale_alerts, 120.0),
         ("日志告警扫描", scan_log_alerts, 120.0),
         ("告警恢复自动关单", auto_close_tickets_for_resolved_alerts, 60.0),
         # 数据库审核单定时执行（scheduled 单到点执行；与告警自动关单共用 30s 循环）

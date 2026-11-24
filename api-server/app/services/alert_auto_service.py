@@ -2695,6 +2695,70 @@ async def recovery_sweep_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def escalate_stale_alerts() -> int:
+    """修复超时转人工（2026-11-24 老板口径）
+
+    告警持续处于 pending（已发现异常、正在诊断/修复）且**超过 N 分钟仍未恢复** →
+    自动转人工（建工单 + 通知），不再无休止地循环重试。
+
+    不拦的情形：
+      - 正在修复中（Redis `alert:repairing:{id}` 标记存在）
+      - 已有在途审批单（生产审批中属正常等待）
+    恢复后工单自动关闭由 ticket_service.auto_close_tickets_for_resolved_alerts 负责（每 60s）。
+    """
+    from app.services.system_setting_service import get_setting
+
+    try:
+        timeout_min = int(float((await get_setting("alert_manual_timeout_minutes", "5")) or "5"))
+    except Exception:  # noqa: BLE001
+        timeout_min = 5
+    if timeout_min <= 0:
+        return 0
+
+    deadline = datetime.now() - timedelta(minutes=timeout_min)
+    escalated = 0
+    async with async_session() as session:
+        rows = (await session.execute(
+            select(Alert).where(
+                Alert.status == "pending",
+                Alert.manual_required == False,  # noqa: E712
+            ).order_by(Alert.id.desc()).limit(100)
+        )).scalars().all()
+
+    for a in rows:
+        ts_raw = a.detected_at or a.occurred_at
+        ts = None
+        if ts_raw:
+            try:
+                ts = ts_raw if isinstance(ts_raw, datetime) else datetime.strptime(str(ts_raw)[:19], "%Y-%m-%d %H:%M:%S")
+            except Exception:  # noqa: BLE001
+                ts = None
+        if ts is None or ts > deadline:
+            continue
+        try:
+            if await redis_pool.exists(f"alert:repairing:{a.id}"):
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+        async with async_session() as session:
+            inflight = (await session.execute(
+                select(Approval.id).where(Approval.alert_id == a.id, Approval.status == "pending").limit(1)
+            )).first()
+        if inflight:
+            continue
+        try:
+            await _mark_manual_and_notify(
+                a, f"修复超时（>{timeout_min} 分钟未恢复）",
+                f"告警自 {ts.strftime('%Y-%m-%d %H:%M:%S')} 起未恢复，已超过 {timeout_min} 分钟自动修复时限，"
+                "转人工处理；人工修复后故障恢复将自动关闭工单。",
+            )
+            escalated += 1
+            logger.info("告警 %d 超过 %d 分钟未恢复，转人工", a.id, timeout_min)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("告警 %d 超时转人工失败: %s", a.id, e)
+    return escalated
+
+
 async def auto_process_alerts() -> int:
     """扫描 pending 告警，逐条执行完整闭环（诊断/方案复用，断点续传）；返回处理数量"""
     value = await acquire_lock(redis_pool, "lock:alert_auto", 300000)  # 5 分钟：覆盖单批最长处理时间，防拆分后并发重叠
