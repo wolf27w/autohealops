@@ -53,6 +53,8 @@ from app.utils.pod import infer_deployment_name  # 去重：统一实现（原�
 
 PLACEHOLDER_KEYS = ("namespace", "pod_name", "deployment_name", "node_name", "resource_type", "resource_name")
 _PLACEHOLDER_RE = __import__("re").compile(r"\{[a-zA-Z_]+\}")
+# 只读命令：不能当作「修复动作」（批准后执行成功也等于没修）
+_READONLY_VERBS = {"get", "list", "describe", "logs", "top", "explain", "version", "cluster-info", "api-resources"}
 
 
 def _is_command_allowed(command: str) -> bool:
@@ -70,15 +72,12 @@ def _is_command_allowed(command: str) -> bool:
     return any(t in whitelist for t in tokens)
 
 
-def _fill_kb_steps(steps: list, alert: Alert) -> list:
-    """填充知识库命令模板占位符 → 可执行命令（安全校验：残留占位符/白名单不命中丢弃）
-
-    返回填充后可用步骤；全部不可用返回空列表（调用方降级 AI 诊断）
-    """
+def _plan_step_ctx(alert: Alert) -> dict:
+    """命令模板占位符上下文（namespace/pod_name/deployment_name/node_name/...）"""
     resource_name = alert.resource_name or ""
     resource_type = alert.resource_type or ""
     pod_name = resource_name if resource_type == "pod" else ""
-    ctx = {
+    return {
         "namespace": alert.namespace or "default",
         "pod_name": pod_name,
         "deployment_name": infer_deployment_name(pod_name) if pod_name else "",
@@ -86,6 +85,14 @@ def _fill_kb_steps(steps: list, alert: Alert) -> list:
         "resource_type": resource_type,
         "resource_name": resource_name,
     }
+
+
+def _fill_kb_steps(steps: list, alert: Alert) -> list:
+    """填充知识库命令模板占位符 → 可执行命令（安全校验：残留占位符/白名单不命中丢弃）
+
+    返回填充后可用步骤；全部不可用返回空列表（调用方降级 AI 诊断）
+    """
+    ctx = _plan_step_ctx(alert)
     filled: list = []
     for s in steps:
         if not isinstance(s, dict):
@@ -105,6 +112,70 @@ def _fill_kb_steps(steps: list, alert: Alert) -> list:
         ns["command"] = command
         filled.append(ns)
     return filled
+
+
+def _command_verb(command: str) -> str:
+    """取 kubectl 命令子命令（跳过 -n/--namespace/-c/-o 等 flag 及其值）"""
+    tokens = command.split()
+    if tokens and tokens[0] == "kubectl":
+        tokens = tokens[1:]
+    value_flags = {"-n", "--namespace", "-c", "--container", "-l", "--selector",
+                   "-o", "--output", "-f", "--filename", "--context", "--kubeconfig"}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t in value_flags:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        return t
+    return ""
+
+
+def _sanitize_plan_steps(steps: list, alert: Alert) -> tuple[list, list]:
+    """修复方案可执行性校验（2026-11-24）
+
+    AI 生成的方案常把「只读诊断命令」当修复动作，或残留 `{namespace}/{pod_name}` 占位符 →
+    审批通过后 executor 拿到 `kubectl -n {namespace} ...`，首词 `-n` 不在白名单直接失败。
+    这里统一：
+      - platform_action（平台内置动作）原样保留（不涉及命令模板）；
+      - command 型：填占位符 → 残留占位符丢弃 → 白名单不命中丢弃 → 只读命令不作修复动作丢弃。
+    返回 (可执行步骤, 剔除原因列表)。
+    """
+    ctx = _plan_step_ctx(alert)
+    out: list = []
+    dropped: list = []
+    for s in steps or []:
+        if not isinstance(s, dict):
+            continue
+        if s.get("platform_action"):
+            out.append(s)
+            continue
+        command = (s.get("command") or "").strip()
+        if not command:
+            continue
+        try:
+            command = command.format(**ctx)
+        except (KeyError, IndexError, ValueError):
+            pass
+        if _PLACEHOLDER_RE.search(command):
+            dropped.append(f"占位符未解析: {command[:60]}")
+            continue
+        if not _is_command_allowed(command):
+            dropped.append(f"命令不在白名单: {command[:60]}")
+            continue
+        tokens = command.split()
+        if tokens and tokens[0] == "kubectl":
+            tokens = tokens[1:]
+        if _command_verb(command) in _READONLY_VERBS:
+            dropped.append(f"只读命令不作修复动作: {command[:60]}")
+            continue
+        ns = dict(s)
+        ns["command"] = command
+        out.append(ns)
+    return out, dropped
 
 
 # ============ R74 知识库定位重构（诊断参考注入 + 条件复用 + 可疑标记） ============
@@ -2200,11 +2271,33 @@ async def _process_one(alert: Alert) -> bool:
             "params": {"namespace": alert.namespace, "deployment": alert.resource_name, "to_revision": 0},
         }] + [s for s in steps if isinstance(s, dict) and s.get("platform_action")]
         logger.info("告警 %d 判定为发布引入，改用回滚动作（替代重建）", alert.id)
+    # 6.6 方案可执行性校验（2026-11-24）：AI 方案常残留 {namespace}/{pod_name} 占位符，
+    # 或把只读诊断命令（get/describe/logs）当修复动作 → 审批通过后 executor 白名单直接拒（首词 -n）。
+    # 统一规范化并回写 plan_json；清空则转人工并附诊断（不发注定失败的审批单）。
+    steps, _dropped = _sanitize_plan_steps(steps, alert)
+    if _dropped:
+        logger.info("告警 %d 方案剔除 %d 项不可执行步骤: %s",
+                    alert.id, len(_dropped), "；".join(_dropped)[:400])
+    _pid = locals().get("plan_id") or 0
+    if _pid:
+        try:
+            async with async_session() as session:
+                _p = await session.get(RepairPlan, _pid)
+                if _p is not None:
+                    _new_json = json.dumps({"steps": steps}, ensure_ascii=False)
+                    if (_p.plan_json or "") != _new_json:
+                        _p.plan_json = _new_json
+                        await session.commit()
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("告警 %d 回写规范化方案失败: %s", alert.id, _e)
+
     if not steps:
-        # AI/知识库/标准动作都拿不到可执行方案 → 转人工（等人工）
+        _why = ""
+        if _dropped:
+            _why = "（AI 方案无可执行动作：" + "；".join(_dropped)[:300] + "）"
         await _mark_manual_and_notify(
             alert, "无可用修复方案",
-            f"故障 {alert.fault_type} 无知识库/AI/标准修复方案，需人工处理。",
+            f"故障 {alert.fault_type} 无知识库/AI/标准修复方案，需人工处理。{_why}",
         )
         logger.info("告警 %d 无可用修复方案，转人工", alert.id)
         return True
