@@ -538,6 +538,7 @@ async def _evaluate_autonomy_gate(alert: Alert, steps: list, confidence) -> dict
         confidence=None if confidence is None else float(confidence),
         env=(alert.env or ""),
         user_impacting=bool(impact.get("impacting")),
+        mode=await _automation_mode(),
     )
     # 既定口径例外（2026-09-22）：卡 Terminating 的 Pod「审不审都要删」→ 免审批
     if action_key == "delete_stuck_pod":
@@ -586,6 +587,20 @@ def _format_low_confidence_detail(confidence, category: str, evidence_refs: list
     return "；".join(parts)
 
 
+async def _automation_mode() -> str:
+    """当前自动化处置模式（full=直接诊断修复 / assist=影响面动作走审批）
+
+    2026-11-24 老板口径：「直接诊断修复，不要一直停滞」→ 默认 full。
+    full 下仍保留安全红线：动作库 forbidden/red、低置信度（<阈值）拦截。
+    """
+    try:
+        from app.services.system_setting_service import get_setting
+        v = (await get_setting("automation_mode", "full") or "").strip().lower()
+        return v if v in ("full", "assist") else "full"
+    except Exception:  # noqa: BLE001
+        return "full"
+
+
 async def _decide_action(alert: Alert, steps: list) -> str:
     """按四维风险评分决策：auto / approval_1（单人）/ approval_2（双人）"""
     from app.models import Cluster
@@ -602,7 +617,9 @@ async def _decide_action(alert: Alert, steps: list) -> str:
     decision = decision_engine.decide_by_level(scoring["level"], policy)
 
     # 高危命令强制至少单人审批（节点级/高影响面资源动作即使评分低也需人工放行）
-    if decision_engine.has_high_risk_command(steps) and decision == "auto":
+    # full 模式（老板 2026-11-24 口径：直接诊断修复）下不再因命令高危升级，交给执行层与验证兜底。
+    if decision == "auto" and await _automation_mode() != "full" \
+            and decision_engine.has_high_risk_command(steps):
         decision = "approval_1"
     logger.info("告警 %d 风险决策: 等级%d(分%d,环境%s) → %s",
                 alert.id, scoring["level"], scoring["score"], env_tag, decision)
@@ -889,21 +906,45 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
 AUTO_VERIFY_WAIT_SECONDS = int(os.getenv("AUTO_VERIFY_WAIT_SECONDS", "180"))
 
 
+async def check_workload_recovered(cluster_id: int, namespace: str, deployment: str) -> bool:
+    """工作负载是否已全部就绪（Deployment ready_replicas >= replicas）
+
+    回滚场景专用：回滚后旧 RS 的 Pod 会被重建/换名，按原 Pod 名校验永远 false。
+    """
+    if not (deployment and namespace):
+        return False
+    r = await executor_client.acall(
+        executor_client.get_deployment_status, cluster_id, namespace, deployment)
+    if not r.get("success"):
+        return False
+    replicas = int(r.get("replicas") or 0)
+    ready = int(r.get("ready_replicas") or 0)
+    return bool(r.get("ready")) or (replicas > 0 and ready >= replicas)
+
+
 async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS) -> bool:
-    """执行修复后等待并验证 Pod 恢复（每 10s 查一次，最多 max_wait_seconds 秒）
+    """执行修复后等待并验证恢复（每 10s 查一次，最多 max_wait_seconds 秒）
 
     删除 Pod 重建 / 补 imagePullSecrets 后，Pod 需要时间重新拉镜像、调度、启动。
     验证通过（所有容器 Running+Ready）才允许标记已解决，否则保持 pending。
-    2026-10-21：默认 60s 太短（实测 23 条"执行成功但验证不过"多数是拉镜像/调度超 1 分钟），
+    2026-10-21：默认 60s 太短（实测 23 条“执行成功但验证不过”多数是拉镜像/调度超 1 分钟），
     默认放宽到 180s，可用环境变量 AUTO_VERIFY_WAIT_SECONDS 覆盖。
+    2026-11-24：优先按 Deployment 可用副本验证（回滚后 Pod 换名，按原 Pod 名永远不过）。
     """
+    dep_name = (getattr(alert, "deployment_name", "") or "").strip()
+    if not dep_name:
+        dep_name = infer_deployment_name(alert.resource_name or "")
     waited = 0
     while waited < max_wait_seconds:
+        if dep_name and await check_workload_recovered(alert.cluster_id, alert.namespace or "", dep_name):
+            return True
         if await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name):
             return True
         await asyncio.sleep(10)
         waited += 10
     # 超时后最后再查一次
+    if dep_name and await check_workload_recovered(alert.cluster_id, alert.namespace or "", dep_name):
+        return True
     return await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name)
 
 
@@ -1658,10 +1699,51 @@ async def _process_node_alert(alert: Alert) -> bool:
         logger.info("节点告警 %d 已恢复，自动关闭", alert.id)
         return True
 
-    # P2：可隔离恢复 → 生成 cordon+drain 方案，强制走审批（drain 为高危命令）
+    # P2：可隔离恢复 → cordon+drain 方案
     steps, why = await node_diag.build_isolate_steps(alert.cluster_id, alert.resource_name or "", alert.fault_type)
     if steps:
         plan_json = json.dumps({"steps": steps}, ensure_ascii=False)
+        # 2026-11-24 老板口径：直接诊断修复，不停滞在审批（full 模式）
+        if await _automation_mode() == "full":
+            trace_id = generate_trace_id()
+            async with async_session() as session:
+                plan = RepairPlan(alert_id=alert.id, diagnosis_id=None, plan_json=plan_json,
+                                  operation_types="UPDATE,DELETE", risk_level="high", status="executing")
+                session.add(plan)
+                await session.commit()
+                await session.refresh(plan)
+                plan_id = plan.id
+            logger.info("节点告警 %d full 模式直接执行隔离方案（%s）", alert.id, why)
+            try:
+                await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("节点告警 %d 隔离方案执行异常: %s", alert.id, e)
+            recovered = False
+            try:
+                recovered = await node_diag.check_node_recovered(alert.cluster_id, alert.resource_name or "")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("节点 %s 恢复校验失败: %s", alert.resource_name, e)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            async with async_session() as session:
+                p = await session.get(RepairPlan, plan_id)
+                if p is not None:
+                    p.status = "completed" if recovered else "failed"
+                a = await session.get(Alert, alert.id)
+                if a is not None:
+                    if recovered:
+                        a.status = "self_healed"
+                        a.resolved_at = now
+                        a.message = (a.message or "") + "（自愈：节点隔离成功，节点已恢复）"
+                    else:
+                        a.status = "pending"
+                        a.manual_required = True
+                        a.message = (a.message or "") + "\n【节点自愈】隔离方案已执行，但节点尚未恢复，转人工继续。"
+                    if summary and "【节点诊断】" not in (a.message or ""):
+                        a.message = (a.message or "") + "\n【节点诊断】\n" + summary
+                    await session.commit()
+            logger.info("节点告警 %d 隔离方案已执行，节点恢复=%s", alert.id, recovered)
+            return True
+
         async with async_session() as session:
             plan = RepairPlan(alert_id=alert.id, diagnosis_id=None, plan_json=plan_json,
                               operation_types="UPDATE,DELETE", risk_level="high", status="pending")
@@ -2152,10 +2234,12 @@ async def _process_one(alert: Alert) -> bool:
     if probe_steps and not _is_probe_root_cause(root_cause):
         probe_steps = []
         logger.info("告警 %d 诊断根因未指向探针配置，放弃调参动作（避免拿表象当根因）", alert.id)
-    # 2026-11-23 发布变更关联：B 层（应用/配置）且最近有发布变更 → 优先回滚，不转人工。
+    # 2026-11-24 发布变更关联：B 层（应用/配置层）且有可回滚的历史版本 → 优先回滚，不转人工。
+    # 不再要求「变更发生在 6h 内」：pod 已在 CrashLoop、且已找到健康版本时，回滚就是正确处置；
+    # 旧版本的真实上线时间可能远早于本次故障窗口（实测 change_time 2026-11-23，故障 2026-11-24）。
     # 仅 B 层触发（C/D 层仍转人工；A 层无变更时逻辑不变）。
     release_steps: list = []
-    if (layer == "B" and release_change.get("changed") and release_change.get("recent")
+    if (layer == "B" and release_change.get("changed")
             and release_change.get("rollback_to")):
         ns = alert.namespace or ""
         dep = release_change.get("deployment") or ""
@@ -2312,7 +2396,13 @@ async def _process_one(alert: Alert) -> bool:
         str(s.get("platform_action")) for s in (steps or [])
         if isinstance(s, dict) and s.get("platform_action")
     }
-    if (_platform_actions or release_steps or probe_steps) and action == "auto":
+    _auto_mode = await _automation_mode()
+    if _auto_mode == "full":
+        if (_platform_actions or release_steps or probe_steps) and action != "manual":
+            logger.info("告警 %d full 自动化模式：影响面动作 %s 直接执行（不转审批）",
+                        alert.id, ",".join(sorted(_platform_actions)) or "probe")
+            action = "auto"
+    elif (_platform_actions or release_steps or probe_steps) and action == "auto":
         action = "approval_1"
         _what = "回滚" if ("rollback_deployment" in _platform_actions or release_steps) else "平台动作"
         logger.info("告警 %d %s方案强制走审批（影响面动作：%s）", alert.id, _what,
@@ -2361,8 +2451,8 @@ async def _process_one(alert: Alert) -> bool:
 
     if action == "auto":
         # R44-P3：低置信度转人工闸门——AI 诊断置信度不足 → 不自动执行，转工单/待人工
-        # （diag_confidence=None 表示缺失，confidence_below_threshold 返回 False，退回原有行为）
-        if diag_confidence is not None and confidence_below_threshold(diag_confidence):
+        # （full 自动化模式下不拦：老板 2026-11-24 口径「直接诊断修复」）
+        if diag_confidence is not None and _auto_mode != "full" and confidence_below_threshold(diag_confidence):
             await _mark_manual_and_notify(
                 alert, "AI 诊断置信度不足",
                 _format_low_confidence_detail(diag_confidence, diag_category, evidence_refs, root_cause),

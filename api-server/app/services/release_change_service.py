@@ -295,12 +295,20 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
     if not current:
         current = nums[-1]
 
-    # prev = 小于 current 的最大 revision
+    # prev = 回滚目标：优先「有就绪副本且未判失败」的历史 revision
+    # （2026-11-24：连续两个 bad revision 时只退一步仍会坏——实测 :3 回退到 :2 依旧 CrashLoop）
     smaller = [n for n in nums if n < current]
     if not smaller:
         # 只有 1 个 revision（无可回滚目标）
         return _empty_result(deployment, kind)
-    prev = max(smaller)
+    healthy = [n for n in smaller
+               if not (by_num.get(n) or {}).get("failed")
+               and int((by_num.get(n) or {}).get("ready_replicas") or 0) > 0]
+    prev = max(healthy) if healthy else max(smaller)
+    if healthy and max(smaller) not in healthy:
+        logger.info("回滚目标跳过失败版本: %s/%s current=%s → 直接回退到 %s（有 %s 个就绪副本）",
+                    namespace, deployment, current, prev,
+                    (by_num.get(prev) or {}).get("ready_replicas"))
 
     try:
         cur_tpl = await executor_client.acall(
@@ -334,6 +342,8 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
         summary = (f"当前 revision {current}（创建于 {time_part}，{recent_label}）"
                    f"对比上一版 {prev}：\n" + "\n".join("- " + d for d in diff))
 
+    logger.info("发布变更检测: %s/%s current=%s prev=%s changed=%s recent=%s (change_time=%s)",
+                namespace, deployment, current, prev, changed, recent, change_time)
     return {
         "changed": changed,
         "recent": recent,
