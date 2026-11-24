@@ -140,37 +140,31 @@ async def _upsert_db_alert(c: DBConnection, fault_type: str, err: str) -> int:
     """建单/聚合：同库同故障在途不重复建单；返回新建告警 id（0=在途聚合未新建）"""
     now = datetime.now()
     async with async_session() as session:
-        existing = (await session.execute(
-            select(Alert).where(
-                Alert.resource_type == "db",
-                Alert.fault_type == fault_type,
-                Alert.resource_name == c.name,
-                Alert.status.in_(["pending", "awaiting_approval"]),
-            ).order_by(Alert.id.desc()).limit(1)
-        )).scalar_one_or_none()
-        if existing:
-            existing.event_count = (existing.event_count or 0) + 1
-            existing.message = _build_message(c, fault_type, err)
+        # 合并（2026-11-24）：原来只查 pending/awaiting，而 DB 告警大多 30~60s 被自动解决，
+        # 一 resolved dedup_key 就变 NULL → 下一轮又插一行（实测同一库同一故障 2.5h 落 113 行）。
+        # 统一走 alert_merge：活跃（含 ticketed）累加、窗口内已解决的复用 reopen。
+        from app.services import alert_merge
+        row, reopen = await alert_merge.find_merge_target(
+            session, cluster_id=0, resource_type="db", fault_type=fault_type,
+            namespace="", deployment_name=c.name, resource_name=c.name)
+        if row:
+            # 配置类告警冷却：人工解决后不要下一分钟就重建（老板 2026-11-11 反馈「关不掉」）
+            if reopen and _is_config_error(err):
+                closed_at = row.resolved_at or row.detected_at
+                age_s = (now - closed_at).total_seconds() if closed_at else CONFIG_ALERT_COOLDOWN_MIN * 60
+                if age_s < CONFIG_ALERT_COOLDOWN_MIN * 60:
+                    logger.info(
+                        "数据库【%s】配置类错误在 %d 分钟冷却期内（上次告警 #%s 已解决），本轮不重开：%s",
+                        c.name, CONFIG_ALERT_COOLDOWN_MIN, row.id, (err or "")[:120],
+                    )
+                    return 0
+            alert_merge.apply_merge(row, message=_build_message(c, fault_type, err),
+                                    severity="high", reopen=reopen, now=now)
             await session.commit()
+            if reopen:
+                logger.info("数据库【%s】%s 复发合并：复用 #%d（累计 %d 次）",
+                            c.name, fault_type, row.id, row.event_count)
             return 0
-        # 配置类告警冷却：人工解决后不要下一分钟就重建（老板 2026-11-11 反馈「关不掉」）
-        if _is_config_error(err):
-            since = now - timedelta(minutes=CONFIG_ALERT_COOLDOWN_MIN)
-            recent = (await session.execute(
-                select(Alert).where(
-                    Alert.resource_type == "db",
-                    Alert.fault_type == fault_type,
-                    Alert.resource_name == c.name,
-                    Alert.status == "resolved",
-                    Alert.resolved_at >= since.strftime("%Y-%m-%d %H:%M:%S"),
-                ).order_by(Alert.id.desc()).limit(1)
-            )).scalar_one_or_none()
-            if recent:
-                logger.info(
-                    "数据库【%s】配置类错误在 %d 分钟冷却期内（上次告警 #%s 已解决），本轮不新建告警：%s",
-                    c.name, CONFIG_ALERT_COOLDOWN_MIN, recent.id, (err or "")[:120],
-                )
-                return 0
         env_val = (getattr(c, "env_tag", "") or "").strip()
         if not env_val and (getattr(c, "source", "direct") or "direct") == "agent" and c.cluster_id:
             try:

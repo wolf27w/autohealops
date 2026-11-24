@@ -23,7 +23,10 @@ from app.services.screen_bus import screen_bus
 
 DEFAULT_WINDOW_MINUTES = 30
 RESOLVED_STATUSES = ("resolved", "self_healed")
-ACTIVE_STATUSES = ("pending", "awaiting_approval")
+# 活跃含 ticketed（2026-11-24）：告警转工单后 dedup_key 生成列变 NULL，唯一索引拦不住，
+# 同故障每轮检测都新插一行（实测 qa-asfp 7 个服务 3 小时摔了 122 行，工单只有 7 张）。
+# 把 ticketed 纳入活跃合并后：在途工单期间的复发只累加 event_count，不再新增行。
+ACTIVE_STATUSES = ("pending", "awaiting_approval", "ticketed")
 
 # 合并窗口读取缓存（进程内 10s）：修（2026-11-10）前每次告警事件都要查一次 system_settings，
 # 而告警摄取是高频路径（单次 RTT ~14ms，占单次合并开销的 1/3）。

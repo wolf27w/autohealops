@@ -7,7 +7,7 @@ TerminatingStuck 与 node/db/log 按**资源名**聚合，其余按 **Deployment
 """
 import unittest
 
-from app.services.alert_merge import is_resource_dimension
+from app.services.alert_merge import ACTIVE_STATUSES, is_resource_dimension
 
 
 class TestMergeDimension(unittest.TestCase):
@@ -22,6 +22,13 @@ class TestMergeDimension(unittest.TestCase):
         self.assertTrue(is_resource_dimension("DiskPressure", "node"))
         self.assertTrue(is_resource_dimension("DBConnFailed", "db"))
         self.assertTrue(is_resource_dimension("LogKeyword", "log"))
+
+    def test_ticketed_counts_as_active(self):
+        """2026-11-24：ticketed 必须算活跃——dedup_key 在 ticketed 后变 NULL，
+        唯一索引拦不住，不纳入合并就会同故障继续新插行（qa-asfp 3 小时 122 行）。"""
+        self.assertIn("ticketed", ACTIVE_STATUSES)
+        self.assertIn("pending", ACTIVE_STATUSES)
+        self.assertIn("awaiting_approval", ACTIVE_STATUSES)
 
 
 if __name__ == "__main__":
