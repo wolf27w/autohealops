@@ -1940,6 +1940,12 @@ async def _process_one(alert: Alert) -> bool:
                         _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                         await session.commit()
                         recovered_alert = a
+                # 收尾时从审计回填正文（正文唯一事实源 = audit_records）
+                try:
+                    from app.services.alert_message import refresh_from_audit
+                    await refresh_from_audit(alert.id)
+                except Exception:  # noqa: BLE001
+                    pass
                 # 兜底关当前告警时也解除其关联 pending 审批（避免残留审批最终被判「审核超时」）
                 await _cancel_related_approvals(alert.id)
                 if recovered_alert:

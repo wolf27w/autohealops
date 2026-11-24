@@ -74,12 +74,32 @@ async def create_audit_record(trace_id: str, **fields) -> str:
 
 
 async def update_audit_record(trace_id: str, field: str, data: str) -> None:
-    """更新审计记录字段并重算 hash"""
+    """更新审计记录字段并重算 hash
+
+    2026-11-24 修：原来找不到 trace_id 对应记录就 **静默 return** → 没先 create 的处理链路
+    （如「复发合并」复用诊断后直接执行回滚）所有 execution_detail / rollback 明细全部丢失。
+    改为 upsert：无记录时补建（接上哈希链），保证执行留痕不丢。
+    """
+    if not (trace_id or "").strip():
+        return
     async with async_session() as session:
         result = await session.execute(select(AuditRecord).where(AuditRecord.trace_id == trace_id).order_by(AuditRecord.id.desc()).limit(1))
         record = result.scalar_one_or_none()
         if not record:
-            return
+            # 补建：取最后一条的 hash 作为 previous_hash（with_for_update 防并发分叉）
+            last_res = await session.execute(
+                select(AuditRecord).order_by(AuditRecord.id.desc()).limit(1).with_for_update()
+            )
+            last = last_res.scalar_one_or_none()
+            previous_hash = last.hash_value if last else ""
+            record = AuditRecord(
+                decision_id=generate_decision_id(),
+                trace_id=trace_id,
+                trigger_snapshot="", ai_call_detail="", decision_detail="",
+                execution_detail="", verification_detail="",
+                hash_value="", previous_hash=previous_hash,
+            )
+            session.add(record)
         if field in ("trigger_snapshot", "ai_call_detail", "decision_detail", "execution_detail", "verification_detail"):
             setattr(record, field, data)
             data_str = _serialize(

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 
 from app.core.database import async_session
@@ -71,4 +72,53 @@ async def set_section(alert_id: int, name: str, content: str) -> str:
             return new_msg
     except Exception as e:  # noqa: BLE001
         logger.warning("告警 %s 正文段落【%s】写入失败: %s", alert_id, name, e)
+        return ""
+
+
+async def refresh_from_audit(alert_id: int, scan_limit: int = 3000) -> str:
+    """从审计记录渲染正文的【处置留痕】段（告警正文的唯一事实源是 audit_records）。
+
+    2026-11-24：执行链路偶尔没走到「写正文」那一步（如复用方案/中途收尾），
+    审计里却有完整 rollback 明细 → 在告警收尾时统一从审计回填，保证正文不丢。
+
+    返回写入后的正文（未找到审计或失败返回空串）。
+    """
+    if not alert_id:
+        return ""
+    try:
+        from sqlalchemy import select
+        from app.models import AuditRecord
+
+        async with async_session() as session:
+            rows = (await session.execute(
+                select(AuditRecord.execution_detail)
+                # f-string 里 {"alert_id": N} 会被当成 dict 字面量（单引号）→ 匹配不到，必须手工拼
+                .where(AuditRecord.execution_detail.like('%' + '"alert_id": ' + str(int(alert_id)) + '%'))
+                .where(AuditRecord.execution_detail.like('%rollback%'))
+                .order_by(AuditRecord.id.desc())
+                .limit(scan_limit)
+            )).scalars().all()
+        best = None
+        for raw in rows:
+            try:
+                d = json.loads(raw or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if int(d.get("alert_id") or 0) != int(alert_id):
+                continue
+            rb = d.get("rollback") or {}
+            if rb.get("deployment"):
+                best = rb
+                break
+        if not best:
+            return ""
+        def _short(imgs):
+            return "、".join((i or "").split("/")[-1] for i in list(imgs or []) if i)
+        _before, _after = _short(best.get("images_before")), _short(best.get("images_after"))
+        _revs = f"revision {best.get('from_revision')} → {best.get('after_revision') or best.get('to_revision')}"
+        note = (f"自动回滚 {best.get('deployment')}：镜像 {_before} → {_after}；{_revs}"
+                if (_before and _after) else f"自动回滚 {best.get('deployment')}：{_revs}")
+        return await set_section(alert_id, "处置留痕", note)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %s 从审计回填正文失败: %s", alert_id, e)
         return ""
