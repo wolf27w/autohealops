@@ -259,6 +259,12 @@ def _empty_result(deployment: str = "", kind: str = "deployment") -> dict:
     }
 
 
+def _skip(deployment: str, kind: str, namespace: str, reason: str) -> dict:
+    """检测不成立时统一的「跳过」出口 + 可观测日志（2026-11-24：原来静默返回空，排查无迹可寻）"""
+    logger.info("发布变更检测跳过: %s/%s reason=%s", namespace, deployment, reason)
+    return _empty_result(deployment, kind)
+
+
 async def detect_release_change(cluster_id, namespace, deployment, lookback_hours: int = 6,
                                kind: str = "deployment") -> dict:
     """反查工作负载最近发布变更，返回 {changed, recent, deployment, current_revision,
@@ -271,20 +277,20 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
     统一生成 diff。kind 仅作意图标识，不参与 RPC 参数（proto 无 kind 字段）。
     """
     if not deployment or not namespace:
-        return _empty_result(deployment, kind)
+        return _skip(deployment, kind, namespace, "缺少 deployment 或 namespace")
     try:
         revs = await executor_client.acall(
             executor_client.list_revisions, cluster_id, namespace, deployment)
     except Exception as e:  # noqa: BLE001
         logger.debug("list_revisions 调用失败（%s/%s）: %s", namespace, deployment, e)
-        return _empty_result(deployment, kind)
+        return _skip(deployment, kind, namespace, "list_revisions 调用异常")
     if not (revs or {}).get("success"):
-        return _empty_result(deployment, kind)
+        return _skip(deployment, kind, namespace, "list_revisions 返回失败")
 
     items = [it for it in (revs.get("items") or [])
              if isinstance(it, dict) and it.get("revision") is not None]
     if not items:
-        return _empty_result(deployment, kind)
+        return _skip(deployment, kind, namespace, "无有效 revision 记录")
     by_num = {it["revision"]: it for it in items}
     nums = sorted(by_num.keys())
 
@@ -300,10 +306,27 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
     smaller = [n for n in nums if n < current]
     if not smaller:
         # 只有 1 个 revision（无可回滚目标）
-        return _empty_result(deployment, kind)
+        return _skip(deployment, kind, namespace, "只有一个 revision，无可回滚目标")
     healthy = [n for n in smaller
                if not (by_num.get(n) or {}).get("failed")
                and int((by_num.get(n) or {}).get("ready_replicas") or 0) > 0]
+    # 补充判定（2026-11-24）：滚动发布卡住时旧 RS 的 spec.replicas 已缩到 0 →
+    # status.readyReplicas 归零，但旧 Pod 仍在跑。用「仍有 Ready Pod 的 RS」反推健康 revision，
+    # 否则会把健康版本漏掉 → 回退到另一个坏版本。
+    try:
+        _pods = await executor_client.acall(
+            executor_client.list_deployment_pods, cluster_id, namespace, deployment)
+        if (_pods or {}).get("success"):
+            _ready_rs = {
+                "-".join((p.get("name") or "").split("-")[:-1])
+                for p in (_pods.get("pods") or []) if p.get("ready") and p.get("name")
+            }
+            for _n in smaller:
+                _rs = (by_num.get(_n) or {}).get("replicaset") or ""
+                if _rs and _rs in _ready_rs and _n not in healthy:
+                    healthy.append(_n)
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("按 Ready Pod 反推健康 revision 失败（%s/%s）: %s", namespace, deployment, _e)
     prev = max(healthy) if healthy else max(smaller)
     if healthy and max(smaller) not in healthy:
         logger.info("回滚目标跳过失败版本: %s/%s current=%s → 直接回退到 %s（有 %s 个就绪副本）",
@@ -317,9 +340,25 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
             executor_client.get_revision_template, cluster_id, namespace, deployment, prev)
     except Exception as e:  # noqa: BLE001
         logger.debug("get_revision_template 调用失败（%s/%s）: %s", namespace, deployment, e)
-        return _empty_result(deployment, kind)
+        return _skip(deployment, kind, namespace, "get_revision_template 调用异常")
     if not (cur_tpl or {}).get("success") or not (prev_tpl or {}).get("success"):
-        return _empty_result(deployment, kind)
+        # 模板取不到（旧 RS 被 revisionHistoryLimit 回收等）：若目标版本有就绪副本，仍可判为发布引入
+        if prev in healthy:
+            _created = (by_num.get(current) or {}).get("created_at") or ""
+            _dt = _parse_time(_created)
+            _recent = bool(_dt and (datetime.now(_TZ) - _dt) <= timedelta(hours=lookback_hours))
+            logger.info("发布变更按就绪副本判定: %s/%s current=%s → %s（模板对比不可用）",
+                        namespace, deployment, current, prev)
+            return {
+                "changed": True, "recent": _recent, "deployment": deployment,
+                "current_revision": int(current), "rollback_to": int(prev),
+                "change_time": _dt.strftime("%Y-%m-%d %H:%M:%S") if _dt else "",
+                "kind": (kind or "deployment").lower(),
+                "summary": (f"当前 revision {current} 启动异常，历史 revision {prev} 仍有就绪副本"
+                            "（模板对比不可用，按就绪副本判定）"),
+                "diff": [],
+            }
+        return _skip(deployment, kind, namespace, "revision 模板获取失败")
 
     cur_doc = yaml.safe_load((cur_tpl or {}).get("yaml") or "") or {}
     prev_doc = yaml.safe_load((prev_tpl or {}).get("yaml") or "") or {}

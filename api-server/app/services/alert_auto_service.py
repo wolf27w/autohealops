@@ -2171,6 +2171,26 @@ async def _process_one(alert: Alert) -> bool:
                     diagnosis["evidence_refs"] = evidence_refs
             except Exception as _e_guard:  # noqa: BLE001
                 logger.debug("诊断证据校正失败: %s", _e_guard)
+            # 2026-11-24 幻觉护栏：结论引用的异常/引文必须能在采集证据里找到
+            # （当天两次事故：模型编造「必须提供非默认的 Nacos 账号凭据」，日志无此句）
+            try:
+                from app.services.diagnosis_evidence_guard import apply_guard as _apply_ev_guard, MARK as _EV_MARK
+                _ev_text = "\n".join(x for x in (
+                    alert_data.get("recent_logs") or "",
+                    alert_data.get("recent_events") or "",
+                    alert_data.get("termination_evidence") or "",
+                ) if x)
+                _new_rc2, _bad_claims = _apply_ev_guard(root_cause, _ev_text)
+                if _bad_claims:
+                    logger.warning("告警 %d 诊断结论缺少证据支撑（未命中：%s），已标记不可信",
+                                   alert.id, "、".join(_bad_claims[:3]))
+                    root_cause = _new_rc2
+                    diag_confidence = 0
+                    diagnosis["root_cause"] = root_cause
+                    diagnosis["confidence"] = 0
+                    _hallucinated = True
+            except Exception as _e_ev:  # noqa: BLE001
+                logger.debug("诊断证据校验失败: %s", _e_ev)
             # C2：AI 返回空结论（无根因且无建议）→ 单独记录 empty_result + 转人工（不静默当成功）
             if not (root_cause or "").strip() and not diagnosis.get("suggestions"):
                 try:
@@ -2385,6 +2405,15 @@ async def _process_one(alert: Alert) -> bool:
     if _dropped:
         logger.info("告警 %d 方案剔除 %d 项不可执行步骤: %s",
                     alert.id, len(_dropped), "；".join(_dropped)[:400])
+    # 2026-11-24 幻觉护栏：结论无证据支撑时，不用 AI 猜的动作去改生产（回滚/平台内置动作除外）
+    if locals().get("_hallucinated") and not any(
+            isinstance(s, dict) and s.get("platform_action") for s in steps):
+        await _mark_manual_and_notify(
+            alert, "诊断结论缺少证据支撑",
+            f"{root_cause}\n（已拒绝执行基于该结论的修复动作；请人工核实首错与变更）",
+        )
+        logger.info("告警 %d 结论不可信且无确定性动作，转人工", alert.id)
+        return True
     _pid = locals().get("plan_id") or 0
     if _pid:
         try:
@@ -2713,6 +2742,7 @@ async def escalate_stale_alerts() -> int:
     恢复后工单自动关闭由 ticket_service.auto_close_tickets_for_resolved_alerts 负责（每 60s）。
     """
     from app.services.system_setting_service import get_setting
+    from app.models import RepairPlan
 
     try:
         timeout_min = int(float((await get_setting("alert_manual_timeout_minutes", "5")) or "5"))
@@ -2746,6 +2776,17 @@ async def escalate_stale_alerts() -> int:
                 continue
         except Exception:  # noqa: BLE001
             pass
+        # 正在执行修复（近期 executing 计划）→ 不算超时（否则会把自己的修复打断转人工）
+        async with async_session() as session:
+            running = (await session.execute(
+                select(RepairPlan.id).where(
+                    RepairPlan.alert_id == a.id,
+                    RepairPlan.status == "executing",
+                    RepairPlan.created_at >= datetime.now() - timedelta(minutes=5),
+                ).limit(1)
+            )).first()
+        if running:
+            continue
         async with async_session() as session:
             inflight = (await session.execute(
                 select(Approval.id).where(Approval.alert_id == a.id, Approval.status == "pending").limit(1)
