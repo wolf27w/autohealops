@@ -858,6 +858,27 @@ async def _set_plan_status(plan_id: int, status: str) -> None:
         logger.warning("更新方案 %s 状态为 %s 失败: %s", plan_id, status, e)
 
 
+async def _workload_images(cluster_id: int, namespace: str, deployment: str) -> tuple[list, int]:
+    """取工作负载当前 revision 与镜像列表（回滚留痕用）→ (images, revision)，失败返回 ([], 0)"""
+    if not (namespace and deployment):
+        return [], 0
+    try:
+        r = await executor_client.acall(
+            executor_client.list_revisions, cluster_id, namespace, deployment)
+        if not (r or {}).get("success"):
+            return [], 0
+        cur = int(r.get("current_revision") or 0)
+        items = [it for it in (r.get("items") or []) if isinstance(it, dict)]
+        hit = next((it for it in items if int(it.get("revision") or 0) == cur), None)
+        if hit is None and items:
+            hit = max(items, key=lambda x: int(x.get("revision") or 0))
+            cur = int(hit.get("revision") or 0)
+        return list((hit or {}).get("images") or []), cur
+    except Exception as e:  # noqa: BLE001
+        logger.debug("取工作负载镜像失败（%s/%s）: %s", namespace, deployment, e)
+        return [], 0
+
+
 async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_id: str) -> str:
     """免审方案自动执行 + 留痕，返回 "success" / "failed"
 
@@ -870,6 +891,27 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
     if plan_id:
         await _set_plan_status(plan_id, "executing")
     result = "success"
+    # 2026-11-24 回滚留痕：执行前后抓 revision + 镜像，写审计 + 告警正文
+    # （老板：回滚是代码/镜像问题导致的，必须能追溯“从哪版退到哪版”）
+    _rb_step = {}
+    try:
+        _steps_meta = json.loads(plan_json or "{}").get("steps") or []
+        _rb_step = next((s for s in _steps_meta
+                         if isinstance(s, dict) and s.get("platform_action") == "rollback_deployment"), {}) or {}
+    except (json.JSONDecodeError, TypeError):
+        _rb_step = {}
+    _rb_info: dict = {}
+    if _rb_step:
+        _p = _rb_step.get("params") or {}
+        _ns = _p.get("namespace") or alert.namespace or ""
+        _dep = _p.get("deployment") or ""
+        _before_imgs, _before_rev = await _workload_images(alert.cluster_id, _ns, _dep)
+        _rb_info = {
+            "namespace": _ns, "deployment": _dep, "kind": _p.get("kind") or "deployment",
+            "to_revision": _p.get("to_revision"), "from_revision": _before_rev,
+            "images_before": _before_imgs,
+            "trigger": "自动回滚（检测到最近发布变更导致启动失败）",
+        }
     try:
         # 子线程消费生成器，避免阻塞事件循环
         # 计划执行统一走 plan_runner（支持「平台内置动作」步骤，如探针调参）
@@ -887,6 +929,7 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
         await audit_service.update_audit_record(trace_id, "execution_detail", json.dumps({
             "plan_id": plan_id, "alert_id": alert.id, "mode": "auto", "result": result,
             "failed_steps": failed_steps,
+            **({"rollback": _rb_info} if _rb_info else {}),
         }, ensure_ascii=False))
     except Exception as e:  # noqa: BLE001
         result = "failed"
@@ -923,6 +966,30 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
 
     if result == "failed":
         await _set_plan_status(plan_id, "failed")
+    # 2026-11-24 回滚留痕（执行后）：补 after 快照 + 写告警正文 + 审计明细
+    if _rb_info:
+        try:
+            _after_imgs, _after_rev = await _workload_images(
+                alert.cluster_id, _rb_info.get("namespace") or "", _rb_info.get("deployment") or "")
+            _rb_info["images_after"] = _after_imgs
+            _rb_info["after_revision"] = _after_rev
+            def _short(imgs):
+                return "、".join((i or "").split("/")[-1] for i in imgs if i) or "?"
+            _note = (f"（自动回滚：镜像 {_short(_rb_info.get('images_before'))} → {_short(_after_imgs)}；"
+                     f"revision {_rb_info.get('from_revision')} → {_after_rev or _rb_info.get('to_revision')}）")
+            async with async_session() as session:
+                a = await session.get(Alert, alert.id)
+                if a is not None and _note not in (a.message or ""):
+                    a.message = (a.message or "") + _note
+                    await session.commit()
+            await audit_service.update_audit_record(
+                trace_id, "rollback_detail", json.dumps(_rb_info, ensure_ascii=False))
+            logger.info("告警 %d 回滚留痕: %s/%s rev %s→%s 镜像 %s→%s", alert.id,
+                        _rb_info.get("namespace"), _rb_info.get("deployment"),
+                        _rb_info.get("from_revision"), _after_rev,
+                        _short(_rb_info.get("images_before")), _short(_after_imgs))
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("回滚留痕失败: %s", _e)
     return result
 
 
@@ -2297,6 +2364,40 @@ async def _process_one(alert: Alert) -> bool:
         }]
         logger.info("告警 %d 命中最近发布变更（rev %s→%s），改用回滚动作",
                     alert.id, release_change.get("current_revision"), rollback_to)
+        # 2026-11-24 诊断补全：把发布变更归因写进诊断结果 + 告警正文
+        # （老板：回滚是代码问题导致的，诊断结果不能只说“应用层”而不给变更证据）
+        _rc_block = {
+            "deployment": dep, "namespace": ns, "kind": rc_kind,
+            "current_revision": release_change.get("current_revision"),
+            "rollback_to": rollback_to,
+            "change_time": release_change.get("change_time") or "",
+            "recent": bool(release_change.get("recent")),
+            "summary": release_change.get("summary") or "",
+            "diff": release_change.get("diff") or [],
+            "verdict": "最近发布变更导致启动失败（新版本身不可用时回滚到有就绪副本的历史版本）",
+        }
+        try:
+            if diag_row is not None and getattr(diag_row, "diagnosis_json", ""):
+                async with async_session() as session:
+                    _dr = await session.get(AIDiagnosisResult, diag_row.id)
+                    if _dr is not None and _dr.diagnosis_json:
+                        _dj = json.loads(_dr.diagnosis_json)
+                        _dj["release_change"] = _rc_block
+                        _dr.diagnosis_json = json.dumps(_dj, ensure_ascii=False)
+                        await session.commit()
+                        logger.info("告警 %d 诊断结果已补全发布变更归因（诊断 #%d）", alert.id, diag_row.id)
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("补写诊断发布变更归因失败: %s", _e)
+        try:
+            _mark = (f"\n【发布变更】{ns}/{dep} revision {release_change.get('current_revision')}"
+                     f" → 回滚 {rollback_to}；变更时间 {release_change.get('change_time') or '未知'}")
+            async with async_session() as session:
+                _a = await session.get(Alert, alert.id)
+                if _a is not None and "【发布变更】" not in (_a.message or ""):
+                    _a.message = (_a.message or "") + _mark
+                    await session.commit()
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("追加告警发布变更标记失败: %s", _e)
     if layer == "B" and not release_steps:
         await _mark_manual_and_notify(
             alert, "根因在应用层（需改代码走发布）",
