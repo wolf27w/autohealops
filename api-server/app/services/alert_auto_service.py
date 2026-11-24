@@ -604,6 +604,45 @@ async def _automation_mode(alert: Alert | None = None) -> str:
     return "assist" if await _alert_is_prod(alert) else "full"
 
 
+async def _alert_env(alert: Alert | None) -> str:
+    """告警所属环境（alert.env 优先，缺失回查 cluster.env_tag），统一小写"""
+    if alert is None:
+        return ""
+    env = (getattr(alert, "env", "") or "").strip().lower()
+    if env:
+        return env
+    cid = getattr(alert, "cluster_id", None)
+    if not cid:
+        return ""
+    try:
+        async with async_session() as session:
+            c = await session.get(Cluster, int(cid))
+            if c is not None:
+                return (c.env_tag or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+async def _rollback_allowed(alert: Alert | None) -> bool:
+    """该环境是否允许自动回滚（2026-11-24 老板口径：只生产需要回滚，测试/UAT 不需要）。
+
+    system_settings.rollback_envs（逗号分隔环境名，默认 "prod"；空 / "*" / "all" = 全环境允许）。
+    """
+    try:
+        from app.services.system_setting_service import get_setting
+        raw = (await get_setting("rollback_envs", "prod") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        raw = "prod"
+    if raw in ("", "*", "all"):
+        return True
+    allowed = {x.strip() for x in raw.split(",") if x.strip()}
+    if {"prod", "production"} & allowed:   # 生产两写法等价
+        allowed |= {"prod", "production"}
+    env = await _alert_env(alert)
+    return env in allowed
+
+
 async def _alert_is_prod(alert: Alert | None) -> bool:
     """告警是否属于生产环境（alert.env 优先，缺失则查集群 env_tag）"""
     if alert is None:
@@ -2353,7 +2392,11 @@ async def _process_one(alert: Alert) -> bool:
     # 回滚是确定性、可逆动作，不依赖 AI 对根因层的猜测；C/D 层判断仅影响其余修复路径。
     # 也不再要求「变更发生在 6h 内」（旧版本上线时间可能早于故障窗口）。
     release_steps: list = []
-    if release_change.get("changed") and release_change.get("rollback_to"):
+    if release_change.get("changed") and release_change.get("rollback_to") \
+            and not await _rollback_allowed(alert):
+        logger.info("告警 %d 环境 %s 未开启自动回滚（rollback_envs），跳过回滚方案",
+                    alert.id, await _alert_env(alert) or "未知")
+    elif release_change.get("changed") and release_change.get("rollback_to"):
         if layer != "B":
             logger.info("告警 %d 发布变更命中（诊断 layer=%s），仍按回滚处置", alert.id, layer or "空")
         ns = alert.namespace or ""
@@ -2900,7 +2943,8 @@ async def escalate_stale_alerts() -> int:
             continue
         # 2026-11-24：超时前先看「存不存在确定性修复方案」（发布回滚）。
         # 有则继续自动修（交给 auto_process_alerts），不因超时转人工——能修就不该推给人。
-        if (a.resource_type or "") == "pod" and (a.fault_type or "") in RELEASE_CHANGE_FAULT_TYPES:
+        if ((a.resource_type or "") == "pod" and (a.fault_type or "") in RELEASE_CHANGE_FAULT_TYPES
+                and await _rollback_allowed(a)):
             try:
                 from app.services.release_change_service import detect_release_change
                 _kind, _dep = await _resolve_workload(a)
