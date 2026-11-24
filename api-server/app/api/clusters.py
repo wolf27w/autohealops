@@ -4,14 +4,16 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.clients.executor_client import executor_client
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.security import decrypt_aes256_gcm, encrypt_aes256_gcm
 from app.middleware.permission import require_admin, require_any_user, require_operator
-from app.models import Alert, Cluster, Task
+from app.models import (
+    AIDiagnosisResult, Alert, Approval, Cluster, RepairPlan, Task, Ticket, TicketComment,
+)
 from app.services import user_permission_service
 
 logger = logging.getLogger(__name__)
@@ -882,12 +884,37 @@ async def update_cluster(cluster_id: int, payload: dict, user=Depends(require_ad
 
 @router.delete("/{cluster_id}")
 async def delete_cluster(cluster_id: int, user=Depends(require_admin)):
+    """删除集群及其派生数据。
+
+    ⚠️ 顺序很关键（2026-11-24 修）：原来先删 alerts、再按 `Alert.cluster_id` 子查询删 tasks，
+    子查询此时已是空集 → tasks 全部悬空。现在先固化 alert_ids，再按 id 清派生数据。
+
+    工单是人工处理留痕，不随集群删除：只脱钩（alert_id/cluster_id 置空）并写一条流转记录，
+    避免工单详情里「来源告警」指向已删除的行（历史 57 张单已用 scripts/fix_orphan_tickets.py 修）。
+    """
     await executor_client.acall(executor_client.stop_watch, cluster_id)
     async with async_session() as session:
-        await session.execute(__import__("sqlalchemy").delete(Alert).where(Alert.cluster_id == cluster_id))
-        await session.execute(__import__("sqlalchemy").delete(Task).where(Task.alert_id.in_(
-            __import__("sqlalchemy").select(Alert.id).where(Alert.cluster_id == cluster_id)
-        )))
+        alert_ids = list((await session.execute(
+            select(Alert.id).where(Alert.cluster_id == cluster_id)
+        )).scalars())
+        if alert_ids:
+            # 派生数据随告警一起清：诊断结果 / 修复计划 / 执行任务 / 审批单
+            await session.execute(delete(AIDiagnosisResult).where(AIDiagnosisResult.alert_id.in_(alert_ids)))
+            await session.execute(delete(RepairPlan).where(RepairPlan.alert_id.in_(alert_ids)))
+            await session.execute(delete(Task).where(Task.alert_id.in_(alert_ids)))
+            await session.execute(delete(Approval).where(Approval.alert_id.in_(alert_ids)))
+            await session.execute(delete(Alert).where(Alert.id.in_(alert_ids)))
+        # 工单脱钩保留（不删历史留痕）
+        tickets = (await session.execute(
+            select(Ticket).where(Ticket.cluster_id == cluster_id)
+        )).scalars().all()
+        for t in tickets:
+            t.alert_id = None
+            t.cluster_id = None
+            session.add(TicketComment(
+                ticket_id=t.id, user_id=0, username="system", type="action",
+                content=f"源告警已随集群（id={cluster_id}）删除，工单保留，来源告警关联已清除",
+            ))
         c = await session.get(Cluster, cluster_id)
         if c:
             await session.delete(c)
