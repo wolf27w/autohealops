@@ -132,6 +132,8 @@ AGENT_GATEWAY_PUBLIC_ADDR: "<任一节点IP>:30905"
 | **B. `AGENT_GATEWAY_MODE` 不生效** | 设 `remote` 仍走进程内网关 → 实时日志/终端全失败，后台 ERROR 循环把 CPU 打满、HPA 扩到 5 | `Settings` 未声明该字段且 `model_config: extra="ignore"`，pydantic 直接丢弃环境变量 | `config.py` 补 `AGENT_GATEWAY_MODE` / `AGENT_GATEWAY_INTERNAL_ADDR` 两个字段；补进 `gen_k8s_config.py` 的 `API_CONFIGMAP` |
 | **C. 多副本并发迁移** | 每个副本启动都跑 `alembic upgrade head` → 抢 DDL 锁、Pod 长时间不 Ready、CPU 490m+ | 镜像 CMD 自带迁移 | Deployment 加 `RUN_MIGRATIONS=false` 分支 + 新增 `k8s/migrate-job.yaml` 单独跑迁移 |
 
+| **D. 告警自动处理必然抛异常** | 多副本日志每轮刷 `告警自动处理 异常: cannot access local variable 'AIDiagnosisResult' where it is not associated with a value`，CPU 被空转打高 | `_process_one()` 里有一处局部 `from app.models import AIDiagnosisResult`，把该名字变成函数局部变量 → 前面第 1740 行先用后赋值（UnboundLocalError） | 删掉该局部导入（模块级已导入），AST 校验函数内无同名导入 |
+
 > 顺带修掉：`api-server/requirements.txt` 里 `cryptography==43.0.1` 与 `asyncssh==2.24.1`（要求 >=48.0.1）冲突 → **镜像根本构建不出来**，已改为 `50.0.2`（本机 venv 同版本，crypto 互测通过）。
 
 ### 镜像

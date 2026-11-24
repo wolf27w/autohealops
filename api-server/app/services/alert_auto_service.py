@@ -2318,7 +2318,9 @@ async def _process_one(alert: Alert) -> bool:
             # 2026-11-23 反证机制：执行后验证未通过 → 原根因结论被否证，
             # 清掉诊断缓存，让下一轮重新诊断（旧行为会复用同一结论 → 改了没用还说同一原因）。
             try:
-                from app.models import AIDiagnosisResult
+                # ⚠️ 不要再在这里 import AIDiagnosisResult：函数内出现同名赋值/导入会把整个函数的
+                #    该名字变成局部变量，导致上面第 1740 行先用后赋值 → UnboundLocalError
+                #    （2026-11-24 线上实测：告警自动处理每轮必抛，CPU 打满）。模块级已导入。
                 async with async_session() as session:
                     rows = (await session.execute(
                         select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert.id)
