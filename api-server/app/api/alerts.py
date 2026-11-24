@@ -81,10 +81,12 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
             conditions.append(Alert.cluster_id == cluster_id)
         if severity:
             conditions.append(Alert.severity == severity)
-        if status:
+        if status and status not in ("all", "*"):
             conditions.append(Alert.status == status)
-        else:
-            # 默认只显示待处理的新告警；已转审批/已转人工协助的在「审核列表」处理
+        elif not status:
+            # 兼容旧行为：**不带** status 参数时只给待处理；前端用 status=all 显式要全量。
+            # （2026-11-24）原来这个隐式默认和 UI 上“空的状态下拉”矛盾：用户以为看到全部，
+            # 实际只看到 pending → 「运行态势 128 vs 列表几条」对不上。
             conditions.append(Alert.status == "pending")
         if fault_type:
             conditions.append(Alert.fault_type == fault_type)

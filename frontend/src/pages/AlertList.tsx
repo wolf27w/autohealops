@@ -24,7 +24,7 @@ const FAMILY_LABEL: Record<string, string> = Object.fromEntries(FAULT_FAMILIES)
 
 export default function AlertList() {
   const [severity, setSeverity] = useState<string>()
-  const [status, setStatus] = useState<string>()
+  const [status, setStatus] = useState<string>('all')
   const [env, setEnv] = useState<string>()
   const [manualOnly, setManualOnly] = useState<boolean | undefined>()
   const [faultType, setFaultType] = useState<string>()
@@ -174,8 +174,10 @@ export default function AlertList() {
             { value: 'AppBusiness', label: 'AppBusiness 业务错误' },
             { value: 'LogKeyword', label: 'LogKeyword 兜底' },
           ]} />
-        <Select placeholder="状态" allowClear style={{ width: 140 }} onChange={(v) => { setStatus(v); setPage(1) }}
+        <Select placeholder="状态" style={{ width: 140 }} value={status}
+          onChange={(v) => { setStatus(v ?? 'all'); setPage(1) }}
           options={[
+            { value: 'all', label: '全部状态' },
             { value: 'pending', label: '待处理' },
             { value: 'resolved', label: '已解决' },
             { value: 'self_healed', label: '已自愈' },
@@ -197,7 +199,7 @@ export default function AlertList() {
         rowKey="id"
         loading={loading}
         dataSource={alerts}
-        pagination={{ current: page, pageSize: PAGE_SIZE, total: alertTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条`, onChange: (p) => setPage(p) }}
+        pagination={{ current: page, pageSize: PAGE_SIZE, total: alertTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条（同故障已合并）`, onChange: (p) => setPage(p) }}
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
         expandable={{
           expandedRowRender: (record) => <DiagnosisPanel alert={record} />,
