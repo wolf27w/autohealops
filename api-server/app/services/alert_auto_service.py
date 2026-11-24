@@ -1466,8 +1466,9 @@ def _plan_is_platform(plan_row) -> bool:
 
 
 async def _create_probe_plan(alert: Alert, diag_row, steps: list) -> int:
-    """探针调参方案落表（RepairPlan，steps 为平台内置动作）"""
-    """探针调参方案落表（RepairPlan，steps 为平台内置动作）"""
+    """平台内置动作方案落表（RepairPlan：探针调参 / 发布回滚等 platform_action steps）"""
+    from app.models import RepairPlan
+
     async with async_session() as session:
         plan = RepairPlan(
             alert_id=alert.id,
