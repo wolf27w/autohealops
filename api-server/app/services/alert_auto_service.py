@@ -2646,11 +2646,17 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
     # 正在自动执行修复的告警：本轮跳过，等执行+验证跑完由执行链路自己落 self_healed，
     # 否则会出现「平台刚删了 Pod，新 Pod 起来了，恢复扫描先把它按 resolved 关掉」→ 自愈记录丢失
     # （2026-10-21：实测这就是"看不到 AI 自动修复"的主要原因之一）。
+    # 2026-11-24 修：只跳过「近期创建」的 executing 计划。进程重启/执行中断会把计划永久留在
+    # executing，而这里无哨兵不断跳过 → 告警永不关闭（实测 4 条 TerminatingStuck 卡 90 分钟，
+    # 其中一条积了 19 个 executing 计划）；超过 STALE_PLAN_MINUTES 视为僵尸，不再阻止关闭。
     from app.models import RepairPlan
+    from app.services.repair_plan_service import EXECUTING_GRACE_MIN
+    _plan_cutoff = datetime.now() - timedelta(minutes=EXECUTING_GRACE_MIN)
     async with async_session() as session:
         executing_ids = set((await session.execute(
             select(RepairPlan.alert_id).where(
                 RepairPlan.status == "executing",
+                RepairPlan.created_at >= _plan_cutoff,
                 RepairPlan.alert_id.in_([a.id for a in rows]) if rows else text("1=0"),
             )
         )).scalars())

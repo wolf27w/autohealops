@@ -23,11 +23,16 @@ logger = get_logger("api-server.repair_plan_service")
 ACTIVE_ALERT_STATUSES = ("pending", "awaiting_approval", "ticketed")
 # 执行中的计划刚创建多久内不动（给真实执行留窗口）
 EXECUTING_GRACE_MIN = 5
+# 僵尸执行计划：无论告警是否仍活跃，执行超过这个时长就收尾
+# （进程重启/执行中断会把计划永久留在 executing → 恢复扫描跳过该告警 → 告警永不关闭；
+#  2026-11-24 实测：一条告警积了 19 个 executing 计划，卡 90 分钟不关闭）
+STALE_EXECUTING_MIN = 30
 
 
 async def close_stale_repair_plans(limit: int = 5000) -> int:
-    """把关联告警已结束/不存在的在跑计划置 cancelled，返回处理条数。"""
+    """把关联告警已结束/不存在的在跑计划、以及超龄僵尸执行计划置 cancelled，返回处理条数。"""
     cutoff = datetime.now() - timedelta(minutes=EXECUTING_GRACE_MIN)
+    stale_cutoff = datetime.now() - timedelta(minutes=STALE_EXECUTING_MIN)
     async with async_session() as session:
         ids = list((await session.execute(
             select(RepairPlan.id)
@@ -38,7 +43,12 @@ async def close_stale_repair_plans(limit: int = 5000) -> int:
                     # 执行中：只收尾「不是刚刚创建」的，避免打断正在跑的动作
                     (RepairPlan.status == "executing") & (RepairPlan.created_at <= cutoff),
                 ),
-                or_(Alert.id.is_(None), Alert.status.notin_(ACTIVE_ALERT_STATUSES)),
+                or_(
+                    Alert.id.is_(None),
+                    Alert.status.notin_(ACTIVE_ALERT_STATUSES),
+                    # 告警仍活跃，但执行计划已超龄（进程重启/异常残留）→ 同样收尾
+                    RepairPlan.created_at <= stale_cutoff,
+                ),
             )
             .limit(limit)
         )).scalars())
