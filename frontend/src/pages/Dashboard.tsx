@@ -178,7 +178,7 @@ export default function Dashboard() {
     { label: '数据库', value: hs.db_score },
   ]
   const spineKpis = [
-    { label: '未处理告警', value: kpi?.alert_pending ?? 0, foot: '待响应告警', alert: (kpi?.alert_pending ?? 0) > 0 },
+    { label: '未修复告警', value: kpi?.alert_pending ?? 0, foot: '待处理+待审批+已转工单（同故障已合并）', alert: (kpi?.alert_pending ?? 0) > 0 },
     { label: '待人工', value: kpi?.manual_pending ?? 0, foot: '需人工介入', alert: (kpi?.manual_pending ?? 0) > 0 },
     { label: '自动处理 (24h)', value: kpi?.auto_processed_24h ?? 0, foot: '自愈 + 自动执行', alert: false },
     { label: '待审核', value: kpi?.approval_pending ?? 0, foot: '变更审批待办', alert: (kpi?.approval_pending ?? 0) > 0 },

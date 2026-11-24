@@ -331,8 +331,32 @@ async def _compute_dashboard(
         cluster_total = (await session.execute(select(func.count()).select_from(Cluster))).scalar() or 0
         cluster_healthy = (await session.execute(select(func.count()).select_from(Cluster).where(Cluster.status == "healthy"))).scalar() or 0
         alert_pending = (await session.execute(select(func.count()).select_from(Alert).where(Alert.status == "pending"))).scalar() or 0
+        # 活跃告警（未修复）：与告警列表「未修复」同口径——pending + awaiting_approval + ticketed，
+        # 并按「集群 + 命名空间 + fault_type + 服务」合并同故障（与列表 group=true 一致）。
+        # 2026-11-24 老板反馈「运行态势数字和列表对不上」：原来只算 pending 且不合并。
+        from app.services.alert_merge import ACTIVE_STATUSES as _ACTIVE_STATUSES
+        _svc_col = func.coalesce(func.nullif(Alert.deployment_name, ""), Alert.resource_name, "")
+        _ns_col = func.coalesce(Alert.namespace, "")
+        alert_active = (await session.execute(
+            select(func.count()).select_from(
+                select(Alert.cluster_id, _ns_col, Alert.fault_type, _svc_col)
+                .where(Alert.status.in_(_ACTIVE_STATUSES))
+                .group_by(Alert.cluster_id, _ns_col, Alert.fault_type, _svc_col)
+                .subquery()
+            )
+        )).scalar() or 0
         approval_pending = (await session.execute(select(func.count()).select_from(Approval).where(Approval.status == "pending"))).scalar() or 0
         alert_total = (await session.execute(select(func.count()).select_from(Alert))).scalar() or 0
+        # 分集群活跃告警（同口径：活跃态 + 同故障合并；每行 = 一个合并组）
+        _active_sub = (
+            select(Alert.cluster_id.label("cid"))
+            .where(Alert.status.in_(_ACTIVE_STATUSES))
+            .group_by(Alert.cluster_id, _ns_col, Alert.fault_type, _svc_col)
+            .subquery()
+        )
+        _active_rows = (await session.execute(
+            select(_active_sub.c.cid, func.count()).group_by(_active_sub.c.cid)
+        )).all()
         alert_healed = (await session.execute(
             select(func.count()).select_from(Alert).where(Alert.status.in_(["self_healed", "resolved"]))
         )).scalar() or 0
@@ -1147,6 +1171,7 @@ async def _compute_dashboard(
     a_map: dict[int, dict] = {}
     for cid, st, cnt in alert_by_cluster:
         a_map.setdefault(int(cid), {})[st] = int(cnt)
+    _active_by_cluster: dict[int, int] = {int(cid): int(cnt) for cid, cnt in _active_rows}
     r_map = _cur
     ns_map = _cur_ns
     snap_map: dict[int, str] = {}
@@ -1219,7 +1244,7 @@ async def _compute_dashboard(
             "cpu_pct": _sane_pct(cpu_used, cpu_cap),
             "mem_pct": _sane_pct(mem_used, mem_cap),
             "alert_total": sum(a.values()),
-            "alert_pending": a.get("pending", 0),
+            "alert_pending": _active_by_cluster.get(c.id, 0),
             "alert_self_healed": a.get("self_healed", 0),
             "alert_resolved": a.get("resolved", 0),
             "alert_awaiting": a.get("awaiting_approval", 0),
@@ -1263,7 +1288,7 @@ async def _compute_dashboard(
     payload = {
         "core": {
             "cluster_total": cluster_total, "cluster_healthy": cluster_healthy,
-            "alert_pending": alert_pending, "approval_pending": approval_pending,
+            "alert_pending": alert_active, "alert_pending_raw": alert_pending, "approval_pending": approval_pending,
             "alert_total": alert_total, "alert_healed": alert_healed,
             "heal_rate": round(alert_healed / alert_total, 4) if alert_total else 0.0,
             "plan_total": plan_total, "plan_completed": plan_done,
