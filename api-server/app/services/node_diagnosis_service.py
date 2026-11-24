@@ -389,7 +389,19 @@ async def uncordon_ready_nodes() -> int:
         for raw in names:
             name = raw.decode() if isinstance(raw, bytes) else str(raw)
             try:
-                if not await check_node_recovered(cid, name):
+                node = await get_node(cid, name)
+                if not node:
+                    await redis_pool.srem(key, name)
+                    continue
+                # 只在「真的被 cordon」时才自动 uncordon：方案生成阶段就会登记，
+                # 但方案可能从未执行/被取消（节点本来就可调度）→ 清理登记，避免每 5 分钟无意义 uncordon。
+                if not node.get("unschedulable"):
+                    await redis_pool.srem(key, name)
+                    continue
+                ready = bool(node.get("ready")) and not any(
+                    c.get("type") != "Ready" and c.get("status") == "True"
+                    for c in (node.get("conditions") or []))
+                if not ready:
                     continue
                 r = await executor_client.acall(executor_client.execute_command, cid, "", f"uncordon {name}")
                 if r.get("success"):
