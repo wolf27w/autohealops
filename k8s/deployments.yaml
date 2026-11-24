@@ -35,6 +35,20 @@ spec:
           image: autohealops/api-server:latest
           ports:
             - containerPort: 8080
+          # 多副本：迁移不能随每个副本启动（并发 alembic upgrade 抢 DDL 锁 → CPU 飙高、Pod 长时间不 Ready）。
+          # 迁移由 k8s/migrate-job.yaml 单独跑；RUN_MIGRATIONS=false 时直接起服务。
+          command:
+            - sh
+            - -c
+            - |
+              if [ "${RUN_MIGRATIONS:-true}" = "false" ]; then
+                echo "RUN_MIGRATIONS=false：跳过迁移（由 migrate-job 负责）"
+                exec uvicorn app.main:app --host 0.0.0.0 --port 8080
+              fi
+              alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8080
+          env:
+            - name: RUN_MIGRATIONS
+              value: "false"
           envFrom:
             - configMapRef:
                 name: api-server-config

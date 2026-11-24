@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     #   诊断会话历史目录（JSONL，一行一条消息；相对路径按仓库根解析）
     #   历史正文落文件，数据库只留元数据；保留天数见系统设置 agent_session_retention_days
     AGENT_SESSION_DIR: str = "data/agent-sessions"
+    #   R2 拆网关：inproc=网关跑在本进程（仅单副本）；remote=独立 agent-gateway 服务承载（可多副本）
+    #   ⚠️ 2026-11-24：这两个字段必须声明。此前只在代码里 getattr 兜底，而 model_config 是 extra="ignore"
+    #   → ConfigMap/环境变量里的 AGENT_GATEWAY_MODE 会被 pydantic 丢弃，remote 模式永远不生效（部署实测踩到）。
+    AGENT_GATEWAY_MODE: str = "inproc"
+    AGENT_GATEWAY_INTERNAL_ADDR: str = "127.0.0.1:9096"
 
     # 镜像仓库（R3）：列仓库标签用。可选全局只读凭据；或 REGISTRY_CREDS 按 host 配（JSON）
     #   例：REGISTRY_CREDS={"harbor.efreight.cn":{"username":"ro","password":"***"}}

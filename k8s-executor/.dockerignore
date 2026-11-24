@@ -1,0 +1,14 @@
+# macOS 元数据/临时文件（AppleDouble）：会让 alembic 把 ._*.py 当迁移脚本加载 → SyntaxError: null bytes
+**/._*
+**/.DS_Store
+# Python 缓存
+**/__pycache__
+**/*.pyc
+# 本地开发产物
+.git
+logs
+data
+backups
+**/.venv
+frontend/node_modules
+**/bin/

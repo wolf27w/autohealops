@@ -4,7 +4,8 @@
 > - ✅ 已开发：R53、R60-9、R60-P3（**L-b 层内容对比已实现并用 harbor 真实镜像验证**）、R61–R74、R75（**25 项**）
 > - ✅ 代码尾巴清零：Oracle 方言 export/import/backup（33 单测）、STS/DS 发布变更检测+回滚 kind 透传、proto 同步、openapi 契约、配置覆盖度
 > - ✅ M4/D2：改为保留策略（`scripts/retention_purge.py` + `k8s/retention-cronjob.yaml`，quota 30d / slow_sql 90d），测试集群已建 CronJob；当前两表无过期数据（数据仅 7 天）
-> - 🔧 运维窗口：R49（测试集群多副本部署中）、P4（NodePort 30905）、A6（生产部署）
+> - ✅ R49 多副本验证 + P4 网关对外：**2026-11-24 测试集群实测通过**（2 副本、agent 单连接 connected、60 分钟 12 条诊断零重复、日志经 agent-gateway 转发正常）；期间修掉 3 个阻断缺陷（AppleDouble 污染镜像 / AGENT_GATEWAY_MODE 不生效 / 多副本并发迁移）
+> - 🔧 运维窗口：A6（生产部署）
 > - ⬜ 未开发（需先定方向）：R17（CDC）、R41（vm-app）
 > - 🟡 待拍板：R51-charset
 > - ⏸ 暂缓：S1–S5、M7、R44

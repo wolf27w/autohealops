@@ -1,5 +1,7 @@
 # 遗留项处置说明（2026-11-23）
 
+> **2026-11-24 更新：R49 + P4 已在测试集群 192.168.6.36 实测完成**，期间发现并修复 3 个阻断缺陷（详见文末「2026-11-24 实测结果」一节）。
+
 本文件记录四项「非开发类遗留」的核查结论与可执行步骤。
 
 ---
@@ -99,3 +101,39 @@ AGENT_GATEWAY_PUBLIC_ADDR: "<任一节点IP>:30905"
 - [ ] 生产集群直连（kubeconfig），不套 agent（2026-11-20 老板口径）
 - [ ] 告警通知渠道（飞书/邮件）在生产配置里验证一条
 - [ ] 首次部署后跑一遍：登录 → 集群列表 → 容器日志 → 一条告警全链路
+
+---
+
+## 2026-11-24 实测结果（测试集群 192.168.6.36）
+
+### 部署形态
+
+| 资源 | 结果 |
+|---|---|
+| api-server | 2 副本（HPA 2~5，修完缺陷后 CPU 25% 回落） |
+| ai-service / frontend | 各 2 副本 |
+| agent-gateway | 1 副本（`Recreate`），mTLS + token 校验 |
+| k8s-executor | 1 副本 |
+| Service | `api-server-agent-gateway` NodePort **9095→30905**；`frontend` NodePort **80→30090**（30080 已被 archery 占用） |
+| 配置 | `AGENT_GATEWAY_MODE=remote`、`AGENT_GATEWAY_INTERNAL_ADDR=agent-gateway:9096`、`AGENT_GATEWAY_PUBLIC_ADDR=192.168.6.36:30905` |
+
+### R49 四项验收
+
+1. **多副本跑起来** ✅ api-server/ai-service/frontend 多副本全部 Ready，无 CrashLoop。
+2. **agent 只连一条** ✅ agent 只有一个 `-platform=192.168.6.36:30905`，连到 agent-gateway；DB `agent_status=connected`、`agent_last_seen_at` 持续刷新。
+3. **一条告警只处理一次** ✅ 多副本运行窗口内：60 分钟 12 条诊断、按 alert_id 分组**重复 0 条**（Redis 单飞锁生效）。
+4. **容器日志/终端经 agent-gateway 转发** ✅ `GET /api/v1/resources/clusters/999025/namespaces/autohealops/pods/<pod>/logs/download` 返回真实日志（gzip，解压后是 k8s-executor watcher 日志）；api-server 日志 6 处「由独立 agent-gateway 服务承载」，ERROR 0 条。
+
+### 期间发现并修复的缺陷（2026-11-24，commit 见 git log）
+
+| 缺陷 | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| **A. AppleDouble 污染镜像** | api-server CrashLoop：`alembic … SyntaxError: source code string cannot contain null bytes` | macOS 打包把 `._*.py` 元数据带进 `/app/alembic/versions/`，alembic 当迁移脚本加载 | 新增 5 个 `.dockerignore`（`**/._*`、`**/__pycache__`）；重建镜像后实测镜像内 `._*` = 0 |
+| **B. `AGENT_GATEWAY_MODE` 不生效** | 设 `remote` 仍走进程内网关 → 实时日志/终端全失败，后台 ERROR 循环把 CPU 打满、HPA 扩到 5 | `Settings` 未声明该字段且 `model_config: extra="ignore"`，pydantic 直接丢弃环境变量 | `config.py` 补 `AGENT_GATEWAY_MODE` / `AGENT_GATEWAY_INTERNAL_ADDR` 两个字段；补进 `gen_k8s_config.py` 的 `API_CONFIGMAP` |
+| **C. 多副本并发迁移** | 每个副本启动都跑 `alembic upgrade head` → 抢 DDL 锁、Pod 长时间不 Ready、CPU 490m+ | 镜像 CMD 自带迁移 | Deployment 加 `RUN_MIGRATIONS=false` 分支 + 新增 `k8s/migrate-job.yaml` 单独跑迁移 |
+
+> 顺带修掉：`api-server/requirements.txt` 里 `cryptography==43.0.1` 与 `asyncssh==2.24.1`（要求 >=48.0.1）冲突 → **镜像根本构建不出来**，已改为 `50.0.2`（本机 venv 同版本，crypto 互测通过）。
+
+### 镜像
+
+`harbor.efreight.cn/ops/autohealops-api-server:20261124`（含上面三处修复；agent-gateway 复用同一镜像）。
