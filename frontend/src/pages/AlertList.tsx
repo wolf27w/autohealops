@@ -24,7 +24,7 @@ const FAMILY_LABEL: Record<string, string> = Object.fromEntries(FAULT_FAMILIES)
 
 export default function AlertList() {
   const [severity, setSeverity] = useState<string>()
-  const [status, setStatus] = useState<string>('all')
+  const [status, setStatus] = useState<string>('active')
   const [env, setEnv] = useState<string>()
   const [manualOnly, setManualOnly] = useState<boolean | undefined>()
   const [faultType, setFaultType] = useState<string>()
@@ -174,9 +174,10 @@ export default function AlertList() {
             { value: 'AppBusiness', label: 'AppBusiness 业务错误' },
             { value: 'LogKeyword', label: 'LogKeyword 兜底' },
           ]} />
-        <Select placeholder="状态" style={{ width: 140 }} value={status}
-          onChange={(v) => { setStatus(v ?? 'all'); setPage(1) }}
+        <Select placeholder="状态" style={{ width: 150 }} value={status}
+          onChange={(v) => { setStatus(v ?? 'active'); setPage(1) }}
           options={[
+            { value: 'active', label: '未修复' },
             { value: 'all', label: '全部状态' },
             { value: 'pending', label: '待处理' },
             { value: 'resolved', label: '已解决' },

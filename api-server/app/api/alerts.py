@@ -82,7 +82,13 @@ async def list_alerts(cluster_id: int | None = None, severity: str | None = None
         if severity:
             conditions.append(Alert.severity == severity)
         if status and status not in ("all", "*"):
-            conditions.append(Alert.status == status)
+            # status=active/open：未修复 = 活跃态（pending + awaiting_approval + ticketed），
+            # 与仪表盘「活跃告警」同口径（alert_merge.ACTIVE_STATUSES）。
+            if status in ("active", "open", "unresolved"):
+                from app.services.alert_merge import ACTIVE_STATUSES
+                conditions.append(Alert.status.in_(ACTIVE_STATUSES))
+            else:
+                conditions.append(Alert.status == status)
         elif not status:
             # 兼容旧行为：**不带** status 参数时只给待处理；前端用 status=all 显式要全量。
             # （2026-11-24）原来这个隐式默认和 UI 上“空的状态下拉”矛盾：用户以为看到全部，
