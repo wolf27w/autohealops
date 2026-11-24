@@ -538,7 +538,7 @@ async def _evaluate_autonomy_gate(alert: Alert, steps: list, confidence) -> dict
         confidence=None if confidence is None else float(confidence),
         env=(alert.env or ""),
         user_impacting=bool(impact.get("impacting")),
-        mode=await _automation_mode(),
+        mode=await _automation_mode(alert),
     )
     # 既定口径例外（2026-09-22）：卡 Terminating 的 Pod「审不审都要删」→ 免审批
     if action_key == "delete_stuck_pod":
@@ -587,18 +587,41 @@ def _format_low_confidence_detail(confidence, category: str, evidence_refs: list
     return "；".join(parts)
 
 
-async def _automation_mode() -> str:
-    """当前自动化处置模式（full=直接诊断修复 / assist=影响面动作走审批）
+async def _automation_mode(alert: Alert | None = None) -> str:
+    """当前自动化处置模式（full=直接诊断修复 / assist=审批红线）
 
-    2026-11-24 老板口径：「直接诊断修复，不要一直停滞」→ 默认 full。
-    full 下仍保留安全红线：动作库 forbidden/red、低置信度（<阈值）拦截。
+    2026-11-24 老板口径：**按环境分**——生产环境保留审批红线，测试环境无所谓全自动。
+    - system_settings.automation_mode = by_env（默认）：production/prod → assist，其余 → full
+    - full / assist：全局强制（调试/应急用）
     """
     try:
         from app.services.system_setting_service import get_setting
-        v = (await get_setting("automation_mode", "full") or "").strip().lower()
-        return v if v in ("full", "assist") else "full"
+        v = (await get_setting("automation_mode", "by_env") or "").strip().lower()
     except Exception:  # noqa: BLE001
-        return "full"
+        v = "by_env"
+    if v in ("full", "assist"):
+        return v
+    return "assist" if await _alert_is_prod(alert) else "full"
+
+
+async def _alert_is_prod(alert: Alert | None) -> bool:
+    """告警是否属于生产环境（alert.env 优先，缺失则查集群 env_tag）"""
+    if alert is None:
+        return False
+    env = (getattr(alert, "env", "") or "").strip().lower()
+    if env:
+        return env in ("prod", "production")
+    cid = getattr(alert, "cluster_id", None)
+    if not cid:
+        return False
+    try:
+        async with async_session() as session:
+            c = await session.get(Cluster, int(cid))
+            if c is not None:
+                return (c.env_tag or "").strip().lower() in ("prod", "production")
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 async def _decide_action(alert: Alert, steps: list) -> str:
@@ -618,7 +641,7 @@ async def _decide_action(alert: Alert, steps: list) -> str:
 
     # 高危命令强制至少单人审批（节点级/高影响面资源动作即使评分低也需人工放行）
     # full 模式（老板 2026-11-24 口径：直接诊断修复）下不再因命令高危升级，交给执行层与验证兜底。
-    if decision == "auto" and await _automation_mode() != "full" \
+    if decision == "auto" and await _automation_mode(alert) != "full" \
             and decision_engine.has_high_risk_command(steps):
         decision = "approval_1"
     logger.info("告警 %d 风险决策: 等级%d(分%d,环境%s) → %s",
@@ -1704,7 +1727,7 @@ async def _process_node_alert(alert: Alert) -> bool:
     if steps:
         plan_json = json.dumps({"steps": steps}, ensure_ascii=False)
         # 2026-11-24 老板口径：直接诊断修复，不停滞在审批（full 模式）
-        if await _automation_mode() == "full":
+        if await _automation_mode(alert) == "full":
             trace_id = generate_trace_id()
             async with async_session() as session:
                 plan = RepairPlan(alert_id=alert.id, diagnosis_id=None, plan_json=plan_json,
@@ -2396,7 +2419,7 @@ async def _process_one(alert: Alert) -> bool:
         str(s.get("platform_action")) for s in (steps or [])
         if isinstance(s, dict) and s.get("platform_action")
     }
-    _auto_mode = await _automation_mode()
+    _auto_mode = await _automation_mode(alert)
     if _auto_mode == "full":
         if (_platform_actions or release_steps or probe_steps) and action != "manual":
             logger.info("告警 %d full 自动化模式：影响面动作 %s 直接执行（不转审批）",

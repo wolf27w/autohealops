@@ -76,10 +76,11 @@ DEFAULT_SETTINGS = {
     "embedding_api_key": ("", "Embedding API Key"),
     # 风险评分策略（JSON：操作/资源/影响面/环境分值、等级分段、审核阈值、超时时间）
     "risk_policy": ("", "风险评分策略 JSON（留空用默认）"),
-    # 自动化处置模式（2026-11-24 老板口径：直接诊断修复，不要卡在审批）
-    #   full   = 能修就直接修（影响面动作/高风险命令也自动执行，仅保留 forbidden/red 红线与低置信度拦截）
-    #   assist = 影响面动作（回滚/调探针/节点隔离）走人工审批
-    "automation_mode": ("full", "自动化处置模式：full=直接诊断修复 / assist=影响面动作走审批"),
+    # 自动化处置模式（2026-11-24 老板口径：测试环境直接修，生产环境保留审批红线）
+    #   by_env = 按环境判定（默认）：生产(prod/production) 走审批红线，其余环境直接诊断修复
+    #   full   = 全局直接修（含生产）
+    #   assist = 全局走审批（含测试）
+    "automation_mode": ("by_env", "自动化处置模式：by_env=生产审批/测试直修（默认）｜full=全局直修｜assist=全局审批"),
     # 审批意见模板（JSON 字符串数组，审批时可直接选用）
     "approval_comment_templates": ("[]", "审批意见模板（JSON 字符串数组）"),
     # AI 诊断：深度诊断单次对话最大「有效」工具步数（重复调用不占额，按环境可调）
