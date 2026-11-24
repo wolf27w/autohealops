@@ -177,20 +177,11 @@ export default function Dashboard() {
     { label: '告警', value: hs.alert_score },
     { label: '数据库', value: hs.db_score },
   ]
-  // 活跃告警：与告警列表同口径（分组），不再是原始行数
-  const activeGroupByStatus = kpi?.alert_active_groups_by_status ?? {}
-  const activeRawByStatus = kpi?.alert_active_raw_by_status ?? {}
-  const activeGroups = kpi?.alert_active_groups ?? 0
-  const activeRaw = Object.values(activeRawByStatus).reduce((a, b) => a + (b ?? 0), 0)
-  const activeBreakdown =
-    `待处理 ${activeGroupByStatus.pending ?? 0} 组 · 待审批 ${activeGroupByStatus.awaiting_approval ?? 0} 组`
-    + ` · 已转工单 ${activeGroupByStatus.ticketed ?? 0} 组（共 ${activeRaw} 条，已按故障合并）`
-
   const spineKpis = [
-    { label: '活跃告警', value: activeGroups, foot: `${activeRaw} 条 · 与告警列表同口径`, alert: activeGroups > 0, tip: activeBreakdown },
-    { label: '待人工', value: kpi?.manual_pending_groups ?? kpi?.manual_pending ?? 0, foot: `${kpi?.manual_pending ?? 0} 条 · 与列表同口径`, alert: (kpi?.manual_pending ?? 0) > 0, tip: '与告警列表「处理方式 = 需人工协助」筛选结果一致（按故障合并后的组数）' },
-    { label: '自动处理 (24h)', value: kpi?.auto_processed_24h ?? 0, foot: '自愈 + 自动执行', alert: false, tip: '' },
-    { label: '待审核', value: kpi?.approval_pending ?? 0, foot: '变更审批待办', alert: (kpi?.approval_pending ?? 0) > 0, tip: '' },
+    { label: '未处理告警', value: kpi?.alert_pending ?? 0, foot: '待响应告警', alert: (kpi?.alert_pending ?? 0) > 0 },
+    { label: '待人工', value: kpi?.manual_pending ?? 0, foot: '需人工介入', alert: (kpi?.manual_pending ?? 0) > 0 },
+    { label: '自动处理 (24h)', value: kpi?.auto_processed_24h ?? 0, foot: '自愈 + 自动执行', alert: false },
+    { label: '待审核', value: kpi?.approval_pending ?? 0, foot: '变更审批待办', alert: (kpi?.approval_pending ?? 0) > 0 },
   ]
 
   // 容量提示（纯前端推导：集群水位 + DB 使用率，不依赖新后端接口）
@@ -290,13 +281,7 @@ export default function Dashboard() {
                 {k.label}
               </div>
               <div style={{ fontSize: 26, fontWeight: 600, marginTop: 4, color: ink, fontVariantNumeric: 'tabular-nums' }}>{k.value}</div>
-              {k.tip ? (
-                <Tooltip title={k.tip}>
-                  <div style={{ fontSize: 12, color: faint, marginTop: 2, cursor: 'help', textDecoration: 'underline dotted' }}>{k.foot}</div>
-                </Tooltip>
-              ) : (
-                <div style={{ fontSize: 12, color: faint, marginTop: 2 }}>{k.foot}</div>
-              )}
+              <div style={{ fontSize: 12, color: faint, marginTop: 2 }}>{k.foot}</div>
             </div>
           ))}
         </div>
