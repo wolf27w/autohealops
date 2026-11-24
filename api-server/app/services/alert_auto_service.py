@@ -2277,13 +2277,14 @@ async def _process_one(alert: Alert) -> bool:
     if probe_steps and not _is_probe_root_cause(root_cause):
         probe_steps = []
         logger.info("告警 %d 诊断根因未指向探针配置，放弃调参动作（避免拿表象当根因）", alert.id)
-    # 2026-11-24 发布变更关联：B 层（应用/配置层）且有可回滚的历史版本 → 优先回滚，不转人工。
-    # 不再要求「变更发生在 6h 内」：pod 已在 CrashLoop、且已找到健康版本时，回滚就是正确处置；
-    # 旧版本的真实上线时间可能远早于本次故障窗口（实测 change_time 2026-11-23，故障 2026-11-24）。
-    # 仅 B 层触发（C/D 层仍转人工；A 层无变更时逻辑不变）。
+    # 2026-11-24 发布变更关联：检测到「当前版本启动失败 + 存在健康历史版本」就直接回滚，
+    # 不再要求 layer==B（实测：同一批坏发布里，AI 对部分服务判了非 B 层 → 明明有回滚能力却转人工）。
+    # 回滚是确定性、可逆动作，不依赖 AI 对根因层的猜测；C/D 层判断仅影响其余修复路径。
+    # 也不再要求「变更发生在 6h 内」（旧版本上线时间可能早于故障窗口）。
     release_steps: list = []
-    if (layer == "B" and release_change.get("changed")
-            and release_change.get("rollback_to")):
+    if release_change.get("changed") and release_change.get("rollback_to"):
+        if layer != "B":
+            logger.info("告警 %d 发布变更命中（诊断 layer=%s），仍按回滚处置", alert.id, layer or "空")
         ns = alert.namespace or ""
         dep = release_change.get("deployment") or ""
         rollback_to = release_change.get("rollback_to")
@@ -2793,6 +2794,21 @@ async def escalate_stale_alerts() -> int:
             )).first()
         if inflight:
             continue
+        # 2026-11-24：超时前先看「存不存在确定性修复方案」（发布回滚）。
+        # 有则继续自动修（交给 auto_process_alerts），不因超时转人工——能修就不该推给人。
+        if (a.resource_type or "") == "pod" and (a.fault_type or "") in RELEASE_CHANGE_FAULT_TYPES:
+            try:
+                from app.services.release_change_service import detect_release_change
+                _kind, _dep = await _resolve_workload(a)
+                if _dep:
+                    _rc = await detect_release_change(
+                        a.cluster_id, a.namespace or "", _dep, lookback_hours=168)
+                    if _rc.get("changed") and _rc.get("rollback_to"):
+                        logger.info("告警 %d 超时但存在确定修复方案（回滚 %s→rev%s），不转人工",
+                                    a.id, _dep, _rc.get("rollback_to"))
+                        continue
+            except Exception as _e:  # noqa: BLE001
+                logger.debug("告警 %d 超时前修复可行性检查失败: %s", a.id, _e)
         try:
             await _mark_manual_and_notify(
                 a, f"修复超时（>{timeout_min} 分钟未恢复）",

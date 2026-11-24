@@ -285,7 +285,8 @@ async def detect_release_change(cluster_id, namespace, deployment, lookback_hour
         logger.debug("list_revisions 调用失败（%s/%s）: %s", namespace, deployment, e)
         return _skip(deployment, kind, namespace, "list_revisions 调用异常")
     if not (revs or {}).get("success"):
-        return _skip(deployment, kind, namespace, "list_revisions 返回失败")
+        _err = (revs or {}).get("error") or ""
+        return _skip(deployment, kind, namespace, f"list_revisions 返回失败: {_err[:160]}")
 
     items = [it for it in (revs.get("items") or [])
              if isinstance(it, dict) and it.get("revision") is not None]
