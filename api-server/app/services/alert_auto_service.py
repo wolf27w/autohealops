@@ -975,13 +975,11 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
             _rb_info["after_revision"] = _after_rev
             def _short(imgs):
                 return "、".join((i or "").split("/")[-1] for i in imgs if i) or "?"
-            _note = (f"（自动回滚：镜像 {_short(_rb_info.get('images_before'))} → {_short(_after_imgs)}；"
-                     f"revision {_rb_info.get('from_revision')} → {_after_rev or _rb_info.get('to_revision')}）")
-            async with async_session() as session:
-                a = await session.get(Alert, alert.id)
-                if a is not None and _note not in (a.message or ""):
-                    a.message = (a.message or "") + _note
-                    await session.commit()
+            _note = (f"自动回滚 {_rb_info.get('deployment')}：镜像 {_short(_rb_info.get('images_before'))} → "
+                     f"{_short(_after_imgs)}；revision {_rb_info.get('from_revision')} → "
+                     f"{_after_rev or _rb_info.get('to_revision')}")
+            from app.services.alert_message import set_section as _set_section
+            await _set_section(alert.id, "处置留痕", _note)
             await audit_service.update_audit_record(
                 trace_id, "rollback_detail", json.dumps(_rb_info, ensure_ascii=False))
             logger.info("告警 %d 回滚留痕: %s/%s rev %s→%s 镜像 %s→%s", alert.id,
@@ -2389,15 +2387,14 @@ async def _process_one(alert: Alert) -> bool:
         except Exception as _e:  # noqa: BLE001
             logger.warning("补写诊断发布变更归因失败: %s", _e)
         try:
-            _mark = (f"\n【发布变更】{ns}/{dep} revision {release_change.get('current_revision')}"
-                     f" → 回滚 {rollback_to}；变更时间 {release_change.get('change_time') or '未知'}")
-            async with async_session() as session:
-                _a = await session.get(Alert, alert.id)
-                if _a is not None and "【发布变更】" not in (_a.message or ""):
-                    _a.message = (_a.message or "") + _mark
-                    await session.commit()
+            from app.services.alert_message import set_section as _set_section
+            await _set_section(
+                alert.id, "发布变更",
+                f"{ns}/{dep} revision {release_change.get('current_revision')} → 回滚 {rollback_to}；"
+                f"变更时间 {release_change.get('change_time') or '未知'}",
+            )
         except Exception as _e:  # noqa: BLE001
-            logger.warning("追加告警发布变更标记失败: %s", _e)
+            logger.warning("写入告警发布变更段失败: %s", _e)
     if layer == "B" and not release_steps:
         await _mark_manual_and_notify(
             alert, "根因在应用层（需改代码走发布）",
