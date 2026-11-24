@@ -501,6 +501,52 @@ async def _compute_dashboard(
                 Alert.status.in_(["pending", "awaiting_approval", "ticketed"])))
         )).scalar() or 0
 
+        # --- 活跃告警的「分组口径」（2026-11-24，修 KPI 与告警列表对不上） ---
+        # 告警列表按「集群+namespace+fault_type+服务」合并，只显示每组最新一条，total 是**组数**；
+        # 而 KPI 原来给的是**原始行数**（pending+awaiting_approval+ticketed），
+        # 导致「未处理告警 128」与列表筛选「待处理 5 条」看起来完全对不上
+        # （128 里 122 条是已转工单，合并后只有 11 组）。
+        # 这里补一份同为分组口径的计数，让 KPI 与列表筛选能一一对齐。
+        _active_statuses = ("pending", "awaiting_approval", "ticketed")
+        _cid = func.coalesce(Alert.cluster_id, -1)
+        _ns = func.coalesce(Alert.namespace, "")
+        _svc = func.coalesce(func.nullif(Alert.deployment_name, ""), Alert.resource_name, "")
+        # 分组必须下推到子查询（group_by），否则外层 count 数的还是行数
+        _agsub = _filter(select(
+            Alert.status.label("st"),
+            _cid.label("cid"), _ns.label("ns"),
+            Alert.fault_type.label("ft"), _svc.label("svc"),
+        ).where(Alert.status.in_(_active_statuses))
+            .group_by(Alert.status, _cid, _ns, Alert.fault_type, _svc)).subquery()
+        _ag_rows = (await session.execute(
+            select(_agsub.c.st, func.count()).group_by(_agsub.c.st)
+        )).all()
+        active_groups_by_status = {str(st): int(n) for st, n in _ag_rows}
+        # 三态合并后的「不重复组数」：同一故障先 pending 后 ticketed 会跨状态分组，
+        # 所以 5+1+11=17 而实际只有 12 组（与告警列表不筛状态时的活跃部分一致）
+        _aguniq = _filter(select(
+            _cid.label("cid"), _ns.label("ns"), Alert.fault_type.label("ft"), _svc.label("svc"),
+        ).where(Alert.status.in_(_active_statuses))
+            .distinct()).subquery()
+        active_groups = int((await session.execute(
+            select(func.count()).select_from(_aguniq)
+        )).scalar() or 0)
+        # 需人工协助的活跃告警：同样给分组数（与列表「处理方式=需人工协助」筛选项对齐），
+        # 否则 KPI「待人工 122」会比「活跃告警 12」还大，看着自相矛盾
+        _mqq = _filter(select(
+            _cid.label("cid"), _ns.label("ns"), Alert.fault_type.label("ft"), _svc.label("svc"),
+        ).where(Alert.status.in_(_active_statuses), Alert.manual_required.is_(True))
+            .distinct()).subquery()
+        manual_groups = int((await session.execute(
+            select(func.count()).select_from(_mqq)
+        )).scalar() or 0)
+        _r_rows = (await session.execute(
+            _filter(select(Alert.status, func.count()).select_from(Alert)
+                    .where(Alert.status.in_(_active_statuses)))
+            .group_by(Alert.status)
+        )).all()
+        active_raw_by_status = {str(st): int(n) for st, n in _r_rows}
+
         # --- DB 异常 / DB 健康（project_id 经 ProjectDBConnection 过滤；cluster_id 不影响 DB） ---
         db_conns = list((await session.execute(select(DBConnection))).scalars())
         if project_db_ids is not None:
@@ -926,6 +972,11 @@ async def _compute_dashboard(
         kpi = {
             "cluster_total": c_total,
             "alert_pending": active_filtered,
+            # 2026-11-24：与告警列表同口径（分组）的活跃告警计数——前端 KPI 用这一组
+            "alert_active_groups": active_groups,
+            "alert_active_groups_by_status": active_groups_by_status,
+            "alert_active_raw_by_status": active_raw_by_status,
+            "manual_pending_groups": manual_groups,
             "auto_processed_24h": auto_processed_24h,
             "auto_processed_with_action": auto_processed_with_action,
             "auto_healed_without_action": auto_healed_without_action,

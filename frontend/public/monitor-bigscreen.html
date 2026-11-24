@@ -404,7 +404,13 @@ function renderKpis() {
   const nodeReady = cd.reduce((s, c) => s + (c.node_ready || 0), 0);
   const podTotal = cd.reduce((s, c) => s + (c.pods || 0), 0);
   const containerTotal = (kpi.container_total != null && Number(kpi.container_total) > 0) ? Number(kpi.container_total) : null;
-  const alertPending = val(core.alert_pending, 0);
+  const alertPending = (kpi.alert_active_groups != null)
+    ? val(kpi.alert_active_groups, 0)
+    : val(core.alert_pending, 0);
+  const gbs = kpi.alert_active_groups_by_status || {};
+  const alertSub = (gbs.pending != null)
+    ? `待处理 ${gbs.pending || 0} · 待审批 ${gbs.awaiting_approval || 0} · 已转单 ${gbs.ticketed || 0}`
+    : null;
   const auto24h = val(kpi.auto_processed_24h, 0);
   const rate = (kpi.self_heal_rate != null ? val(kpi.self_heal_rate, null) : null) ?? val(kpi.heal_rate, null);
   const mttr = val(kpi.mttr_minutes, val(core.mttr_minutes, null));
@@ -422,7 +428,7 @@ function renderKpis() {
     { t: '节点', v: nodeTotal, d: `就绪 ${nodeReady}`, cls: '' },
     { t: 'Pod', v: podTotal, d: '全部命名空间', cls: '' },
     { t: '容器', v: containerTotal != null ? containerTotal : '—', d: containerTotal != null ? '全部命名空间' : '暂无数据源', cls: '' },
-    { t: '未恢复告警', v: alertPending, d: sevSub, cls: 'err', sp: sparkNew },
+    { t: '未恢复告警', v: alertPending, d: alertSub || sevSub, cls: 'err', sp: sparkNew },
     { t: '24h 自愈', v: auto24h, d: '自动处理', cls: 'ok', sp: sparkHeal },
     { t: '自愈成功率', v: rate != null ? Math.round(rate * 100) : '—', unit: rate != null ? '%' : '', d: '24h 已解决', cls: rate != null ? 'ok' : '', sp: sparkRate },
     { t: '平均恢复 MTTR', v: fmtMttr(mttr), d: '分钟口径', cls: '' },

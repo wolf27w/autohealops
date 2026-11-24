@@ -294,6 +294,14 @@ export interface HealthScore {
 export interface DashboardKpi {
   cluster_total: number
   alert_pending: number
+  /** 活跃告警「不重复组数」（与告警列表同口径：集群+namespace+故障类型+服务 合并） */
+  alert_active_groups?: number
+  /** 活跃告警按状态的分组数（与列表筛选 status 后的 total 一致） */
+  alert_active_groups_by_status?: Record<string, number>
+  /** 活跃告警按状态的原始条数（展示「N 组 / M 条」用） */
+  alert_active_raw_by_status?: Record<string, number>
+  /** 活跃告警中的「需人工协助」分组数（与列表 manual_required 筛选同口径） */
+  manual_pending_groups?: number
   /** 自动处理（最近 24 小时）：自愈 ∪ 有成功执行动作的告警（去重） */
   auto_processed_24h: number
   manual_pending: number
