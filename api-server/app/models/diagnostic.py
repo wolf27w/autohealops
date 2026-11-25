@@ -40,6 +40,9 @@ class DiagnosticReport(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     task_type: Mapped[str] = mapped_column(String(10), default="app")
+    # 归属连接/集群（迁移 q0r1s2t3u4v5 新增列；单库/单集群用户查报告列表按此过滤）
+    conn_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     conclusion: Mapped[str] = mapped_column(Text, default="")   # 诊断结论
     root_cause: Mapped[str] = mapped_column(Text, default="")   # 根因
     suggestion: Mapped[str] = mapped_column(Text, default="")   # 处理/优化建议
