@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 # ============================================================================
@@ -99,6 +99,37 @@ def _parse_json(s: Any, default: Any) -> Any:
         return default
 
 
+def _coerce_dt(v: Any) -> datetime | None:
+    """把 str/datetime 统一成 datetime；解析失败返回 None（轨迹合成不允许抛异常）"""
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            return datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _shift_ts(base: datetime | None, seconds: int, as_str: bool = False):
+    """在基准时间上递增 seconds（保持原类型：str 进 str 出，便于前端/耗时计算统一）"""
+    if base is None:
+        return None
+    shifted = base + timedelta(seconds=seconds)
+    return shifted.isoformat() if as_str else shifted
+
+
+def _react_snapshot(diagnosis: dict) -> tuple[list, bool, str]:
+    """解析 context_snapshot → (tool_steps, degraded, degrade_reason)；任何异常形态都返回空"""
+    snap = _parse_json(diagnosis.get("context_snapshot"), {})
+    if not isinstance(snap, dict):
+        return [], False, ""
+    tool_steps = snap.get("tool_steps")
+    if not isinstance(tool_steps, list):
+        tool_steps = []
+    return tool_steps, bool(snap.get("degraded")), str(snap.get("degrade_reason") or "")
+
+
 def format_duration(ms: int | float | None) -> str:
     """毫秒 → 人读耗时（46s / 1m12s / 850ms）"""
     if ms is None or ms < 0:
@@ -176,14 +207,51 @@ def _build_steps(src: dict) -> list[dict]:
             "suggestions": suggestions[:5],
             "confidence": confidence,
         }
+        # ReAct 循环快照（单次诊断无 tool_steps，解析结果为空 → 行为不变）
+        tool_steps, degraded, degrade_reason = _react_snapshot(diagnosis)
+        diag_summary = redact(body, 2000)
+        if degraded:
+            diag_summary = f"{diag_summary}｜降级：{degrade_reason or '未说明原因'}"
         steps.append(_step(
             "diagnose", "trigger", "tool", "AI 诊断",
             ts=diagnosis.get("created_at"),
             tool_name="ai_diagnose",
             args={"fault_type": alert.get("fault_type"), "resource_name": alert.get("resource_name")},
-            result_summary=redact(body, 2000),
-            status="ok",
+            result_summary=diag_summary,
+            status="skip" if degraded else "ok",
         ))
+
+        # 2.1 ReAct 每轮工具调用（diagnose 的子节点，按发生顺序展开流水线）
+        raw_ts = diagnosis.get("created_at")
+        base_ts = _coerce_dt(raw_ts)
+        ts_as_str = isinstance(raw_ts, str)
+        for i, st in enumerate(tool_steps):
+            if not isinstance(st, dict):
+                continue
+            tool = str(st.get("tool") or "").strip()
+            ok = bool(st.get("success"))
+            raw_out = st.get("output")
+            if isinstance(raw_out, str):
+                out_text = raw_out
+            elif raw_out is None:
+                out_text = ""
+            else:
+                out_text = redact(raw_out, 4000)
+            if out_text:
+                summary = redact(out_text, 1500)
+            else:
+                summary = "" if ok else "失败"
+            arg_val = st.get("args")
+            steps.append(_step(
+                f"tool-{i}", "diagnose", "tool",
+                f"工具 · {tool}" if tool else f"工具步 {i + 1}",
+                ts=_shift_ts(base_ts, i + 1, as_str=ts_as_str),
+                tool_name=tool,
+                args=_mask_value(arg_val) if isinstance(arg_val, (dict, list, str)) else arg_val,
+                result_summary=summary,
+                status="ok" if ok else "error",
+                error=(out_text[:300] if not ok else ""),
+            ))
 
     # 3. 诊断失败（转人工）
     if failure:
@@ -438,6 +506,15 @@ def assemble_trace(src: dict, cluster_name: str = "", db_name: str = "") -> dict
 
     result, action = _decide_result_action(alert, plan, decision, approval, exec_logs, verification, ticket)
     rounds = len(exec_logs) if exec_logs else len([s for s in steps if s["kind"] in ("tool", "decide", "exec")])
+    # ReAct 轨迹：优先用快照里的真实轮数（否则展开工具步后会把「1 轮诊断」算成 N 轮，2026-11-25）
+    if diagnosis:
+        try:
+            _snap = _parse_json(diagnosis.get("context_snapshot"), {})
+            _r = int((_snap or {}).get("rounds") or 0) if isinstance(_snap, dict) else 0
+            if _r > 0:
+                rounds = _r
+        except (TypeError, ValueError):
+            pass
 
     domain = "app" if alert.get("cluster_id") is not None else "db"
     target = ""
@@ -518,6 +595,7 @@ def _to_src(alert, diagnosis, failure, plan, decision, approval, exec_logs, veri
         },
         "diagnosis": {
             "diagnosis_json": diagnosis.diagnosis_json, "confidence": diagnosis.confidence,
+            "context_snapshot": diagnosis.context_snapshot,
             "created_at": diagnosis.created_at,
         } if diagnosis else None,
         "failure": {
