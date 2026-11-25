@@ -47,6 +47,36 @@ _HIGH_RISK_RE = re.compile(
     r"|(?<!un)\bcordon\b|\brm\s+-rf\b|\bpurge\b"
 )
 
+# 代码/配置类根因信号（2026-11-25 老板口径：异常先看日志找根因，不能靠删 Pod 碰运气）
+_CODE_SIGNALS = (
+    "application run failed", "application failed to start", "caused by:", "java.lang.",
+    "org.springframework", "could not resolve placeholder", "no such file or directory",
+    "illegalstateexception", "nullpointerexception", "classnotfoundexception",
+    "panic:", "traceback (most recent call last)", "modulenotfounderror",
+)
+_DELETE_POD_RE = re.compile(r"(?i)\bdelete\s+pods?\b")
+
+
+def _code_fault_signal(diag: dict) -> bool:
+    """诊断证据是否指向代码/配置层（看退出码 + 首错行 + 日志）
+
+    注意：137/143 是资源/被动终止维度（OOM、SIGTERM），日志里的 java.lang.OutOfMemoryError
+    不算代码根因；只有出现「启动失败/显式 Caused by」才归为代码类。
+    """
+    blob = " ".join(str(diag.get(k) or "") for k in
+                    ("termination_evidence", "recent_logs", "root_cause", "probe_evidence"))
+    low = blob.lower()
+    m = re.search(r"(?i)(?:laststate)?exitcode[=:\s]+(\d{1,3})", blob)
+    code = int(m.group(1)) if m else None
+    if code in (137, 143) or "oomkilled" in low or "outofmemoryerror" in low:
+        if not any(s in low for s in ("failed to start", "application run failed", "caused by:")):
+            return False
+    if any(s in low for s in _CODE_SIGNALS):
+        return True
+    if code is not None and code not in (0, 137, 143, 255):
+        return True
+    return False
+
 
 def _steps_text(steps: list) -> str:
     """把计划 steps 展平成一段可检索文本（命令 + 平台动作 + 描述）"""
@@ -64,7 +94,7 @@ def _steps_text(steps: list) -> str:
     return "\n".join(parts)
 
 
-def hard_blocks(steps: list, env_tag: str = "") -> list[str]:
+def hard_blocks(steps: list, env_tag: str = "", code_fault: bool = False) -> list[str]:
     """返回命中的硬红线（空列表 = 没有越线）"""
     text = _steps_text(steps)
     blocks: list[str] = []
@@ -74,6 +104,12 @@ def hard_blocks(steps: list, env_tag: str = "") -> list[str]:
         blocks.append("跨命名空间/全集群批量删除")
     if (env_tag or "").lower().startswith("prod") and _SCALE_ZERO_RE.search(text):
         blocks.append("生产环境缩容到 0")
+    # 2026-11-25 老板口径：代码/配置类根因严禁「只靠删 Pod 碰运气」
+    if code_fault and steps and all(
+            isinstance(s, dict) and (_DELETE_POD_RE.search(str(s.get("command") or ""))
+                                     or str(s.get("platform_action") or "") in ("delete_pod", "rebuild_pod"))
+            for s in steps):
+        blocks.append("代码/配置类根因禁止仅删 Pod 重建（需先定位具体原因）")
     return blocks
 
 
@@ -174,8 +210,13 @@ def evaluate(
     if not steps:
         add("动作:空方案", -30, "没有可执行步骤")
     text = _steps_text(steps)
-    if re.search(r"(?i)\bdelete\s+pod\b|\bdelete\s+pod\b", text):
-        add("动作:删Pod重建", 4, "确定性动作、风险低")
+    if _DELETE_POD_RE.search(text):
+        if _code_fault_signal(diag):
+            add("动作:盲删Pod", -12, "证据指向代码/配置类根因，删 Pod 重建会复发")
+        else:
+            add("动作:删Pod重建", 4, "确定性动作、风险低")
+    else:
+        pass
     if _HIGH_RISK_RE.search(text):
         add("风险:高危命令", -20, "涉及工作负载/命名空间/节点级破坏性操作")
     if _SCALE_ZERO_RE.search(text) and not (env_tag or "").lower().startswith("prod"):
@@ -202,7 +243,7 @@ def evaluate(
         add("历史:反复转人工", -10, f"同类问题已转人工 {repeated_manual} 次")
 
     score = _clamp(score)
-    blocks = hard_blocks(steps, env_tag)
+    blocks = hard_blocks(steps, env_tag, code_fault=_code_fault_signal(diag))
 
     if blocks:
         recommend = "manual"

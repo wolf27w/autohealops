@@ -267,6 +267,13 @@ def _build_initial_messages(alert_data: dict, context: dict, task_memory: str) -
     if detect_scenario(alert_data, context) == "startup_failure":
         lines.append("")
         lines.extend(_startup_checklist_lines())
+    lines.append("")
+    lines.append(
+        "【处置红线（2026-11-25 老板口径）】不得把「删 Pod 重建」当默认动作："
+        "证据里有首错行/框架异常/退出码≠137,143 就属于代码或配置类根因，"
+        "必须先给出具体原因（异常类名 / 配置键 / 文件路径）与证据行；"
+        "删 Pod 只会复发，结论应落到「改配置 / 回滚 / 发版 / 转人工」，而不是重建。"
+    )
     return [{"role": "user", "content": "\n".join(lines)}]
 
 
@@ -283,6 +290,8 @@ def _startup_checklist_lines() -> list[str]:
         "3) 若差异在启动参数/配置文件 → 结论落在「镜像/发布变更」层，给出回滚 + 修正方式（不要只写重启/扩缩）。",
         "4) 若出口码为 137/143 或探针失败 → 才回到资源/探针维度（本轮不适用）。",
         "5) 证据不足时按结构化交代（①已排除 ②缺失证据 ③建议补充采集），不得用探针失败/重启次数当根因。",
+        "6) 禁止把「删 Pod 重建」当处置：有首错行/退出码≠137,143 时，根因必须落到具体异常类名/配置键/文件行；"
+        "删 Pod 只会复发 → 结论应为改配置、回滚到健康版本、或转人工发版。",
     ]
 
 

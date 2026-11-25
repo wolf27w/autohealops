@@ -135,6 +135,49 @@ def _command_verb(command: str) -> str:
     return ""
 
 
+# 声明层动作意图（R77.2，2026-11-25）：AI 只给「想改什么」，命令与回滚由平台按当前 YAML 生成
+_PLATFORM_INTENT_ACTIONS = {"set_env", "set_resources", "set_image", "set_replicas", "rollout_restart"}
+
+
+async def _materialize_platform_actions(steps: list, alert: Alert, trace_id: str) -> list:
+    """把声明层动作意图编译成 command + rollback_command。
+
+    为什么要这层：AI 手写 kubectl 容易语法错/丢回滚，且经常因此被「可执行性清洗」丢掉 → 无可用方案。
+    现在模型只写 platform_action + params，平台读当前 YAML 生成等价命令与回滚语句。
+    注意：输出步骤不再保留 platform_action 字段（否则会被 plan_runner 当成未注册平台动作执行失败），
+    改用 intent 字段留痕。
+    """
+    if not any(isinstance(s, dict) and str(s.get("platform_action") or "") in _PLATFORM_INTENT_ACTIONS
+               for s in (steps or [])):
+        return steps
+    from app.services import platform_actions
+    out: list = []
+    for s in steps or []:
+        if not (isinstance(s, dict) and str(s.get("platform_action") or "") in _PLATFORM_INTENT_ACTIONS):
+            out.append(s)
+            continue
+        action = str(s["platform_action"])
+        params = dict(s.get("params") or {})
+        params.setdefault("namespace", alert.namespace or "")
+        params.setdefault("workload", alert.deployment_name or alert.resource_name or "")
+        try:
+            built = await platform_actions.prepare(action, params, alert.cluster_id, trace_id)
+        except Exception as e:  # noqa: BLE001 单个动作编译失败不拖垮整份方案
+            logger.warning("告警 %d 平台动作 %s 编译失败，已丢弃：%s", alert.id, action, e)
+            continue
+        if not built.get("command"):
+            logger.info("告警 %d 平台动作 %s 无有效变更，已跳过（%s）",
+                        alert.id, action, built.get("description") or "")
+            continue
+        out.append({
+            "command": built["command"],
+            "rollback_command": built.get("rollback_command") or "",
+            "description": s.get("description") or built.get("description") or action,
+            "intent": action,
+        })
+    return out
+
+
 def _sanitize_plan_steps(steps: list, alert: Alert) -> tuple[list, list]:
     """修复方案可执行性校验（2026-11-24）
 
@@ -695,6 +738,57 @@ async def _alert_is_prod(alert: Alert | None) -> bool:
     except Exception:  # noqa: BLE001
         pass
     return False
+
+
+# ============ 根因-动作一致性（R77.1，2026-11-25 老板口径）============
+# 老板口径：不能「异常就删 Pod」。异常先看日志找根因；代码/配置类根因必须给出具体原因
+# （异常类名/配置键/文件路径），动作只能是改配置/回滚/转人工，禁止删 Pod 重建。
+_CODE_FAULT_PATTERNS = (
+    "application run failed", "application failed to start", "failed to start",
+    "caused by:", "java.lang.", "org.springframework", "org.apache.", "no such file or directory",
+    "could not resolve placeholder", "illegalstateexception", "nullpointerexception",
+    "classnotfoundexception", "syntaxerror", "unhandled exception", "panic:",
+    "traceback (most recent call last)", "modulenotfounderror", "error: unrecognized",
+)
+
+
+def _exit_code_of(evidence_text: str) -> "int | None":
+    """从证据文本里提 lastState 退出码（兼容 exitCode=1 / lastStateExitCode: 1 两种形态）"""
+    txt = evidence_text or ""
+    for pat in (r"lastStateExitCode[=:\s-]+(\d{1,3})", r"exitCode[=:\s]+(\d{1,3})"):
+        m = re.search(pat, txt)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def looks_like_code_fault(evidence_text: str) -> bool:
+    """证据里是否出现「代码/配置类」信号（首错行、框架异常、非 137/143 退出码）
+
+    137/143 是资源/被动终止维度（OOM、SIGTERM）：即使日志里有 java.lang.OutOfMemoryError
+    也不算代码根因，除非同时出现「启动失败/显式 Caused by」。
+    """
+    txt = (evidence_text or "").lower()
+    code = _exit_code_of(evidence_text)
+    _startup_fail = any(p in txt for p in ("application run failed", "application failed to start",
+                                          "failed to start", "caused by:"))
+    if code in (137, 143) or "oomkilled" in txt or "outofmemoryerror" in txt:
+        if not _startup_fail:
+            return False
+    if any(p in txt for p in _CODE_FAULT_PATTERNS):
+        return True
+    if code is not None and code not in (0, 137, 143, 255):
+        return True
+    return False
+
+
+def _is_delete_pod_action(step) -> bool:
+    if not isinstance(step, dict):
+        return False
+    if str(step.get("platform_action") or "") in ("delete_pod", "rebuild_pod"):
+        return True
+    cmd = str(step.get("command") or "").lower()
+    return "delete pod" in cmd or "delete pods" in cmd
 
 
 async def _record_decision_score(alert_id: int, plan_id, trace_id: str,
@@ -2779,10 +2873,33 @@ async def _process_one(alert: Alert) -> bool:
     # 6.6 方案可执行性校验（2026-11-24）：AI 方案常残留 {namespace}/{pod_name} 占位符，
     # 或把只读诊断命令（get/describe/logs）当修复动作 → 审批通过后 executor 白名单直接拒（首词 -n）。
     # 统一规范化并回写 plan_json；清空则转人工并附诊断（不发注定失败的审批单）。
+    # 6.55 声明层动作意图 → 命令 + 回滚（R77.2，2026-11-25）：模型只给「改什么」，平台按当前 YAML 生成
+    steps = await _materialize_platform_actions(steps, alert, trace_id)
     steps, _dropped = _sanitize_plan_steps(steps, alert)
     if _dropped:
         logger.info("告警 %d 方案剔除 %d 项不可执行步骤: %s",
                     alert.id, len(_dropped), "；".join(_dropped)[:400])
+    # 6.7 根因-动作一致性（2026-11-25 老板口径）：禁止「异常即删 Pod」
+    #   证据里有首错行/框架异常/非 137/143 退出码 → 代码或配置类根因，删 Pod 只会复发。
+    #   此时方案若只剩删 Pod，直接转人工并要求代码级定位（不得靠重建碰运气）。
+    if steps and all(_is_delete_pod_action(s) for s in steps):
+        _code_evidence = "\n".join(x for x in (
+            alert_data.get("termination_evidence") or "",
+            (alert_data.get("recent_logs") or "")[:4000],
+            (alert_data.get("recent_events") or "")[:2000],
+        ) if x)
+        if looks_like_code_fault(_code_evidence):
+            _code = _exit_code_of(_code_evidence)
+            await _mark_manual_and_notify(
+                alert, "禁止异常即删 Pod（需代码级定位）",
+                f"证据显示代码/配置类根因（exitCode={_code if _code is not None else '未知'}，"
+                "日志有首错行/框架异常）。删 Pod 重建只会复发，需先定位具体原因："
+                "异常类名/配置键/文件路径，再决定改配置、回滚或发版。\n"
+                f"当前诊断：{root_cause or '（无）'}",
+            )
+            logger.info("告警 %d 命中「禁止盲删 Pod」闸门，转人工代码定位（exitCode=%s）",
+                        alert.id, _code)
+            return True
     # 2026-11-24 幻觉护栏：结论无证据支撑时，不用 AI 猜的动作去改生产（回滚/平台内置动作除外）
     if locals().get("_hallucinated") and not any(
             isinstance(s, dict) and s.get("platform_action") for s in steps):

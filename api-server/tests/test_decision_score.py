@@ -86,6 +86,25 @@ class TestEvaluate(unittest.TestCase):
         self.assertIn("评分", r["explain"])
         self.assertEqual(r["version"], ds.SCORE_VERSION)
 
+    def test_code_fault_delete_pod_is_hard_block(self):
+        """老板口径 2026-11-25：代码/配置类根因禁止仅删 Pod 重建"""
+        diag = dict(self._good_diag())
+        diag["recent_logs"] = "Caused by: java.lang.IllegalStateException: db url missing"
+        r = ds.evaluate(diagnosis=diag, layer="A", env_tag="test",
+                        steps=[{"command": "kubectl delete pod web-1"}])
+        self.assertEqual(r["recommend"], "manual")
+        self.assertTrue(any("禁止仅删 Pod" in b for b in r["hard_blocks"]))
+        self.assertTrue(any(f["name"] == "动作:盲删Pod" for f in r["factors"]))
+
+    def test_oom_delete_pod_not_blocked(self):
+        """OOM(137) 属于资源维度，删 Pod 重建不触发硬红线"""
+        diag = dict(self._good_diag())
+        diag["recent_logs"] = "exitCode=137 OOMKilled"
+        diag["root_cause"] = "内存 limit 偏小导致 OOMKilled"
+        r = ds.evaluate(diagnosis=diag, layer="A", env_tag="test",
+                        steps=[{"command": "kubectl delete pod web-1"}])
+        self.assertFalse(any("禁止仅删 Pod" in b for b in r["hard_blocks"]))
+
 
 if __name__ == "__main__":
     unittest.main()
