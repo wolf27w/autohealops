@@ -274,6 +274,8 @@ def _build_initial_messages(alert_data: dict, context: dict, task_memory: str) -
         "必须先给出具体原因（异常类名 / 配置键 / 文件路径）与证据行；"
         "删 Pod 只会复发，结论应落到「改配置 / 回滚 / 发版 / 转人工」，而不是重建。"
         "需要定位具体代码时调 inspect_jar（在镜像内找 jar 并反编译，只读）。"
+        "凭据/配置类故障先调 get_workload_env 看 env 与 Secret/ConfigMap 引用是否存在（值已打码），"
+        "再区分「没配」「引用错了」「配了默认值」三种情况——不得未验证就断言缺失。"
     )
     return [{"role": "user", "content": "\n".join(lines)}]
 

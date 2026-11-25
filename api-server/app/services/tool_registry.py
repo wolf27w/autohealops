@@ -28,6 +28,8 @@ import difflib
 import json
 import re
 
+import yaml
+
 from app.clients.executor_client import executor_client
 from app.core.config import settings
 from app.services import db_collector
@@ -1476,6 +1478,119 @@ _register({
     "domain": "application",
     "handler": _h_inspect_jar,
 })
+
+# ============ R77.4：工作负载 env/凭据来源（2026-11-25）============
+# 缺口：诊断只能看到异常文本，看不到 Deployment 到底有没有配凭据、是 secret 引用还是明文，
+# 于是只能推断「未提供凭据」并给出可能无效的建议。这里补一个只读工具把它变成实证。
+
+_SENSITIVE_ENV_RE = re.compile(r"(?i)(pass|pwd|secret|token|key|credential|auth)")
+
+
+def _mask_env_value(key: str, value) -> str:
+    """敏感 key 一律打码（只报长度，不报值），非敏感值直接展示"""
+    v = "" if value is None else str(value)
+    if _SENSITIVE_ENV_RE.search(key or ""):
+        return f"***（长度 {len(v)}）"
+    return v[:120]
+
+
+def _summarize_workload_env(doc: dict, kind: str, name: str, ns: str) -> tuple[str, dict]:
+    """从工作负载 YAML 抽 env/envFrom 摘要（纯函数）。返回 (文本行列表, 引用集合)"""
+    spec = _extract_pod_spec(doc or {})
+    containers = spec.get("containers") or []
+    lines = [f"【{kind}/{name} @ {ns}】"]
+    refs = {"secret": set(), "configmap": set()}
+    for c in containers:
+        if not isinstance(c, dict):
+            continue
+        lines.append(f"容器 {c.get('name')}  image={c.get('image')}")
+        for e in c.get("env") or []:
+            if not isinstance(e, dict):
+                continue
+            k = e.get("name") or ""
+            if "value" in e:
+                lines.append(f"  env {k} = {_mask_env_value(k, e.get('value'))}")
+                continue
+            vf = e.get("valueFrom") or {}
+            if isinstance(vf.get("secretKeyRef"), dict):
+                s = vf["secretKeyRef"]
+                refs["secret"].add(s.get("name"))
+                lines.append(f"  env {k} ← secret {s.get('name')}/{s.get('key')}")
+            elif isinstance(vf.get("configMapKeyRef"), dict):
+                cm = vf["configMapKeyRef"]
+                refs["configmap"].add(cm.get("name"))
+                lines.append(f"  env {k} ← configmap {cm.get('name')}/{cm.get('key')}")
+            else:
+                lines.append(f"  env {k} ← {list(vf.keys()) or '（空 valueFrom）'}")
+        for ef in c.get("envFrom") or []:
+            if not isinstance(ef, dict):
+                continue
+            if isinstance(ef.get("secretRef"), dict):
+                refs["secret"].add(ef["secretRef"].get("name"))
+                lines.append(f"  envFrom secret {ef['secretRef'].get('name')}")
+            if isinstance(ef.get("configMapRef"), dict):
+                refs["configmap"].add(ef["configMapRef"].get("name"))
+                lines.append(f"  envFrom configmap {ef['configMapRef'].get('name')}")
+    return "\n".join(lines), refs
+
+
+async def _h_get_workload_env(args: dict, context: dict) -> dict:
+    """只读：查工作负载容器的 env 与凭据来源（值打码），并校验引用的 Secret/ConfigMap 是否存在"""
+    ns = (args.get("namespace") or context.get("namespace") or "").strip()
+    name = (args.get("workload") or args.get("deployment") or "").strip()
+    kind = (args.get("kind") or "deployment").strip().lower()
+    cid = context.get("cluster_id")
+    if not (ns and name and cid):
+        return {"success": False, "output": "", "error": "缺少 namespace/workload 或集群上下文"}
+    tid = context.get("trace_id", "")
+    r = await executor_client.acall(executor_client.get_workload_yaml, cid, kind, ns, name, tid)
+    if not r.get("success"):
+        return {"success": False, "output": "",
+                "error": f"读取 {kind}/{name} YAML 失败: {r.get('error') or r.get('message') or '未知错误'}"}
+    try:
+        doc = yaml.safe_load(r.get("yaml") or "") or {}
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"YAML 解析失败: {e}"}
+    text, refs = _summarize_workload_env(doc, kind, name, ns)
+    lines = [text]
+    mr = await executor_client.acall(executor_client.list_misc_resources, cid, ns, tid)
+    if mr.get("success"):
+        secs = {s.get("name"): s for s in (mr.get("secrets") or [])}
+        cms = {c.get("name"): c for c in (mr.get("configmaps") or [])}
+        for n in sorted(x for x in refs["secret"] if x):
+            lines.append("Secret %s: %s" % (
+                n, f"存在（data 键数 {secs[n].get('data_count')}）" if n in secs else "**不存在**"))
+        for n in sorted(x for x in refs["configmap"] if x):
+            lines.append("ConfigMap %s: %s" % (
+                n, f"存在（data 键数 {cms[n].get('data_count')}）" if n in cms else "**不存在**"))
+        cand = sorted(n for n in secs if n and re.search(r"(?i)nacos|credential|secret|passw", n))[:10]
+        if cand:
+            lines.append("命名空间内相关 Secret: " + "、".join(cand))
+    else:
+        lines.append(f"（Secret/ConfigMap 列表读取失败：{mr.get('error')}）")
+    lines.append("说明：凭据值一律打码，只报来源与是否存在；具体 key 是否缺失需结合 Secret 内容人工核对。")
+    return {"success": True, "output": "\n".join(lines)[:12000], "error": ""}
+
+
+_register({
+    "name": "get_workload_env",
+    "label": "工作负载环境变量与凭据来源",
+    "description": (
+        "查询 Deployment/StatefulSet/DaemonSet 各容器的环境变量与凭据来源（只读）：明文值敏感项打码，"
+        "secretKeyRef/configMapKeyRef/envFrom 一律列出引用名，并校验引用的 Secret/ConfigMap 是否存在及 data 键数。"
+        "用于「凭据缺失/默认值」类故障：确认到底是没配、还是配了但引用错了（如 Secret 不存在、key 名写错）。"
+    ),
+    "args_schema": {
+        "workload": {"type": "string", "required": True, "description": "工作负载名（如 dgis-alpm-module-system）"},
+        "namespace": {"type": "string", "required": False, "description": "命名空间，默认用当前告警的", "default": ""},
+        "kind": {"type": "string", "required": False,
+                 "description": "deployment/statefulset/daemonset，默认 deployment", "default": "deployment"},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_get_workload_env,
+})
+
 
 _register({
     "name": "compare_revisions",
