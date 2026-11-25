@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # executor 日志流 HTTP 地址（P1-R5 实时日志跟随）
     EXECUTOR_LOGSTREAM_ADDR: str = "http://localhost:9099"
     AI_SERVICE_HTTP_ADDR: str = "http://localhost:9000"
+    # AI 服务调用超时（秒，R76-P0）：必须与 ReAct 循环总预算对齐
+    #   （常态 90s / 启动失败场景 180s），否则一次慢调用就吃光全部预算。
+    #   Agent 单步决策（一次 LLM 输出，要快）：默认 45s
+    AGENT_DECIDE_TIMEOUT_SECONDS: float = 45.0
+    #   诊断类（diagnose/multi_diagnose/jvm_analyze，需长输出/多证据）：默认 100s
+    AI_DIAGNOSE_TIMEOUT_SECONDS: float = 100.0
+    #   方案类（generate_plan/verify_repair/sql_optimize）：默认 60s
+    AI_PLAN_TIMEOUT_SECONDS: float = 60.0
     # gRPC 并发上限（A4）：限制同时向 executor 发起的同步调用数，防止后台循环耗尽线程池
     EXECUTOR_MAX_CONCURRENCY: int = 8
 

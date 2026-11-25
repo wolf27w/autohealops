@@ -8,8 +8,10 @@
 工具的实际执行在 api-server 侧（executor ExecInPod / describe / ES 日志），
 本服务只负责「决策」——判断该调什么、调完够不够、何时下结论。
 """
+import asyncio
 import json
 
+from app.core.config import settings
 from app.services.model_adapter import call_with_fallback
 from app.utils.json_util import extract_json, extract_json_prefer
 
@@ -88,17 +90,44 @@ SYSTEM_PROMPT_ONCE = """你是 Kubernetes 应用层故障诊断专家。
 """
 
 
-def _parse_decision(content: str) -> dict:
+def _parse_decision(content: str, require_action: bool = True):
     """解析 LLM 返回的决策 JSON（容忍 markdown 包裹/多余文字/多个对象）
 
     坑：模型有时先输出思考文字 + 多个 JSON（先 describe_pod 草稿再 exec_in_pod），
     旧的 extract_json 取首{..}尾} 会跨对象拼接→非法 JSON→退化成 final_answer 直接回显原文。
     改为优先取**最后一个含 action 的对象**。
+
+    R76-P0（2026-11-25）：解析失败**返回 None**，绝不再伪造 `final_answer`
+    （旧行为把模型原文当 root_cause，会被落库并沉淀进知识库 → 假结论）。
+    注意 extract_json_prefer 在没有任何对象含 prefer_key 时会回落成「最后一个 JSON 对象」，
+    所以这里必须再判 `"action" not in parsed`，不能依赖 default。
+
+    require_action=False：单轮诊断路径（diagnose_once）不要求模型给出 action
+    （调用点会强制成 final_answer），只要求解析出 dict；require_action=True 时缺 action 即视为失败。
     """
-    return extract_json_prefer(
-        content, prefer_key="action",
-        default={"action": "final_answer", "root_cause": content, "suggestions": [], "handling_advice": ""},
-    )
+    parsed = extract_json_prefer(content, prefer_key="action", default=None)
+    if not isinstance(parsed, dict):
+        return None
+    if require_action and "action" not in parsed:
+        return None
+    return parsed
+
+
+def _unparseable_decision(raw: str, model_used: str, resp=None) -> dict:
+    """解析彻底失败时的返回值：显式标记 unparseable，交由 api-server 单次诊断兜底。
+
+    api-server `agent_loop._run_loop_body` 中 action 既不是 tool_call 也不是 final_answer
+    → `_degrade("unparseable_action")` → 单次诊断兜底；因此这里**不能**返回 final_answer。
+    """
+    decision = {
+        "action": "unparseable",
+        "raw": (raw or "")[:500],
+        "model_used": model_used,
+    }
+    if resp is not None:
+        decision["model_fallback"] = bool(getattr(resp, "model_fallback", False))
+        decision["fallback_from"] = list(getattr(resp, "fallback_from", []) or [])
+    return decision
 
 
 async def decide_next_step(
@@ -142,9 +171,35 @@ async def decide_next_step(
 
     user_prompt = "\n".join(lines)
 
-    resp, model_used = await call_with_fallback(SYSTEM_PROMPT, user_prompt, "agent_decide", severity)
+    # ai-service 侧 LLM 超时必须 ≤ api-server 的 AGENT_DECIDE_TIMEOUT_SECONDS（默认 45s），
+    # 否则 api-server 已超时放弃，本地还在等（一次慢调用吃光 ReAct 循环总预算）。
+    llm_timeout = float(getattr(settings, "LLM_AGENT_DECIDE_TIMEOUT_SECONDS", 40.0) or 40.0)
+
+    resp, model_used = await asyncio.wait_for(
+        call_with_fallback(SYSTEM_PROMPT, user_prompt, "agent_decide", severity),
+        timeout=llm_timeout,
+    )
 
     decision = _parse_decision(resp.content)
+
+    # 一次修复重试：首次解析失败（拿不到 action）→ 把上次原文 + 纠正提示再问一次 LLM
+    if decision is None:
+        retry_prompt = (
+            user_prompt
+            + "\n\n【你上一条输出】\n"
+            + (resp.content or "")[:2000]
+            + "\n\n你上一条输出不是合法 JSON，请只输出一个 JSON 对象，不要任何解释文字。"
+        )
+        resp2, model_used2 = await asyncio.wait_for(
+            call_with_fallback(SYSTEM_PROMPT, retry_prompt, "agent_decide", severity),
+            timeout=llm_timeout,
+        )
+        decision = _parse_decision(resp2.content)
+        if decision is None:
+            # 两次都解析不出 action → 不伪造 final_answer，标记 unparseable 交 api-server 兜底
+            return _unparseable_decision(resp2.content or resp.content, model_used2, resp2)
+        resp, model_used = resp2, model_used2
+
     decision["model_used"] = model_used
     decision["model_fallback"] = bool(getattr(resp, "model_fallback", False))
     decision["fallback_from"] = list(getattr(resp, "fallback_from", []) or [])
@@ -176,9 +231,26 @@ async def diagnose_once(
     ]
     user_prompt = "\n".join(lines)
 
-    resp, model_used = await call_with_fallback(SYSTEM_PROMPT_ONCE, user_prompt, "agent_decide_once", severity)
+    # 单轮诊断也是 LLM 一次输出，超时与决策对齐（≤ api-server AGENT_DECIDE_TIMEOUT_SECONDS）
+    llm_timeout = float(getattr(settings, "LLM_AGENT_DECIDE_TIMEOUT_SECONDS", 40.0) or 40.0)
 
-    decision = _parse_decision(resp.content)
+    resp, model_used = await asyncio.wait_for(
+        call_with_fallback(SYSTEM_PROMPT_ONCE, user_prompt, "agent_decide_once", severity),
+        timeout=llm_timeout,
+    )
+
+    decision = _parse_decision(resp.content, require_action=False)
+    if decision is None:
+        # 解析失败：返回空 root_cause + 标记（**键名不变**，api-server 依赖 root_cause/suggestions
+        # 等键存在）。绝不把模型原文塞进 root_cause，否则会被落库/沉淀成假结论。
+        decision = {
+            "action": "final_answer",
+            "root_cause": "",
+            "suggestions": [],
+            "handling_advice": "",
+            "_parse_failed": True,
+            "raw": (resp.content or "")[:500],
+        }
     decision["action"] = "final_answer"
     decision["model_used"] = model_used
     decision["model_fallback"] = bool(getattr(resp, "model_fallback", False))

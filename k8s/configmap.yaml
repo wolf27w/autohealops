@@ -21,6 +21,13 @@ data:
   EXECUTOR_LOGSTREAM_ADDR: "http://k8s-executor:9099"
   AI_SERVICE_HTTP_ADDR: "http://ai-service:9000"
   EXECUTOR_MAX_CONCURRENCY: "8"
+  # ---------- AI 调用超时（R76-P0，必须与 ReAct 循环预算对齐）----------
+  # Agent 单步决策（一次 LLM 输出，要快）
+  AGENT_DECIDE_TIMEOUT_SECONDS: "45"
+  # 诊断类（diagnose/multi_diagnose/jvm_analyze）
+  AI_DIAGNOSE_TIMEOUT_SECONDS: "100"
+  # 方案类（generate_plan/verify_repair/sql_optimize）
+  AI_PLAN_TIMEOUT_SECONDS: "60"
 
   # ---------- JWT（非密钥参数）----------
   JWT_ALGORITHM: "HS256"
@@ -101,3 +108,8 @@ data:
   # AI 成本控制（0=不限制）
   DAILY_COST_LIMIT: "0"
   SINGLE_ALERT_COST_LIMIT: "0"
+  # LLM 调用超时（R76-P0）：必须 ≤ api-server 侧对应超时
+  # Agent 决策/单轮诊断（api-server AGENT_DECIDE_TIMEOUT_SECONDS 默认 45）
+  LLM_AGENT_DECIDE_TIMEOUT_SECONDS: "40"
+  # 一般诊断/方案类（api-server AI_DIAGNOSE_TIMEOUT_SECONDS=100 / AI_PLAN_TIMEOUT_SECONDS=60）
+  LLM_TIMEOUT_SECONDS: "60"

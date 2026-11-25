@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     DAILY_COST_LIMIT: float = 0.0
     SINGLE_ALERT_COST_LIMIT: float = 0.0
 
+    # LLM 调用超时（秒）：必须 ≤ api-server 侧对应超时，否则对端先放弃、本地还在等
+    #   Agent 决策 / 单轮诊断（api-server AGENT_DECIDE_TIMEOUT_SECONDS 默认 45）
+    LLM_AGENT_DECIDE_TIMEOUT_SECONDS: float = 40.0
+    #   一般诊断 / 方案类（api-server AI_DIAGNOSE_TIMEOUT_SECONDS 默认 100、AI_PLAN_TIMEOUT_SECONDS 默认 60）
+    LLM_TIMEOUT_SECONDS: float = 60.0
+
     LOG_LEVEL: str = "INFO"
 
     model_config = SettingsConfigDict(
