@@ -276,6 +276,14 @@ export default function AgentTrace() {
                           <code style={{ background: '#f7f8fa', padding: '1px 6px', borderRadius: 4, fontSize: 12 }}>{s.tool_name}</code>
                         </div>
                       )}
+                      {s.args != null && (
+                        <div style={{ marginTop: 4, fontSize: 12, color: '#5b6472', wordBreak: 'break-all' }}>
+                          入参：
+                          <code style={{ background: '#f7f8fa', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>
+                            {(typeof s.args === 'string' ? s.args : JSON.stringify(s.args)).slice(0, 300)}
+                          </code>
+                        </div>
+                      )}
                       {s.result_summary && (
                         <div style={{
                           marginTop: 6, color: '#3d4451', fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12,
