@@ -2586,6 +2586,18 @@ async def _process_one(alert: Alert) -> bool:
         return True
 
     # 4. 方案：有则复用 → 知识库命中直接复用（零 AI）→ 无则 AI 生成
+    # 2026-11-25：方案复用必须跟「本次诊断」对齐——验证失败后会清诊断缓存重新诊断，
+    # 若仍复用旧方案，会把已被否证的同一动作再执行一遍（删 Pod→复发→再删）。
+    try:
+        _cur_diag_id = int((diagnosis or {}).get("diagnosis_id") or 0) or int(getattr(diag_row, "id", 0) or 0)
+    except (TypeError, ValueError):
+        _cur_diag_id = int(getattr(diag_row, "id", 0) or 0)
+    _plan_diag_id = int(getattr(plan_row, "diagnosis_id", 0) or 0) if plan_row is not None else 0
+    _plan_reusable = bool(plan_row) and plan_row.status != "failed" and (
+        not _plan_diag_id or not _cur_diag_id or _plan_diag_id == _cur_diag_id)
+    if plan_row and not _plan_reusable:
+        logger.info("告警 %d 旧方案不匹配本次诊断（plan#%s diag=%s / cur=%s status=%s），重新生成",
+                    alert.id, plan_row.id, _plan_diag_id, _cur_diag_id, plan_row.status)
     # 2026-11-23 发布变更关联：B 层命中最近发布变更 → 用回滚动作替代重建/改代码。
     if release_steps:
         if plan_row and _plan_is_platform(plan_row):
@@ -2604,7 +2616,7 @@ async def _process_one(alert: Alert) -> bool:
         else:
             plan_id = await _create_probe_plan(alert, diag_row, probe_steps)
             steps = probe_steps
-    elif plan_row:
+    elif plan_row and _plan_reusable:
         plan_id = plan_row.id
         try:
             steps = json.loads(plan_row.plan_json).get("steps", [])
