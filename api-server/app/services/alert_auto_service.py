@@ -697,6 +697,24 @@ async def _alert_is_prod(alert: Alert | None) -> bool:
     return False
 
 
+async def _record_decision_score(alert_id: int, plan_id, trace_id: str,
+                                 score: dict, final_action: str, mode: str) -> None:
+    """落 decision_scores（R77，2026-11-25）：shadow 模式只留痕，不改决策。"""
+    try:
+        from app.models import DecisionScore
+        async with async_session() as session:
+            session.add(DecisionScore(
+                alert_id=int(alert_id), plan_id=int(plan_id or 0), trace_id=trace_id or "",
+                score=int(score.get("score") or 0), recommend=str(score.get("recommend") or ""),
+                final_action=str(final_action or ""), mode=str(mode or "shadow"),
+                hard_blocks="；".join(score.get("hard_blocks") or []),
+                factors_json=json.dumps(score.get("factors") or [], ensure_ascii=False),
+            ))
+            await session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("决策评分落库失败（alert=%s）: %s", alert_id, e)
+
+
 async def _decide_action(alert: Alert, steps: list) -> str:
     """按四维风险评分决策：auto / approval_1（单人）/ approval_2（双人）"""
     from app.models import Cluster
@@ -2860,6 +2878,48 @@ async def _process_one(alert: Alert) -> bool:
         if gate["decision"] == "approve" and action == "auto":
             action = "approval_1"
             logger.info("告警 %d 自主闸门要求人工放行：%s", alert.id, "；".join(gate.get("reasons") or []))
+
+    # 8.6 决策加权评分（R77，2026-11-25 老板口径：一票否决 → 加权评分 + 硬红线）
+    #   shadow（默认）：只算分、只留痕，不改现有决策；enforce：只收紧不放松（auto → 审批）
+    try:
+        from app.services import decision_score as _dscore
+        _pol = await _dscore.load_policy()
+        if _pol.get("enabled"):
+            _env = await _alert_env(alert)
+            _kb_id = locals().get("kb_reused_id")
+            _score = _dscore.evaluate(
+                alert={"fault_type": alert.fault_type, "severity": alert.severity,
+                       "resource_type": alert.resource_type},
+                diagnosis={
+                    **(diagnosis or {}),
+                    "root_cause": root_cause,
+                    "termination_evidence": alert_data.get("termination_evidence") or "",
+                    "probe_evidence": alert_data.get("probe_evidence") or "",
+                    "metrics_trend": alert_data.get("metrics_trend") or "",
+                    "recent_logs": (alert_data.get("recent_logs") or "")[:2000],
+                    "degraded": bool((diagnosis or {}).get("degraded")),
+                },
+                steps=steps, env_tag=_env or "", layer=layer,
+                history={
+                    "recent_failures": (rec or {}).get("attempts") or 0,
+                    "kb_suspect": bool(_kb_id and await _kb_is_suspect(_kb_id)),
+                },
+                policy=_pol,
+            )
+            await _record_decision_score(alert.id, plan_id, trace_id, _score, action,
+                                         _pol.get("mode", "shadow"))
+            try:
+                await audit_service.update_audit_record(
+                    trace_id, "decision_score", json.dumps(_score, ensure_ascii=False))
+            except Exception:  # noqa: BLE001
+                pass
+            logger.info("告警 %d 决策评分：%s（实际决策 %s）", alert.id, _score["explain"], action)
+            if _pol.get("mode") == "enforce" and action == "auto" and _score["recommend"] != "auto":
+                action = "approval_1"
+                logger.info("告警 %d 评分为 %s（%s）→ auto 降为审批",
+                            alert.id, _score["recommend"], _score["explain"])
+    except Exception as _sge:  # noqa: BLE001 评分失败不得影响主链路
+        logger.debug("告警 %d 决策评分失败（跳过）: %s", alert.id, _sge)
 
     if action == "auto":
         # R44-P3：低置信度转人工闸门——AI 诊断置信度不足 → 不自动执行，转工单/待人工

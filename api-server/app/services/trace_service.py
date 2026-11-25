@@ -264,6 +264,20 @@ def _build_steps(src: dict) -> list[dict]:
         ))
 
     # 4. 决策 / 方案
+    sc = src.get("score")
+    sc_note = ""
+    if sc:
+        sc_note = f"评分 {sc.get('score')} → {sc.get('recommend')}（实际 {sc.get('final_action')}，{sc.get('mode')}）"
+        try:
+            _fs = json.loads(sc.get("factors_json") or "[]")
+            _neg = [f"{f['name']}{int(f.get('delta', 0)):+d}" for f in _fs
+                    if isinstance(f, dict) and int(f.get("delta", 0) or 0) < 0]
+            if _neg:
+                sc_note += "｜减分：" + "、".join(_neg[:6])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        if sc.get("hard_blocks"):
+            sc_note += "｜硬红线：" + str(sc["hard_blocks"])
     if plan:
         pj = _parse_json(plan.get("plan_json"), {})
         plan_steps = pj.get("steps", []) if isinstance(pj, dict) else []
@@ -281,6 +295,8 @@ def _build_steps(src: dict) -> list[dict]:
             ][:10],
             "rollback": rollback[:5],
         }
+        if sc_note:
+            decide_body["score"] = sc_note
         steps.append(_step(
             "decide", "trigger", "decide",
             f"决策 · 风险等级 {plan.get('risk_level', '—')}",
@@ -288,6 +304,15 @@ def _build_steps(src: dict) -> list[dict]:
             args={"operation_types": plan.get("operation_types", "")},
             result_summary=redact(decide_body, 3000),
             status="ok",
+        ))
+
+    # 4.1 无方案但有评分（转人工/无可用方案）——仍把评分展示出来，方便看“为什么没修”
+    if not plan and sc_note:
+        steps.append(_step(
+            "decide", "trigger", "decide", "决策 · 未生成可执行方案",
+            ts=alert.get("detected_at"),
+            result_summary=redact(sc_note, 1200),
+            status="skip",
         ))
 
     # 5. 审批（decide 的子节点）
@@ -572,7 +597,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.core.database import async_session  # noqa: E402
 from app.models import (  # noqa: E402
-    AIDiagnosisResult, Alert, Approval, Cluster, DecisionResult, DiagnosisFailure,
+    AIDiagnosisResult, Alert, Approval, Cluster, DecisionResult, DecisionScore, DiagnosisFailure,
     ExecutionLog, RepairPlan, RepairVerification, Ticket,
 )
 
@@ -582,7 +607,8 @@ def _row_ts(v):
     return v
 
 
-def _to_src(alert, diagnosis, failure, plan, decision, approval, exec_logs, verification, ticket) -> dict:
+def _to_src(alert, diagnosis, failure, plan, decision, approval, exec_logs, verification, ticket,
+            score=None) -> dict:
     """把 ORM 对象 → 纯 dict（JSON 字段保留原始字符串，交给纯函数解析+脱敏）"""
     return {
         "alert": {
@@ -635,6 +661,10 @@ def _to_src(alert, diagnosis, failure, plan, decision, approval, exec_logs, veri
             "id": ticket.id, "ticket_no": ticket.ticket_no, "title": ticket.title,
             "status": ticket.status, "priority": ticket.priority, "created_at": ticket.created_at,
         } if ticket else None,
+        "score": {
+            "score": score.score, "recommend": score.recommend, "final_action": score.final_action,
+            "mode": score.mode, "hard_blocks": score.hard_blocks, "factors_json": score.factors_json,
+        } if score else None,
     }
 
 
@@ -642,7 +672,7 @@ async def _load_relations(session, alert_ids: list[int]) -> dict[int, dict]:
     """按 alert_id 批量预取关联记录，避免 N+1"""
     rel: dict[int, dict] = {aid: {"diagnosis": None, "failure": None, "plan": None,
                                  "decision": None, "approval": None, "exec_logs": [],
-                                 "verification": None, "ticket": None} for aid in alert_ids}
+                                 "verification": None, "ticket": None, "score": None} for aid in alert_ids}
     if not alert_ids:
         return rel
 
@@ -721,6 +751,13 @@ async def _load_relations(session, alert_ids: list[int]) -> dict[int, dict]:
     for t in tickets:
         rel[t.alert_id].setdefault("ticket", t)
 
+    # 决策评分（R77，按 alert_id，最新一条）
+    scores = (await session.execute(
+        select(DecisionScore).where(DecisionScore.alert_id.in_(alert_ids)).order_by(DecisionScore.id.desc())
+    )).scalars().all()
+    for sc in scores:
+        rel[sc.alert_id].setdefault("score", sc)
+
     return rel
 
 
@@ -775,7 +812,7 @@ async def list_traces(page: int = 1, page_size: int = 20, domain: str = "",
         tr = assemble_trace(_to_src(
             a, rel[a.id]["diagnosis"], rel[a.id]["failure"], rel[a.id]["plan"],
             rel[a.id]["decision"], rel[a.id]["approval"], rel[a.id]["exec_logs"],
-            rel[a.id]["verification"], rel[a.id]["ticket"],
+            rel[a.id]["verification"], rel[a.id]["ticket"], rel[a.id]["score"],
         ), cluster_name=cluster_names.get(a.cluster_id, ""))
         # Python 侧过滤
         if domain and tr["domain"] != domain:
@@ -832,7 +869,7 @@ async def get_trace(trace_id: str, user=None) -> dict | None:
         r = rel[alert.id]
         tr = assemble_trace(_to_src(
             alert, r["diagnosis"], r["failure"], r["plan"], r["decision"],
-            r["approval"], r["exec_logs"], r["verification"], r["ticket"],
+            r["approval"], r["exec_logs"], r["verification"], r["ticket"], r["score"],
         ), cluster_name=cluster_name)
         tr["evidence"] = await _load_evidence(session, alert.id, r)
         return tr
@@ -889,7 +926,7 @@ async def trace_stats(user=None) -> dict:
         tr = assemble_trace(_to_src(
             a, rel[a.id]["diagnosis"], rel[a.id]["failure"], rel[a.id]["plan"],
             rel[a.id]["decision"], rel[a.id]["approval"], rel[a.id]["exec_logs"],
-            rel[a.id]["verification"], rel[a.id]["ticket"],
+            rel[a.id]["verification"], rel[a.id]["ticket"], rel[a.id]["score"],
         ))
         if tr["result"] == "ok" and tr["action"] == "auto":
             auto_closed += 1

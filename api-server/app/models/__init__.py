@@ -56,6 +56,7 @@ from app.models.task import Task, TaskAuditLog
 from app.models.ticket import Ticket, TicketComment
 from app.models.user import Role, User
 from app.models.verification import RepairVerification
+from app.models.decision_score import DecisionScore
 
 __all__ = [
     "DiagnosisSession",
@@ -135,6 +136,7 @@ __all__ = [
     "RepairPlan",
     "ExecutionLog",
     "RepairVerification",
+    "DecisionScore",
     "AIEffectivenessStat",
     "ModelAccuracyStat",
     "SystemSetting",
