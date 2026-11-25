@@ -1282,7 +1282,8 @@ async def execute_tool(tool_name: str, args: dict, context: dict) -> dict:
 
     1. 工具存在性校验（未知工具拒绝，防止 LLM 乱调）
     2. 参数 schema 校验（类型 + 必填）
-    3. 执行 handler
+    3. 权限闸门：permission != readonly 的工具要求 context["allow_operate"] 显式授权
+    4. 执行 handler
     返回 {"success": bool, "output": str, "error": str, "tool": str}
     """
     tool = TOOL_REGISTRY.get(tool_name)
@@ -1296,10 +1297,15 @@ async def execute_tool(tool_name: str, args: dict, context: dict) -> dict:
     if not ok:
         return {"success": False, "output": "", "error": err, "tool": tool_name}
 
-    # 只读工具必须带只读上下文（cluster_id）；operate 类工具后续由决策引擎把关，本层只校验
-    if tool["permission"] == "readonly" and not context.get("cluster_id") and tool["domain"] != "knowledge":
-        # knowledge 域不依赖集群上下文，其余只读工具需要 cluster_id
-        pass
+    # 权限闸门（2026-11-25）：operate 类工具会变更集群，调用方必须在 context 里显式授权
+    # （allow_operate=True）才能执行；只读工具不受影响。
+    if tool["permission"] != "readonly" and not context.get("allow_operate"):
+        return {
+            "success": False,
+            "output": "",
+            "error": "工具需要写权限但调用方未显式授权（allow_operate）",
+            "tool": tool_name,
+        }
 
     try:
         handler = tool["handler"]

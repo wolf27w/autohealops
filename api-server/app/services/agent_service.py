@@ -131,13 +131,30 @@ async def _persist_message(session_id: int, role: str, content: str = "",
     })
 
 
+# 诊断助手允许调用的 operate 工具白名单（2026-11-25）
+# 老板口径：应用诊断 = 容器诊断，容器内跑命令/自装诊断命令是既有能力，必须保留。
+# 将来新增 operate 工具必须在此显式登记，否则 _execute_tool 直接拒绝（兜底防误开写权限）。
+AGENT_OPERATE_WHITELIST: frozenset[str] = frozenset({"exec_in_pod"})
+
+
 async def _execute_tool(tool_name: str, args: dict, session: DiagnosisSession) -> dict:
-    """执行单个诊断工具（统一走 tool_registry：校验 + 分发）"""
+    """执行单个诊断工具（统一走 tool_registry：校验 + 权限闸门 + 分发）
+
+    诊断助手只允许 exec_in_pod 这类受控工具；新增 operate 工具需在此处（AGENT_OPERATE_WHITELIST）
+    显式白名单，否则一律拒绝并记 warning。
+    """
+    tool = tool_registry.get_tool(tool_name)
+    if tool and tool.get("permission") != "readonly" and tool_name not in AGENT_OPERATE_WHITELIST:
+        logger.warning("会话 %s 拒绝 operate 工具 %s：不在诊断助手白名单内", session.id, tool_name)
+        return {"success": False, "output": "",
+                "error": f"工具 {tool_name} 需要写权限，但不在诊断助手白名单内", "tool": tool_name}
     context = {
         "cluster_id": session.cluster_id,
         "namespace": session.namespace,
         "pod_name": session.pod_name,
         "session_id": session.id,
+        # 显式授权 operate：白名单已在上方校验，此处只对白名单内工具放行
+        "allow_operate": True,
     }
     return await tool_registry.execute_tool(tool_name, args, context)
 
@@ -366,6 +383,8 @@ async def run_agent_turn(session: DiagnosisSession, user_input: str, cluster_nam
     _cat = (getattr(session, "category", "") or "app").lower()
     _domain = {"db": "database", "node": "all", "cluster": "all"}.get(_cat, "application")
     diagnostic_tools = tool_registry.list_tools(domain=_domain)
+    # 注意：此处不过滤 permission——本会话允许 operate 白名单内的 exec_in_pod（容器内诊断，见 AGENT_OPERATE_WHITELIST）；
+    # 真正执行时由 _execute_tool 做白名单校验 + tool_registry 权限闸门把关。
     seen_calls: set[str] = set()  # 已执行过的 (tool, args) 去重
 
     used_steps = 0       # 有效工具执行步数（重复调用不占）
