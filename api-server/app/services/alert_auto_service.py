@@ -791,6 +791,35 @@ def _is_delete_pod_action(step) -> bool:
     return "delete pod" in cmd or "delete pods" in cmd
 
 
+def _diagnosis_pod_refs(diag_data: dict) -> set[str]:
+    """从证据引用里取「诊断时的 Pod 名」（evidence_refs 形如 pod/<name>）。"""
+    out: set[str] = set()
+    for r in (diag_data or {}).get("evidence_refs") or []:
+        s = str(r or "").strip()
+        low = s.lower()
+        if low.startswith("pod/"):
+            out.add(s.split("/", 1)[1].strip())
+        elif low.startswith("pod:"):
+            out.add(s.split(":", 1)[1].strip())
+    return {x for x in out if x}
+
+
+def _diagnosis_stale_for_pod(diag_data: dict, alert) -> bool:
+    """诊断是否针对旧 Pod（2026-11-25）
+
+    背景：Pod 被删除重建后，告警行的 resource_name 会更新为新 Pod，但旧诊断仍挂在同一条 alert 上，
+    重跑时被 diag_cached / 窗口复用直接拿来用 → 输出一字不差，等于从来没重新诊断。
+    判据：诊断证据里的 Pod 名与当前告警 Pod 不一致 → 旧结论；无 pod 引用（老数据/非 Pod）保持原行为。
+    """
+    if (getattr(alert, "resource_type", "") or "") != "pod":
+        return False
+    refs = _diagnosis_pod_refs(diag_data or {})
+    if not refs:
+        return False
+    cur = (getattr(alert, "resource_name", "") or "").strip()
+    return bool(cur) and cur not in refs
+
+
 async def _record_decision_score(alert_id: int, plan_id, trace_id: str,
                                  score: dict, final_action: str, mode: str) -> None:
     """落 decision_scores（R77，2026-11-25）：shadow 模式只留痕，不改决策。"""
@@ -2379,6 +2408,18 @@ async def _process_one(alert: Alert) -> bool:
     evidence_refs: list = []
     diag_category = ""
     diag_cached = bool(diag_row and diag_row.diagnosis_json)
+    # 2026-11-25：Pod 重建后旧诊断必须作废——否则「重新诊断」只是把旧结论再抄一遍
+    if diag_cached:
+        try:
+            _dj0 = json.loads(diag_row.diagnosis_json)
+            if _diagnosis_stale_for_pod(_dj0, alert):
+                logger.info("告警 %d 既有诊断 #%s 针对旧 Pod（证据 Pod=%s，当前=%s）→ 重新诊断",
+                            alert.id, diag_row.id, "、".join(sorted(_diagnosis_pod_refs(_dj0))) or "?",
+                            alert.resource_name)
+                diag_cached = False
+                diag_row = None  # 旧诊断不再关联本计划的 parent
+        except (json.JSONDecodeError, TypeError):
+            pass
     # 探针专项（2026-10-29）：只对 Pod 类故障采一次，供给「AI 诊断上下文」和「探针调参方案」两处用
     probe_result: dict = {"text": "", "findings": []}
     if alert.resource_type == "pod" and alert.resource_name:
@@ -2413,9 +2454,13 @@ async def _process_one(alert: Alert) -> bool:
                 alert.cluster_id, alert.namespace or "", alert.resource_name or "", alert.fault_type
             )
             if reused:
-                diag_row = reused[0]
-                diag_cached = True
-                logger.info("告警 %d 复用同资源同故障诊断 #%d（窗口内，跳过 AI 诊断）", alert.id, diag_row.id)
+                _rrow, _rdata = reused[0], (reused[1] if len(reused) > 1 else {})
+                if _diagnosis_stale_for_pod(_rdata, alert):
+                    logger.info("告警 %d 跳过窗口复用诊断 #%s（针对旧 Pod）", alert.id, getattr(_rrow, "id", "?"))
+                else:
+                    diag_row = _rrow
+                    diag_cached = True
+                    logger.info("告警 %d 复用同资源同故障诊断 #%d（窗口内，跳过 AI 诊断）", alert.id, diag_row.id)
         except Exception as e:  # noqa: BLE001
             logger.debug("诊断复用查询失败: %s", e)
     if diag_cached:
