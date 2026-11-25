@@ -338,6 +338,7 @@ def _build_steps(src: dict) -> list[dict]:
         verdict = verification.get("ai_verdict", "")
         verdict_zh = {
             "healed": "已自愈", "degraded": "变差", "unchanged": "无变化", "worsened": "恶化",
+            "unverified": "未验证", "scaled_to_zero": "已缩容至 0",
         }.get(verdict, verdict or "未判定")
         body = {
             "ai_verdict": verdict_zh,

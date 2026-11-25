@@ -338,12 +338,17 @@ def _is_not_found(message) -> bool:
     return "not found" in msg or "notfound" in msg or "不存在" in msg
 
 
-async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) -> bool:
-    """查询 Pod 是否恢复/资源是否已删除（两种情况都视为告警可关闭）
+RECOVERY_SCALED_TO_ZERO = "scaled_to_zero"
 
-    - 原 Pod Running+Ready → 恢复
-    - 原 Pod 已删 + Deployment 所有 Pod Running+Ready → 恢复
-    - 原 Pod 已删 + Deployment 不存在/无 Pod → 资源已删除，关闭告警
+
+async def check_pod_recovered_detail(cluster_id: int, namespace: str, pod_name: str) -> tuple[bool, str]:
+    """查询 Pod 是否恢复/资源是否已删除，返回 (是否可关闭告警, 原因)
+
+    - 原 Pod Running+Ready → (True, "")
+    - 原 Pod 已删 + Deployment 所有 Pod Running+Ready → (True, "")
+    - Deployment 无 Pod 且**期望副本=0**（主动缩容下线）→ (True, "scaled_to_zero")
+    - Deployment 无 Pod 但**期望副本>0**（副本全没，真故障）→ (False, "")  ← 2026-11-25 修
+    - Deployment 不存在 → (True, "") 资源已删除
     只有 Deployment 仍有 Pod 但未 Ready（服务持续故障）才不关闭。
 
     查询失败（success=False 且非 not found）→ 一律视为「不确定」，返回 False 保持 pending，
@@ -351,10 +356,10 @@ async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) ->
     """
     result = await executor_client.acall(executor_client.get_pod_status, cluster_id, namespace, pod_name)
     if result.get("success") and result.get("ready"):
-        return True
+        return True, ""
     # get_pod_status 失败：区分「Pod 不存在」与「查询失败」；查询失败直接保持 pending
     if not result.get("success") and not _is_not_found(result.get("message")):
-        return False
+        return False, ""
 
     # Pod 仍存在但未就绪：只有 Deployment 才需要看同工作负载其它副本（滚动更新场景）。
     # StatefulSet / DaemonSet 的 Pod 名是稳定的（重建后同名），存在且未就绪就是持续故障。
@@ -366,7 +371,7 @@ async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) ->
         if detail.get("success"):
             owner_kind = ((detail.get("detail") or {}).get("owner_kind") or "").strip()
         if owner_kind != "Deployment":
-            return False
+            return False, ""
 
     # Pod 已删除，或是 Deployment 但当前 Pod 未就绪：查同 Deployment 的所有 Pod（区分新旧版本副本）
     dep_name = infer_deployment_name(pod_name)
@@ -374,13 +379,27 @@ async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) ->
         dep_pods = await executor_client.acall(executor_client.list_deployment_pods, cluster_id, namespace, dep_name)
         if dep_pods.get("success"):
             if dep_pods.get("all_ready"):
-                return True  # 所有 Pod Running+Ready，恢复
+                return True, ""  # 所有 Pod Running+Ready，恢复
             if not dep_pods.get("pods"):
-                return True  # Deployment 无 Pod（已缩容/删除），资源已删除，关闭告警
-            return False  # 仍有 Pod 但未 Ready，服务持续故障，告警不关
+                # 2026-11-25（老板口径）：区分「主动缩容到 0」与「期望副本>0 但 Pod 全没了」
+                st = await executor_client.acall(
+                    executor_client.get_deployment_status, cluster_id, namespace, dep_name)
+                replicas = int(st.get("replicas") or 0) if st.get("success") else -1
+                if replicas == 0:
+                    return True, RECOVERY_SCALED_TO_ZERO
+                if replicas > 0:
+                    return False, ""  # 期望有副本但一个都没有 = 真故障，不准关
+                return _is_not_found(dep_pods.get("message")), ""
+            return False, ""  # 仍有 Pod 但未 Ready，服务持续故障，告警不关
         # 查询失败（success=False）：仅当明确 not found 才视为资源已删除，否则保持 pending
-        return _is_not_found(dep_pods.get("message"))
-    return False
+        return _is_not_found(dep_pods.get("message")), ""
+    return False, ""
+
+
+async def check_pod_recovered(cluster_id: int, namespace: str, pod_name: str) -> bool:
+    """兼容包装：只关心「能不能关告警」（不区分缩容到 0）"""
+    ok, _ = await check_pod_recovered_detail(cluster_id, namespace, pod_name)
+    return ok
 
 
 def build_standard_steps(alert: Alert) -> list:
@@ -1071,37 +1090,36 @@ async def check_workload_recovered(cluster_id: int, namespace: str, deployment: 
     return bool(r.get("ready")) or (replicas > 0 and ready >= replicas)
 
 
-async def _recovery_snapshot(alert: Alert, dep_name: str) -> tuple[bool, "int | None"]:
-    """采一次恢复状态：(是否恢复, Pod 重启次数或 None)
+async def _recovery_snapshot(alert: Alert, dep_name: str) -> tuple[bool, "int | None", str]:
+    """采一次恢复状态：(是否恢复, Pod 重启次数或 None, 原因)
 
     2026-11-25：验证不能只看 Ready 一瞬——CrashLoop 崩溃周期 > 验证窗口时会「判自愈、随即复发」。
-    这里同时取 restart_count，供 _verify_auto_repair 做稳定性二次确认。
+    这里同时取 restart_count，供 _verify_auto_repair 做稳定性二次确认；
+    原因 "scaled_to_zero" 表示工作负载被主动缩容到 0（关告警但要标注已下线，不算自愈）。
     """
+    reason = ""
     if dep_name:
         recovered = await check_workload_recovered(alert.cluster_id, alert.namespace or "", dep_name)
+        if not recovered:
+            st = await executor_client.acall(
+                executor_client.get_deployment_status, alert.cluster_id, alert.namespace or "", dep_name)
+            if st.get("success") and int(st.get("replicas") or 0) == 0:
+                recovered, reason = True, RECOVERY_SCALED_TO_ZERO
     else:
-        recovered = await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name)
+        recovered, reason = await check_pod_recovered_detail(
+            alert.cluster_id, alert.namespace, alert.resource_name)
     rc: "int | None" = None
     if alert.resource_name and not dep_name:
         st = await executor_client.acall(
             executor_client.get_pod_status, alert.cluster_id, alert.namespace or "", alert.resource_name)
         if st.get("success"):
             rc = int(st.get("restart_count") or 0)
-    return recovered, rc
+    return recovered, rc, reason
 
 
-async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS,
-                              stable_seconds: "int | None" = None) -> bool:
-    """执行修复后等待并验证恢复（每 10s 查一次，最多 max_wait_seconds 秒）
-
-    删除 Pod 重建 / 补 imagePullSecrets 后，Pod 需要时间重新拉镜像、调度、启动。
-    验证通过（所有容器 Running+Ready）才允许标记已解决，否则保持 pending。
-    2026-10-21：默认 60s 太短（实测 23 条“执行成功但验证不过”多数是拉镜像/调度超 1 分钟），
-    默认放宽到 180s，可用环境变量 AUTO_VERIFY_WAIT_SECONDS 覆盖。
-    2026-11-24：优先按 Deployment 可用副本验证（回滚后 Pod 换名，按原 Pod 名永远不过）。
-    2026-11-25：就绪后再观察一个稳定性窗口（AUTO_VERIFY_STABLE_SECONDS，默认 20s），
-    期间重启次数增长即判定「仍在崩溃」，不给假自愈结论。
-    """
+async def _verify_auto_repair_ex(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS,
+                                 stable_seconds: "int | None" = None) -> tuple[bool, str]:
+    """同 _verify_auto_repair，但返回 (是否恢复, 原因)；原因为 scaled_to_zero 时调用方需标注「已缩容至 0」。"""
     stable = AUTO_VERIFY_STABLE_SECONDS if stable_seconds is None else max(0, stable_seconds)
     dep_name = (getattr(alert, "deployment_name", "") or "").strip()
     if not dep_name:
@@ -1111,38 +1129,61 @@ async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_
     _rtype = (getattr(alert, "resource_type", "") or "").strip().lower()
     if _rtype in ("node", "db_connection", "host", "vm") and not (getattr(alert, "deployment_name", "") or "").strip():
         logger.info("告警 %d 资源类型 %s 无可验证 Pod/工作负载，不判定自愈", alert.id, _rtype)
-        return False
+        return False, ""
     waited = 0
     while waited < max_wait_seconds:
-        recovered, rc = await _recovery_snapshot(alert, dep_name)
+        recovered, rc, reason = await _recovery_snapshot(alert, dep_name)
         if recovered:
-            if stable <= 0:
-                return True
+            # 缩容到 0 无需稳定性窗口（本来就没 Pod 可观察）
+            if reason == RECOVERY_SCALED_TO_ZERO or stable <= 0:
+                return True, reason
             await asyncio.sleep(stable)
             waited += stable
-            recovered2, rc2 = await _recovery_snapshot(alert, dep_name)
+            recovered2, rc2, reason2 = await _recovery_snapshot(alert, dep_name)
             if not recovered2:
                 continue
+            if reason2 == RECOVERY_SCALED_TO_ZERO:
+                return True, reason2
             if rc is not None and rc2 is not None and rc2 > rc:
                 logger.info("告警 %d Pod 就绪后又在验证窗口内重启（%s→%s），不算恢复", alert.id, rc, rc2)
                 continue
-            return True
+            return True, reason
         await asyncio.sleep(10)
         waited += 10
     # 超时后最后再查一次（2026-11-25：末次也必须过稳定性检查，不能绕过就判恢复）
-    recovered, rc = await _recovery_snapshot(alert, dep_name)
+    recovered, rc, reason = await _recovery_snapshot(alert, dep_name)
     if not recovered:
-        return False
-    if stable <= 0:
-        return True
+        return False, ""
+    if reason == RECOVERY_SCALED_TO_ZERO or stable <= 0:
+        return True, reason
     await asyncio.sleep(min(stable, 5))
-    recovered2, rc2 = await _recovery_snapshot(alert, dep_name)
+    recovered2, rc2, reason2 = await _recovery_snapshot(alert, dep_name)
     if not recovered2:
-        return False
+        return False, ""
+    if reason2 == RECOVERY_SCALED_TO_ZERO:
+        return True, reason2
     if rc is not None and rc2 is not None and rc2 > rc:
         logger.info("告警 %d 末次校验仍在重启（%s→%s），不算恢复", alert.id, rc, rc2)
-        return False
-    return True
+        return False, ""
+    return True, reason
+
+
+async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS,
+                              stable_seconds: "int | None" = None) -> bool:
+    """执行修复后等待并验证恢复（只关心真假，不区分「缩容到 0」）
+
+    删除 Pod 重建 / 补 imagePullSecrets 后，Pod 需要时间重新拉镜像、调度、启动。
+    验证通过（所有容器 Running+Ready）才允许标记已解决，否则保持 pending。
+    2026-10-21：默认 60s 太短（实测 23 条“执行成功但验证不过”多数是拉镜像/调度超 1 分钟），
+    默认放宽到 180s，可用环境变量 AUTO_VERIFY_WAIT_SECONDS 覆盖。
+    2026-11-24：优先按 Deployment 可用副本验证（回滚后 Pod 换名，按原 Pod 名永远不过）。
+    2026-11-25：就绪后再观察一个稳定性窗口（AUTO_VERIFY_STABLE_SECONDS，默认 20s），
+    期间重启次数增长即判定「仍在崩溃」，不给假自愈结论。
+    需要「缩容到 0」语义时用 _verify_auto_repair_ex。
+    """
+    ok, _ = await _verify_auto_repair_ex(
+        alert, max_wait_seconds=max_wait_seconds, stable_seconds=stable_seconds)
+    return ok
 
 
 async def verify_repair_outcome(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS) -> tuple["bool | None", str]:
@@ -1159,7 +1200,9 @@ async def verify_repair_outcome(alert: Alert, max_wait_seconds: int = AUTO_VERIF
     dep_name = (getattr(alert, "deployment_name", "") or "").strip() or infer_deployment_name(alert.resource_name or "")
     if not (rtype in ("pod", "replicaset") or dep_name):
         return None, f"{rtype or '未知'}资源没有可用验证指标，未做恢复验证"
-    ok = await _verify_auto_repair(alert, max_wait_seconds=max_wait_seconds)
+    ok, reason = await _verify_auto_repair_ex(alert, max_wait_seconds=max_wait_seconds)
+    if reason == RECOVERY_SCALED_TO_ZERO:
+        return True, "已缩容至 0（按配置下线）"
     return ok, ("就绪且重启次数未增长" if ok else "验证窗口内未恢复")
 
 
@@ -1216,11 +1259,16 @@ async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
             await session.refresh(plan)
             plan_id = plan.id
         exec_result = await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
-        repaired = await _verify_auto_repair(alert)
+        repaired, vreason = await _verify_auto_repair_ex(alert)
         await record_repair_verification(
             plan_id, verdict="healed" if repaired else "unchanged",
             status="success" if repaired else "failed",
             detail=f"删 Pod 重建后验证（exec={exec_result}）")
+        if repaired and vreason == RECOVERY_SCALED_TO_ZERO:
+            await _set_plan_status(plan_id, "completed")
+            await _mark_scaled_to_zero(alert)
+            logger.info("告警 %d 删 Pod 重建后工作负载已缩容至 0，按配置下线关闭", alert.id)
+            return True
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
@@ -1419,6 +1467,35 @@ def _mark_alert_recovered(a: Alert, now: str) -> None:
     a.resolved_at = now
     if not a.resolved_by:
         a.resolved_by = "system"
+
+
+async def _mark_scaled_to_zero(alert: Alert) -> None:
+    """工作负载被主动缩容到 0：关告警 + 标注 + 发通知（2026-11-25 老板口径）。
+
+    这不是「自愈」也不是「故障恢复」，是资源按配置下线；告警要关（否则留僵尸），
+    但正文和通知都必须写清楚「已缩容至 0」，避免运维误以为服务正常。
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    closed = None
+    try:
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+            if a:
+                a.status = "resolved"
+                a.resolved_at = now
+                if "已缩容至 0" not in (a.message or ""):
+                    a.message = (a.message or "") + "（已缩容至 0，按配置下线，关闭告警）"
+                if not a.resolved_by:
+                    a.resolved_by = "system"
+                await session.commit()
+                closed = a
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 标注缩容至 0 失败: %s", alert.id, e)
+    try:
+        from app.services.notification_service import send_recovery_notification
+        await send_recovery_notification(closed or alert, "已缩容至 0（按配置下线）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 缩容至 0 通知失败: %s", alert.id, e)
 
 
 async def _notify_recovered(alerts: list[Alert]) -> None:
@@ -1881,11 +1958,15 @@ async def _auto_force_delete_terminating(alert: Alert) -> bool:
     trace_id = generate_trace_id()
     plan_id = await _create_plan_from_kb(alert, None, steps)
     await _execute_auto_plan(alert, plan_id, json.dumps({"steps": steps}, ensure_ascii=False), trace_id)
-    _repaired = await _verify_auto_repair(alert)
+    _repaired, _vreason = await _verify_auto_repair_ex(alert)
     await record_repair_verification(
         plan_id, verdict="healed" if _repaired else "unchanged",
         status="success" if _repaired else "failed",
         detail="TerminatingStuck 免审批强删后验证")
+    if _repaired and _vreason == RECOVERY_SCALED_TO_ZERO:
+        await _set_plan_status(plan_id, "completed")
+        await _mark_scaled_to_zero(alert)
+        return True
     if _repaired:
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
@@ -2802,11 +2883,17 @@ async def _process_one(alert: Alert) -> bool:
         exec_result = await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
         await _record_suppression(alert)
         # 等待 + 验证修复（Pod 重建需时间，验证通过才标记已解决）
-        repaired = await _verify_auto_repair(alert)
+        repaired, vreason = await _verify_auto_repair_ex(alert)
         await record_repair_verification(
             plan_id, verdict="healed" if repaired else "unchanged",
             status="success" if repaired else "failed",
             detail=f"自动修复后验证（exec={exec_result}）")
+        if repaired and vreason == RECOVERY_SCALED_TO_ZERO:
+            # 主动缩容到 0：关告警但标注已下线，不记自愈、不沉淀知识库
+            await _set_plan_status(plan_id, "completed")
+            await _mark_scaled_to_zero(alert)
+            logger.info("告警 %d 修复后工作负载已缩容至 0，按配置下线关闭", alert.id)
+            return True
         # R74：复用 KB 动作执行后验证未通过/计划失败 → 该条目可疑计数 +1（≥2 次后续只作参考，不再复用动作）
         if kb_reused_id and (not repaired or exec_result == "failed"):
             await _mark_kb_suspect(kb_reused_id)
@@ -2979,7 +3066,16 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
             if alert.id in executing_ids or await _is_repairing(alert.id):
                 logger.info("恢复收敛：告警 %d 正在修复中，本轮跳过（等验证结果自行落 self_healed）", alert.id)
                 continue
-            if not await check_pod_recovered(alert.cluster_id, alert.namespace or "", alert.resource_name):
+            _ok, _reason = await check_pod_recovered_detail(alert.cluster_id, alert.namespace or "", alert.resource_name)
+            if not _ok:
+                continue
+            if _reason == RECOVERY_SCALED_TO_ZERO:
+                # 2026-11-25：主动缩容到 0 → 关告警 + 标注「已缩容至 0」+ 通知（不当恢复处理）
+                await _mark_scaled_to_zero(alert)
+                await _cancel_related_approvals(alert.id)
+                closed += 1
+                logger.info("恢复收敛：告警 %d（%s/%s）已缩容至 0，按配置下线关闭",
+                            alert.id, alert.namespace, alert.resource_name)
                 continue
             n = await _close_related_alerts(alert)
             if n == 0:

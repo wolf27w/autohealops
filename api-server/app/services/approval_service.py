@@ -962,6 +962,9 @@ async def execute_approved_plan(plan_id: int) -> None:
     else:
         verify_detail = "告警记录缺失，无法验证"
     verdict = "healed" if repaired is True else ("unverified" if repaired is None else "unchanged")
+    _scaled_zero = repaired is True and "已缩容至 0" in (verify_detail or "")
+    if _scaled_zero:
+        verdict = "scaled_to_zero"
     await record_repair_verification(
         plan_id, verdict=verdict,
         status="success" if repaired is True else ("pending" if repaired is None else "failed"),
@@ -991,7 +994,8 @@ async def execute_approved_plan(plan_id: int) -> None:
                             a.resolved_by = str(appr.approved_by)
                     a.status = "resolved"
                     a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
-                    a.message = (a.message or "") + "（人工审批通过，已解决，验证通过）"
+                    a.message = (a.message or "") + ("（人工审批通过；已缩容至 0，按配置下线，关闭告警）"
+                                                     if _scaled_zero else "（人工审批通过，已解决，验证通过）")
                     await session.commit()
     elif repaired is None:
         # 无可验证指标（节点/数据库类）：不宣称「验证通过」，也不判失败；告警收尾但显式标注未验证
