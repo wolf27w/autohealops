@@ -42,8 +42,9 @@ _K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 KB_HIT_SIMILARITY = 0.9
 # 知识库检索相似度阈值：>= 该值作为"命中"（注入诊断上下文）
 KB_REF_SIMILARITY = 0.6
-# 单条告警处理锁时长（毫秒）：需覆盖 AI 调用 + 修复验证窗口（验证最长 60s）
-PER_ALERT_LOCK_MS = 180000
+# 单条告警处理锁时长（毫秒）：需覆盖「AI 诊断（启动失败场景预算 180s）+ 兜底重试 + 执行 + 验证轮询」。
+# 2026-11-25：原 180s 与诊断预算恰好相等，长链路必然中途丢锁 → 30s 扫描并发进同一告警（重复诊断/重复修复）。
+PER_ALERT_LOCK_MS = int(os.getenv("PER_ALERT_LOCK_MS", "600000"))
 
 
 from app.utils.pod import infer_deployment_name  # 去重：统一实现（原三处各一份）
@@ -286,6 +287,17 @@ async def _mark_kb_suspect(kb_id) -> None:
         logger.warning("知识条目可疑计数失败 kb=%s: %s", kb_id, e)
 
 
+def is_untrusted_root_cause(root_cause: str) -> bool:
+    """结论是否不可信（空 / 降级占位 / 证据不足），这类结论不得沉淀知识库、不得复用动作。"""
+    rc = (root_cause or "").strip()
+    if not rc:
+        return True
+    for marker in ("未能确定根因", "ReAct 诊断降级", "诊断降级", "AI 诊断无结论"):
+        if marker in rc:
+            return True
+    return False
+
+
 async def _resolve_kb_reuse(kb_ref: dict | None, diag_root: str, alert: Alert) -> tuple:
     """诊断完成后决定是否复用 KB 动作。
 
@@ -297,6 +309,9 @@ async def _resolve_kb_reuse(kb_ref: dict | None, diag_root: str, alert: Alert) -
     """
     if not kb_ref:
         return [], "no_reference"
+    # 2026-11-25：知识库条目本身若是降级/证据不足结论，一律不复用动作
+    if is_untrusted_root_cause(kb_ref.get("root_cause", "")):
+        return [], "kb_root_untrusted"
     try:
         raw_steps = json.loads(kb_ref.get("execution_steps") or "[]")
         if not isinstance(raw_steps, list):
@@ -690,6 +705,11 @@ async def _decide_action(alert: Alert, steps: list) -> str:
 
 async def _dedup_knowledge(fault_type: str, root_cause: str, repair_steps: str, execution_steps: str = "") -> None:
     """知识库沉淀：同类型同根因只留一条（跨服务跨环境聚合）；带可执行步骤"""
+    # 2026-11-25：不可信结论不入库。降级/证据不足的占位文案一旦沉淀，会在下次同故障时
+    # 以高相似度被零 AI 复用（_kb_precheck），把「未能确定根因」当成根因一直传下去。
+    if is_untrusted_root_cause(root_cause):
+        logger.info("跳过知识库沉淀（结论不可信/证据不足）: %s", (root_cause or "")[:80])
+        return
     from app.services.diag_category import category_of
     try:
         results = await knowledge_service.search_knowledge(
@@ -1031,6 +1051,8 @@ async def _execute_auto_plan(alert: Alert, plan_id: int, plan_json: str, trace_i
 
 
 AUTO_VERIFY_WAIT_SECONDS = int(os.getenv("AUTO_VERIFY_WAIT_SECONDS", "180"))
+# 就绪后的稳定性观察窗口（秒）：期间重启次数增长 → 判定仍在崩溃（2026-11-25）
+AUTO_VERIFY_STABLE_SECONDS = int(os.getenv("AUTO_VERIFY_STABLE_SECONDS", "20"))
 
 
 async def check_workload_recovered(cluster_id: int, namespace: str, deployment: str) -> bool:
@@ -1049,7 +1071,27 @@ async def check_workload_recovered(cluster_id: int, namespace: str, deployment: 
     return bool(r.get("ready")) or (replicas > 0 and ready >= replicas)
 
 
-async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS) -> bool:
+async def _recovery_snapshot(alert: Alert, dep_name: str) -> tuple[bool, "int | None"]:
+    """采一次恢复状态：(是否恢复, Pod 重启次数或 None)
+
+    2026-11-25：验证不能只看 Ready 一瞬——CrashLoop 崩溃周期 > 验证窗口时会「判自愈、随即复发」。
+    这里同时取 restart_count，供 _verify_auto_repair 做稳定性二次确认。
+    """
+    if dep_name:
+        recovered = await check_workload_recovered(alert.cluster_id, alert.namespace or "", dep_name)
+    else:
+        recovered = await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name)
+    rc: "int | None" = None
+    if alert.resource_name and not dep_name:
+        st = await executor_client.acall(
+            executor_client.get_pod_status, alert.cluster_id, alert.namespace or "", alert.resource_name)
+        if st.get("success"):
+            rc = int(st.get("restart_count") or 0)
+    return recovered, rc
+
+
+async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS,
+                              stable_seconds: "int | None" = None) -> bool:
     """执行修复后等待并验证恢复（每 10s 查一次，最多 max_wait_seconds 秒）
 
     删除 Pod 重建 / 补 imagePullSecrets 后，Pod 需要时间重新拉镜像、调度、启动。
@@ -1057,22 +1099,90 @@ async def _verify_auto_repair(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_
     2026-10-21：默认 60s 太短（实测 23 条“执行成功但验证不过”多数是拉镜像/调度超 1 分钟），
     默认放宽到 180s，可用环境变量 AUTO_VERIFY_WAIT_SECONDS 覆盖。
     2026-11-24：优先按 Deployment 可用副本验证（回滚后 Pod 换名，按原 Pod 名永远不过）。
+    2026-11-25：就绪后再观察一个稳定性窗口（AUTO_VERIFY_STABLE_SECONDS，默认 20s），
+    期间重启次数增长即判定「仍在崩溃」，不给假自愈结论。
     """
+    stable = AUTO_VERIFY_STABLE_SECONDS if stable_seconds is None else max(0, stable_seconds)
     dep_name = (getattr(alert, "deployment_name", "") or "").strip()
     if not dep_name:
         dep_name = infer_deployment_name(alert.resource_name or "")
+    # 非 Pod 类资源（节点/数据库/主机）没有 Pod/工作负载可查：不推断 Deployment，直接判未恢复，
+    # 避免 "node-1" 被当成 Pod 名查不到、又被推成 Deployment "node" 而误判恢复（2026-11-25）
+    _rtype = (getattr(alert, "resource_type", "") or "").strip().lower()
+    if _rtype in ("node", "db_connection", "host", "vm") and not (getattr(alert, "deployment_name", "") or "").strip():
+        logger.info("告警 %d 资源类型 %s 无可验证 Pod/工作负载，不判定自愈", alert.id, _rtype)
+        return False
     waited = 0
     while waited < max_wait_seconds:
-        if dep_name and await check_workload_recovered(alert.cluster_id, alert.namespace or "", dep_name):
-            return True
-        if await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name):
+        recovered, rc = await _recovery_snapshot(alert, dep_name)
+        if recovered:
+            if stable <= 0:
+                return True
+            await asyncio.sleep(stable)
+            waited += stable
+            recovered2, rc2 = await _recovery_snapshot(alert, dep_name)
+            if not recovered2:
+                continue
+            if rc is not None and rc2 is not None and rc2 > rc:
+                logger.info("告警 %d Pod 就绪后又在验证窗口内重启（%s→%s），不算恢复", alert.id, rc, rc2)
+                continue
             return True
         await asyncio.sleep(10)
         waited += 10
-    # 超时后最后再查一次
-    if dep_name and await check_workload_recovered(alert.cluster_id, alert.namespace or "", dep_name):
+    # 超时后最后再查一次（2026-11-25：末次也必须过稳定性检查，不能绕过就判恢复）
+    recovered, rc = await _recovery_snapshot(alert, dep_name)
+    if not recovered:
+        return False
+    if stable <= 0:
         return True
-    return await check_pod_recovered(alert.cluster_id, alert.namespace, alert.resource_name)
+    await asyncio.sleep(min(stable, 5))
+    recovered2, rc2 = await _recovery_snapshot(alert, dep_name)
+    if not recovered2:
+        return False
+    if rc is not None and rc2 is not None and rc2 > rc:
+        logger.info("告警 %d 末次校验仍在重启（%s→%s），不算恢复", alert.id, rc, rc2)
+        return False
+    return True
+
+
+async def verify_repair_outcome(alert: Alert, max_wait_seconds: int = AUTO_VERIFY_WAIT_SECONDS) -> tuple["bool | None", str]:
+    """审批路径/外部复用的统一验证入口（2026-11-25 新增）。
+
+    返回 (结果, 说明)：
+    - True  → 已验证恢复（就绪 + 重启次数未增长）
+    - False → 已确认未恢复
+    - None  → 该资源没有可用验证指标（如节点、数据库连接），调用方**不得**当作「验证通过」
+    """
+    rtype = (getattr(alert, "resource_type", "") or "").strip().lower()
+    if rtype in ("node", "db_connection", "host", "vm"):
+        return None, f"{rtype} 资源没有可用验证指标，未做恢复验证"
+    dep_name = (getattr(alert, "deployment_name", "") or "").strip() or infer_deployment_name(alert.resource_name or "")
+    if not (rtype in ("pod", "replicaset") or dep_name):
+        return None, f"{rtype or '未知'}资源没有可用验证指标，未做恢复验证"
+    ok = await _verify_auto_repair(alert, max_wait_seconds=max_wait_seconds)
+    return ok, ("就绪且重启次数未增长" if ok else "验证窗口内未恢复")
+
+
+async def record_repair_verification(plan_id: int, *, verdict: str, status: str,
+                                     detail: str = "", before: str = "", after: str = "") -> None:
+    """落 repair_verifications（2026-11-25 新增）。
+
+    原来只有 AI 判定路径写这张表，自动/审批自愈路径全空 → 轨迹页「验证」步永远不出现、
+    复盘也看不到修复前后对比。这里统一补写；失败不影响主链路。
+    """
+    if not plan_id:
+        return
+    try:
+        from app.models import RepairVerification
+        async with async_session() as session:
+            session.add(RepairVerification(
+                plan_id=plan_id, ai_verdict=verdict, status=status,
+                before_snapshot=before, after_snapshot=after,
+                metrics_comparison=(detail or "")[:4000],
+            ))
+            await session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("验证结果落库失败（plan=%s）: %s", plan_id, e)
 
 
 REBUILD_TRIED_MARK = "（已尝试自动重建一次）"
@@ -1107,6 +1217,10 @@ async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
             plan_id = plan.id
         exec_result = await _execute_auto_plan(alert, plan_id, plan_json, trace_id)
         repaired = await _verify_auto_repair(alert)
+        await record_repair_verification(
+            plan_id, verdict="healed" if repaired else "unchanged",
+            status="success" if repaired else "failed",
+            detail=f"删 Pod 重建后验证（exec={exec_result}）")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
@@ -1767,7 +1881,12 @@ async def _auto_force_delete_terminating(alert: Alert) -> bool:
     trace_id = generate_trace_id()
     plan_id = await _create_plan_from_kb(alert, None, steps)
     await _execute_auto_plan(alert, plan_id, json.dumps({"steps": steps}, ensure_ascii=False), trace_id)
-    if await _verify_auto_repair(alert):
+    _repaired = await _verify_auto_repair(alert)
+    await record_repair_verification(
+        plan_id, verdict="healed" if _repaired else "unchanged",
+        status="success" if _repaired else "failed",
+        detail="TerminatingStuck 免审批强删后验证")
+    if _repaired:
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
             if a:
@@ -2672,6 +2791,10 @@ async def _process_one(alert: Alert) -> bool:
         await _record_suppression(alert)
         # 等待 + 验证修复（Pod 重建需时间，验证通过才标记已解决）
         repaired = await _verify_auto_repair(alert)
+        await record_repair_verification(
+            plan_id, verdict="healed" if repaired else "unchanged",
+            status="success" if repaired else "failed",
+            detail=f"自动修复后验证（exec={exec_result}）")
         # R74：复用 KB 动作执行后验证未通过/计划失败 → 该条目可疑计数 +1（≥2 次后续只作参考，不再复用动作）
         if kb_reused_id and (not repaired or exec_result == "failed"):
             await _mark_kb_suspect(kb_reused_id)
