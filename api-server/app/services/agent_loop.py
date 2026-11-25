@@ -690,6 +690,21 @@ async def diagnose_alert_react(alert, alert_data: dict, context: dict,
     _ctx = dict(context)
     _ctx.setdefault("severity", severity)
     _ctx.setdefault("trace_id", trace_id)
+    # 2026-11-25 P0：工具执行靠 context 里的集群/Pod 上下文，原来这里只塞了 severity/trace_id
+    # → 所有工具调用都报「缺少集群/Pod 上下文」「'cluster_id'」→ 连续失败 → 2 步就降级单次诊断，
+    # ReAct 实际从未真正跑过（症状：重新诊断结论永远不变）。
+    _ctx.setdefault("cluster_id", getattr(alert, "cluster_id", None))
+    _ctx.setdefault("namespace", getattr(alert, "namespace", "") or "")
+    _ctx.setdefault("resource_type", getattr(alert, "resource_type", "") or "")
+    _ctx.setdefault("resource_name", getattr(alert, "resource_name", "") or "")
+    _ctx.setdefault("deployment_name", getattr(alert, "deployment_name", "") or "")
+    _ctx.setdefault("alert_id", getattr(alert, "id", None))
+    _ctx.setdefault("fault_type", getattr(alert, "fault_type", "") or "")
+    if (getattr(alert, "resource_type", "") or "").strip().lower() == "pod":
+        _ctx.setdefault("pod_name", getattr(alert, "resource_name", "") or "")
+    if not _ctx.get("cluster_id"):
+        logger.warning("ReAct 上下文缺少 cluster_id（alert=%s），工具调用会全部失败",
+                       getattr(alert, "id", "?"))
     return await run_react_loop(
         alert_data, _ctx,
         policy=policy,
