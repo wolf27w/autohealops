@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     JVM_JATTACH_URL: str = "https://github.com/apangin/jattach/releases/download/v2.2/jattach"
     JVM_JATTACH_PATH: str = "/tmp/.autohealops-jattach"
 
+    # 镜像内 jar 反查（inspect_jar）：异常/配置问题直接进容器镜像定位，不接 Git。
+    #   容器镜像里通常没有 JDK（JRE/精简镜像），javap 用不了时降级用 CFR 反编译器：
+    #   首次使用时 curl 下载到容器 /tmp 下执行（约 2MB）。
+    #   ⚠️ 目标集群出不了外网时，把这里指向内网制品库/对象存储里的同名 jar。
+    CODE_DECOMPILER_URL: str = "https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar"
+
     # Agent 接入（M3 / P3）：镜像、镜像拉取凭据、网关对外地址
     #   AGENT_IMAGE：目标集群能拉到的镜像（构建见 agent/Dockerfile）
     AGENT_IMAGE: str = "harbor.efreight.cn/ops/autohealops-agent:0.2.18"

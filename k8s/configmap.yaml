@@ -28,6 +28,8 @@ data:
   AI_DIAGNOSE_TIMEOUT_SECONDS: "100"
   # 方案类（generate_plan/verify_repair/sql_optimize）
   AI_PLAN_TIMEOUT_SECONDS: "60"
+  # 镜像内 jar 反查（inspect_jar）的反编译器下载地址（集群出不了外网时指向内网制品库）
+  CODE_DECOMPILER_URL: "https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar"
 
   # ---------- JWT（非密钥参数）----------
   JWT_ALGORITHM: "HS256"

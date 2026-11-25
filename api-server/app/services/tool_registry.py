@@ -26,8 +26,10 @@ context 约定（由调用方传入）：
 """
 import difflib
 import json
+import re
 
 from app.clients.executor_client import executor_client
+from app.core.config import settings
 from app.services import db_collector
 from app.clients.ai_client import ai_client
 
@@ -935,6 +937,323 @@ async def _h_compare_cluster_images(args: dict, context: dict) -> dict:
     return {"success": True, "output": "\n".join(lines)[:6000], "error": ""}
 
 
+# ============ inspect_jar：镜像内 jar 反查（配置键 / 异常类） ============
+#
+# 口径（老板 2026-11-25）：「异常先看日志找根因；代码问题就反查镜像里的 jar，反编译找到具体原因」。
+# 不接 Git、不走镜像仓库，直接在执行目标容器里用 find/unzip/javap/java/curl 多步定位：
+#   1) find 找 jar → 2) unzip -l 列条目、unzip -p 读配置文本、匹配类条目
+#   3) javap -c 反编译；镜像没 JDK 时降级 CFR（下载到 /tmp 再 java -jar）
+# 安全：只读命令、单命令不经 shell，pattern/jar/URL 先做字符白名单校验。
+
+_SAFE_TOKEN_RE = re.compile(r"^[\w./:\-]+$")
+
+_JAR_FIND_CMDS = (
+    "find /app -maxdepth 3 -name *.jar",
+    "find /opt -maxdepth 4 -name *.jar",
+    "find / -xdev -maxdepth 5 -name *.jar",
+)
+
+_CFR_PATH = "/tmp/.autohealops-cfr.jar"
+
+
+def _is_safe_pattern(value: str) -> bool:
+    """字符白名单：只允许字母数字与 . / : - _（挡住空格、引号、管道、重定向、命令连接符）。"""
+    if not value or not isinstance(value, str):
+        return False
+    if len(value) > 300:
+        return False
+    return bool(_SAFE_TOKEN_RE.match(value.strip()))
+
+
+def _norm_class_path(pattern: str) -> tuple[str, str]:
+    """异常类名 → (点分类全名, jar 内条目后缀)。
+
+    com.foo.Bar / com/foo/Bar / com.foo.Bar.class 都归一化成
+    ("com.foo.Bar", "com/foo/Bar.class")；短名 Bar → ("Bar", "Bar.class")。
+    """
+    p = (pattern or "").strip().replace("/", ".")
+    if p.lower().endswith(".class"):
+        p = p[:-6]
+    p = p.strip(".")
+    return p, p.replace(".", "/") + ".class"
+
+
+def _pick_jar(paths: list[str]) -> str:
+    """从 find 结果里挑主应用 jar：优先含 app / SNAPSHOT，排除 sources/javadoc，路径短的优先。"""
+    seen: set[str] = set()
+    items: list[tuple[int, int, str]] = []
+    for raw in paths or []:
+        p = (raw or "").strip()
+        if not p.endswith(".jar") or p in seen:
+            continue
+        seen.add(p)
+        low = p.lower()
+        name = low.rsplit("/", 1)[-1]
+        score = 0
+        if "app" in low:
+            score += 2
+        if "snapshot" in low:
+            score += 2
+        if name.endswith("-sources.jar") or name.endswith("-javadoc.jar"):
+            score -= 5
+        items.append((score, len(p), p))
+    if not items:
+        return ""
+    items.sort(key=lambda t: (-t[0], t[1], t[2]))
+    return items[0][2]
+
+
+def _parse_unzip_list(output: str) -> list[str]:
+    """解析 unzip -l 输出，返回条目路径列表（跳过表头/分隔线/尾部统计）。"""
+    entries: list[str] = []
+    for line in (output or "").splitlines():
+        s = line.rstrip()
+        if not s.strip() or s.lstrip().startswith("Archive:"):
+            continue
+        parts = s.split()
+        if len(parts) < 4:
+            continue
+        name = parts[-1]
+        if not (name.endswith("/") or "." in name or "/" in name):
+            continue
+        if not parts[0].isdigit():  # 表头 Length/Date/Time/Name 之类
+            continue
+        entries.append(name)
+    return entries
+
+
+def _pattern_regex(pattern: str) -> re.Pattern | None:
+    """配置键模糊匹配：点/横线/斜杠/冒号/空白都视作分隔符。"""
+    tokens = [t for t in re.split(r"[.\-_/:\s]+", pattern or "") if t]
+    if not tokens:
+        return None
+    sep = r"[.\-_/:\s]{0,6}"
+    return re.compile(sep.join(re.escape(t) for t in tokens), re.IGNORECASE)
+
+
+def _filter_config_lines(text: str, pattern: str, max_lines: int = 20) -> list[tuple[int, str]]:
+    """在配置文件文本里筛命中行，返回 [(行号, 行内容)]。
+
+    命中口径：模糊分隔符匹配；整键没命中时退化为「末段关键词」（如 url）命中，
+    覆盖 yml 里键被拆到多行/带 profile 前缀的情况。注释行跳过。
+    """
+    tokens = [t for t in re.split(r"[.\-_/:\s]+", pattern or "") if t]
+    if not tokens:
+        return []
+    head_rx = _pattern_regex(tokens[0])
+    tail = tokens[-1].lower() if len(tokens) > 1 else ""
+    # 单段 pattern（如 Bar）：只按子串匹配，避免整行被正则吞掉
+    if len(tokens) == 1:
+        key = tokens[0].lower()
+        hits = []
+        for lineno, line in enumerate((text or "").splitlines(), 1):
+            if key in line.lower():
+                hits.append((lineno, line.strip()[:300]))
+                if len(hits) >= max_lines:
+                    break
+        return hits
+    sep = r"[.\-_/:\s]{0,6}"
+    full_rx = re.compile(sep.join(re.escape(t) for t in tokens), re.IGNORECASE)
+    hits: list[tuple[int, str]] = []
+    for lineno, line in enumerate((text or "").splitlines(), 1):
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith("!"):
+            continue
+        ok = bool(full_rx.search(line))
+        if not ok and tail and len(tail) >= 3 and tail in line.lower():
+            ok = head_rx is not None
+        if ok:
+            hits.append((lineno, line.strip()[:300]))
+            if len(hits) >= max_lines:
+                break
+    return hits
+
+
+def _config_entries(entries: list[str], limit: int = 3) -> list[str]:
+    """挑配置条目：application*/bootstrap* 的 yml/yaml/properties，主文件优先、层级浅优先。"""
+    rx = re.compile(r"(?:^|/)(?:application|bootstrap)[^/]*\.(?:ya?ml|properties)$", re.IGNORECASE)
+    picked = [e for e in entries if rx.search(e)]
+
+    def _rank(e: str) -> tuple[int, int, int]:
+        name = e.rsplit("/", 1)[-1].lower()
+        base = 0 if name.startswith(("application.", "bootstrap.")) else 1
+        return (base, e.count("/"), len(e))
+
+    return sorted(picked, key=_rank)[:limit]
+
+
+def _class_entries(entries: list[str], class_suffix: str) -> list[str]:
+    """在条目清单里找类文件：先严格后缀匹配，再退化为短名匹配；BOOT-INF/classes 优先。"""
+    if not class_suffix:
+        return []
+    hit = [e for e in entries if e.endswith(class_suffix)]
+    if not hit:
+        short = class_suffix.rsplit("/", 1)[-1]
+        hit = [e for e in entries if e.endswith("/" + short)]
+    hit.sort(key=lambda e: (0 if e.endswith("classes/" + class_suffix) else 1, len(e)))
+    return hit
+
+
+def _fqcn_from_entry(entry: str) -> str:
+    """jar 条目 → 可直接喂 javap/java 的类全名。"""
+    p = entry
+    for pre in ("BOOT-INF/classes/", "WEB-INF/classes/", "classes/"):
+        if p.startswith(pre):
+            p = p[len(pre):]
+            break
+    if p.lower().endswith(".class"):
+        p = p[:-6]
+    return p.replace("/", ".")
+
+
+def _javap_ok(res: dict) -> bool:
+    """javap 是否真拿到了反编译结果（javap 找不到类时也可能 success=true）。"""
+    if not res or not res.get("success"):
+        return False
+    txt = (res.get("output") or "").strip()
+    if not txt:
+        return False
+    low = txt.lower()
+    for bad in ("error:", "cannot find symbol", "class not found", "not found in classpath", "no such file"):
+        if bad in low:
+            return False
+    return True
+
+
+async def _h_inspect_jar(args: dict, context: dict) -> dict:
+    """在目标容器镜像内反查 jar：定位配置键命中 / 反编译异常类（只读，多步编排）。"""
+    pattern = str(args.get("pattern") or "").strip()
+    jar_arg = str(args.get("jar") or "").strip()
+    container = str(args.get("container") or "").strip() or None
+    mode = str(args.get("mode") or "auto").strip().lower()
+    if mode not in ("auto", "config", "class"):
+        mode = "auto"
+    if not pattern:
+        return {"success": False, "output": "",
+                "error": "缺少参数：pattern（异常类名如 com.foo.Bar 或配置键如 spring.datasource.url）"}
+    if not _is_safe_pattern(pattern):
+        return {"success": False, "output": "",
+                "error": "pattern 含非法字符（只允许字母数字与 . / : - _）：" + pattern[:60]}
+    if jar_arg and not _is_safe_pattern(jar_arg):
+        return {"success": False, "output": "", "error": "jar 路径含非法字符（只允许字母数字与 . / : - _）"}
+
+    cluster_id = context.get("cluster_id")
+    namespace = context.get("namespace")
+    pod_name = context.get("pod_name")
+    trace_id = str(context.get("trace_id") or "")
+
+    async def _run(command: str) -> dict:
+        """每一步都是一次独立的容器内单命令执行（不经 shell）。"""
+        try:
+            r = await executor_client.acall(
+                executor_client.exec_in_pod, cluster_id, namespace, pod_name, command,
+                container=container, trace_id=trace_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            return {"success": False, "output": "", "error": str(e)}
+        return r or {}
+
+    sections: list[str] = []
+    reasons: list[str] = []
+    try:
+        # ---- 1. 定位 jar ----
+        jar_path = jar_arg
+        if not jar_path:
+            found: list[str] = []
+            for cmd in _JAR_FIND_CMDS:
+                r = await _run(cmd)
+                if not (r.get("success") or r.get("output")):
+                    continue
+                for line in (r.get("output") or "").splitlines():
+                    s = line.strip()
+                    if s.endswith(".jar"):
+                        found.append(s)
+                if found:
+                    break
+            jar_path = _pick_jar(found)
+        if not jar_path:
+            return {"success": False, "output": "",
+                    "error": "镜像内没找到 jar，可能是多模块/非 Spring Boot，可传 jar 参数（如 /app/app.jar）"}
+
+        # ---- 2. 条目清单 ----
+        r = await _run("unzip -l " + jar_path)
+        listing = r.get("output") or ""
+        entries = _parse_unzip_list(listing)
+        if not r.get("success"):
+            reasons.append(f"unzip -l 失败：{(r.get('error') or listing)[:300]}")
+        elif not entries:
+            reasons.append("unzip -l 无条目（镜像内可能没有 unzip，或该文件不是可读 jar）")
+        sections.append(f"【JAR】\n{jar_path}\n条目数：{len(entries)}")
+
+        fqcn, class_suffix = _norm_class_path(pattern)
+        do_config = mode in ("auto", "config")
+        do_class = mode in ("auto", "class")
+
+        # ---- 3. 配置命中 ----
+        if do_config:
+            cfg_lines: list[str] = []
+            for entry in _config_entries(entries):
+                rr = await _run("unzip -p " + jar_path + " " + entry)
+                if not rr.get("success"):
+                    reasons.append(f"读取 {entry} 失败：{(rr.get('error') or '')[:200]}")
+                    continue
+                for lineno, text in _filter_config_lines(rr.get("output") or "", pattern):
+                    cfg_lines.append(f"{entry}:{lineno}: {text}")
+                if len(cfg_lines) >= 60:
+                    break
+            if cfg_lines:
+                sections.append("【配置命中】\n" + "\n".join(cfg_lines[:60]))
+            else:
+                sections.append("【配置命中】无（已扫 application*/bootstrap*；键不存在、被环境变量/Nacos 覆盖，或不在 jar 内）")
+
+        # ---- 4. 类反编译 ----
+        if do_class:
+            candidates = _class_entries(entries, class_suffix)
+            if not candidates:
+                # auto 模式下 pattern 很可能就是个配置键（如 spring.datasource.url），类没命中不算失败，不塞噪音
+                if mode == "class":
+                    reasons.append(f"jar 内未找到类 {fqcn}（查找条目 {class_suffix}）；确认类名或换 mode=config")
+            else:
+                target = candidates[0]
+                target_fqcn = _fqcn_from_entry(target)
+                backend = ""
+                dump = ""
+                # a) javap（JDK 镜像）
+                jr = await _run(f"javap -p -c -classpath {jar_path} {target_fqcn}")
+                if _javap_ok(jr):
+                    dump, backend = jr.get("output") or "", "javap"
+                else:
+                    reasons.append(f"javap 失败（{target_fqcn}）：{((jr.get('error') or jr.get('output') or '')[:200])}")
+                    # b) CFR 降级：本地没有就下载
+                    local = await _run("ls " + _CFR_PATH)
+                    if not local.get("success"):
+                        url = str(getattr(settings, "CODE_DECOMPILER_URL", "") or "").strip()
+                        if not url:
+                            reasons.append("未配置 CODE_DECOMPILER_URL，无法下载反编译器")
+                        elif not _is_safe_pattern(url):
+                            reasons.append("CODE_DECOMPILER_URL 含非法字符，拒绝下载")
+                        else:
+                            dl = await _run(f"curl -fsSL -o {_CFR_PATH} {url}")
+                            if not dl.get("success"):
+                                reasons.append(f"下载 CFR 失败：{((dl.get('error') or dl.get('output') or '')[:200])}")
+                    cr = await _run(f"java -jar {_CFR_PATH} {jar_path} {target_fqcn}")
+                    if cr.get("success") and (cr.get("output") or "").strip():
+                        dump, backend = cr.get("output") or "", "cfr"
+                    else:
+                        reasons.append(f"CFR 反编译失败：{((cr.get('error') or cr.get('output') or '')[:200])}")
+                if backend:
+                    sections.append(f"【类反编译（{backend}）】\n类：{fqcn} → {target}\n{dump}")
+                else:
+                    reasons.append("镜像无 JDK 且无法下载反编译器，只能给出清单与配置命中")
+
+        body = "\n\n".join(s for s in sections if s)
+        if reasons:
+            body += "\n\n【失败原因】\n" + "\n".join("- " + x for x in reasons)
+        return {"success": True, "output": body[:12000], "error": ""}
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "output": "", "error": f"jar 反查异常：{e}"}
+
+
 # ============ 注册表 ============
 
 TOOL_REGISTRY: dict[str, dict] = {}
@@ -1130,6 +1449,32 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_list_revisions,
+})
+
+
+_register({
+    "name": "inspect_jar",
+    "label": "镜像内 jar 反查",
+    "description": (
+        "直接进容器镜像反查 jar（不接 Git）：按异常类名或配置键定位真因。"
+        "自动 find 找主应用 jar → unzip -l 列条目 → 配置类扫描 application*/bootstrap* 并返回命中行号；"
+        "类名则先 javap -p -c 反编译，镜像没 JDK 时自动降级 CFR 反编译器（下载到容器 /tmp）。"
+        "用于「日志指向某个类/某条配置但看不到源码」的场景：如 NullPointerException 在 com.foo.Bar.method、"
+        "或 Failed to bind properties under 'spring.datasource.url'。只读，不修改任何文件。"
+    ),
+    "args_schema": {
+        "pattern": {"type": "string", "required": True,
+                    "description": "异常类名（com.foo.Bar 或 Bar）或配置键（如 spring.datasource.url）；只允许字母数字与 . / : - _"},
+        "jar": {"type": "string", "required": False,
+                "description": "显式 jar 路径（如 /app/app.jar）；不填则自动 find 推断", "default": ""},
+        "container": {"type": "string", "required": False,
+                      "description": "容器名（多容器 Pod 必填，从 describe_pod 获取）", "default": ""},
+        "mode": {"type": "string", "required": False,
+                 "description": "auto（默认，配置+类都查）/ config（只查配置键）/ class（只反编译类）", "default": "auto"},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "handler": _h_inspect_jar,
 })
 
 _register({
