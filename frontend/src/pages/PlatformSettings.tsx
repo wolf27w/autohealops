@@ -96,6 +96,7 @@ export default function PlatformSettings() {
         smtp_ssl: d.smtp_ssl !== 'false',
         smtp_port: Number(d.smtp_port),
         sftp_max_mb: Number(d.sftp_max_mb ?? 200),
+        labor_minutes_per_heal: Number(d.labor_minutes_per_heal ?? 3),
       })
     })
   }, [])
@@ -118,6 +119,7 @@ export default function PlatformSettings() {
         ? String(settings.smtp_port ?? '465')
         : String(values.smtp_port),
       sftp_max_mb: String(values.sftp_max_mb ?? settings.sftp_max_mb ?? 200),
+      labor_minutes_per_heal: String(values.labor_minutes_per_heal ?? settings.labor_minutes_per_heal ?? 3),
     }
     await updateSettings(payload)
     message.success('设置已保存')
@@ -339,6 +341,10 @@ export default function PlatformSettings() {
                   <Form.Item name="agent_max_tool_steps" label="单次对话最大工具步数（1~100）"
                     tooltip="深度诊断模式下，单次对话最多执行的「有效」工具步数；重复调用不占额。默认 12。">
                     <InputNumber min={1} max={100} />
+                  </Form.Item>
+                  <Form.Item name="labor_minutes_per_heal" label="大屏节省人工基准（分钟/次）"
+                    tooltip="默认 3 分钟，用于大屏「节省人工」估算：节省人工 = 成功自愈次数 × 基准分钟数。">
+                    <InputNumber min={1} max={1440} />
                   </Form.Item>
                   <Button type="primary" onClick={handleSave}>保存配置</Button>
                 </Form>

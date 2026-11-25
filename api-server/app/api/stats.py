@@ -141,8 +141,10 @@ _SEVERITY_LEVEL = {"critical": "P0", "high": "P1", "medium": "P2", "low": "P3"}
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 # 处置状态映射（告警 status → 大屏 chips 文案）
 _DISPOSAL_LABEL = {"pending": "待处理", "awaiting_approval": "待审批", "ticketed": "已转工单"}
-# 节省人工估算：每起成功自动处置按「不超过 3 分钟」人工处理估算（2026-11-23 老板定口径）
-_LABOR_MINUTES_PER_HEAL = 3
+# 节省人工估算默认基准（分钟/次成功自愈）。可通过系统设置 `labor_minutes_per_heal` 覆盖
+# （老板 2026-11-23 定口径：每次资源不高于 3 分钟人工处理）。
+_LABOR_MINUTES_PER_HEAL_DEFAULT = 3
+_LABOR_MINUTES_PER_HEAL_MAX = 1440  # 上限（分钟）：防止误配导致估算离谱
 
 
 def _severity_level(severity: str) -> str:
@@ -215,9 +217,31 @@ def _diagnosis_summary(diag_json: str) -> dict | str:
     return {"root_cause": root_cause[:200], "impact": impact[:100], "suggestions": suggestions}
 
 
-def _labor_saved_minutes(success_count: int) -> int:
-    """节省人工（分钟）：成功自动处置数 × 30 分钟/起"""
-    return max(0, int(success_count or 0)) * _LABOR_MINUTES_PER_HEAL
+def _parse_labor_minutes(raw) -> int:
+    """解析「节省人工基准」配置值：正整数 1~1440；非法/越界回退默认 3"""
+    try:
+        v = int(str(raw or "").strip())
+    except (TypeError, ValueError):
+        return _LABOR_MINUTES_PER_HEAL_DEFAULT
+    if v < 1 or v > _LABOR_MINUTES_PER_HEAL_MAX:
+        return _LABOR_MINUTES_PER_HEAL_DEFAULT
+    return v
+
+
+async def _labor_minutes_per_heal() -> int:
+    """读取「节省人工基准」配置（分钟/次自愈），带校验；读取失败回退默认 3"""
+    from app.services import system_setting_service
+    try:
+        raw = await system_setting_service.get_setting(
+            "labor_minutes_per_heal", str(_LABOR_MINUTES_PER_HEAL_DEFAULT))
+    except Exception:  # noqa: BLE001  DB 不可用回退默认，不影响仪表盘主流程
+        return _LABOR_MINUTES_PER_HEAL_DEFAULT
+    return _parse_labor_minutes(raw)
+
+
+def _labor_saved_minutes(success_count: int, minutes_per_heal: int = _LABOR_MINUTES_PER_HEAL_DEFAULT) -> int:
+    """节省人工（分钟）：成功自动处置数 × 单次基准（分钟/起，基准可配置，默认 3）"""
+    return max(0, int(success_count or 0)) * max(0, int(minutes_per_heal or 0))
 
 
 # ============ 仪表盘缓存 / 单飞 / 预热（2026-09-24 性能修复） ============
@@ -904,17 +928,20 @@ async def _compute_dashboard(
         # 口径：动作级（来源 = 执行记录 ExecutionLog，与 action_stat 同源）：
         #   success = 成功执行的自愈动作数（self_heal+restart+scale+rollback 成功数之和）
         #   failed  = 执行失败的动作数（status in failed/rolled_back）
-        #   节省人工 = success × 30 分钟/起（无历史工时基准，行业常用估算值，见 _labor_saved_minutes）
+        #   节省人工 = success × 基准分钟/起（基准可配置，默认 3；见 _labor_minutes_per_heal）
         _sh_success = sum(action_stat.values())
         _sh_failed = action_failed
         _sh_total = _sh_success + _sh_failed
+        _labor_base = await _labor_minutes_per_heal()
+        _labor_minutes = _labor_saved_minutes(_sh_success, _labor_base)
         self_heal_effect = {
             "success": _sh_success,
             "failed": _sh_failed,
             "total": _sh_total,
             "success_rate": round(_sh_success / _sh_total, 4) if _sh_total else 0.0,
             "incidents_healed": auto_processed_24h,
-            "labor_saved_minutes": _labor_saved_minutes(_sh_success),
+            "labor_saved_minutes": _labor_minutes,
+            "labor_saved_hours": round(_labor_minutes / 60, 2),
             "action_dist": dict(action_stat),
         }
 

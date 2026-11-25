@@ -13,6 +13,7 @@ from app.api.stats import (
     _duration_seconds,
     _labor_saved_minutes,
     _parse_diagnosis_json,
+    _parse_labor_minutes,
     _severity_level,
     _title_for,
 )
@@ -109,10 +110,36 @@ class TestDiagnosisSummary(unittest.TestCase):
 
 
 class TestLaborSaved(unittest.TestCase):
-    def test_calc(self):
+    def test_calc_default(self):
         self.assertEqual(_labor_saved_minutes(5), 15)  # R53（2026-11-23）：工时基准 30→3 分钟/起
         self.assertEqual(_labor_saved_minutes(0), 0)
         self.assertEqual(_labor_saved_minutes(-1), 0)
+
+    def test_custom_base(self):
+        # R53 可配置（2026-11-25）：基准分钟数由系统设置 labor_minutes_per_heal 传入
+        self.assertEqual(_labor_saved_minutes(5, 45), 225)
+        self.assertEqual(_labor_saved_minutes(5, 0), 0)
+
+
+class TestParseLaborMinutes(unittest.TestCase):
+    """R53 可配置基准解析：默认值 / 自定义值 / 非法值"""
+
+    def test_default(self):
+        self.assertEqual(_parse_labor_minutes("3"), 3)
+        self.assertEqual(_parse_labor_minutes(""), 3)
+        self.assertEqual(_parse_labor_minutes(None), 3)
+
+    def test_custom(self):
+        self.assertEqual(_parse_labor_minutes("45"), 45)
+        self.assertEqual(_parse_labor_minutes(1440), 1440)
+        self.assertEqual(_parse_labor_minutes("1"), 1)
+
+    def test_invalid(self):
+        self.assertEqual(_parse_labor_minutes("abc"), 3)
+        self.assertEqual(_parse_labor_minutes("0"), 3)
+        self.assertEqual(_parse_labor_minutes("-5"), 3)
+        self.assertEqual(_parse_labor_minutes("1441"), 3)
+        self.assertEqual(_parse_labor_minutes("  "), 3)
 
 
 if __name__ == "__main__":
