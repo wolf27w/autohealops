@@ -13,7 +13,9 @@
 
 开关：`settings.AGENT_REACT_LOOP_ENABLED`（2026-11-23 R69 起默认 True）。
 可调参数：`system_settings` 的 `agent_policy` JSON（缺省用 DEFAULT_AGENT_POLICY；
-步数默认 8、硬上限 12，总时限默认 90s）。
+步数默认 8、硬上限 16、总时限默认 90s）。
+场景分级（2026-11-25）：启动失败类（CrashLoop/启动失败/exitCode=1）自动放大到 12 步 / 180s，
+并在初始消息里注入「启动失败固定采集顺序」（首步调 `collect_startup_evidence`）。
 """
 from __future__ import annotations
 
@@ -47,8 +49,22 @@ class AgentPolicy:
 
 DEFAULT_AGENT_POLICY = AgentPolicy()
 
-# 步数硬上限（2026-11-23 R69）：无论 agent_policy JSON 或调用方传值，最多 12 步。
-MAX_ROUNDS_HARD_LIMIT = 12
+# 步数硬上限（2026-11-23 R69 定 12；2026-11-25 因启动失败场景放宽到 16）：
+# 无论 agent_policy JSON 或调用方传值，最多 16 步。
+MAX_ROUNDS_HARD_LIMIT = 16
+
+# 启动失败场景（2026-11-25 事故复盘）：固定采集顺序需要 8~12 轮才能挖到镜像内文件/版本差异，
+# 按场景放大预算（只放大不缩小，且不超硬上限）。
+STARTUP_FAILURE_MAX_ROUNDS = 12
+STARTUP_FAILURE_TOTAL_TIMEOUT = 180.0
+
+# 启动失败场景识别：告警字段或上下文里出现这些特征即按启动失败给预算与采集清单
+_STARTUP_HINTS = (
+    "crashloop", "crash loop", "startup", "启动失败", "起不来", "启动异常",
+    "application run failed", "application failed to start", "exitcode=1", "exit code 1",
+    "imagepull", "errimagepull", "createcontainererror", "back-off restarting",
+)
+
 
 # 哨兵：区分「未传 fallback（用默认单次诊断）」与「显式传 None（不要兜底）」
 _UNSET = object()
@@ -109,6 +125,34 @@ async def load_agent_policy() -> AgentPolicy:
 def is_react_loop_enabled() -> bool:
     """阶段 7 开关（2026-11-23 R69 起默认 True，开启）。"""
     return bool(getattr(settings, "AGENT_REACT_LOOP_ENABLED", True))
+
+
+def detect_scenario(alert_data: dict, context: dict) -> str:
+    """判断诊断场景（纯函数）：startup_failure / default。
+
+    启动失败类需要的采集链更长（退出码→首错行→入口脚本→镜像内配置→版本对比），
+    需要单独放大轮次预算并注入固定采集顺序。
+    """
+    blob = " ".join(str(v) for v in (
+        alert_data.get("fault_type"), alert_data.get("message"), alert_data.get("status_info"),
+        context.get("fault_type"), context.get("message"),
+    ) if v).lower()
+    if any(h in blob for h in _STARTUP_HINTS):
+        return "startup_failure"
+    return "default"
+
+
+def apply_scenario_policy(policy: AgentPolicy, scenario: str) -> AgentPolicy:
+    """按场景放大预算（只放大不缩小；结果不超硬上限）。"""
+    if scenario != "startup_failure":
+        return policy
+    return replace(
+        policy,
+        max_rounds=max(policy.max_rounds, min(STARTUP_FAILURE_MAX_ROUNDS, MAX_ROUNDS_HARD_LIMIT)),
+        total_timeout=max(policy.total_timeout, STARTUP_FAILURE_TOTAL_TIMEOUT),
+        per_tool_timeout=max(policy.per_tool_timeout, 20.0),
+    )
+
 
 
 # ============ 任务记忆（7.3 方案 B：零迁移，实时聚合现有 alerts 表） ============
@@ -220,7 +264,26 @@ def _build_initial_messages(alert_data: dict, context: dict, task_memory: str) -
         lines.append("")
         lines.append("【任务记忆（同资源历史）】")
         lines.append(task_memory)
+    if detect_scenario(alert_data, context) == "startup_failure":
+        lines.append("")
+        lines.extend(_startup_checklist_lines())
     return [{"role": "user", "content": "\n".join(lines)}]
+
+
+def _startup_checklist_lines() -> list[str]:
+    """启动失败固定采集清单（2026-11-25 事故复盘后固化）。
+
+    目标：把「人工排障里真正下刀的 5 步」写成固定顺序，避免有限轮次内乱试。
+    """
+    return [
+        "【启动失败固定采集顺序（按序执行，不要跳步；首步一个工具拿全 5 项）】",
+        "1) 先调 collect_startup_evidence（只读）：一次拿到 lastState.terminated(exitCode/reason)、"
+        "首错行、入口脚本启动参数、镜像内 application.yml 占位符默认值、与上一版本差异。",
+        "2) 拿着它的「候选结论」去交叉验证：首错行是否为框架自定义异常（如需要非默认凭据/必须加载配置）？",
+        "3) 若差异在启动参数/配置文件 → 结论落在「镜像/发布变更」层，给出回滚 + 修正方式（不要只写重启/扩缩）。",
+        "4) 若出口码为 137/143 或探针失败 → 才回到资源/探针维度（本轮不适用）。",
+        "5) 证据不足时按结构化交代（①已排除 ②缺失证据 ③建议补充采集），不得用探针失败/重启次数当根因。",
+    ]
 
 
 def _normalize_final(decision: dict, state: dict, start: float) -> dict:
@@ -461,12 +524,20 @@ async def _run_loop_body(
         tool_name = (decision.get("tool") or "").strip()
         args = decision.get("args") or {}
 
-        # 4. 执行工具（per_tool_timeout 超时保护）
+        # 4. 执行工具（per_tool_timeout 超时保护；工具可用自身 timeout 覆盖，如启动证据包 60s）
         t0 = time.monotonic()
+        tool_timeout = policy.per_tool_timeout
         try:
-            result = await asyncio.wait_for(execute(tool_name, args, context), timeout=policy.per_tool_timeout)
+            _tdef = tool_registry.TOOL_REGISTRY.get(tool_name) or {}
+            _override = _tdef.get("timeout")
+            if isinstance(_override, (int, float)) and _override > 0:
+                tool_timeout = float(_override)
+        except Exception:  # noqa: BLE001 取工具定义失败不影响主流程
+            pass
+        try:
+            result = await asyncio.wait_for(execute(tool_name, args, context), timeout=tool_timeout)
         except asyncio.TimeoutError:
-            result = {"success": False, "output": "", "error": f"工具执行超时（>{policy.per_tool_timeout}s）"}
+            result = {"success": False, "output": "", "error": f"工具执行超时（>{tool_timeout}s）"}
         except Exception as e:  # noqa: BLE001
             result = {"success": False, "output": "", "error": str(e)}
         if not isinstance(result, dict):
@@ -548,7 +619,9 @@ async def run_react_loop(
     """
     if policy is None:
         policy = await load_agent_policy()
-    # 2026-11-23 R69：步数硬上限 12，无论 agent_policy JSON 或调用方传值都不超过（下限 1）。
+    # 2026-11-25：启动失败场景按需放大预算（只放大），之后统一由硬上限 16 封顶。
+    policy = apply_scenario_policy(policy, detect_scenario(alert_data, context))
+    # 步数硬上限 16，无论 agent_policy JSON 或调用方传值都不超过（下限 1）。
     if policy.max_rounds > MAX_ROUNDS_HARD_LIMIT or policy.max_rounds < 1:
         policy = replace(policy, max_rounds=max(1, min(policy.max_rounds, MAX_ROUNDS_HARD_LIMIT)))
     if tools is None:

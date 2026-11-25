@@ -134,6 +134,28 @@ async def _h_search_logs(args: dict, context: dict) -> dict:
     return {"success": True, "output": txt[:8000], "error": ""}
 
 
+async def _h_collect_startup_evidence(args: dict, context: dict) -> dict:
+    """启动失败证据包（2026-11-25）：一次采集退出码/首错行/入口脚本/镜像内配置/上一版本差异。
+
+    只读：registry 读镜像层文件（首选，CrashLoop 也能读）+ 同 Deployment 运行中 Pod 的 exec 兜底。
+    """
+    from app.services import startup_evidence_service
+
+    container = (args.get("container") or "").strip()
+    compare_previous = args.get("compare_previous")
+    if not isinstance(compare_previous, bool):
+        compare_previous = True
+    r = await startup_evidence_service.collect(
+        context, container=container, compare_previous=compare_previous
+    )
+    return {
+        "success": bool(r.get("success")),
+        "output": (r.get("output") or "")[:8000],
+        "error": r.get("error", ""),
+        "data": r.get("data") or {},
+    }
+
+
 async def _h_get_probe_config(args: dict, context: dict) -> dict:
     """读取 Pod 所属 Deployment 的探针配置（liveness/readiness/startup）。
 
@@ -955,6 +977,28 @@ _register({
     "permission": "readonly",
     "domain": "application",
     "handler": _h_search_logs,
+})
+
+_register({
+    "name": "collect_startup_evidence",
+    "label": "启动失败证据包",
+    "description": (
+        "启动失败/CrashLoopBackOff 类问题**首选**工具：一次采集 ①容器 lastState.terminated（exitCode/reason）"
+        "②日志首错行（Application run failed / Caused by / 根异常）③镜像入口脚本与启动参数（-D 凭据、profile）"
+        "④镜像内 BOOT-INF/classes/application.yml 的占位符默认值 ⑤与上一版本的逐行差异，并给出凭据风险判定"
+        "（是否出厂默认口令、环境变量能否覆盖）。用于「发布后起不来」：先调本工具，再针对差异深挖，"
+        "不要直接用探针失败/重启次数当根因。只读。"
+    ),
+    "args_schema": {
+        "container": {"type": "string", "required": False,
+                      "description": "容器名（多容器 Pod 时指定，留空取第一个）", "default": ""},
+        "compare_previous": {"type": "bool", "required": False,
+                             "description": "是否与上一个 revision 的镜像做文件级对比，默认 true", "default": True},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "timeout": 90,
+    "handler": _h_collect_startup_evidence,
 })
 
 _register({

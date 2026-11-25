@@ -142,7 +142,7 @@ class TestLoopLimits(unittest.IsolatedAsyncioTestCase):
         fallback.assert_not_awaited()
 
     async def test_max_rounds_hard_cap(self):
-        """2026-11-23 R69：调用方传 max_rounds > 12 → 被钳到硬上限 12。"""
+        """2026-11-25：调用方传 max_rounds > 16 → 被钳到硬上限 16。"""
         decide = AsyncMock(side_effect=lambda *a, **k: _tool_call("describe_pod"))
         execute = AsyncMock(return_value={"success": True, "output": "ok"})
 
@@ -151,7 +151,7 @@ class TestLoopLimits(unittest.IsolatedAsyncioTestCase):
             policy=_policy(max_rounds=99), decide=decide, execute=execute, fallback=None,
         )
 
-        self.assertEqual(res["rounds"], 12)
+        self.assertEqual(res["rounds"], 16)
         self.assertEqual(res["degrade_reason"], "max_rounds")
 
     async def test_total_timeout_wraps_up(self):
@@ -320,12 +320,12 @@ class TestPolicy(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(p.tool_output_truncate, 6000)
 
     async def test_policy_json_max_rounds_clamped(self):
-        """2026-11-23 R69：agent_policy JSON max_rounds > 12 → 钳到硬上限 12。"""
+        """2026-11-25：agent_policy JSON max_rounds > 16 → 钳到硬上限 16。"""
         raw = json.dumps({"max_rounds": 20})
         with patch("app.services.system_setting_service.get_setting",
                    AsyncMock(return_value=raw)):
             p = await agent_loop.load_agent_policy()
-        self.assertEqual(p.max_rounds, 12)
+        self.assertEqual(p.max_rounds, 16)
 
     async def test_policy_invalid_json_falls_back(self):
         """非法 JSON / 非 dict → 回退默认（2026-11-23 R69：步数默认 8）。"""
