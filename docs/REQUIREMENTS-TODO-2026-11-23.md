@@ -1,6 +1,11 @@
 # 我的需求总表（2026-11-23 整理）
 
-> **状态汇总（2026-11-24 09:5x 按提交核实，HEAD `e5723c0`）**
+> **本次改动记录（2026-11-25，HEAD 基准 `c96da62`）**
+> - 🧹 删除 `workload_logs.py` 里与 `resources.py` 重复的 Pod 日志下载端点（同路由 `GET .../pods/{pod}/logs/download`），统一到 `resources.py`（支持 previous/all/agent 集群）；同步重生成 `docs/openapi.json` 契约。
+> - 🧹 `DiagnosticReport` 补 `conn_id`/`cluster_id` ORM 映射（迁移 `q0r1s2t3u4v5` 已加列，此前只能裸 SQL 过滤）。
+> - ✅ 单测 954 全过；冒烟：真实集群 Pod 日志下载 200（gzip 与 gzip=0 均通）。
+
+> **状态汇总（2026-11-25 按提交核实，HEAD `c96da62`）**
 > - ✅ 已开发：R53、R60-9、R60-P3（**L-b 层内容对比已实现并用 harbor 真实镜像验证**）、R61–R74、R75（**25 项**）
 > - ✅ 代码尾巴清零：Oracle 方言 export/import/backup（33 单测）、STS/DS 发布变更检测+回滚 kind 透传、proto 同步、openapi 契约、配置覆盖度
 > - ✅ M4/D2：改为保留策略（`scripts/retention_purge.py` + `k8s/retention-cronjob.yaml`，quota 30d / slow_sql 90d），测试集群已建 CronJob；当前两表无过期数据（数据仅 7 天）
@@ -12,7 +17,7 @@
 > - ⚠️ Oracle 全链路（导出/导入/备份）**无实机验证**：本机与测试集群都没有 Oracle 实例，仅单测覆盖 SQL 生成/切分/分批/转义
 
 
-> 口径：代码核实（HEAD `f0cfb28`），不照抄旧文档。旧盘点见 `REQUIREMENTS-TODO-2026-11-20.md`，需求明细见 `BACKLOG-2026-11-13.md`。
+> 口径：代码核实（HEAD `c96da62`），不照抄旧文档。旧盘点见 `REQUIREMENTS-TODO-2026-11-20.md`，需求明细见 `BACKLOG-2026-11-13.md`。
 > 本表 = 老板视角的**唯一待办清单**，按「能立刻干 / 等你一句话 / 要动环境 / 暂缓」四类分组。
 
 ---
