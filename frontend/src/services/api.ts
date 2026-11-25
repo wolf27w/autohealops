@@ -129,7 +129,8 @@ export const getAlert = (id: number) => http.get<Alert>(`/alerts/${id}`)
 export const resolveAlert = (id: number) => http.post(`/alerts/${id}/resolve`)
 export const manualResolveAlert = (id: number, data: Payload) => http.post(`/alerts/${id}/manual-resolve`, data)
 export const batchResolveAlerts = (alertIds: number[], resolution: string) => http.post('/alerts/batch-resolve', { alert_ids: alertIds, resolution })
-export const diagnoseAlert = (id: number) => http.post(`/alerts/${id}/diagnose`)
+// 手动重新诊断：走 ReAct（会真的调工具取证），最长 180s 预算，客户端超时对应放宽
+export const diagnoseAlert = (id: number) => http.post(`/alerts/${id}/diagnose`, undefined, { timeout: 200000 })
 export const getDiagnosis = (id: number) => http.get(`/alerts/${id}/diagnosis`)
 export const getAlertDescribe = (id: number) => http.get(`/alerts/${id}/describe`)
 // 告警协作（C1）：认领 / 确认 / 备注

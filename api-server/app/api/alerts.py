@@ -2,6 +2,7 @@
 """告警管理 API"""
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
@@ -367,6 +368,13 @@ async def diagnose_alert(alert_id: int, user=Depends(require_operator)):
         a = await session.get(Alert, alert_id)
         if not a:
             return {"code": 404, "message": "告警不存在", "data": None}
+        # 2026-11-25：ReAct 需要 alert 对象（任务记忆/日志），先把属性拷出来避免 session 关闭后失效
+        _alert_like = SimpleNamespace(
+            id=a.id, cluster_id=a.cluster_id, namespace=a.namespace or "",
+            resource_name=a.resource_name or "", resource_type=a.resource_type or "",
+            deployment_name=a.deployment_name or "", fault_type=a.fault_type or "",
+            severity=a.severity or "",
+        )
         alert_data = {
             "alert_id": a.id, "cluster_name": str(a.cluster_id),
             "namespace": a.namespace, "resource_name": a.resource_name,
@@ -425,7 +433,30 @@ async def diagnose_alert(alert_id: int, user=Depends(require_operator)):
             logger.debug("手动诊断采集探针证据失败: %s", e)
 
     try:
-        diagnosis = await ai_client.diagnose(alert_id, alert_data, diag_ctx, trace_id)
+        # 2026-11-25（老板反馈「改造完重新诊断结论还是不变」）：
+        # 手动重新诊断原来走单次诊断——不问任何工具，只能拿已有日志猜；
+        # 而 inspect_jar / get_workload_env 这些取证工具只在 ReAct 循环里可用。
+        # 现在：能开 ReAct 就先跑 ReAct（带只读工具），失败才降级单次诊断。
+        from app.services import agent_loop as _agent_loop
+        diagnosis = None
+        if _agent_loop.is_react_loop_enabled():
+            try:
+                diagnosis = await _agent_loop.diagnose_alert_react(
+                    _alert_like, alert_data, diag_ctx,
+                    severity=_alert_like.severity or "high", trace_id=trace_id)
+                try:
+                    from app.services import alert_auto_service as _aas
+                    await _aas._persist_react_diagnosis(_alert_like, diagnosis, alert_data, diag_ctx)
+                except Exception as _pe:  # noqa: BLE001
+                    logger.debug("手动诊断 ReAct 结果落库失败: %s", _pe)
+                logger.info("告警 %d 手动重新诊断完成（ReAct，%d 步，降级=%s）",
+                            alert_id, len(diagnosis.get("tool_steps") or []),
+                            diagnosis.get("degraded"))
+            except Exception as _re:  # noqa: BLE001
+                logger.warning("告警 %d 手动诊断 ReAct 失败，降级单次诊断: %s", alert_id, _re)
+                diagnosis = None
+        if diagnosis is None:
+            diagnosis = await ai_client.diagnose(alert_id, alert_data, diag_ctx, trace_id)
     except Exception as e:  # noqa: BLE001
         return {"code": 500, "message": f"诊断失败: {e}", "data": None}
 
