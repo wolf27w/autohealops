@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     AI_DIAGNOSE_TIMEOUT_SECONDS: float = 100.0
     #   方案类（generate_plan/verify_repair/sql_optimize）：默认 60s
     AI_PLAN_TIMEOUT_SECONDS: float = 60.0
+    # 恢复收敛扫描间隔（秒）：2026-11-25 老板口径 60s 太长 → 默认 5s
+    #   每轮只做最轻的状态查询（get_pod_status，必要时才查工作负载 Pods），单轮条数受 limit 限制
+    RECOVERY_SWEEP_INTERVAL_SECONDS: float = 5.0
     # gRPC 并发上限（A4）：限制同时向 executor 发起的同步调用数，防止后台循环耗尽线程池
     EXECUTOR_MAX_CONCURRENCY: int = 8
 

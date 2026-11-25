@@ -3275,15 +3275,23 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
 
 
 async def recovery_sweep_loop() -> None:
-    """恢复收敛后台循环（60s 一次）"""
+    """恢复收敛后台循环（默认 5s 一次；2026-11-25 老板：60s 太长）。
+
+    频率说明：每轮对每条告警只做一次最轻的状态查询（get_pod_status），
+    只有「原 Pod 不存在」时才多查一次工作负载 Pods；单轮条数受 limit 限制，
+    且扫的是顺序 await（不会堆并发）。间隔可用 RECOVERY_SWEEP_INTERVAL_SECONDS 调。
+    """
+    interval = max(1.0, float(getattr(settings, "RECOVERY_SWEEP_INTERVAL_SECONDS", 5.0) or 5.0))
     while True:
+        t0 = time.monotonic()
         try:
             n = await sweep_recovered_alerts()
             if n:
                 logger.info("恢复收敛本轮关闭 %d 条告警", n)
         except Exception as e:  # noqa: BLE001
             logger.warning("恢复收敛循环异常: %s", e)
-        await asyncio.sleep(60)
+        # 扣掉本轮耗时，避免慢轮次把周期拖长（下限 0.5s 防空转）
+        await asyncio.sleep(max(0.5, interval - (time.monotonic() - t0)))
 
 
 async def escalate_stale_alerts() -> int:

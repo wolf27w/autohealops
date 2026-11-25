@@ -30,6 +30,8 @@ data:
   AI_PLAN_TIMEOUT_SECONDS: "60"
   # 镜像内 jar 反查（inspect_jar）的反编译器下载地址（集群出不了外网时指向内网制品库）
   CODE_DECOMPILER_URL: "https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar"
+  # 恢复收敛扫描间隔（秒）：告警恢复后多快关闭（默认 5s）
+  RECOVERY_SWEEP_INTERVAL_SECONDS: "5"
 
   # ---------- JWT（非密钥参数）----------
   JWT_ALGORITHM: "HS256"
