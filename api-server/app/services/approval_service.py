@@ -947,24 +947,34 @@ async def execute_approved_plan(plan_id: int) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("审批执行成功后知识库沉淀失败: %s", e)
 
-    # 执行后验证：查 Pod/Deployment 是否恢复（验证通过才算修复完成，否则通知仍需处理）
-    from app.services.alert_auto_service import check_pod_recovered, infer_deployment_name
-    repaired = False
-    if alert_type == "pod" and alert_resource:
-        repaired = await check_pod_recovered(cluster_id, alert_ns, alert_resource)
+    # 执行后验证（2026-11-25 修）：复用自动路径同一套判据——轮询等待 + 工作负载维度 + 重启次数稳定性。
+    # 旧逻辑两处致命：①执行完立即单次查询（Pod 还没起来就判「未通过」→ 假失败）
+    #              ②非 Pod 资源一律默认通过（假成功）
+    from app.services.alert_auto_service import verify_repair_outcome, record_repair_verification
+    repaired: bool | None = None
+    verify_detail = ""
+    if alert is not None:
+        try:
+            repaired, verify_detail = await verify_repair_outcome(alert)
+        except Exception as _ve:  # noqa: BLE001 验证异常不得当成「已验证」
+            repaired, verify_detail = None, f"验证执行异常: {_ve}"
+            logger.warning("计划 %d 执行后验证异常：%s", plan_id, _ve)
     else:
-        repaired = True  # 非 Pod 资源无状态验证能力，默认通过
-    verdict = "healed" if repaired else "unchanged"
+        verify_detail = "告警记录缺失，无法验证"
+    verdict = "healed" if repaired is True else ("unverified" if repaired is None else "unchanged")
+    await record_repair_verification(
+        plan_id, verdict=verdict,
+        status="success" if repaired is True else ("pending" if repaired is None else "failed"),
+        detail=verify_detail)
     # A-3（2026-10-29）：隐式反馈 —— 修复验证结果反推诊断质量（人工已评价则不覆盖）
     try:
         from app.services import diagnosis_feedback_service as _dfb
-        if plan and plan.alert_id:
+        if plan and plan.alert_id and repaired is not None:
             await _dfb.implicit_feedback(plan.alert_id, bool(repaired), note=verdict)
     except Exception as _e:  # noqa: BLE001
         logger.debug("隐式反馈失败: %s", _e)
 
-    if repaired:
-        # 人工审批通过 + 执行 + 验证通过 → 告警标记「已解决」（resolved）
+    if repaired is True:
         if plan and plan.alert_id:
             async with async_session() as session:
                 a = await session.get(Alert, plan.alert_id)
@@ -982,6 +992,17 @@ async def execute_approved_plan(plan_id: int) -> None:
                     a.status = "resolved"
                     a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
                     a.message = (a.message or "") + "（人工审批通过，已解决，验证通过）"
+                    await session.commit()
+    elif repaired is None:
+        # 无可验证指标（节点/数据库类）：不宣称「验证通过」，也不判失败；告警收尾但显式标注未验证
+        logger.info("计划 %d 执行完成，但该资源无可用验证指标（%s）", plan_id, verify_detail)
+        if plan and plan.alert_id:
+            async with async_session() as session:
+                a = await session.get(Alert, plan.alert_id)
+                if a and a.status in ("awaiting_approval", "pending"):
+                    a.status = "resolved"
+                    a.resolved_at = time.strftime("%Y-%m-%d %H:%M:%S")
+                    a.message = (a.message or "") + f"（人工审批通过，已执行；未验证：{verify_detail}）"
                     await session.commit()
     else:
         # 验证未通过 → 计划置 failed，告警转需人工 + 通知 + 回写（防僵尸告警：不再停在 awaiting_approval）
