@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""工作负载聚合日志（R5 剩余）：聚合日志 + SSE 跟随 + gzip 下载。
+"""工作负载聚合日志（R5 剩余）：聚合日志 + SSE 跟随。
 
 与 resources.py 里的单 Pod 日志（GetPodLogs）互补：
-  2) GET .../workloads/{kind}/{name}/logs/stream   —— SSE，先推快照，再每 2s 轮询增量（跟随）
-  3) GET .../pods/{pod}/logs/download              —— 单 Pod 日志附件下载（gzip 流式压缩）
+  GET .../workloads/{kind}/{name}/logs/stream   —— SSE，先推快照，再每 2s 轮询增量（跟随）
+
+单 Pod 日志下载端点统一在 resources.py（GET .../pods/{pod}/logs/download），勿在此重复定义。
 
 设计口径：
   - 工作负载 → Pod 列表：deployment 走 executor ListDeploymentPods（精确），其余 kind
@@ -16,18 +17,15 @@ import asyncio
 import json
 import logging
 import time
-import zlib
-from datetime import datetime, timezone
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.clients.executor_client import executor_client
 from app.core.database import async_session
 from app.core.security import decode_jwt
-from app.middleware.permission import require_any_user
 from app.models import User
 from app.services.user_permission_service import check_cluster_permission
 
@@ -45,8 +43,6 @@ STREAM_TAIL = 500          # 跟随轮询每次拉的 tail 窗口（行）
 STREAM_INTERVAL = 2.0      # 轮询间隔（秒）
 STREAM_HEARTBEAT = 15.0    # 心跳注释帧间隔（秒）
 MAX_AGG_TAIL = 5000        # 聚合 tail 上限
-MAX_DOWNLOAD_TAIL = 5000   # 下载 tail 上限
-_GZIP_CHUNK = 65536        # gzip 流式压缩块大小
 
 
 # ==================== 纯函数（供单测） ====================
@@ -88,13 +84,6 @@ def incremental_new_lines(lines: list[str], pushed: int, last_line: str = "") ->
 
 
 # ==================== 鉴权辅助 ====================
-
-async def _deny_cluster(user, cluster_id: int, namespace: str = "", required: str = "read"):
-    """与 resources.py 保持一致的集群资源级鉴权：无权限返回 403 dict，否则 None。"""
-    if not await check_cluster_permission(user, cluster_id, namespace, required):
-        return {"code": 403, "message": "无权限访问该集群", "data": None}
-    return None
-
 
 async def _resolve_user(token: str) -> User | None:
     """从 JWT token 解析用户（SSE/EventSource 无法带 Authorization 头，token 走 query param）。"""
@@ -227,19 +216,6 @@ async def _fetch_pod_tail(cluster_id: int, namespace: str, pod: dict, container:
                      "error": "；".join(errors)}
 
 
-def _iter_gzip(text: str, chunk_size: int = _GZIP_CHUNK) -> Iterator[bytes]:
-    """gzip 流式压缩：按块喂给 compressobj，避免一次性拼出完整压缩字节（源文本已在内存）。"""
-    compressor = zlib.compressobj(6, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
-    data = text.encode("utf-8")
-    for i in range(0, len(data), chunk_size):
-        chunk = compressor.compress(data[i:i + chunk_size])
-        if chunk:
-            yield chunk
-    tail = compressor.flush()
-    if tail:
-        yield tail
-
-
 # ==================== 2) SSE 跟随 ====================
 
 def _sse_event(event: str, data: dict) -> str:
@@ -329,43 +305,5 @@ async def workload_logs_stream(request: Request, cluster_id: int, namespace: str
 
 
 # ==================== 3) gzip 下载 ====================
-
-@router.get("/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs/download")
-async def pod_logs_download(cluster_id: int, namespace: str, pod_name: str, container: str = "",
-                            tail: int = 5000, gzip: int = 1, start: str = "", end: str = "",
-                            user=Depends(require_any_user)):
-    """下载单 Pod 容器日志（附件）。gzip=1（默认）用 gzip 流式压缩，文件名带 pod 与时间戳。
-
-    start/end（RFC3339 或 epoch 秒）同时给定时，按时间段过滤下载：走 executor 日志流 HTTP
-    取整份带时间戳日志后在 api-server 侧按时间戳过滤（executor 只支持 since_seconds，不支持任意起止）。
-    日志流不可用（agent 集群无平台 kubeconfig）时返回 502，由调用方决定是否降级为 tail 行数。
-    """
-    tail = max(1, min(int(tail or MAX_DOWNLOAD_TAIL), MAX_DOWNLOAD_TAIL))
-    if denied := await _deny_cluster(user, cluster_id, namespace):
-        return denied
-    text = ""
-    if start and end:
-        from app.services.logstream_client import fetch_logs, filter_logs_by_time
-        raw, err = await fetch_logs(cluster_id, namespace, pod_name, container,
-                                    all_lines=True, keep_timestamps=True, timeout=120.0)
-        if err:
-            raise HTTPException(status_code=502, detail=f"日志流不可用，无法按时间段过滤：{err}")
-        text = filter_logs_by_time(raw, start, end)
-    else:
-        r = await executor_client.acall(executor_client.get_pod_logs, cluster_id, namespace, pod_name,
-                                        container, tail, False)
-        text = r.get("logs", "") if r.get("success") else ""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    safe_ns = namespace or "default"
-    safe_pod = pod_name or "pod"
-    if int(gzip or 0):
-        return StreamingResponse(
-            _iter_gzip(text),
-            media_type="application/gzip",
-            headers={"Content-Disposition": f'attachment; filename="{safe_ns}_{safe_pod}_{ts}.log.gz"'},
-        )
-    return Response(
-        content=text,
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{safe_ns}_{safe_pod}_{ts}.log"'},
-    )
+# 单 Pod 日志下载端点统一在 resources.py（GET .../pods/{pod}/logs/download，
+# 支持 previous/all/agent 集群）。勿在此重复定义同一路由。
