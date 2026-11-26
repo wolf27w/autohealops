@@ -387,6 +387,8 @@ def _is_not_found(message) -> bool:
 
 
 RECOVERY_SCALED_TO_ZERO = "scaled_to_zero"
+# 服务层面已恢复（期望副本全部就绪，但仍有旧版本残留 Pod 未就绪）
+RECOVERY_SERVICE_READY = "service_ready"
 
 
 async def check_pod_recovered_detail(cluster_id: int, namespace: str, pod_name: str) -> tuple[bool, str]:
@@ -438,7 +440,17 @@ async def check_pod_recovered_detail(cluster_id: int, namespace: str, pod_name: 
                 if replicas > 0:
                     return False, ""  # 期望有副本但一个都没有 = 真故障，不准关
                 return _is_not_found(dep_pods.get("message")), ""
-            return False, ""  # 仍有 Pod 但未 Ready，服务持续故障，告警不关
+            # 2026-11-26（老板：服务恢复了工单还挂着）：旧崩溃 Pod 还在，但 Deployment 期望副本已全部就绪
+            # （典型：回滚后新 RS 正常、旧 RS 残留 Pod 仍 CrashLoop）→ 服务层面已恢复，告警/工单应关闭；
+            # 残留 Pod 由 Pod 级告警与清理逻辑单独处理。
+            st = await executor_client.acall(
+                executor_client.get_deployment_status, cluster_id, namespace, dep_name)
+            if st.get("success"):
+                replicas = int(st.get("replicas") or 0)
+                ready_replicas = int(st.get("ready_replicas") or 0)
+                if replicas > 0 and ready_replicas >= replicas:
+                    return True, RECOVERY_SERVICE_READY
+            return False, ""  # 期望副本没有全部就绪 = 服务持续故障，告警不关
         # 查询失败（success=False）：仅当明确 not found 才视为资源已删除，否则保持 pending
         return _is_not_found(dep_pods.get("message")), ""
     return False, ""
@@ -3503,6 +3515,9 @@ async def sweep_recovered_alerts(limit: int = 50) -> int:
                 logger.info("恢复收敛：告警 %d（%s/%s）已缩容至 0，按配置下线关闭",
                             alert.id, alert.namespace, alert.resource_name)
                 continue
+            if _reason == RECOVERY_SERVICE_READY:
+                logger.info("恢复收敛：告警 %d（%s/%s）服务已有就绪副本（旧 Pod 残留 CrashLoop）→ 关闭",
+                            alert.id, alert.namespace, alert.resource_name)
             n = await _close_related_alerts(alert)
             if n == 0:
                 recovered_alert = None
