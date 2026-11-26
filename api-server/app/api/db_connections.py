@@ -23,6 +23,8 @@ from app.services import user_permission_service
 from app.services.dialects import UnsupportedError, get_dialect
 from app.services.dialects.base import check_ident, check_type_spec, sql_literal
 
+from app.utils import timeutil
+
 router = APIRouter(prefix="/api/v1/db-connections")
 logger = logging.getLogger(__name__)
 
@@ -1647,12 +1649,12 @@ async def list_slow_sql(conn_id: int, limit: int = 50, start: str = "", end: str
     stmt = select(SlowSQLRecord).where(SlowSQLRecord.db_connection_id == conn_id)
     if start:
         try:
-            stmt = stmt.where(SlowSQLRecord.sampled_at >= datetime.fromisoformat(start.replace("Z", "+00:00")))
+            stmt = stmt.where(SlowSQLRecord.sampled_at >= timeutil.parse_iso_local(start))
         except ValueError:
             return {"code": 400, "message": "start 时间格式不正确", "data": None}
     if end:
         try:
-            stmt = stmt.where(SlowSQLRecord.sampled_at <= datetime.fromisoformat(end.replace("Z", "+00:00")))
+            stmt = stmt.where(SlowSQLRecord.sampled_at <= timeutil.parse_iso_local(end))
         except ValueError:
             return {"code": 400, "message": "end 时间格式不正确", "data": None}
     # 列表按 digest 聚合（同一 SQL 只显示一行）：执行次数求和、平均耗时按次数加权、最大耗时取最大
@@ -1742,10 +1744,14 @@ def classify_slow_diff(has_a: bool, has_b: bool, a_avg: float, b_avg: float) -> 
 
 
 def _parse_ts(v: str) -> tuple[datetime | None, str | None]:
+    """ISO 时间串 → 本地 naive datetime（2026-11-26：前端发 UTC，库里存本地时间）。
+
+    不换算会差 8 小时，导致「最近 N 小时」的慢 SQL 明细恒为空。
+    """
     if not v:
         return None, None
     try:
-        return datetime.fromisoformat(v.replace("Z", "+00:00")), None
+        return timeutil.parse_iso_local(v), None
     except ValueError:
         return None, v
 

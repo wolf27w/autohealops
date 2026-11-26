@@ -228,11 +228,15 @@ def _order_column(order: str):
 
 
 def _parse_iso(v: str) -> tuple[datetime | None, str | None]:
-    """ISO 时间串 → datetime；失败返回 (None, 原串)。"""
+    """ISO 时间串 → **本地 naive** datetime；失败返回 (None, 原串)。
+
+    2026-11-26：库里 start_time 存本地时间，前端发 UTC，必须换算，否则差 8 小时查不到。
+    """
     if not v:
         return None, None
     try:
-        return datetime.fromisoformat(v.replace("Z", "+00:00")), None
+        from app.utils import timeutil
+        return timeutil.parse_iso_local(v), None
     except ValueError:
         return None, v
 
