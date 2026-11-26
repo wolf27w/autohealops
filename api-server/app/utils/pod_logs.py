@@ -63,6 +63,7 @@ _PATH_HINT_RES = (
     re.compile(r"-D[\w.]*log(?:\.path|\.dir)=([^\s\"'=]+)", re.I),  # -Dapp.log.path=...
     re.compile(r"\b(?:LOG_PATH|LOG_DIR|LOGGING_PATH|LOG_HOME|LOG_DIRECTORY)=([^\s\"'=]+)", re.I),
 )
+_FIND_ROOTS = ("/apps", "/opt", "/data", "/home", "/usr/local", "/var/log")
 _DEFAULT_LOG_DIRS = (
     "/apps/works/logs", "/app/logs", "/opt/logs", "/usr/local/tomcat/logs",
     "/home/app/logs", "/var/log/app", "/logs",
@@ -246,6 +247,27 @@ async def _container_log_files(cluster_id: int, namespace: str, pod_name: str,
                     break
         if parts:
             break
+    # 3) 兜底：注解/启动参数都没有时，自动发现「最近 3 小时内被写过的 .log」
+    #    （2026-11-26 老板问「为什么要加注解」——不需要注解，用 find 自动找）
+    if not parts:
+        for root in _FIND_ROOTS:
+            r = await _exec(f"find {root} -maxdepth 4 -name *.log -mmin -180")
+            if not r.get("success"):
+                continue
+            cand = [ln.strip() for ln in (r.get("output") or "").splitlines() if ln.strip()]
+            cand = [c for c in cand if _safe_path(c)][:6]
+            for fpath in cand:
+                tail = await _exec(f"tail -n 2000 {fpath}")
+                text = (tail.get("output") or "").strip() if tail.get("success") else ""
+                if not text:
+                    continue
+                seg = _render(f"容器内日志文件 {fpath}（自动发现）", text)
+                if seg:
+                    parts.append(seg)
+                if len(parts) >= 2:
+                    break
+            if parts:
+                break
     return "\n\n".join(parts)
 
 
