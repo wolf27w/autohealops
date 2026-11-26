@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """告警管理 API"""
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Request
@@ -574,8 +574,16 @@ async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
             .order_by(AIDiagnosisResult.id.desc())
         )
         d = result.scalars().first()
+        a = await session.get(Alert, alert_id)
     if not d:
         return {"code": 404, "message": "无诊断结果", "data": None}
+    # 2026-11-26：诊断是否属于「上一轮故障」
+    # 告警复发合并会复用同一行 alert 并重置 detected_at；此时最新诊断可能还是上一轮的，
+    # 直接当本轮根因展示会误导（老板实测「新故障显示上一次的原因」）。前端据此标「已过期」。
+    stale = False
+    episode_start = getattr(a, "detected_at", None) if a else None
+    if d.created_at and episode_start:
+        stale = d.created_at < (episode_start - timedelta(seconds=120))
     # R68（2026-11-23）：解析 diagnosis_json 出七字段相关项（原因/证据/把握度/影响面），
     # 前端直接渲染，避免每个页面各自手写 JSON 解析；解析失败降级为原始字段。
     import json as _json
@@ -592,6 +600,8 @@ async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
         refs = []
     return {"code": 200, "message": "success", "data": {
         "diagnosis_json": d.diagnosis_json, "confidence": d.confidence, "created_at": str(d.created_at),
+        # 2026-11-26：轮次标记（stale=True = 上一轮故障的诊断，本轮尚未重新诊断）
+        "stale": stale, "episode_started_at": str(episode_start) if episode_start else "",
         # R68 七字段（诊断侧）
         "root_cause": str(data.get("root_cause", "") or "").strip(),
         "evidence_refs": [str(x).strip() for x in refs if str(x).strip()],

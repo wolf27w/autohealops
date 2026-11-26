@@ -25,6 +25,38 @@ logger = get_logger("api-server.diagnosis_reuse")
 
 DEFAULT_WINDOW_MINUTES = 30
 
+# 在途（未终态）状态：只有「仍在途的告警」才代表同一轮故障，它的诊断才能被窗口复用。
+# 告警一旦 resolved/self_healed，那一轮故障就结束了，之后的新告警是新故障，必须重新诊断。
+ACTIVE_ALERT_STATUSES = ("pending", "awaiting_approval", "ticketed")
+
+# 故障「轮次」判定的时钟容差（秒）：
+# alert.detected_at 在复发合并（alert_merge.apply_merge reopen）时由**应用侧** datetime.now() 重置，
+# 而 ai_diagnosis_results.created_at 是**数据库** server_default 生成。两边时钟有秒级偏差时，
+# 新诊断可能被判成「上一轮的」→ 每轮反复重诊断。给 120s 容差。
+# 代价：同 Pod 同故障在 2 分钟内快速抖回来的复发会复用上一轮结论（根因大概率相同，可接受）。
+EPISODE_SKEW_TOLERANCE_SECONDS = 120
+
+
+def episode_start(alert) -> datetime | None:
+    """当前故障「轮次」的起点（alert.detected_at；复发合并 reopen 时会被重置为复现时刻）"""
+    return getattr(alert, "detected_at", None)
+
+
+def is_previous_episode(row_created_at: datetime | None, alert) -> bool:
+    """这条诊断/方案是否属于**上一轮**故障（属于则不得复用）
+
+    背景（2026-11-26 老板反馈）：故障修好后复发，UI/诊断仍显示上一次的原因。
+    根因：alert_merge 在合并窗口内复发时**复用同一行 alert**（reopen，detected_at 重置），
+    但诊断/修复方案复用路径只按 alert_id 查，不看诊断/方案是什么时候的 → 直接拿上一轮的结论。
+    """
+    start = episode_start(alert)
+    if not row_created_at or not start:
+        return False
+    try:
+        return row_created_at < (start - timedelta(seconds=EPISODE_SKEW_TOLERANCE_SECONDS))
+    except TypeError:  # 极端情况：时区感知/裸 datetime 混用
+        return False
+
 
 async def get_reuse_window_minutes() -> int:
     """读取复用窗口（分钟）；读设置失败按默认 30 分钟"""
@@ -53,24 +85,31 @@ async def find_reusable_diagnosis(
     since = datetime.now() - timedelta(minutes=minutes)
     try:
         async with async_session() as session:
-            rows = list((await session.execute(
-                select(AIDiagnosisResult)
+            rows = (await session.execute(
+                select(AIDiagnosisResult, Alert.detected_at)
                 .join(Alert, Alert.id == AIDiagnosisResult.alert_id)
                 .where(
                     Alert.cluster_id == cluster_id,
                     Alert.namespace == (namespace or ""),
                     Alert.resource_name == (resource_name or ""),
                     Alert.fault_type == fault_type,
+                    # 2026-11-26：只从**仍在途**的告警复用——告警已 resolved/self_healed 说明
+                    # 那轮故障已结束，新告警必须重新诊断（否则输出上一次的原因）
+                    Alert.status.in_(ACTIVE_ALERT_STATUSES),
                     AIDiagnosisResult.created_at >= since,
                 )
                 .order_by(AIDiagnosisResult.id.desc())
                 .limit(5)
-            )).scalars())
+            )).all()
     except Exception as e:  # noqa: BLE001
         logger.warning("查询可复用诊断失败: %s", e)
         return None
 
-    for row in rows:
+    tol = timedelta(seconds=EPISODE_SKEW_TOLERANCE_SECONDS)
+    for row, src_detected in rows:
+        # 源告警自己也可能已经被新一轮复发重开过：它身上早于本轮起点的诊断不能用
+        if src_detected and row.created_at and row.created_at < (src_detected - tol):
+            continue
         try:
             data = json.loads(row.diagnosis_json or "{}")
         except (json.JSONDecodeError, TypeError):
@@ -80,14 +119,20 @@ async def find_reusable_diagnosis(
     return None
 
 
-async def find_alert_diagnosis(alert_id: int) -> tuple[AIDiagnosisResult, dict] | None:
-    """取某告警自己最近一条有结论的诊断（同告警重复诊断的去重）"""
+async def find_alert_diagnosis(alert_id: int, episode_start_at: datetime | None = None
+                               ) -> tuple[AIDiagnosisResult, dict] | None:
+    """取某告警**当前轮次**最近一条有结论的诊断（同告警重复诊断的去重）
+
+    episode_start_at：当前轮次起点（alert.detected_at）。给定后，早于它的诊断属于上一轮故障，
+    一律不复用（2026-11-26：复合并复用同一行告警时，不传这个就会拿到上一轮结论）。
+    """
     async with async_session() as session:
+        q = select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert_id)
+        if episode_start_at is not None:
+            q = q.where(AIDiagnosisResult.created_at >= (
+                episode_start_at - timedelta(seconds=EPISODE_SKEW_TOLERANCE_SECONDS)))
         rows = list((await session.execute(
-            select(AIDiagnosisResult)
-            .where(AIDiagnosisResult.alert_id == alert_id)
-            .order_by(AIDiagnosisResult.id.desc())
-            .limit(3)
+            q.order_by(AIDiagnosisResult.id.desc()).limit(3)
         )).scalars())
     for row in rows:
         try:

@@ -3,7 +3,7 @@ import { envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge } from 'antd'
+import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge, Alert as AntAlert } from 'antd'
 import { getAlertsPaged, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
 import { canWrite } from '../utils/auth'
 import StatusTag from '../components/StatusTag'
@@ -326,6 +326,9 @@ interface DiagnosisData {
   confidence?: number | string | null
   diagnosis_json?: string
   created_at?: string
+  // 2026-11-26：stale=true 表示这条诊断属于上一轮故障（告警复发合并复用同一行，本轮尚未重新诊断）
+  stale?: boolean
+  episode_started_at?: string
   root_cause?: string
   evidence_refs?: string[]
   impact?: unknown
@@ -398,6 +401,19 @@ function DiagnosisPanel({ alert }: { alert: Alert }) {
 
   return (
     <div style={{ padding: '4px 0' }}>
+      {data.stale && (
+        <AntAlert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 8 }}
+          message="这条诊断属于上一轮故障，本轮尚未重新诊断"
+          description={
+            `诊断时间 ${String(data.created_at || '').slice(0, 19) || '未知'}` +
+            `；本轮故障始于 ${String(data.episode_started_at || alert.detected_at || '').slice(0, 19) || '未知'}` +
+            '。以「原因」为准前请先确认是否已重新诊断，否则可能是上一次故障的结论。'
+          }
+        />
+      )}
       {field('现象', phenomenon)}
       {field('首次出现时间', firstOccurrence)}
       {field('原因', rootCause, !data.root_cause)}

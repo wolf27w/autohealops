@@ -106,7 +106,7 @@ class TestProcessIncrement(unittest.IsolatedAsyncioTestCase):
     async def test_liveness_kill_137_creates_probe_alert(self):
         """liveness 事件 + exitCode=137 → 建 PodRestartProbeFail + 诊断 + 通知"""
         with patch.object(prs, "_describe_pod", AsyncMock(return_value=LIVENESS_EVENTS)), \
-                patch.object(prs, "_upsert_alert", AsyncMock(return_value=42)) as upsert, \
+                patch.object(prs, "_upsert_alert", AsyncMock(return_value=(42, True, False))) as upsert, \
                 patch.object(prs, "_diagnose_and_notify", AsyncMock()) as diagnose, \
                 patch.object(prs, "redis_pool") as rp:
             rp.exists = AsyncMock(return_value=0)
@@ -125,7 +125,7 @@ class TestProcessIncrement(unittest.IsolatedAsyncioTestCase):
     async def test_readiness_only_exit1_skips(self):
         """readiness-only + reason=Error/exitCode=1 → 返回 0，不建单（交给 CrashLoop 链路）"""
         with patch.object(prs, "_describe_pod", AsyncMock(return_value=READINESS_EVENTS)), \
-                patch.object(prs, "_upsert_alert", AsyncMock(return_value=42)) as upsert, \
+                patch.object(prs, "_upsert_alert", AsyncMock(return_value=(42, True, False))) as upsert, \
                 patch.object(prs, "redis_pool") as rp:
             rp.exists = AsyncMock(return_value=0)
             n = await prs._process_increment(1, _pod(code=1), 4, 3)
@@ -136,7 +136,7 @@ class TestProcessIncrement(unittest.IsolatedAsyncioTestCase):
     async def test_137_but_readiness_only_skips(self):
         """exitCode=137 但只有 readiness 事件（无 liveness）→ 返回 0，不建单"""
         with patch.object(prs, "_describe_pod", AsyncMock(return_value=READINESS_EVENTS)), \
-                patch.object(prs, "_upsert_alert", AsyncMock(return_value=42)) as upsert, \
+                patch.object(prs, "_upsert_alert", AsyncMock(return_value=(42, True, False))) as upsert, \
                 patch.object(prs, "redis_pool") as rp:
             rp.exists = AsyncMock(return_value=0)
             n = await prs._process_increment(1, _pod(code=137), 4, 3)
@@ -147,7 +147,7 @@ class TestProcessIncrement(unittest.IsolatedAsyncioTestCase):
     async def test_oom_creates_oom_alert(self):
         """OOMKilled → 建 PodRestartOOM（不变）"""
         with patch.object(prs, "_describe_pod", AsyncMock(return_value="")) as desc, \
-                patch.object(prs, "_upsert_alert", AsyncMock(return_value=42)) as upsert, \
+                patch.object(prs, "_upsert_alert", AsyncMock(return_value=(42, True, False))) as upsert, \
                 patch.object(prs, "_diagnose_and_notify", AsyncMock()) as diagnose, \
                 patch.object(prs, "redis_pool") as rp:
             rp.exists = AsyncMock(return_value=0)
@@ -168,7 +168,7 @@ class TestProcessIncrement(unittest.IsolatedAsyncioTestCase):
         """既没 OOM 也没 liveness 事件 → 不属于 N5，不上报"""
         events = "Events:\n  Normal  Pulled  container image already present on machine"
         with patch.object(prs, "_describe_pod", AsyncMock(return_value=events)), \
-                patch.object(prs, "_upsert_alert", AsyncMock(return_value=42)) as upsert, \
+                patch.object(prs, "_upsert_alert", AsyncMock(return_value=(42, True, False))) as upsert, \
                 patch.object(prs, "redis_pool") as rp:
             rp.exists = AsyncMock(return_value=0)
             n = await prs._process_increment(1, _pod(code=1), 4, 3)
@@ -179,7 +179,7 @@ class TestProcessIncrement(unittest.IsolatedAsyncioTestCase):
     async def test_grace_period_suppresses(self):
         """宽限期内直接返回 0（不查 describe、不建单）"""
         with patch.object(prs, "_describe_pod", AsyncMock(return_value="")) as desc, \
-                patch.object(prs, "_upsert_alert", AsyncMock(return_value=42)) as upsert, \
+                patch.object(prs, "_upsert_alert", AsyncMock(return_value=(42, True, False))) as upsert, \
                 patch.object(prs, "redis_pool") as rp:
             rp.exists = AsyncMock(return_value=1)  # 命中宽限期
             n = await prs._process_increment(1, _pod(code=137), 4, 3)

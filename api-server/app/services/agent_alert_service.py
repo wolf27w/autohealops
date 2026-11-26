@@ -115,8 +115,10 @@ async def _merge_or_insert(ev: dict) -> int:
                                             severity=ev.get("severity") or "", reopen=reopen, now=now)
                     await session.commit()
                     if reopen:
-                        logger.info("告警复发合并（节点/资源）：%s %s 复用 #%d（次数 %d）",
+                        logger.info("告警复发合并（节点/资源）：%s %s 复用 #%d（次数 %d）→ 新一轮故障",
                                     rname, fault, row.id, row.event_count)
+                        # 2026-11-26：复发重开必须重新触发处理（否则诊断一直停在上一轮结论）
+                        return int(row.id)
                     return 0
             else:
                 # Pod：按 Deployment 聚合（同服务持续故障合成一条；窗口内复发 → 复用原告警 reopen）
@@ -128,8 +130,10 @@ async def _merge_or_insert(ev: dict) -> int:
                                             severity=ev.get("severity") or "", reopen=reopen, now=now)
                     await session.commit()
                     if reopen:
-                        logger.info("告警复发合并：%s/%s %s 复用 #%d（次数 %d）",
+                        logger.info("告警复发合并：%s/%s %s 复用 #%d（次数 %d）→ 新一轮故障",
                                     dep or rname, fault, rname, row.id, row.event_count)
+                        # 2026-11-26：复发重开必须重新触发处理（否则诊断一直停在上一轮结论）
+                        return int(row.id)
                     return 0
 
         # 环境维度（R24）：集群的 env_tag（空则回落集群名）

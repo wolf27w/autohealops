@@ -219,8 +219,12 @@ def _grace_key(cluster_id: int, field: str) -> str:
 
 
 async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
-                        restart: int, prev_r: int, extra: str = "") -> int:
-    """建单/聚合：同 Deployment 同 fault_type 在途不重复建单；返回新建告警 id（0=在途聚合未新建）
+                        restart: int, prev_r: int, extra: str = "") -> tuple[int, bool, bool]:
+    """建单/聚合：同 Deployment 同 fault_type 在途不重复建单；返回 (告警id, 是否新建, 是否复发重开)
+
+    - (id, True, False)  新建告警 → 需诊断
+    - (id, False, True)  复发合并（reopen 既有行）→ 新一轮故障，需重新诊断
+    - (0, False, False)  并入仍在途的告警（同一轮故障）→ 不重复诊断
 
     按 deployment_name 维度聚合（与 alerts.dedup_key 唯一索引 + watcher 去重口径一致，
     避免同服务多 Pod 同时 OOM 时撞 1062 唯一索引）；聚合时把 resource_name 更新为最新出问题的 Pod。
@@ -239,9 +243,12 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
                                     resource_name=pod["name"], reopen=reopen, now=now)
             await session.commit()
             if reopen:
-                logger.info("Pod 重启告警复发合并：%s %s 复用 #%d（累计 %d 次）",
+                logger.info("Pod 重启告警复发合并：%s %s 复用 #%d（累计 %d 次）→ 新一轮故障，重新诊断",
                             dep, fault_type, row.id, row.event_count)
-            return 0
+                # 2026-11-26：复发复用同一行告警时，上一轮的诊断仍挂在 alert_id 上；
+                # 不重新诊断的话，告警详情会一直显示上一次的原因。
+                return int(row.id), False, True
+            return 0, False, False
         alert = Alert(
             cluster_id=cluster_id,
             resource_type="pod",
@@ -262,14 +269,14 @@ async def _upsert_alert(cluster_id: int, pod: dict, fault_type: str,
         except IntegrityError:
             # 唯一索引竞态兜底 → 转聚合，不重复建单（只把「已存在」当聚合）
             await session.rollback()
-            return 0
+            return 0, False, False
         except Exception as e:  # noqa: BLE001
             # 其它异常（DB 故障等）不静默吞：回滚并抛给上层感知，避免静默丢告警
             await session.rollback()
             logger.error("Pod 重启告警建单失败（非唯一冲突）: %s", e)
             raise
         await session.refresh(alert)
-        return alert.id
+        return int(alert.id), True, False
 
 
 async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
@@ -344,8 +351,9 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
     reused = None
     try:
         from app.services import diagnosis_reuse
-        # ① 同一告警已经诊断过（N5 聚合告警：重启计数又涨一次）→ 永不复诊，避免同一条告警刷十几条诊断
-        reused = await diagnosis_reuse.find_alert_diagnosis(alert_id)
+        # ① 同一告警**本轮**已诊断过（N5 聚合告警：重启计数又涨一次）→ 不复诊，避免同一条告警刷十几条诊断；
+        #    2026-11-26：限定本轮（detected_at 之后），复发重开时上一轮结论不算数
+        reused = await diagnosis_reuse.find_alert_diagnosis(alert_id, episode_start_at=alert.detected_at)
         if not reused:
             # ② 其他告警但同一 Pod 同故障，且在复用窗口内 → 也算同一问题
             reused = await diagnosis_reuse.find_reusable_diagnosis(
@@ -404,8 +412,13 @@ async def _process_increment(cluster_id: int, pod: dict, restart: int, prev_r: i
                          field, _container_facts(pod))
             return 0
 
-    alert_id = await _upsert_alert(cluster_id, pod, fault_type, restart, prev_r, extra)
+    alert_id, created, reopened = await _upsert_alert(cluster_id, pod, fault_type, restart, prev_r, extra)
     if alert_id == 0:
+        return 0
+    if not created:
+        # 复发：复用既有告警行（上一轮已恢复/关单），这是新一轮故障 → 重新诊断+通知；
+        # 不算「新建告警」（返回 0 仅影响计数日志）。
+        await _diagnose_and_notify(alert_id, cluster_id, pod, fault_type, prev_r, restart)
         return 0
 
     # 连续异常重启计数：达到 3 次 → 本次仍告警，之后进入宽限期（抑制后续）

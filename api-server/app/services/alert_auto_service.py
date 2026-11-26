@@ -2363,14 +2363,27 @@ async def _process_one(alert: Alert) -> bool:
         logger.debug("修复后复发判定失败（跳过，不影响主链路）: %s", e)
 
     # 2. 复用已有诊断 + 方案（断点续传：诊断/方案失败后下次继续）
+    # 2026-11-26（老板反馈「修好后的新故障还是上一次的原因」）：只复用**本轮故障**的产物。
+    # alert_merge 在合并窗口内复发时复用同一行 alert（reopen，detected_at 重置为复现时刻），
+    # 但上一轮的诊断/已完成的方案仍挂在同一个 alert_id 上 →
+    #   ① 诊断直接拿上一轮结论；② plan_row 是 completed/executing → 直接 return False（连修都不修）。
+    # 轮次起点 = alert.detected_at，给时钟容差（detected_at 是应用侧时钟、created_at 是 DB 时钟）。
+    from app.services import diagnosis_reuse as _dreuse
+    _ep_since = None
+    if alert.detected_at:
+        _ep_since = alert.detected_at - timedelta(seconds=_dreuse.EPISODE_SKEW_TOLERANCE_SECONDS)
     async with async_session() as session:
+        _dq = select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert.id)
+        if _ep_since is not None:
+            _dq = _dq.where(AIDiagnosisResult.created_at >= _ep_since)
         diag_row = (await session.execute(
-            select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert.id)
-            .order_by(AIDiagnosisResult.id.desc()).limit(1)
+            _dq.order_by(AIDiagnosisResult.id.desc()).limit(1)
         )).scalar_one_or_none()
+        _pq = select(RepairPlan).where(RepairPlan.alert_id == alert.id)
+        if _ep_since is not None:
+            _pq = _pq.where(RepairPlan.created_at >= _ep_since)
         plan_row = (await session.execute(
-            select(RepairPlan).where(RepairPlan.alert_id == alert.id)
-            .order_by(RepairPlan.id.desc()).limit(1)
+            _pq.order_by(RepairPlan.id.desc()).limit(1)
         )).scalar_one_or_none()
 
     # 方案已执行/执行中 → 跳过（告警状态会由执行流程更新）
