@@ -117,5 +117,39 @@ class TestDeadPodFallback(unittest.IsolatedAsyncioTestCase):
         self.assertIn("APPLICATION FAILED TO START", out)
 
 
+class TestContainerLogFilesAndNoise(unittest.TestCase):
+    """2026-11-26（老板）：日志要看容器内文件；且不能把 INFO/DEBUG 噪声当错误行"""
+
+    def test_log_dirs_from_launch_args(self):
+        dirs = pod_logs._log_dirs_from_hints(
+            "java ... -DJM.LOG.PATH=/apps/works/logs/afbase/ -XX:MaxRAMPercentage=60 "
+            "-Dapp.log.path=/data/logs/app.log  LOG_PATH=/var/log/x")
+        self.assertIn("/apps/works/logs/afbase", dirs)
+        self.assertIn("/data/logs", dirs)
+        self.assertIn("/var/log/x", dirs)
+
+    def test_error_line_excludes_info_noise(self):
+        self.assertFalse(pod_logs._is_error_line(
+            "2026-11-25 09:54:43.863 INFO [main] ParamUtil [http-client] connect timeout:1000"))
+        self.assertFalse(pod_logs._is_error_line(
+            "2026-11-25 09:54:23.578 DEBUG x : ==>  Preparing: SELECT * FROM t WHERE a = ?"))
+        self.assertTrue(pod_logs._is_error_line(
+            "2026-11-25 09:54:44 ERROR 7 --- [main] c.e.X : java.lang.OutOfMemoryError: Java heap space"))
+        self.assertTrue(pod_logs._is_error_line(
+            "/usr/bin/enpoint: line 2:     7 Killed  java ${JAVA_OPTS}"))
+        self.assertTrue(pod_logs._is_error_line(
+            "2026-11-25 WARN 7 --- [main] o.s.b.d : APPLICATION FAILED TO START"))
+
+    def test_render_drops_debug_noise(self):
+        text = "\n".join([
+            "2026-11-25 09:54:23.578 DEBUG c.e.a.d.C 159 : ==>  Preparing: SELECT * FROM af_rounting_sign_detail",
+            "2026-11-25 09:54:44.980 ERROR 7 --- [main] c.e.X : java.lang.OutOfMemoryError: Java heap space",
+            "2026-11-25 09:54:45.000 INFO 7 --- [main] c.e.Y : done",
+        ])
+        seg = pod_logs._render("t", text)
+        self.assertIn("OutOfMemoryError", seg)
+        self.assertNotIn("Preparing: SELECT", seg)
+
+
 if __name__ == "__main__":
     unittest.main()

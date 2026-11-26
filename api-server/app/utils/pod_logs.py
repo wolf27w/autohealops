@@ -13,6 +13,7 @@
   现在：先按容器维度取（Pod YAML 的 containerStatuses 拿容器名），**跳过日志 sidecar**，
   每个容器独立取 previous / 当前（单容器失败不影响其它），并给每段打容器标签。
 """
+import re
 import time
 
 from app.clients.executor_client import executor_client
@@ -54,6 +55,19 @@ _HARD_STARTUP_MARKERS = (
 # 日志类 sidecar：日志不进诊断上下文（会挤掉应用容器证据）；也不该按它判 --previous 可用性
 _SIDECAR_PREFIXES = ("filebeat", "fluent-bit", "fluentd", "logstash", "logtail", "vector",
                      "istio-proxy", "envoy", "linkerd-proxy", "sidecar")
+
+# 2026-11-26（老板）：很多 Java 应用日志**写在容器内文件**里（stdout 只有启动脚本的 Killed 行），
+# 例如 -DJM.LOG.PATH=/apps/works/logs/afbase/。诊断必须优先看容器内日志文件，stdout 只作补充。
+_PATH_HINT_RES = (
+    re.compile(r"-D[\w.]*LOG[_A-Z]*PATH=([^\s\"'=]+)", re.I),      # -DJM.LOG.PATH=/apps/works/logs/afbase/
+    re.compile(r"-D[\w.]*log(?:\.path|\.dir)=([^\s\"'=]+)", re.I),  # -Dapp.log.path=...
+    re.compile(r"\b(?:LOG_PATH|LOG_DIR|LOGGING_PATH|LOG_HOME|LOG_DIRECTORY)=([^\s\"'=]+)", re.I),
+)
+_DEFAULT_LOG_DIRS = (
+    "/apps/works/logs", "/app/logs", "/opt/logs", "/usr/local/tomcat/logs",
+    "/home/app/logs", "/var/log/app", "/logs",
+)
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./@-]+$")
 
 # 容器名缓存（同一 Pod 在一次诊断里会被调多次；容器名基本不变）
 _CTN_CACHE: dict[tuple[int, str, str], tuple[float, list[str]]] = {}
@@ -118,21 +132,173 @@ async def _container_names(cluster_id: int, namespace: str, pod_name: str) -> li
     return names
 
 
+def _log_dirs_from_hints(*texts: str) -> list[str]:
+    """从启动参数/日志里解析应用自己的日志目录（纯函数，去重、只保留绝对路径）"""
+    out: list[str] = []
+    for text in texts:
+        if not text:
+            continue
+        for rx in _PATH_HINT_RES:
+            for m in rx.finditer(text):
+                p = (m.group(1) or "").strip().rstrip(";,")
+                if not p.startswith("/"):
+                    continue
+                # 取值可能是「目录」也可能是「文件」：带日志扩展名当文件取父目录，否则当目录
+                low = p.lower()
+                if low.endswith((".log", ".out", ".txt", ".json", ".log.gz")) or (
+                        not p.endswith("/") and "." in p.rsplit("/", 1)[-1]):
+                    d = p.rsplit("/", 1)[0]
+                else:
+                    d = p
+                d = d.rstrip("/") or "/"
+                if d not in out:
+                    out.append(d)
+    return out
+
+
+def _safe_path(p: str) -> bool:
+    return bool(p) and ".." not in p and bool(_SAFE_PATH_RE.match(p))
+
+
+async def _list_dir(exec_fn, d: str) -> tuple[list[str], list[str]]:
+    """列目录：返回 (文件名列表, 子目录列表)。用 `ls -1lt` 看首字符区分（无 shell 可用）。"""
+    r = await exec_fn(f"ls -1lt {d}")
+    if not r.get("success"):
+        return [], []
+    files, dirs = [], []
+    for ln in (r.get("output") or "").splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("total ") or len(ln) < 10:
+            continue
+        mode = ln[0]
+        name = ln.split()[-1]
+        if not _safe_path(name) or name.startswith("."):
+            continue
+        if mode == "d":
+            dirs.append(name)
+        elif mode == "-":
+            files.append(name)
+    return files, dirs
+
+
+async def _container_log_files(cluster_id: int, namespace: str, pod_name: str,
+                               container: str, hints: str) -> str:
+    """读**容器内日志文件**（应用日志通常在这里，stdout 只有启动脚本输出）。
+
+    2026-11-26 关键约束：exec_in_pod 是「单命令、不经 shell」，管道/重定向/通配符全不可用
+    （会报「诊断命令包含非法字符」）。所以只用 ls / tail 两个命令，过滤放 Python 侧。
+
+    流程：日志目录（启动参数 -Dxxx.LOG.PATH + 常见目录，最多 5 个）→ 列文件；
+    目录里只有子目录时下钻一层（如 afbase/nacos/logs）→ 取最新日志文件 tail 2000 行
+    → Python 提错误行。单步失败不影响其它。
+    """
+    if not container:
+        return ""
+
+    async def _exec(cmd: str) -> dict:
+        try:
+            return await executor_client.acall(
+                executor_client.exec_in_pod, cluster_id, namespace, pod_name, cmd,
+                container=container)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("容器内取日志失败 %s: %s", cmd[:80], e)
+            return {"success": False, "output": "", "error": str(e)}
+
+    async def _read_file(d: str, fname: str) -> str:
+        fpath = f"{d.rstrip('/')}/{fname}"
+        if not _safe_path(fpath):
+            return ""
+        tail = await _exec(f"tail -n 2000 {fpath}")
+        text = (tail.get("output") or "").strip() if tail.get("success") else ""
+        if not text:
+            return ""
+        return _render(f"容器内日志文件 {fpath}", text)
+
+    dirs = _log_dirs_from_hints(hints) + list(_DEFAULT_LOG_DIRS)
+    parts: list[str] = []
+    seen: set[str] = set()
+    for d in dirs:
+        if not _safe_path(d) or d in seen:
+            continue
+        seen.add(d)
+        if len(seen) > 5:
+            break
+        files, subdirs = await _list_dir(_exec, d)
+        if files:
+            for fname in files[:2]:
+                seg = await _read_file(d, fname)
+                if seg:
+                    parts.append(seg)
+                if len(parts) >= 2:
+                    break
+        else:
+            # 目录里只有子目录 → 下钻一层（如 afbase/nacos/logs）
+            for sub in subdirs[:2]:
+                subdir = f"{d.rstrip('/')}/{sub}"
+                sf, _ignored = await _list_dir(_exec, subdir)
+                for fname in sf[:2]:
+                    seg = await _read_file(subdir, fname)
+                    if seg:
+                        parts.append(seg)
+                    if len(parts) >= 2:
+                        break
+                if len(parts) >= 2:
+                    break
+        if parts:
+            break
+    return "\n\n".join(parts)
+
+
+# 2026-11-26：噪声行（DEBUG/TRACE、MyBatis SQL 参数）——有错误行时一律不进上下文，
+# 否则 2000 行里 95% 是 SQL DEBUG，模型看到的「日志」全是噪声（老板实测结论跑偏）。
+_NOISE_RE = re.compile(r"\b(DEBUG|TRACE)\b|==>\s+Preparing|==>\s+Parameters|<==\s+", re.I)
+
+
+def _is_noise(line: str) -> bool:
+    return bool(_NOISE_RE.search(line))
+
+
+# 强错误特征（不看日志级别也要保留）
+_HARD_ERR = ("error", "exception", "caused by", "fatal", "panic", "outofmemory",
+             "nosuchmethod", "classnotfound", "application failed to start", "killed")
+
+
+def _is_error_line(line: str) -> bool:
+    """是否是「值得给模型看」的错误行（2026-11-26）
+
+    原来只要命中 _LOG_ERR_HINTS 就留 → 连 `INFO ... connect timeout:1000` 这种配置日志都算错误行，
+    模型拿到的「关键错误」其实是噪声。现在：强特征无条件留；弱特征（timeout/unhealthy/startup…）
+    必须是 WARN/ERROR/FATAL 级别；DEBUG/INFO 的 SQL/参数行一律排除。
+    """
+    if _is_noise(line):
+        return False
+    low = line.lower()
+    if any(h in low for h in _HARD_ERR):
+        return True
+    if any(h in low for h in _LOG_ERR_HINTS):
+        return bool(re.search(r"\b(WARN|ERROR|FATAL)\b", line))
+    return False
+
+
 def _render(label: str, txt: str) -> str:
     """把单容器单实例的原始日志压成「关键行 + 末尾 + 启动失败现场」"""
     lines = [ln for ln in txt.splitlines() if ln.strip()]
     if not lines:
         return ""
-    err_lines = [ln[:300] for ln in lines
-                 if len(ln) <= 400 and any(h in ln.lower() for h in _LOG_ERR_HINTS)][-25:]
-    tail_lines = [ln[:300] for ln in lines[-30:]]
-    startup_lines = extract_startup_window(lines)
+    err_lines = [ln[:300] for ln in lines if len(ln) <= 400 and _is_error_line(ln)][-25:]
+    # 有错误行就只留 8 行末尾做「现场收尾」；没有错误行才给 30 行末尾（并从末尾里剔噪声）
+    if err_lines:
+        clean_tail = [ln[:300] for ln in lines if not _is_noise(ln)][-8:]
+    else:
+        clean_tail = [ln[:300] for ln in lines if not _is_noise(ln)][-30:]
+    startup_lines = extract_startup_window([ln for ln in lines if not _is_noise(ln)])
     seg = f"【{label}】"
     if startup_lines:
         seg += "\n启动失败详情：\n" + "\n".join(startup_lines)
     if err_lines:
         seg += "\n关键错误/告警行：\n" + "\n".join(err_lines)
-    seg += "\n日志末尾：\n" + "\n".join(tail_lines)
+    if clean_tail:
+        seg += "\n日志末尾：\n" + "\n".join(clean_tail)
     return seg
 
 
@@ -198,7 +364,9 @@ async def fetch_pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: i
     """
     if not pod_name:
         return ""
+    # 1) 先取 stdout（同时拿到启动参数里的日志目录线索）
     parts, not_found = await _collect_pod_logs(cluster_id, namespace, pod_name, tail)
+    stdout_text = "\n\n".join(parts)
     note = ""
     if not parts and not_found:
         # 2026-11-26：告警记录的 Pod 名可能已过期（Pod 被删/重建），取证不能就此落空
@@ -209,4 +377,22 @@ async def fetch_pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: i
             if parts:
                 note = f"（告警 Pod {pod_name} 已不存在，改用同服务当前 Pod {live}）\n"
                 logger.info("Pod %s/%s 已不存在，诊断日志改取 %s", namespace, pod_name, live)
+    # 2) 2026-11-26（老板）：容器内日志文件才是主证据（Java 应用多写文件，stdout 只有启动脚本输出）
+    file_seg = ""
+    try:
+        targets = await _container_names(cluster_id, namespace, pod_name)
+        cname = targets[0] if targets else ""
+        hint_src = stdout_text + "\n" + (note or "")
+        file_seg = await _container_log_files(cluster_id, namespace, pod_name, cname, hint_src)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("容器内日志文件采集失败: %s", e)
+    if file_seg:
+        parts = [file_seg] + parts
+    # 2026-11-26：按「有没有硬错误行」排序——带真错误的段放最前（文件日志不一定比 stdout 有料，
+    # 比如本例真正的 OOM 证据就在 stdout 的 Killed 行），保证首错行来自真证据。
+    def _rank(seg: str) -> int:
+        low = seg.lower()
+        return 0 if any(h in low for h in ("oomkilled", "outofmemory", "exception", "caused by",
+                                           "fatal", "panic", "error ", "killed")) else 1
+    parts.sort(key=_rank)
     return (note + "\n\n".join(parts)) if parts else ""
