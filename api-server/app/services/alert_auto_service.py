@@ -1039,6 +1039,43 @@ async def _find_open_ticket_for_alert(alert: Alert):
     return None
 
 
+# ---- 转人工前复查（2026-11-26 老板口径）----
+# 背景：AI 诊断一轮要跑 1~3 分钟，诊断结束决定「转人工」时故障可能已经自行恢复（或已被
+# 恢复扫描关闭）。此时再建工单 + 发转人工通知 = 通知一个已经不存在的故障，工单随后又被
+# 反向闭环自动关掉，纯噪音。
+# 因此所有转人工动作统一在 _mark_manual_and_notify 入口复查一次「现在还坏不坏」。
+# 注意：TerminatingStuck 不做资源探测（裸 Pod 会被 check_pod_recovered 误判为已删除）。
+_MANUAL_RECHECK_FAULTS = POD_RECOVERABLE_FAULTS - {"TerminatingStuck"}
+
+
+async def _manual_recheck_skip_reason(alert: Alert) -> str | None:
+    """转人工前复查：已恢复/已终态/已转单 → 返回跳过原因；None 表示仍需转人工。
+
+    探测失败一律返回 None（按原逻辑转人工），宁可多通知，不可漏掉真故障。
+    """
+    try:
+        async with async_session() as session:
+            a = await session.get(Alert, alert.id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("告警 %d 转人工前复查读库失败（按原逻辑继续）: %s", alert.id, e)
+        return None
+    if a is None:
+        return "alert_missing"
+    # 1) 状态已被别处推进/关闭（恢复扫描、工单闭环、人工处理）
+    if (a.status or "") not in ("pending", "awaiting_approval"):
+        return f"status_{a.status}"
+    # 2) Pod 可自愈类型：再探一次真实状态（诊断耗时期间可能已恢复）
+    if ((a.resource_type or "") == "pod"
+            and (a.fault_type or "") in _MANUAL_RECHECK_FAULTS
+            and (a.deployment_name or "")):
+        try:
+            if await check_pod_recovered(a.cluster_id, a.namespace or "", a.resource_name or ""):
+                return "recovered"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("告警 %d 转人工前恢复探测失败（按原逻辑继续）: %s", a.id, e)
+    return None
+
+
 async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -> None:
     """平台/AI 无法自动解决 → **自动创建工单**（派给值班人/团队）+ 标记告警「已转工单」+ 通知。
 
@@ -1047,6 +1084,25 @@ async def _mark_manual_and_notify(alert: Alert, reason: str, detail: str = "") -
     自动建工单，以工单方式通知/派单/闭环（不再建 manual_assist 审核单）。
     """
     from app.services import ticket_service
+
+    # 转人工前复查（2026-11-26）：诊断/等待期间故障已恢复 → 不建单、不发转人工通知
+    skip = await _manual_recheck_skip_reason(alert)
+    if skip:
+        logger.info("告警 %d 转人工前复查命中（%s），跳过建单/通知", alert.id, skip)
+        if skip == "recovered":
+            # 故障已恢复：按「非 AI 处理恢复」关闭，避免告警挂 pending 等下一轮扫描
+            try:
+                closed = await _close_related_alerts(alert)
+                if closed == 0:
+                    async with async_session() as session:
+                        a = await session.get(Alert, alert.id)
+                        if a and (a.status or "") not in ("resolved", "self_healed"):
+                            _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                            await session.commit()
+                await _cancel_related_approvals(alert.id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("告警 %d 恢复后关闭失败: %s", alert.id, e)
+        return
 
     # 已开单抑制（2026-09-23）：同故障同服务已有在途工单 → 本条并入，不重复建单/通知
     try:
@@ -2906,19 +2962,24 @@ async def _process_one(alert: Alert) -> bool:
 
         # 2026-11-23 R68：诊断已完成 → 补发带结论的通知（两段式第二段）。
         # 非紧急告警创建时那条会被 awaiting_diagnosis 抑制，就在这里一次性发出。
-        try:
-            from app.services import notification_service as _notif
-            await _notif.notify_alert(alert, diag_override={
-                "root_cause": root_cause,
-                "evidence_refs": evidence_refs,
-                "confidence": diag_confidence,
-                "impact": impact,
-                "root_cause_layer": root_cause_layer,
-                "model_fallback": bool(diagnosis.get("model_fallback")) if diagnosis else False,
-                "fallback_from": (diagnosis.get("fallback_from") or []) if diagnosis else [],
-            })
-        except Exception as e:  # noqa: BLE001
-            logger.warning("告警 %d 结论通知失败: %s", alert.id, e)
+        # 2026-11-26：诊断期间故障已恢复/已被关闭 → 不再补发结论通知（通知已恢复的故障没意义）
+        _skip_rc = await _manual_recheck_skip_reason(alert)
+        if _skip_rc:
+            logger.info("告警 %d 诊断完成时已不在活跃态（%s），跳过结论通知", alert.id, _skip_rc)
+        else:
+            try:
+                from app.services import notification_service as _notif
+                await _notif.notify_alert(alert, diag_override={
+                    "root_cause": root_cause,
+                    "evidence_refs": evidence_refs,
+                    "confidence": diag_confidence,
+                    "impact": impact,
+                    "root_cause_layer": root_cause_layer,
+                    "model_fallback": bool(diagnosis.get("model_fallback")) if diagnosis else False,
+                    "fallback_from": (diagnosis.get("fallback_from") or []) if diagnosis else [],
+                })
+            except Exception as e:  # noqa: BLE001
+                logger.warning("告警 %d 结论通知失败: %s", alert.id, e)
 
     # R74：诊断完成后比较本次根因与 KB 根因，匹配才复用 KB 动作（不匹配/可疑/无步骤 → 丢弃，走 AI 方案生成）
     kb_hit_steps, kb_reuse_reason = await _resolve_kb_reuse(kb_ref, root_cause, alert)
