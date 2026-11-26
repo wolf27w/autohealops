@@ -49,6 +49,7 @@ const LogSources = lazy(() => import('./pages/LogSources'))
 // 诊断与自愈
 const AgentChat = lazy(() => import('./pages/AgentChat'))
 const DiagnoseStrategy = lazy(() => import('./pages/DiagnoseStrategy'))
+const AutomationPolicy = lazy(() => import('./pages/AutomationPolicy'))
 const CustomTasks = lazy(() => import('./pages/CustomTasks'))
 const ReleaseHistory = lazy(() => import('./pages/ReleaseHistory'))
 const AgentTrace = lazy(() => import('./pages/AgentTrace'))
@@ -171,6 +172,7 @@ export default function App() {
         {/* ===== 诊断与自愈 ===== */}
         <Route path="diagnose/agent" element={<AgentChat />} />
         <Route path="diagnose/strategy" element={guard('/diagnose/strategy', <DiagnoseStrategy />)} />
+        <Route path="diagnose/automation" element={guard('/diagnose/automation', <AutomationPolicy />)} />
         <Route path="diagnose/tasks" element={guard('/diagnose/tasks', <CustomTasks />)} />
         <Route path="diagnose/release" element={<ReleaseHistory />} />
         <Route path="diagnose/traces" element={guard('/diagnose/traces', <AgentTrace />)} />

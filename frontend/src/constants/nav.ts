@@ -50,6 +50,7 @@ export const NAV: NavGroup[] = [
     children: [
       { key: '/diagnose/agent', label: '应用诊断助手', icon: 'MessageOutlined' },
       { key: '/diagnose/strategy', label: '自愈规则与审批', icon: 'SafetyOutlined', minRole: 'admin' },
+      { key: '/diagnose/automation', label: '自动化策略', icon: 'ControlOutlined', minRole: 'admin' },
       { key: '/diagnose/tasks', label: '定时与批量任务', icon: 'ClockCircleOutlined', minRole: 'admin' },
       { key: '/diagnose/release', label: '发布历史', icon: 'RocketOutlined' },
       { key: '/diagnose/executions', label: '执行明细', icon: 'AuditOutlined' },

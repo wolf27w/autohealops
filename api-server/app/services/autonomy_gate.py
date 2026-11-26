@@ -33,6 +33,77 @@ DECISION_APPROVE = "approve"
 DECISION_MANUAL = "manual"
 
 
+def _env_bucket(is_prod: bool) -> str:
+    return "prod" if is_prod else "test"
+
+
+def _threshold_for(is_prod: bool, thresholds: Optional[dict]) -> float:
+    """置信度阈值：环境级配置优先，缺省/非法回退模块常量"""
+    default = CONFIDENCE_THRESHOLD_PROD if is_prod else CONFIDENCE_THRESHOLD_TEST
+    if not thresholds:
+        return default
+    try:
+        v = thresholds.get(_env_bucket(is_prod))
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_conf_or_none(v):
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n != n or n < 0 or n > 1:
+        return None
+    return n
+
+
+DEFAULT_AUTOMATION_POLICY = {
+    "mode": "by_env",
+    "thresholds": {"prod": CONFIDENCE_THRESHOLD_PROD, "test": CONFIDENCE_THRESHOLD_TEST},
+    "actions": {},
+}
+
+
+async def load_automation_policy() -> dict:
+    """读取 system_settings.automation_policy（2026-11-26 可配置授权策略）。
+
+    结构：{"mode": "by_env|full|assist", "thresholds": {"prod": 0.8, "test": 0.6},
+           "actions": {"rebuild_pod": {"prod": "approve", "test": "auto"}}}
+    缺省/非法一律回退默认值（不阻断诊断主链路）。
+    """
+    import json as _json
+    from app.services.system_setting_service import get_setting
+
+    raw = ""
+    try:
+        raw = await get_setting("automation_policy", "") or ""
+    except Exception:  # noqa: BLE001
+        raw = ""
+    data: dict = {}
+    if raw.strip():
+        try:
+            parsed = _json.loads(raw)
+            if isinstance(parsed, dict):
+                data = parsed
+        except (ValueError, TypeError):
+            data = {}
+    mode = str(data.get("mode") or DEFAULT_AUTOMATION_POLICY["mode"]).strip().lower()
+    if mode not in ("by_env", "full", "assist"):
+        mode = "by_env"
+    th_raw = data.get("thresholds") if isinstance(data.get("thresholds"), dict) else {}
+    thresholds = {}
+    for bucket in ("prod", "test"):
+        try:
+            v = th_raw.get(bucket)
+            thresholds[bucket] = float(v) if v is not None and 0 <= float(v) <= 1 else DEFAULT_AUTOMATION_POLICY["thresholds"][bucket]
+        except (TypeError, ValueError):
+            thresholds[bucket] = DEFAULT_AUTOMATION_POLICY["thresholds"][bucket]
+    actions = data.get("actions") if isinstance(data.get("actions"), dict) else {}
+    return {"mode": mode, "thresholds": thresholds, "actions": actions}
+
+
 def evaluate(
     *,
     action_key: str,
@@ -40,11 +111,16 @@ def evaluate(
     env: str,
     user_impacting: bool,
     mode: str = "assist",
+    thresholds: Optional[dict] = None,
+    overrides: Optional[dict] = None,
 ) -> dict:
     """三条件闸门判定。
 
     mode：assist（默认，按风险/置信度/环境判）｜full（2026-11-24 老板口径：直接诊断修复）
       full 下仅保留「动作不存在 / forbidden」红线；red、低置信度、生产用户可感知均放行自动执行。
+    thresholds：按环境的置信度阈值覆盖，如 {"prod": 0.85, "test": 0.5}（2026-11-26 可配置）
+    overrides：动作×环境显式授权矩阵，如 {"rebuild_pod": {"prod": "approve", "test": "auto"}}；
+      值 auto/approve/manual/forbidden，命中即优先于默认风险规则（forbidden 仍以动作库红线优先）。
 
     返回：{"decision": "auto|approve|manual", "level": "L0..L5", "reasons": [str]}
     """
@@ -62,10 +138,32 @@ def evaluate(
 
     risk = action.get("risk")
 
-    # 2. forbidden → 永不执行
+    # 2. forbidden → 永不执行（动作库红线，任何配置都不能放开）
     if risk == "forbidden":
         reasons.append(f"动作 {action_key} 标记为 forbidden，永不自动执行")
         return {"decision": DECISION_MANUAL, "level": "L1", "reasons": reasons}
+
+    # 2.5 显式授权矩阵（2026-11-26）：动作×环境 → auto/approve/manual/forbidden
+    if overrides:
+        ov = (overrides.get(action_key) or {}).get(_env_bucket(is_prod))
+        ov = str(ov or "").strip().lower()
+        if ov == "forbidden":
+            reasons.append(f"授权矩阵：动作 {action_key} 在{('生产' if is_prod else '测试')}环境被禁用（forbidden）")
+            return {"decision": DECISION_MANUAL, "level": "L1", "reasons": reasons}
+        if ov == "manual":
+            reasons.append(f"授权矩阵：动作 {action_key} 在{('生产' if is_prod else '测试')}环境要求人工处理")
+            return {"decision": DECISION_MANUAL, "level": "L2", "reasons": reasons}
+        if ov == "approve":
+            reasons.append(f"授权矩阵：动作 {action_key} 在{('生产' if is_prod else '测试')}环境需要人工审批")
+            return {"decision": DECISION_APPROVE, "level": "L3", "reasons": reasons}
+        if ov == "auto":
+            # auto 仍受置信度底线约束（生产缺置信度不自动执行，避免无依据乱动手）
+            thr = _threshold_for(is_prod, thresholds)
+            if is_prod and not full and (confidence is None or _to_conf_or_none(confidence) is None):
+                reasons.append(f"授权矩阵 auto 但置信度缺失（生产阈值 {thr}），转人工")
+                return {"decision": DECISION_MANUAL, "level": "L2", "reasons": reasons}
+            reasons.append(f"授权矩阵：动作 {action_key} 在{('生产' if is_prod else '测试')}环境允许自动执行")
+            return {"decision": DECISION_AUTO, "level": "L5", "reasons": reasons}
 
     # 3. red → 生产/测试都要人批（full 模式下放行，仅留 forbidden 红线）
     if risk == "red" and not full:
@@ -76,7 +174,7 @@ def evaluate(
         return {"decision": DECISION_AUTO, "level": "L3", "reasons": reasons}
 
     # 4. confidence 缺失或 < 阈值 → manual（full 模式不因置信度拦截）
-    threshold = CONFIDENCE_THRESHOLD_PROD if is_prod else CONFIDENCE_THRESHOLD_TEST
+    threshold = _threshold_for(is_prod, thresholds)
     env_label = "生产" if is_prod else "测试"
     if not full:
         if confidence is None:

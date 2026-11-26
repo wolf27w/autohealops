@@ -624,7 +624,7 @@ async def _gate_workload_spec(alert: Alert) -> tuple[str, dict]:
 async def _evaluate_autonomy_gate(alert: Alert, steps: list, confidence) -> dict | None:
     """返回闸门判定；映射不到动作时返回 None（不干预原链路）。"""
     from app.services.action_registry import get_action
-    from app.services.autonomy_gate import evaluate
+    from app.services.autonomy_gate import evaluate, load_automation_policy
     from app.services.user_impact import judge_user_impact
 
     action_key = _gate_action_for(alert, steps)
@@ -634,12 +634,17 @@ async def _evaluate_autonomy_gate(alert: Alert, steps: list, confidence) -> dict
     impact = judge_user_impact(spec, kind) if spec else {
         "impacting": True, "reasons": ["缺少工作负载规格，按有用户感知处理"], "checked": {},
     }
+    # 2026-11-26：授权策略可配置（模式/阈值/动作×环境矩阵），由前端「自动化策略」页维护
+    policy = await load_automation_policy()
+    _mode = policy.get("mode") if policy.get("mode") in ("full", "assist") else await _automation_mode(alert)
     res = evaluate(
         action_key=action_key,
         confidence=None if confidence is None else float(confidence),
         env=(alert.env or ""),
         user_impacting=bool(impact.get("impacting")),
-        mode=await _automation_mode(alert),
+        mode=_mode,
+        thresholds=policy.get("thresholds"),
+        overrides=policy.get("actions"),
     )
     # 既定口径例外（2026-09-22）：卡 Terminating 的 Pod「审不审都要删」→ 免审批
     if action_key == "delete_stuck_pod":

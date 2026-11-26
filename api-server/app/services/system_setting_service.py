@@ -81,6 +81,8 @@ DEFAULT_SETTINGS = {
     #   full   = 全局直接修（含生产）
     #   assist = 全局走审批（含测试）
     "automation_mode": ("by_env", "自动化处置模式：by_env=生产审批/测试直修（默认）｜full=全局直修｜assist=全局审批"),
+    # 2026-11-26：授权策略（模式 + 置信度阈值 + 动作×环境矩阵），由前端「自动化策略」页维护
+    "automation_policy": ("", "自动化授权策略 JSON：{mode, thresholds:{prod,test}, actions:{key:{prod,test}}}"),
     # 自动回滚允许的环境（2026-11-24 老板口径：只生产需要回滚，测试/UAT 让开发自己重发）
     #   逗号分隔环境名（prod/production/release/qa…）；空 / * / all = 所有环境都允许
     "rollback_envs": ("prod", "允许**自动**回滚的环境（逗号分隔，默认仅 prod；空/all=全部允许）"),

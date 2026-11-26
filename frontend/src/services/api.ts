@@ -633,6 +633,9 @@ export const deleteSelfHealRule = (id: number) => http.delete(`/self-heal-rules/
 // ============ 系统设置 ============
 export const getSettings = () => http.get<Record<string, unknown>>('/settings')
 export const updateSettings = (data: Payload) => http.put('/settings', data)
+// 自动化授权策略（2026-11-26）：模式 + 置信度阈值 + 动作×环境矩阵
+export const getAutomationPolicy = () => http.get<Payload>('/settings/automation-policy')
+export const updateAutomationPolicy = (data: Payload) => http.put('/settings/automation-policy', data)
 // Web 终端安全开关（B9）：危险命令拦截 / 允许粘贴 / 显示水印 / 禁止复制
 export interface TerminalSecurity {
   block_dangerous: boolean
