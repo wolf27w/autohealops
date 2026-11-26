@@ -55,6 +55,8 @@ MAX_ROUNDS_HARD_LIMIT = 16
 
 # 启动失败场景（2026-11-25 事故复盘）：固定采集顺序需要 8~12 轮才能挖到镜像内文件/版本差异，
 # 按场景放大预算（只放大不缩小，且不超硬上限）。
+OOM_MAX_ROUNDS = 10
+OOM_TOTAL_TIMEOUT = 180.0
 STARTUP_FAILURE_MAX_ROUNDS = 12
 # 2026-11-26：个别工具的输出需要更长保留（否则定性的 Description/Action 被截掉）
 TOOL_OUTPUT_TRUNCATE_OVERRIDE = {
@@ -69,6 +71,9 @@ _STARTUP_HINTS = (
     "application run failed", "application failed to start", "exitcode=1", "exit code 1",
     "imagepull", "errimagepull", "createcontainererror", "back-off restarting",
 )
+
+# OOM 场景识别（2026-11-26）：fault_type/消息里出现这些就是 OOM 类
+_OOM_HINTS = ("oomkilled", "podrestartoom", "outofmemory", "memory limit", "容器内存超限", "container mem high", "已 oom")
 
 
 # 哨兵：区分「未传 fallback（用默认单次诊断）」与「显式传 None（不要兜底）」
@@ -133,22 +138,34 @@ def is_react_loop_enabled() -> bool:
 
 
 def detect_scenario(alert_data: dict, context: dict) -> str:
-    """判断诊断场景（纯函数）：startup_failure / default。
+    """判断诊断场景（纯函数）：startup_failure / oom / default。
 
     启动失败类需要的采集链更长（退出码→首错行→入口脚本→镜像内配置→版本对比），
-    需要单独放大轮次预算并注入固定采集顺序。
+    OOM 类要判「泄漏/突发/配额」并给可执行方案，二者都单独注入固定采集顺序。
     """
     blob = " ".join(str(v) for v in (
         alert_data.get("fault_type"), alert_data.get("message"), alert_data.get("status_info"),
         context.get("fault_type"), context.get("message"),
     ) if v).lower()
+    if any(h in blob for h in _OOM_HINTS):
+        return "oom"
     if any(h in blob for h in _STARTUP_HINTS):
         return "startup_failure"
     return "default"
 
 
 def apply_scenario_policy(policy: AgentPolicy, scenario: str) -> AgentPolicy:
-    """按场景放大预算（只放大不缩小；结果不超硬上限）。"""
+    """按场景放大预算（只放大不缩小；结果不超硬上限）。
+
+    OOM 场景（2026-11-26）：取证包本身要查 6h 曲线 + jcmd，给 10 步 / 180s。
+    """
+    if scenario == "oom":
+        return replace(
+            policy,
+            max_rounds=max(policy.max_rounds, min(OOM_MAX_ROUNDS, MAX_ROUNDS_HARD_LIMIT)),
+            total_timeout=max(policy.total_timeout, OOM_TOTAL_TIMEOUT),
+            per_tool_timeout=max(policy.per_tool_timeout, 20.0),
+        )
     if scenario != "startup_failure":
         return policy
     return replace(
@@ -269,9 +286,13 @@ def _build_initial_messages(alert_data: dict, context: dict, task_memory: str) -
         lines.append("")
         lines.append("【任务记忆（同资源历史）】")
         lines.append(task_memory)
-    if detect_scenario(alert_data, context) == "startup_failure":
+    _scenario = detect_scenario(alert_data, context)
+    if _scenario == "startup_failure":
         lines.append("")
         lines.extend(_startup_checklist_lines())
+    elif _scenario == "oom":
+        lines.append("")
+        lines.extend(_oom_checklist_lines())
     lines.append("")
     lines.append(
         "【处置红线（2026-11-25 老板口径）】不得把「删 Pod 重建」当默认动作："
@@ -283,6 +304,23 @@ def _build_initial_messages(alert_data: dict, context: dict, task_memory: str) -
         "再区分「没配」「引用错了」「配了默认值」三种情况——不得未验证就断言缺失。"
     )
     return [{"role": "user", "content": "\n".join(lines)}]
+
+
+def _oom_checklist_lines() -> list[str]:
+    """OOM 固定采集清单（2026-11-26 老板：「跑一段时间突然 OOM，能不能查出为什么 + 怎么解决」）。
+
+    OOM 是结果不是根因；必须回答「泄漏 / 突发 / 配额」三种形态之一，并给可直接执行的方案。
+    """
+    return [
+        "【OOM 固定采集顺序（按序执行，不要跳步；首步一个工具拿全）】",
+        "1) 先调 collect_oom_evidence（只读，window_minutes 建议 360~1440）：一次拿到 lastState(OOMKilled/exitCode)、"
+        "容器 limit/request、近 N 小时内存曲线（锯齿/爬升）、JVM -Xmx/MaxRAMPercentage + GC.heap_info、OOM 前兆日志，"
+        "并给出形态判定（leak 泄漏 / burst 突发 / quota 配额不当）。",
+        "2) 判定为 leak：用「曲线不回落 + 基线抬升」说理；方案必须包含抓两次堆转储对比（jcmd GC.heap_dump）与重启止血。",
+        "3) 判定为 burst：找突发来源（批量接口/大文件/缓存击穿），方案给限流 + 缓存容量上限；不要归因给「内存高」。",
+        "4) 判定为 quota：核对「堆 ≤ limit×0.75」；MaxRAMPercentage 过高时给具体数值调整。",
+        "5) 任何一条结论都要带证据（峰值/limit 比例、回落次数、GC 后基线），不得只写「内存不足/OOM」。",
+    ]
 
 
 def _startup_checklist_lines() -> list[str]:

@@ -215,6 +215,28 @@ async def _h_jvm_diag(args: dict, context: dict) -> dict:
     return {"success": True, "output": f"{header}\n{out}"[:8000], "error": ""}
 
 
+async def _h_collect_oom_evidence(args: dict, context: dict) -> dict:
+    """OOM 取证包（2026-11-26）：内存曲线形态 + JVM 配额 + OOM 前兆 → 判定泄漏/突发/配额 + 解决方法"""
+    from app.services import oom_evidence_service
+
+    container = (args.get("container") or "").strip()
+    try:
+        window = int(args.get("window_minutes") or 360)
+    except (TypeError, ValueError):
+        window = 360
+    r = await oom_evidence_service.collect(context, container=container,
+                                           window_minutes=max(30, min(window, 7 * 24 * 60)))
+    ok = bool(r.get("success"))
+    return {
+        "success": ok,
+        "output": (r.get("output") or "")[:8000],
+        "error": "" if ok else "；".join(r.get("notes") or []) or "OOM 取证失败",
+        "data": {"verdict": (r.get("verdict") or {}).get("kind"),
+                 "containers": r.get("containers") or [],
+                 "trend": r.get("trend") or {}},
+    }
+
+
 async def _h_get_pod_metrics(args: dict, context: dict) -> dict:
     """Prometheus 查 Pod CPU/内存使用率（% of limit）"""
     cluster_id = context["cluster_id"]
@@ -1331,6 +1353,28 @@ _register({
     "domain": "application",
     "timeout": 90,
     "handler": _h_collect_startup_evidence,
+})
+
+_register({
+    "name": "collect_oom_evidence",
+    "label": "OOM 证据包",
+    "description": (
+        "OOMKilled / PodRestartOOM / 容器内存超限类问题**首选**工具：一次采集 ①容器 lastState.terminated"
+        "（OOMKilled/exitCode）与 restartCount ②容器 limits/requests ③近 N 小时 container_memory_working_set"
+        "曲线（判锯齿/爬升）④JVM -Xmx/MaxRAMPercentage 与 GC.heap_info ⑤上次实例日志的 OOM 前兆，并给出"
+        "**形态判定**（缓慢泄漏 / 突发峰值 / 配额不当）与四段解决方法。"
+        "用于回答「为什么 OOM」——不要只看重启次数或 exitCode 就下结论。只读。"
+    ),
+    "args_schema": {
+        "container": {"type": "string", "required": False,
+                      "description": "容器名（多容器 Pod 指定；留空取主容器）", "default": ""},
+        "window_minutes": {"type": "int", "required": False,
+                           "description": "内存趋势回看窗口（分钟），默认 360（6 小时），最大 10080", "default": 360},
+    },
+    "permission": "readonly",
+    "domain": "application",
+    "timeout": 120,
+    "handler": _h_collect_oom_evidence,
 })
 
 _register({
