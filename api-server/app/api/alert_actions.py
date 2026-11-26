@@ -30,3 +30,13 @@ async def dispatch_action(alert_id: int, payload: dict, user=Depends(require_ope
     if not r.get("ok"):
         return {"code": 400, "message": r.get("error") or "处置失败", "data": None}
     return {"code": 200, "message": "success", "data": r}
+
+
+@router.post("/{alert_id}/actions/{action_key}/dispatch")
+async def dispatch_specific_action(alert_id: int, action_key: str, user=Depends(require_operator)):
+    """按指定动作发起处置（2026-11-26）：auto 直接执行；approve 建审批单，批后自动执行。"""
+    operator = getattr(user, "username", "") or ""
+    r = await alert_action_service.dispatch_action(alert_id, action_key, operator)
+    if not r.get("ok"):
+        return {"code": 400, "message": r.get("error") or "处置失败", "data": None}
+    return {"code": 200, "message": "success", "data": r}

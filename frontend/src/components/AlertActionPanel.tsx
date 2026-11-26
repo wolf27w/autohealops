@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { dispatchAlertAction, getCandidateActions } from '../services/api'
+import { dispatchAlertAction, dispatchSpecificAction, getCandidateActions } from '../services/api'
 
 const { Text } = Typography
 
@@ -43,7 +43,7 @@ const MODE_LABEL: Record<string, string> = {
 export default function AlertActionPanel({ alertId, onChanged }: { alertId: number; onChanged?: () => void }) {
   const [data, setData] = useState<CandidateResp | null>(null)
   const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState<'ai' | 'manual' | null>(null)
+  const [busy, setBusy] = useState<'ai' | 'manual' | string | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -64,6 +64,20 @@ export default function AlertActionPanel({ alertId, onChanged }: { alertId: numb
       load()
     } catch (e) {
       message.error(`操作失败：${(e as Error).message}`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const runSpecific = async (c: Candidate) => {
+    setBusy(c.key)
+    try {
+      const r = (await dispatchSpecificAction(alertId, c.key)) as { decision?: string; plan_id?: number; approval_id?: number; message?: string }
+      message.success(r?.message || (r?.approval_id ? `已提交审批 #${r.approval_id}，通过后自动执行` : '已开始执行'))
+      onChanged?.()
+      load()
+    } catch (e) {
+      message.error(`发起失败：${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
@@ -94,6 +108,18 @@ export default function AlertActionPanel({ alertId, onChanged }: { alertId: numb
           {v ? <Text type="secondary" style={{ fontSize: 12 }}>回滚：{v}</Text> : null}
         </Space>
       ),
+    },
+    {
+      title: '操作', width: 110,
+      render: (_, r) => {
+        if (r.decision === 'auto') {
+          return <Button size="small" type="primary" loading={busy === r.key} onClick={() => runSpecific(r)}>立即执行</Button>
+        }
+        if (r.decision === 'approve') {
+          return <Button size="small" loading={busy === r.key} onClick={() => runSpecific(r)}>提交审批</Button>
+        }
+        return <Button size="small" disabled>{r.decision === 'forbidden' ? '禁止' : '仅人工'}</Button>
+      },
     },
   ]
 

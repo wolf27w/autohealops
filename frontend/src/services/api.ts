@@ -637,6 +637,8 @@ export const updateSettings = (data: Payload) => http.put('/settings', data)
 // 告警 AI 处置台（2026-11-26）：候选动作 + 判定 / 触发处置
 export const getCandidateActions = (id: number) => http.get<Payload>(`/alerts/${id}/candidate-actions`)
 export const dispatchAlertAction = (id: number, action: 'ai' | 'manual') => http.post(`/alerts/${id}/dispatch`, { action })
+// 按指定动作发起处置（auto 直接执行 / approve 建审批单，批后自动执行）
+export const dispatchSpecificAction = (id: number, actionKey: string) => http.post(`/alerts/${id}/actions/${actionKey}/dispatch`)
 
 export const getAutomationPolicy = () => http.get<Payload>('/settings/automation-policy')
 export const updateAutomationPolicy = (data: Payload) => http.put('/settings/automation-policy', data)
