@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import type { Key, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge, Collapse, Alert as AntAlert } from 'antd'
-import { getAlertsPaged, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
+import { getAlertsPaged, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
 import { canWrite } from '../utils/auth'
 import StatusTag from '../components/StatusTag'
 import SeverityTag from '../components/SeverityTag'
@@ -36,7 +36,6 @@ export default function AlertList() {
   const PAGE_SIZE = 20
   const writable = canWrite()
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
-  const [diagnosing, setDiagnosing] = useState<number>()
   const [logOpen, setLogOpen] = useState(false)
   const [logs, setLogs] = useState('')
   const [resolveTarget, setResolveTarget] = useState<Alert | null>(null)
@@ -57,17 +56,6 @@ export default function AlertList() {
   })
   const alerts = alertsData?.items ?? []
   const alertTotal = alertsData?.total ?? 0
-
-  const handleDiagnose = async (id: number) => {
-    setDiagnosing(id)
-    try {
-      await diagnoseAlert(id)
-      message.success('诊断已触发')
-      refetch()
-    } finally {
-      setDiagnosing(undefined)
-    }
-  }
 
   const handleBatchResolve = () => {
     if (selectedRowKeys.length === 0) {
@@ -268,12 +256,8 @@ export default function AlertList() {
             title: '操作', render: (_, record) => (
               <Space>
                 {record.resource_type !== 'db' && writable && (
-                  <Button size="small" loading={diagnosing === record.id}
+                  <Button size="small"
                     onClick={() => setExpandedKeys((prev) => prev.includes(record.id) ? prev.filter((k) => k !== record.id) : [...prev, record.id])}>AI 处置</Button>
-                )}
-                {record.resource_type !== 'db' && writable && (
-                  <Button size="small" type="primary" loading={diagnosing === record.id}
-                    onClick={() => handleDiagnose(record.id)}>重新诊断</Button>
                 )}
                 {record.resource_type !== 'db' && (
                   <>
