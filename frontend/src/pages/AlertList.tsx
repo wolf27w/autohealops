@@ -3,7 +3,7 @@ import { envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
 import type { Key, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge, Alert as AntAlert } from 'antd'
+import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge, Collapse, Alert as AntAlert } from 'antd'
 import { getAlertsPaged, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
 import { canWrite } from '../utils/auth'
 import StatusTag from '../components/StatusTag'
@@ -210,8 +210,11 @@ export default function AlertList() {
           onExpandedRowsChange: (keys) => setExpandedKeys([...keys]),
           expandedRowRender: (record) => (
             <div>
-              <DiagnosisPanel alert={record} />
               <AlertActionPanel alertId={record.id} onChanged={refetch} />
+              <Collapse
+                size="small" style={{ marginTop: 8 }}
+                items={[{ key: 'diag', label: '诊断详情（证据 / 处理方法 / 原始结果）', children: <DiagnosisPanel alert={record} /> }]}
+              />
             </div>
           ),
         }}

@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { dispatchAlertAction, dispatchSpecificAction, getCandidateActions } from '../services/api'
+import { dispatchAlertAction, dispatchSpecificAction, getCandidateActions, getDiagnosis } from '../services/api'
 
 const { Text } = Typography
 
@@ -28,6 +28,16 @@ interface CandidateResp {
   candidates: Candidate[]
 }
 
+interface DiagBrief {
+  root_cause?: string
+  confidence?: number | string | null
+  confidence_basis?: string
+  created_at?: string
+  stale?: boolean
+  suggestions?: unknown
+  suggestions_detail?: { immediate?: string[]; root_fix?: string[] }
+}
+
 const RISK_COLOR: Record<string, string> = { green: 'green', yellow: 'gold', red: 'red', forbidden: 'magenta' }
 const DECISION_META: Record<string, { color: string; label: string }> = {
   auto: { color: 'green', label: '可自动执行' },
@@ -40,10 +50,15 @@ const MODE_LABEL: Record<string, string> = {
   full: '全部直接执行',
 }
 
-export default function AlertActionPanel({ alertId, onChanged }: { alertId: number; onChanged?: () => void }) {
+export default function AlertActionPanel({ alertId, onChanged, onReprocess }: {
+  alertId: number
+  onChanged?: () => void
+  onReprocess?: () => void
+}) {
   const [data, setData] = useState<CandidateResp | null>(null)
+  const [diag, setDiag] = useState<DiagBrief | null>(null)
   const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState<'ai' | 'manual' | string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -51,6 +66,9 @@ export default function AlertActionPanel({ alertId, onChanged }: { alertId: numb
       .then((d) => setData(d as unknown as CandidateResp))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
+    getDiagnosis(alertId)
+      .then((d) => setDiag(d as unknown as DiagBrief))
+      .catch(() => setDiag(null))
   }
 
   useEffect(() => { load() }, [alertId])
@@ -130,11 +148,27 @@ export default function AlertActionPanel({ alertId, onChanged }: { alertId: numb
       style={{ marginTop: 12 }}
       extra={
         <Space>
-          <Button size="small" type="primary" loading={busy === 'ai'} onClick={() => run('ai')}>交给 AI 处置</Button>
+          <Button size="small" loading={busy === 'ai'} onClick={() => run('ai')}>重新分析并处置</Button>
           <Button size="small" loading={busy === 'manual'} onClick={() => run('manual')}>转人工</Button>
         </Space>
       }
     >
+      <Alert
+        type={diag?.root_cause ? 'success' : 'warning'} showIcon style={{ marginBottom: 8, padding: '4px 10px' }}
+        message={
+          <span>
+            <b>诊断原因：</b>
+            {diag?.root_cause ? diag.root_cause : '暂无诊断结论（可重新分析或直接交给 AI）'}
+            {typeof diag?.confidence === 'number' ? `（把握度 ${Math.round(diag.confidence * 100)}%）` : ''}
+            {diag?.stale ? '（上一轮诊断，本轮尚未重新分析）' : ''}
+          </span>
+        }
+        description={
+          diag?.suggestions_detail?.root_fix?.length
+            ? <div style={{ fontSize: 12 }}>根因修复建议：{diag.suggestions_detail.root_fix.slice(0, 3).join('；')}</div>
+            : undefined
+        }
+      />
       <Alert
         type="info" showIcon style={{ marginBottom: 8, padding: '4px 10px' }}
         message="真正执行受「自动化策略」约束：判定为需审批的动作会生成审批单，等人工放行后才执行。"
