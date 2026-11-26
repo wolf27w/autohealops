@@ -440,17 +440,24 @@ async def check_pod_recovered_detail(cluster_id: int, namespace: str, pod_name: 
                 if replicas > 0:
                     return False, ""  # 期望有副本但一个都没有 = 真故障，不准关
                 return _is_not_found(dep_pods.get("message")), ""
-            # 2026-11-26（老板：服务恢复了工单还挂着）：旧崩溃 Pod 还在，但 Deployment 期望副本已全部就绪
-            # （典型：回滚后新 RS 正常、旧 RS 残留 Pod 仍 CrashLoop）→ 服务层面已恢复，告警/工单应关闭；
-            # 残留 Pod 由 Pod 级告警与清理逻辑单独处理。
-            st = await executor_client.acall(
-                executor_client.get_deployment_status, cluster_id, namespace, dep_name)
-            if st.get("success"):
-                replicas = int(st.get("replicas") or 0)
-                ready_replicas = int(st.get("ready_replicas") or 0)
-                if replicas > 0 and ready_replicas >= replicas:
-                    return True, RECOVERY_SERVICE_READY
-            return False, ""  # 期望副本没有全部就绪 = 服务持续故障，告警不关
+            # 2026-11-26（老板：服务恢复了工单还挂着）：按「**当前版本**的副本是否全部就绪」判定，
+            # 不能用 Deployment 总的 ready_replicas —— 滚动更新时旧 Pod 仍 ready，
+            # 会被误判成「服务已恢复」而漏报新版本启动失败（老板 15:15 指出的问题）。
+            #   · 回滚/新版本成功后：current revision 的 ready>=desired，旧 RS 残留崩溃 Pod 忽略 → 关闭；
+            #   · 新版本起不来：current revision ready=0 < desired → 绝不关闭（该告警继续在途）。
+            revs = await executor_client.acall(
+                executor_client.list_revisions, cluster_id, namespace, dep_name)
+            if revs.get("success"):
+                items = revs.get("items") or []
+                cur = next((r for r in items if r.get("is_current")), None)
+                if cur is None and items:
+                    cur = max(items, key=lambda r: int(r.get("revision") or 0))
+                if cur:
+                    desired = int(cur.get("desired_replicas") or 0)
+                    ready = int(cur.get("ready_replicas") or 0)
+                    if desired > 0 and ready >= desired:
+                        return True, RECOVERY_SERVICE_READY
+            return False, ""  # 当前版本没有全部就绪 = 服务持续故障（含「新版本起不来」），告警不关
         # 查询失败（success=False）：仅当明确 not found 才视为资源已删除，否则保持 pending
         return _is_not_found(dep_pods.get("message")), ""
     return False, ""
