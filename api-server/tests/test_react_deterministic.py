@@ -104,5 +104,37 @@ class TestInsufficientEvidenceStillHasSolution(unittest.TestCase):
         self.assertGreaterEqual(len(out["suggestions"]), 3)
 
 
+class TestInferConclusionAlwaysGivesResult(unittest.TestCase):
+    """老板 2026-11-26：怎么分析我不管，但必须给出结果（不能停在「未能确定根因」）"""
+
+    def _state(self, text):
+        return {"rounds": 3, "tool_steps": [{"tool": "collect_startup_evidence", "success": True, "output": text}]}
+
+    def test_startup_phase_classified(self):
+        out = agent_loop._infer_conclusion_from_evidence(
+            self._state("容器 app: ready=False restarts=22 lastTerminated={exitCode=1, reason=Error}\n"
+                        "Started=2026-11-26T05:23:21Z, Finished=2026-11-26T05:23:52Z"),
+            {"namespace": "qa-x", "pod_name": "app-1"})
+        self.assertIn("启动期失败", out["root_cause"])
+        self.assertIn("exitCode=1", out["root_cause"])
+        self.assertEqual(out["confidence_basis"], "inference")
+        for k in ("immediate", "root_fix", "verification", "prevention"):
+            self.assertTrue(out["suggestions_detail"][k])
+
+    def test_oom_classified(self):
+        out = agent_loop._infer_conclusion_from_evidence(
+            self._state("lastTerminated={exitCode=137, reason=OOMKilled} restarts=9"), {})
+        self.assertIn("OOMKilled", out["root_cause"])
+
+    def test_runtime_classified(self):
+        out = agent_loop._infer_conclusion_from_evidence(
+            self._state("Started=2026-11-26T01:00:00Z, Finished=2026-11-26T05:23:52Z "
+                        "lastTerminated={exitCode=1, reason=Error}"), {})
+        self.assertIn("运行期", out["root_cause"])
+
+    def test_no_evidence_returns_none(self):
+        self.assertIsNone(agent_loop._infer_conclusion_from_evidence({"tool_steps": []}, {}))
+
+
 if __name__ == "__main__":
     unittest.main()

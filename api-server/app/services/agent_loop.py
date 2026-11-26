@@ -56,14 +56,14 @@ MAX_ROUNDS_HARD_LIMIT = 16
 # 启动失败场景（2026-11-25 事故复盘）：固定采集顺序需要 8~12 轮才能挖到镜像内文件/版本差异，
 # 按场景放大预算（只放大不缩小，且不超硬上限）。
 OOM_MAX_ROUNDS = 10
-OOM_TOTAL_TIMEOUT = 180.0
+OOM_TOTAL_TIMEOUT = 240.0
 STARTUP_FAILURE_MAX_ROUNDS = 12
 # 2026-11-26：个别工具的输出需要更长保留（否则定性的 Description/Action 被截掉）
 TOOL_OUTPUT_TRUNCATE_OVERRIDE = {
     "collect_startup_evidence": 6000,
 }
 
-STARTUP_FAILURE_TOTAL_TIMEOUT = 180.0
+STARTUP_FAILURE_TOTAL_TIMEOUT = 240.0
 
 # 启动失败场景识别：告警字段或上下文里出现这些特征即按启动失败给预算与采集清单
 _STARTUP_HINTS = (
@@ -401,7 +401,7 @@ async def _degrade(
     logger.info("ReAct 循环降级（%s）：%s", reason, detail)
 
     # 2026-11-26：证据已能确定性定根因时直接收口，不再花一次 AI 调用（也避免又回「未能确定根因」）
-    det = _deterministic_root_cause(state, start)
+    det = _deterministic_root_cause(state, start) or _infer_conclusion_from_evidence(state, context)
     if det:
         det["degrade_reason"] = reason
         return det
@@ -603,6 +603,99 @@ def _deterministic_root_cause(state: dict, start: float) -> dict | None:
     return None
 
 
+def _infer_conclusion_from_evidence(state: dict, context: dict | None = None) -> dict | None:
+    """预算耗尽但已有事实 → 给出**归类结论**（而不是「未能确定根因」）。
+
+    老板 2026-11-26：怎么分析我不管，但必须给出结果。
+    这里只用已采事实（exitCode / 阶段 / 重启次数 / 日志有无）做确定性归类：
+      - 启动期退出（<180s）+ 有异常但不属于已知硬错误 → 应用启动失败（代码/配置）
+      - 运行期退出 → 运行期异常退出（代码/依赖/资源）
+      - 有 OOMKilled/137 → 内存/被探针杀
+      - 无任何退出码信息 → 信息不足但仍给出方向 + 明确缺什么
+    """
+    ctx = context or {}
+    blob = "\n".join(str(t.get("output") or "") for t in state.get("tool_steps") or [] if t.get("success"))
+    if not blob:
+        return None
+    import re as _re
+    m = _re.search(r"lastTerminated=\{exitCode=(\d+)", blob)
+    exit_code = m.group(1) if m else ""
+    m2 = _re.search(r"restarts=(\d+)", blob)
+    restarts = m2.group(1) if m2 else ""
+    phase = ""
+    try:
+        from app.services.termination_evidence import phase_from_summary, phase_from_logs
+        phase = phase_from_summary(blob) or phase_from_logs(blob)
+    except Exception:  # noqa: BLE001
+        phase = ""
+    oom = ("oomkilled" in blob.lower()) or exit_code in ("137",)
+    ns = str(ctx.get("namespace") or "<namespace>")
+    pod = str(ctx.get("pod_name") or ctx.get("resource_name") or "<pod>")
+    facts = []
+    if exit_code:
+        facts.append(f"exitCode={exit_code}")
+    if restarts:
+        facts.append(f"重启 {restarts} 次")
+    if phase:
+        facts.append("阶段=" + ("启动期" if phase == "startup" else "运行期"))
+    fact_text = "、".join(facts) or "证据有限"
+
+    if oom:
+        head = f"内存/被杀类退出（{fact_text}）：容器以 OOMKilled/137 结束，按证据归类为内存或探针超时被杀。"
+        fix = {
+            "immediate": ["抬高内存 limit 25% 或把 -XX:MaxRAMPercentage 降到 50~60 止血",
+                          "kubectl rollout undo deployment/<workload> -n <namespace> 回滚上版（若刚发布）"],
+            "root_fix": ["抓堆转储/GC 日志确认是泄漏还是配额不足（jcmd GC.heap_dump / jstat -gcutil）"],
+            "verification": ["Pod Ready、RestartCount 不再增长；working_set 峰值不再贴 limit"],
+            "prevention": ["加 -XX:+HeapDumpOnOutOfMemoryError；内存 80%/90% 两级告警"],
+        }
+    elif phase == "startup":
+        head = (f"启动期失败（{fact_text}）：容器在启动阶段退出，未命中已知硬错误特征，"
+                "按证据归类为**应用启动失败（代码/配置类）**，不是资源或探针问题。")
+        fix = {
+            "immediate": ["先回滚到上一可用版本止血（kubectl rollout undo deployment/<workload> -n <namespace>）",
+                          "对比本次发布/镜像变更（revision diff）锁定引入点"],
+            "root_fix": ["取上次实例日志与容器内日志文件（/apps/**/logs/*.log）中的首个 Caused by 与首个应用栈帧，改代码或配置后重发"],
+            "verification": ["新版本启动日志出现 Started ... in N seconds 且无 Caused by；Pod Ready、RestartCount 归零"],
+            "prevention": ["CI 增加启动冒烟门禁（起容器→等 Ready→失败即阻断发布）"],
+        }
+    elif phase == "runtime":
+        head = (f"运行期异常退出（{fact_text}）：容器跑起来后才退出，按证据归类为运行期异常"
+                "（代码缺陷/依赖或下游异常/资源竞争），不是启动配置问题。")
+        fix = {
+            "immediate": ["保留现场：kubectl logs --previous 与容器内日志文件先落盘，避免被新实例覆盖"],
+            "root_fix": ["按退出前后日志里的首个异常/下游错误定位（DB/中间件超时、空指针、线程池耗尽等）"],
+            "verification": ["同类请求压测下不再触发退出；观察 24h 无重启"],
+            "prevention": ["对下游依赖加超时/熔断；关键路径加异常兜底与告警"],
+        }
+    else:
+        head = (f"证据不足但有方向（{fact_text}）：容器反复退出但未取到可用退出码/日志，"
+                "按现有事实归类为应用侧失败，需补齐证据后确认。")
+        fix = {
+            "immediate": [f"kubectl -n {ns} describe pod {pod}（Last State/Exit Code）",
+                          f"kubectl -n {ns} logs {pod} --previous --tail=300"],
+            "root_fix": ["补齐日志后点「重新诊断」；平台会按指纹判断是否同一问题并重新取证"],
+            "verification": ["Pod Ready、RestartCount 归零"],
+            "prevention": ["开崩溃日志留存；JVM 加 HeapDumpOnOutOfMemoryError"],
+        }
+    logger.info("ReAct 预算耗尽但已归类出结论（phase=%s exit=%s）", phase or "?", exit_code or "?")
+    return {
+        "root_cause": head,
+        "suggestions": fix["immediate"] + fix["root_fix"],
+        "suggestions_detail": fix,
+        "root_cause_layer": "B" if phase == "startup" else "",
+        "confidence": 0.4,
+        "confidence_basis": "inference",
+        "handling_advice": "该结论由已采集事实（退出码/阶段/重启次数）归类得出，未做深度推理；补齐证据后重新诊断可提高精度。",
+        "model_used": "",
+        "degraded": True,
+        "degrade_reason": "inferred_from_evidence",
+        "tool_steps": list(state["tool_steps"]),
+        "rounds": state["rounds"],
+        "elapsed_ms": 0,
+    }
+
+
 def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, detail: str = "",
                                    context: dict | None = None) -> dict:
     """预算耗尽收口（2026-11-23 R69）：确定性「证据不足」结构化输出，不给无证据推测。
@@ -732,8 +825,10 @@ async def _wrap_up(
             }
     except Exception as e:  # noqa: BLE001 收口决策失败 → 确定性输出
         logger.warning("收口决策失败，回退确定性证据不足输出: %s", e)
-    det = _deterministic_root_cause(state, start)
+    det = _deterministic_root_cause(state, start) or _infer_conclusion_from_evidence(state, context)
     if det:
+        det["conclusion_source"] = det.get("degrade_reason") or "deterministic_evidence"
+        det["degrade_reason"] = reason
         return det
     return _wrap_up_insufficient_evidence(state, reason, start, detail=detail, context=context)
 
@@ -931,8 +1026,10 @@ async def run_react_loop(
     except asyncio.TimeoutError:
         # 2026-11-23 R69：总时限耗尽 → 确定性「证据不足」结构化收口（不再调用 LLM，避免超时后再拖时间）
         # 2026-11-26：先看已采集证据能不能确定性定根因（能就不再说「未能确定根因」）
-        det = _deterministic_root_cause(state, start)
+        det = _deterministic_root_cause(state, start) or _infer_conclusion_from_evidence(state, context)
         if det:
+            det["conclusion_source"] = det.get("degrade_reason") or "deterministic_evidence"
+            det["degrade_reason"] = "total_timeout"
             return det
         return _wrap_up_insufficient_evidence(
             state, "total_timeout", start,

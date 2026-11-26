@@ -105,13 +105,14 @@ class TestLoopLimits(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res["degraded"])
         self.assertEqual(res["degrade_reason"], "max_rounds")
         self.assertEqual(res["rounds"], 2)
-        self.assertEqual(res["root_cause"], "未能确定根因")
-        # 收口不再调用单次兜底（不给无证据推测）
+        # 2026-11-26 新契约：收口必须给出「归类结论 + 下一步」，不再停在「未能确定根因」
+        self.assertNotEqual(res["root_cause"], "未能确定根因")
+        self.assertTrue(res["root_cause"])
+        self.assertIn("conclusion_source", res)
+        # 收口仍不调用单次兜底（不额外烧 AI）
         fallback.assert_not_awaited()
         joined = "|".join(res["suggestions"])
-        self.assertIn("已排除", joined)
-        self.assertIn("缺失证据", joined)
-        self.assertIn("建议补充采集", joined)
+        self.assertTrue(("kubectl" in joined) or ("补齐" in joined) or ("重新诊断" in joined))
 
     async def test_max_rounds_wrapup_final_answer(self):
         """达到 max_rounds 且收口决策给出 final_answer → 用其结构化结论（仍标 degraded）。"""
