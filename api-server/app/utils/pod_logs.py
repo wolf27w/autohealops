@@ -291,6 +291,34 @@ async def _container_log_files(cluster_id: int, namespace: str, pod_name: str,
                     break
         if parts:
             break
+    # 2b) 目标容器读不到（典型：CrashLoop 时容器不在跑、exec 直接失败）→ 从挂同一日志卷的 sidecar 读
+    if not parts:
+        containers = await _pod_container_mounts(cluster_id, namespace, pod_name)
+        for sc_name, sc_path in _sidecar_log_paths(containers, container)[:2]:
+            async def _exec_in(cmd: str, _c=sc_name) -> dict:
+                try:
+                    return await executor_client.acall(
+                        executor_client.exec_in_pod, cluster_id, namespace, pod_name, cmd, container=_c)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("sidecar 取日志失败 %s: %s", cmd[:60], e)
+                    return {"success": False, "output": "", "error": str(e)}
+            files, subdirs = await _list_dir(_exec_in, sc_path)
+            for fname in files[:2]:
+                fpath = f"{sc_path.rstrip('/')}/{fname}"
+                if not _safe_path(fpath):
+                    continue
+                tail = await _exec_in(f"tail -n 2000 {fpath}")
+                text = (tail.get("output") or "").strip() if tail.get("success") else ""
+                if not text:
+                    continue
+                seg = _render(f"容器内日志文件 {fpath}（经 sidecar {sc_name} 读取）", text)
+                if seg:
+                    parts.append(seg)
+                if len(parts) >= 2:
+                    break
+            if parts:
+                break
+
     # 3) 兜底：注解/启动参数都没有时，自动发现「最近 3 小时内被写过的 .log」
     #    （2026-11-26 老板问「为什么要加注解」——不需要注解，用 find 自动找）
     if not parts:
@@ -346,6 +374,73 @@ def _is_error_line(line: str) -> bool:
     return False
 
 
+# Java 堆栈里的「问题点」提取（2026-11-26 老板要求：诊断必须落到具体问题点）
+_CAUSED_BY_RE = re.compile(r"^\s*Caused by:\s*(.+)$", re.M)
+_APP_FRAME_RE = re.compile(r"^\s*at\s+((?:com|cn|org\.(?!springframework|apache|mybatis)|net)\.[\w.$]+)\(([\w.$]+\.java):(\d+)\)\s*$", re.M)
+
+
+def extract_stack_root_cause(text: str) -> dict:
+    """从日志里提取 Java 异常的「问题点」：最深 Caused by + 首个应用栈帧（类:行）。
+
+    返回 {"root_exception": str, "app_frame": str, "all_causes": [str]}
+    纯函数，找不到返回空值。用于把「代码有问题」变成「哪个类哪一行抛什么」。
+    """
+    if not text:
+        return {}
+    causes = [m.group(1).strip()[:300] for m in _CAUSED_BY_RE.finditer(text)]
+    root_exc = causes[-1] if causes else ""
+    frames = [f"{m.group(1)}({m.group(2)}:{m.group(3)})" for m in _APP_FRAME_RE.finditer(text)]
+    app_frame = frames[0] if frames else ""
+    if not root_exc and not app_frame:
+        return {}
+    return {"root_exception": root_exc, "app_frame": app_frame, "all_causes": causes[-4:]}
+
+
+async def _pod_container_mounts(cluster_id: int, namespace: str, pod_name: str) -> list[dict]:
+    """读 Pod 各容器的 volumeMounts（用于「主容器不在跑时，从挂同一卷的 sidecar 读日志」）"""
+    try:
+        from app.clients.executor_client import executor_client as ec
+        r = await ec.acall(ec.get_pod_yaml, cluster_id, namespace, pod_name)
+        if not r.get("success") or not r.get("yaml"):
+            return []
+        import yaml
+        doc = yaml.safe_load(r["yaml"]) or {}
+        out = []
+        for c in ((doc.get("spec") or {}).get("containers") or []):
+            mounts = []
+            for vm in (c.get("volumeMounts") or []):
+                mounts.append({"volume": str(vm.get("name") or ""), "path": str(vm.get("mountPath") or "")})
+            out.append({"name": str(c.get("name") or ""), "mounts": mounts})
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取 Pod 容器挂载失败: %s", e)
+        return []
+
+
+def _sidecar_log_paths(containers: list[dict], target: str) -> list[tuple[str, str]]:
+    """找出「挂了与目标容器同一日志卷」的其它容器 → [(容器名, 该容器里的挂载路径)]
+
+    2026-11-26 实测（qa-cud/cud-certification-service）：应用容器 CrashLoop 时 exec 不可用，
+    但 filebeat sidecar 挂着同一个 log 卷（挂到 /var/log）且在运行 → 可以从 sidecar 读日志文件。
+    """
+    tgt = next((c for c in containers if c["name"] == target), None)
+    if not tgt:
+        return []
+    tgt_vols = {m["volume"] for m in tgt["mounts"]
+                if re.search(r"log", m["volume"] + " " + m["path"], re.I)}
+    if not tgt_vols:
+        # 目标容器没有明显日志卷时，退化为「所有同名卷」比对
+        tgt_vols = {m["volume"] for m in tgt["mounts"] if m["volume"]}
+    out: list[tuple[str, str]] = []
+    for c in containers:
+        if c["name"] == target:
+            continue
+        for m in c["mounts"]:
+            if m["volume"] in tgt_vols and _safe_path(m["path"]):
+                out.append((c["name"], m["path"]))
+    return out
+
+
 def _render(label: str, txt: str) -> str:
     """把单容器单实例的原始日志压成「关键行 + 末尾 + 启动失败现场」"""
     lines = [ln for ln in txt.splitlines() if ln.strip()]
@@ -359,6 +454,13 @@ def _render(label: str, txt: str) -> str:
         clean_tail = [ln[:300] for ln in lines if not _is_noise(ln)][-30:]
     startup_lines = extract_startup_window([ln for ln in lines if not _is_noise(ln)])
     seg = f"【{label}】"
+    stack = extract_stack_root_cause(txt)
+    if stack:
+        seg += "\n问题点（根异常）："
+        if stack.get("root_exception"):
+            seg += f"\n  · {stack['root_exception']}"
+        if stack.get("app_frame"):
+            seg += f"\n  · 首个应用栈帧：{stack['app_frame']}"
     if startup_lines:
         seg += "\n启动失败详情：\n" + "\n".join(startup_lines)
     if err_lines:

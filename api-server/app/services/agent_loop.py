@@ -561,6 +561,45 @@ def _deterministic_root_cause(state: dict, start: float) -> dict | None:
             "rounds": state["rounds"],
             "elapsed_ms": int((time.monotonic() - start) * 1000),
         }
+    # 2026-11-26（老板：诊断出「代码问题」但没有具体问题点）：
+    # 通用 Java 启动失败堆栈 → 直接给出「根异常 + 首个应用栈帧(类:行)」
+    try:
+        from app.utils.pod_logs import extract_stack_root_cause
+        st = extract_stack_root_cause(blob)
+        if st.get("root_exception"):
+            rc = f"应用启动失败：{st['root_exception']}"
+            if st.get("app_frame"):
+                rc += f"；首个应用栈帧 {st['app_frame']}"
+            logger.info("ReAct 降级但证据充分：命中 Java 根异常堆栈（%s）", st.get("app_frame") or "无应用栈帧")
+            return {
+                "root_cause": rc,
+                "suggestions": [
+                    f"按栈帧定位代码：{st.get('app_frame') or '（无应用栈帧，按根异常类名全局搜索）'}",
+                    "看该行是配置校验还是逻辑分支：若是配置校验（如 URL/协议/必填项），改配置或环境变量后重发布",
+                ],
+                "suggestions_detail": {
+                    "immediate": ["先回滚到上一可用版本止血（kubectl rollout undo deployment/<workload> -n <namespace>）"],
+                    "root_fix": [
+                        f"定位代码：{st.get('app_frame') or st.get('root_exception')}",
+                        "若是配置驱动的校验失败（如「requires an HTTPS origin」），把对应配置改成合规值并重发；"
+                        "若必须在测试环境用非 HTTPS，需该 SDK 提供允许开关而不是硬编码校验",
+                    ],
+                    "verification": ["新版本启动日志不再出现该 Caused by，Pod Ready、RestartCount 归零"],
+                    "prevention": ["启动失败门禁：CI 起容器验证启动成功后再发布"],
+                },
+                "root_cause_layer": "B",
+                "confidence": 0.85,
+                "confidence_basis": "evidence",
+                "handling_advice": "结论由容器日志中的异常堆栈直接得出（未调用模型）。",
+                "model_used": "",
+                "degraded": True,
+                "degrade_reason": "deterministic_evidence",
+                "tool_steps": list(state["tool_steps"]),
+                "rounds": state["rounds"],
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+            }
+    except Exception as e:  # noqa: BLE001
+        logger.debug("堆栈根因提取失败: %s", e)
     return None
 
 

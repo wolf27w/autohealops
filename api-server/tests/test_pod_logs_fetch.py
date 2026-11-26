@@ -154,5 +154,55 @@ class TestContainerLogFilesAndNoise(unittest.TestCase):
         self.assertNotIn("Preparing: SELECT", seg)
 
 
+class TestStackRootCause(unittest.TestCase):
+    """2026-11-26（老板）：诊断只说「代码问题」不行，必须给具体问题点（类:行 + 异常）"""
+
+    LOG = """2026-11-26 13:23:51,125 [main] WARN o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext 633 - Exception encountered during context initialization
+org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'fileClient'
+Caused by: org.springframework.beans.BeanInstantiationException: Failed to instantiate [com.efreight.cud.common.file.client.api.FileClient]: Factory method 'fileClient' threw exception with message: file service requires an HTTPS origin
+	at org.springframework.beans.factory.support.SimpleInstantiationStrategy.instantiate(SimpleInstantiationStrategy.java:178)
+Caused by: java.lang.IllegalArgumentException: file service requires an HTTPS origin
+	at com.efreight.cud.common.file.client.internal.HttpFileClient.validateUri(HttpFileClient.java:110)
+	at com.efreight.cud.common.file.client.internal.HttpFileClient.<init>(HttpFileClient.java:67)
+	at com.efreight.cud.common.file.client.config.FileClientAutoConfiguration.fileClient(FileClientAutoConfiguration.java:34)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+"""
+
+    def test_extract_deepest_cause_and_app_frame(self):
+        got = pod_logs.extract_stack_root_cause(self.LOG)
+        self.assertIn("IllegalArgumentException", got["root_exception"])
+        self.assertIn("requires an HTTPS origin", got["root_exception"])
+        self.assertEqual(got["app_frame"], "com.efreight.cud.common.file.client.internal.HttpFileClient.validateUri(HttpFileClient.java:110)")
+        self.assertTrue(any("BeanInstantiationException" in c for c in got["all_causes"]))
+
+    def test_render_puts_problem_point_first(self):
+        seg = pod_logs._render("app·上次实例(--previous)", self.LOG)
+        self.assertIn("问题点（根异常）", seg)
+        self.assertIn("HttpFileClient.java:110", seg)
+        self.assertLess(seg.index("问题点（根异常）"), seg.index("日志末尾"))
+
+    def test_no_stack_no_block(self):
+        self.assertEqual(pod_logs.extract_stack_root_cause("INFO all good"), {})
+
+
+class TestSidecarSharedVolume(unittest.TestCase):
+    def test_sidecar_paths_for_log_volume(self):
+        containers = [
+            {"name": "app", "mounts": [{"volume": "log", "path": "/apps/works/logs/x"},
+                                       {"volume": "kube-api-access-x", "path": "/var/run/secrets"}]},
+            {"name": "filebeat", "mounts": [{"volume": "log", "path": "/var/log"},
+                                            {"volume": "filebeat-config", "path": "/usr/share/filebeat"}]},
+        ]
+        got = pod_logs._sidecar_log_paths(containers, "app")
+        self.assertEqual(got, [("filebeat", "/var/log")])
+
+    def test_no_shared_volume(self):
+        containers = [
+            {"name": "app", "mounts": [{"volume": "data", "path": "/data"}]},
+            {"name": "side", "mounts": [{"volume": "other", "path": "/other"}]},
+        ]
+        self.assertEqual(pod_logs._sidecar_log_paths(containers, "app"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
