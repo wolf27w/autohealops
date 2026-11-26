@@ -344,10 +344,18 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         logger.debug("采集探针证据失败: %s", e)
     trace_id = generate_trace_id()
 
+    # 2026-11-26（老板口径）：同一错误反复重启 → 不重复诊断；**报错变了 → 必须重新诊断**。
+    # 指纹 = fault_type + 每容器退出事实（容器/原因/退出码）+ 退出证据摘要 + 首条错误行
+    from app.services import fault_signature
+    _sig = fault_signature.build(
+        fault_type, fault_signature.facts_from_pod(pod), term_summary, first_err)
+    _prev_sig = (getattr(alert, "fault_signature", "") or "")
+    _sig_changed = fault_signature.changed(_prev_sig, _sig)
+
     # AI 诊断（ai-service 侧落 AIDiagnosisResult，与 api-server 共享同一张表）
     # 诊断结论只入库（供告警详情/故障诊断页查看），**不追加进告警 message**（避免通知里骚扰老板）
     # 诊断去重（2026-10-29）：N5 每次重启增量都会走到这里，原来每来一次就新增一条诊断
-    # （同一 Pod 同一故障最多 15 条）。现在窗口内已有结论就直接复用，不再调 AI。
+    # （同一 Pod 同一故障最多 15 条）。现在窗口内已有结论且指纹未变 → 不复诊。
     reused = None
     try:
         from app.services import diagnosis_reuse
@@ -361,15 +369,30 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
             )
     except Exception as e:  # noqa: BLE001
         logger.debug("诊断复用查询失败: %s", e)
-    if reused:
-        logger.info("Pod 重启告警 %d 复用同 Pod 同故障诊断 #%d（窗口内，跳过 AI）", alert_id, reused[0].id)
+    if reused and not _sig_changed:
+        logger.info("Pod 重启告警 %d 同一错误（指纹未变）→ 复用诊断 #%d，不再调 AI",
+                    alert_id, reused[0].id)
     else:
+        if reused and _sig_changed:
+            logger.info("Pod 重启告警 %d 报错已变化（指纹 %s→%s）→ 重新诊断",
+                        alert_id, _prev_sig[:8], _sig[:8])
         try:
             diagnosis = await ai_client.diagnose(alert_id, alert_data, {}, trace_id)
             if not (diagnosis.get("root_cause") or diagnosis.get("suggestions")):
                 logger.info("Pod 重启告警 %d 诊断无结论（模型返回为空）", alert_id)
         except Exception as e:  # noqa: BLE001
             logger.warning("Pod 重启告警 %d AI 诊断失败: %s", alert_id, e)
+
+    # 落指纹（下一轮重启增量据此判断「还是同一个错误」还是「报错变了」）
+    if _sig != _prev_sig:
+        try:
+            async with async_session() as _s:
+                _row = await _s.get(Alert, alert_id)
+                if _row is not None:
+                    _row.fault_signature = _sig
+                    await _s.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("落故障指纹失败 alert=%s: %s", alert_id, e)
 
     # 通知：与集群/资源/DB 告警同一入口（统一策略：分级/静默/渠道/模板/限频）
     try:

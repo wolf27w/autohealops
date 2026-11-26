@@ -46,6 +46,11 @@ KB_REF_SIMILARITY = 0.6
 # 2026-11-25：原 180s 与诊断预算恰好相等，长链路必然中途丢锁 → 30s 扫描并发进同一告警（重复诊断/重复修复）。
 PER_ALERT_LOCK_MS = int(os.getenv("PER_ALERT_LOCK_MS", "600000"))
 
+# 2026-11-26（老板口径）：同一错误一直没修好、反复重启 → 不重复诊断；报错变了 → 必须重新诊断。
+# 在途 Pod 告警的「证据指纹」复核间隔（分钟）：只采证据（describe 退出事实 + 日志首行），
+# 指纹不变就不调 AI；变了才重新诊断。
+DIAGNOSIS_DRIFT_CHECK_MINUTES = max(1, int(os.getenv("DIAGNOSIS_DRIFT_CHECK_MINUTES", "10")))
+
 
 from app.utils.pod import infer_deployment_name  # 去重：统一实现（原三处各一份）
 
@@ -818,6 +823,59 @@ def _diagnosis_stale_for_pod(diag_data: dict, alert) -> bool:
         return False
     cur = (getattr(alert, "resource_name", "") or "").strip()
     return bool(cur) and cur not in refs
+
+
+async def _diagnosis_evidence_drifted(alert) -> bool:
+    """同一轮次内「报错是否变了」（变了 → 旧结论作废、重新诊断）
+
+    老板口径（2026-11-26）：同一个错误一直没修好、容器反复重启 → **不需要重新诊断**；
+    但报错/退出原因变了（退出码、OOM 容器、异常首行）→ **必须重新诊断**。
+
+    做法：采集当前证据算指纹，与告警上记录的指纹（诊断时的）比较；
+    限频：每个告警每 DIAGNOSIS_DRIFT_CHECK_MINUTES 分钟最多检查一次（Redis 标记）。
+    任何采集失败 → 返回 False（宁可少诊断，也不误刷诊断/烧钱）。
+    """
+    if (getattr(alert, "resource_type", "") or "") != "pod" or not alert.resource_name:
+        return False
+    prev = (getattr(alert, "fault_signature", "") or "")
+    if not prev:
+        return False
+    try:
+        from app.core.redis_client import redis_pool
+        key = f"alert:drift:{alert.id}"
+        if await redis_pool.exists(key):
+            return False
+        await redis_pool.set(key, "1", ex=DIAGNOSIS_DRIFT_CHECK_MINUTES * 60)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("告警 %d 证据漂移检查限频失败: %s", alert.id, e)
+        return False
+    try:
+        from app.services import fault_signature
+        from app.services.termination_evidence import collect_pod_termination, first_error_line
+        from app.utils.pod_logs import fetch_pod_logs
+        term = await collect_pod_termination(alert.cluster_id, alert.namespace or "", alert.resource_name or "")
+        logs = await fetch_pod_logs(alert.cluster_id, alert.namespace or "", alert.resource_name or "")
+        cur = fault_signature.build(
+            alert.fault_type, term_summary=(term.get("summary") or ""),
+            first_error=first_error_line(logs or ""))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("告警 %d 证据漂移检查失败: %s", alert.id, e)
+        return False
+    return fault_signature.changed(prev, cur)
+
+
+async def _persist_fault_signature(alert_id: int, sig: str) -> None:
+    """落故障指纹（下一轮据此判断「还是同一个错误」还是「报错变了」）"""
+    if not sig:
+        return
+    try:
+        async with async_session() as session:
+            a = await session.get(Alert, alert_id)
+            if a is not None and (a.fault_signature or "") != sig:
+                a.fault_signature = sig
+                await session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("落故障指纹失败 alert=%s: %s", alert_id, e)
 
 
 async def _record_decision_score(alert_id: int, plan_id, trace_id: str,
@@ -2421,6 +2479,7 @@ async def _process_one(alert: Alert) -> bool:
     evidence_refs: list = []
     diag_category = ""
     diag_cached = bool(diag_row and diag_row.diagnosis_json)
+    drift_detected = False
     # 2026-11-25：Pod 重建后旧诊断必须作废——否则「重新诊断」只是把旧结论再抄一遍
     if diag_cached:
         try:
@@ -2433,6 +2492,17 @@ async def _process_one(alert: Alert) -> bool:
                 diag_row = None  # 旧诊断不再关联本计划的 parent
         except (json.JSONDecodeError, TypeError):
             pass
+    # 2026-11-26（老板口径）：同一错误一直没修好、反复重启 → 不重诊断；
+    # 但「报错变了」（退出码/OOM 容器/异常首行变了）→ 旧结论作废，必须重新诊断。
+    if diag_cached:
+        try:
+            if await _diagnosis_evidence_drifted(alert):
+                logger.info("告警 %d 同一轮次内报错已变化（证据指纹不一致）→ 重新诊断", alert.id)
+                diag_cached = False
+                diag_row = None
+                drift_detected = True
+        except Exception as e:  # noqa: BLE001
+            logger.debug("告警 %d 证据漂移检查异常: %s", alert.id, e)
     # 探针专项（2026-10-29）：只对 Pod 类故障采一次，供给「AI 诊断上下文」和「探针调参方案」两处用
     probe_result: dict = {"text": "", "findings": []}
     if alert.resource_type == "pod" and alert.resource_name:
@@ -2457,10 +2527,11 @@ async def _process_one(alert: Alert) -> bool:
                     alert_data["release_change_evidence"] = release_change["summary"]
         except Exception as e:  # noqa: BLE001
             logger.debug("告警 %d 发布变更检测失败: %s", alert.id, e)
-    if not diag_cached:
+    if not diag_cached and not drift_detected:
         # 诊断去重（2026-10-29 老板反馈「同一个问题诊断有很多」）：
         # 同集群+namespace+资源名+fault_type 在窗口内已有**有结论**的诊断 → 直接复用，
         # 不再调 AI、不再新增 ai_diagnosis_results 行（窗口见系统设置 diagnosis_reuse_minutes）。
+        # 注：证据漂移（报错变了）时不走窗口复用——别的 Pod/告警的旧结论不能用
         try:
             from app.services import diagnosis_reuse
             reused = await diagnosis_reuse.find_reusable_diagnosis(
@@ -2517,6 +2588,19 @@ async def _process_one(alert: Alert) -> bool:
                     alert_data["recent_logs"] = logs_text[:4000]
             except Exception as e:  # noqa: BLE001
                 logger.debug("采集 Pod 日志失败: %s", e)
+        # 2026-11-26：记录本次诊断基于的故障指纹（同一错误不重诊断 / 指纹变了才重诊断）
+        if alert.resource_type == "pod":
+            try:
+                from app.services import fault_signature
+                from app.services.termination_evidence import first_error_line as _first_err_line
+                _sig_now = fault_signature.build(
+                    alert.fault_type,
+                    term_summary=(alert_data.get("termination_evidence") or ""),
+                    first_error=_first_err_line(alert_data.get("recent_logs") or ""),
+                )
+                await _persist_fault_signature(alert.id, _sig_now)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("告警 %d 计算故障指纹失败: %s", alert.id, e)
         await audit_service.create_audit_record(trace_id, trigger_snapshot=json.dumps({
             "alert_id": alert.id, "cluster_id": alert.cluster_id,
             "fault_type": alert.fault_type,

@@ -37,6 +37,9 @@ class Alert(Base):
     rule_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 2026-11-26：日志告警来源规则 id（自动恢复按规则归属关闭；历史数据为 NULL，不参与规则回收）
     log_rule_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # 2026-11-26：故障指纹（fault_type+容器退出事实+退出证据摘要+首条错误行，归一化后 sha1）
+    # 同一轮次内指纹不变 = 还是同一个错误 → 不重复诊断；指纹变了 = 报错变了 → 必须重新诊断
+    fault_signature: Mapped[str] = mapped_column(String(64), default="", server_default="")
     # 故障实际发生时间（报错时间，从事件对象提取，区别于检测时间）
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
