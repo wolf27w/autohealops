@@ -10,8 +10,13 @@ import (
 	"sync"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"golang.org/x/sync/singleflight"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/autohealops/k8s-executor/internal/k8sclient"
 )
 
 // ServiceInfo 服务简况
@@ -111,10 +116,10 @@ const (
 )
 
 type miscCacheEntry struct {
-	at         time.Time     // 数据抓取时间
-	lastAccess time.Time     // 最近一次返回给用户的时间
-	namespace  string        // 抓取时的 namespace（后台刷新用）
-	ex         *Executor     // 抓取所用的 executor（clientset 共享，后台刷新用）
+	at         time.Time // 数据抓取时间
+	lastAccess time.Time // 最近一次返回给用户的时间
+	namespace  string    // 抓取时的 namespace（后台刷新用）
+	ex         *Executor // 抓取所用的 executor（clientset 共享，后台刷新用）
 	data       *MiscResources
 	refreshing bool // 后台刷新是否进行中（单飞标记，避免并发重复刷）
 }
@@ -218,7 +223,12 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("services", st) }()
-		svcs, err := e.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+		var svcs *corev1.ServiceList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			svcs, e2 = e.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+			return e2
+		})
 		if err != nil {
 			fail(fmt.Errorf("list services: %w", err))
 			return
@@ -263,7 +273,12 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("ingresses", st) }()
-		ings, err := e.clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
+		var ings *networkingv1.IngressList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			ings, e2 = e.clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
+			return e2
+		})
 		if err != nil {
 			fail(fmt.Errorf("list ingresses: %w", err))
 			return
@@ -314,14 +329,14 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("configmaps", st) }()
-		cms, err := e.clientset.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+		cmItems, err := e.listConfigMapsPaged(ctx, namespace)
 		if err != nil {
 			fail(fmt.Errorf("list configmaps: %w", err))
 			return
 		}
-		items := make([]ConfigMapInfo, 0, len(cms.Items))
-		for i := range cms.Items {
-			cm := &cms.Items[i]
+		items := make([]ConfigMapInfo, 0, len(cmItems))
+		for i := range cmItems {
+			cm := &cmItems[i]
 			items = append(items, ConfigMapInfo{Namespace: cm.Namespace, Name: cm.Name, DataCount: int32(len(cm.Data) + len(cm.BinaryData)), CreatedAt: cm.CreationTimestamp.Format(time.RFC3339)})
 		}
 		sort.Slice(items, func(i, j int) bool {
@@ -339,14 +354,14 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("secrets", st) }()
-		secs, err := e.clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
+		secretItems, err := e.listSecretsPaged(ctx, namespace)
 		if err != nil {
 			fail(fmt.Errorf("list secrets: %w", err))
 			return
 		}
-		items := make([]SecretInfo, 0, len(secs.Items))
-		for i := range secs.Items {
-			sc := &secs.Items[i]
+		items := make([]SecretInfo, 0, len(secretItems))
+		for i := range secretItems {
+			sc := &secretItems[i]
 			items = append(items, SecretInfo{Namespace: sc.Namespace, Name: sc.Name, Type: string(sc.Type), DataCount: int32(len(sc.Data)), CreatedAt: sc.CreationTimestamp.Format(time.RFC3339)})
 		}
 		sort.Slice(items, func(i, j int) bool {
@@ -364,7 +379,12 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("pvcs", st) }()
-		pvcList, err := e.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+		var pvcList *corev1.PersistentVolumeClaimList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			pvcList, e2 = e.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+			return e2
+		})
 		if err != nil {
 			fail(fmt.Errorf("list pvcs: %w", err))
 			return
@@ -406,7 +426,12 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("storageclasses", st) }()
-		scs, err := e.clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+		var scs *storagev1.StorageClassList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			scs, e2 = e.clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+			return e2
+		})
 		if err != nil {
 			fail(fmt.Errorf("list storageclasses: %w", err))
 			return
@@ -434,7 +459,12 @@ func (e *Executor) fetchMiscResources(ctx context.Context, namespace string) (*M
 		defer wg.Done()
 		st := time.Now()
 		defer func() { mark("pods", st) }()
-		pods, err := e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+		var pods *corev1.PodList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			pods, e2 = e.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+			return e2
+		})
 		if err != nil {
 			// 挂载状态仅是附加列，list pods 失败不阻断整页（留空 = 全部未挂载）
 			log.Printf("[misc] list pods 失败（挂载状态留空）: %v", err)
@@ -582,4 +612,55 @@ func refreshRecentMiscKeys(ctx context.Context) {
 			j.ex.refreshMiscBackground(ctx, j.key, j.ns)
 		}(j)
 	}
+}
+
+// ---------- 2026-11-26：分页 + 传输层重试 ----------
+// 背景：进生产集群报 `list secrets: http2: server sent GOAWAY ... LastStreamID=379`。
+// 除连接层关 HTTP/2（见 k8sclient.tuneTransport）外，这里把大对象列表改成分页拉取，
+// 并对瞬时传输错误做有限重试，避免一次失败就把「点进集群」打成报错。
+
+const listPageSize = 500
+
+func (e *Executor) listSecretsPaged(ctx context.Context, ns string) ([]corev1.Secret, error) {
+	var out []corev1.Secret
+	opts := metav1.ListOptions{Limit: listPageSize}
+	for {
+		var page *corev1.SecretList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			page, e2 = e.clientset.CoreV1().Secrets(ns).List(ctx, opts)
+			return e2
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Items...)
+		if page.Continue == "" || len(page.Items) == 0 {
+			break
+		}
+		opts.Continue = page.Continue
+	}
+	return out, nil
+}
+
+func (e *Executor) listConfigMapsPaged(ctx context.Context, ns string) ([]corev1.ConfigMap, error) {
+	var out []corev1.ConfigMap
+	opts := metav1.ListOptions{Limit: listPageSize}
+	for {
+		var page *corev1.ConfigMapList
+		err := k8sclient.RetryOnTransient(ctx, 3, func() error {
+			var e2 error
+			page, e2 = e.clientset.CoreV1().ConfigMaps(ns).List(ctx, opts)
+			return e2
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Items...)
+		if page.Continue == "" || len(page.Items) == 0 {
+			break
+		}
+		opts.Continue = page.Continue
+	}
+	return out, nil
 }

@@ -3,10 +3,15 @@ package k8sclient
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -64,6 +69,7 @@ func NewClusterClient(clusterID uint, kubeconfigJSON string) (*ClusterClient, er
 
 // newClientFromRest 用现成 rest.Config 构建客户端（in-cluster 用）
 func newClientFromRest(clusterID uint, rc *rest.Config) (*ClusterClient, error) {
+	tuneTransport(rc)
 	clientset, err := kubernetes.NewForConfig(rc)
 	if err != nil {
 		return nil, classifyErr("clientset 创建失败", err)
@@ -112,7 +118,44 @@ func buildRestConfig(clusterID uint, kubeconfigJSON string) (*rest.Config, error
 	if restConfig.Burst < 100 {
 		restConfig.Burst = 100
 	}
+	tuneTransport(restConfig)
 	return restConfig, nil
+}
+
+// tuneTransport 连接层健壮性（2026-11-26）：
+//
+// 默认**关闭 HTTP/2**，改走 HTTP/1.1。原因：apiserver 的 HTTP/2 连接到达 stream 上限或空闲
+// 会发 GOAWAY，客户端在「读响应体中途」遇到就整次请求失败——平台一次进集群并发拉
+// secrets/configmaps/pvc/ingress 全量列表，单连接跑几百个 stream 很容易命中，实测报
+// `list secrets: http2: server sent GOAWAY ... LastStreamID=379, ErrCode=NO_ERROR`。
+//
+// 实现用 WrapTransport（在 client-go 建好带证书的 transport **之后**再改），
+// 不能直接赋值 rc.Transport：那样会让 client-go 报
+// 「using a custom transport with TLS certificate options ... is not allowed」（kubeconfig 带客户端证书时必现）。
+//
+// 需要 HTTP/2 多路复用时可设环境变量 K8S_HTTP2=1 恢复（不推荐：复现概率高）。
+func tuneTransport(rc *rest.Config) {
+	if rc == nil || strings.EqualFold(os.Getenv("K8S_HTTP2"), "1") {
+		return
+	}
+	prev := rc.WrapTransport
+	rc.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+		if prev != nil {
+			rt = prev(rt)
+		}
+		if t, ok := rt.(*http.Transport); ok {
+			t.ForceAttemptHTTP2 = false
+			// 置空 map 才能真正阻止 TLS 协商出 h2（仅 ForceAttemptHTTP2=false 不够）
+			t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+			t.MaxIdleConnsPerHost = 32
+			t.MaxConnsPerHost = 64
+			t.IdleConnTimeout = 90 * time.Second
+			if t.DialContext == nil {
+				t.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+			}
+		}
+		return rt
+	}
 }
 
 // ImpersonatedClient 基于集群平台账号配置派生带 impersonation 的 clientset（云原生 RBAC 运行链）
