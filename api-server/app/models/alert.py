@@ -35,6 +35,8 @@ class Alert(Base):
     event_count: Mapped[int] = mapped_column(Integer, default=1)
     # R12：日志规则优先级（同服务多类命中取最高优先级合并时比较用；仅 log 告警写入）
     rule_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 2026-11-26：日志告警来源规则 id（自动恢复按规则归属关闭；历史数据为 NULL，不参与规则回收）
+    log_rule_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     # 故障实际发生时间（报错时间，从事件对象提取，区别于检测时间）
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)

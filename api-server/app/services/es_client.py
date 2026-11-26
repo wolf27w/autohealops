@@ -154,7 +154,8 @@ class ESClient:
         """
         cfg = await self._cfg(log_source_id)
         if not cfg["base_url"]:
-            return {"count": 0, "pods": [], "namespaces": [], "index": ""}
+            # error 非空 = 「本次没查成」，调用方（日志告警恢复）必须跳过，不能当 0 命中关告警
+            return {"count": 0, "pods": [], "namespaces": [], "index": "", "error": "未配置日志源"}
         if log_source_id:
             eff_index = (cfg.get("index") or "").strip() or (index_pattern or "").strip() or "k8s-*"
         else:
@@ -203,12 +204,13 @@ class ESClient:
             data = resp.json()
         except Exception as e:  # noqa: BLE001
             logger.warning("ES 日志告警查询失败: %s", e)
-            return {"count": 0, "pods": [], "namespaces": [], "index": eff_index}
+            # 2026-11-26：ES 故障/超时不能伪装成「0 命中」，否则自动恢复会把活告警误关
+            return {"count": 0, "pods": [], "namespaces": [], "index": eff_index, "error": str(e)[:200]}
         count = data.get("hits", {}).get("total", {}).get("value", 0)
         aggs = data.get("aggregations", {})
         pods = [b["key"] for b in aggs.get("by_pod", {}).get("buckets", [])]
         namespaces = [b["key"] for b in aggs.get("by_ns", {}).get("buckets", [])]
-        return {"count": count, "pods": pods, "namespaces": namespaces, "index": eff_index}
+        return {"count": count, "pods": pods, "namespaces": namespaces, "index": eff_index, "error": ""}
 
     async def search_logs_result(self, namespace: str, pod: str, tail: int = 50,
                                  log_source_id: int | None = None) -> dict:
