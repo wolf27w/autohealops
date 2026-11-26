@@ -50,7 +50,8 @@ interface CmpDiffRow {
 }
 
 type RangeVal = [Dayjs | null, Dayjs | null] | null
-type OrderVal = 'time' | 'exec' | 'rows_examined'
+// 2026-11-26：增加升序变体（点表头排序）
+type OrderVal = 'time' | 'exec' | 'rows_examined' | 'time_asc' | 'exec_asc' | 'rows_examined_asc'
 
 // 明细筛选条件（时间范围 + 明细专属过滤）
 interface EventFilter {
@@ -370,7 +371,7 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
     { title: '次数', dataIndex: 'exec_count', width: 80, sorter: (a: SlowSQLRow, b: SlowSQLRow) => (a.exec_count || 0) - (b.exec_count || 0) },
     { title: '平均耗时(ms)', dataIndex: 'avg_latency_ms', width: 120, sorter: (a: SlowSQLRow, b: SlowSQLRow) => (a.avg_latency_ms || 0) - (b.avg_latency_ms || 0),
       render: (v: number) => <b style={{ color: (v || 0) > 1000 ? '#cf1322' : undefined }}>{v ?? '-'}</b> },
-    { title: '最大(ms)', dataIndex: 'max_latency_ms', width: 100, render: (v: number) => v ?? '-' },
+    { title: '最大(ms)', dataIndex: 'max_latency_ms', width: 100, sorter: (a: SlowSQLRow, b: SlowSQLRow) => (a.max_latency_ms || 0) - (b.max_latency_ms || 0), render: (v: number) => v ?? '-' },
     { title: '命中规则/建议', width: 240, render: (_: unknown, r: SlowSQLRow) => renderSuggestions(r.suggestions, r) },
     { title: '诊断', width: 110, fixed: 'right' as const,
       render: (_: unknown, r: SlowSQLRow) => (
@@ -456,6 +457,7 @@ export default function DbSlowSqlPanel({ connId }: { connId: number }) {
             ? <SlowSqlEventTable
                 items={eventItems} loading={eventLoading} total={eventTotal} page={page} pageSize={pageSize}
                 onPageChange={(p, ps) => { setPage(p); setPageSize(ps) }}
+                order={f.order} onOrderChange={(o) => { setF((prev) => ({ ...prev, order: o as OrderVal })); setPage(1) }}
                 onOpenTrend={(r) => openTrend(r.digest || '')}
                 onOpenDetail={(r) => setDetailRow(r)}
                 onDiagnose={(r) => setDiagRow(r)}

@@ -57,6 +57,10 @@ _ORDER_COLS = {
     "time": ("start_time", "desc"),
     "exec": ("exec_seconds", "desc"),
     "rows_examined": ("rows_examined", "desc"),
+    # 2026-11-26（老板）：耗时/扫描行数/时间支持升序（点表头排序用）
+    "time_asc": ("start_time", "asc"),
+    "exec_asc": ("exec_seconds", "asc"),
+    "rows_examined_asc": ("rows_examined", "asc"),
 }
 
 

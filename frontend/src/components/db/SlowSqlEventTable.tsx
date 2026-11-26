@@ -44,6 +44,9 @@ interface Props {
   page: number
   pageSize: number
   onPageChange: (page: number, pageSize: number) => void
+  /** 当前排序（time/time_asc/exec/exec_asc/rows_examined/rows_examined_asc），点表头切换 */
+  order?: string
+  onOrderChange?: (order: string) => void
   onOpenTrend: (row: SlowSqlEventItem) => void
   onOpenDetail: (row: SlowSqlEventItem) => void
   onDiagnose: (row: SlowSqlEventItem) => void
@@ -53,10 +56,21 @@ interface Props {
 export default function SlowSqlEventTable({
   items, loading, total, page, pageSize,
   onPageChange, onOpenTrend, onOpenDetail, onDiagnose, onEditTag,
+  order = 'time', onOrderChange,
 }: Props) {
+  // 表头排序 ↔ 后端 order 参数（desc=xxx，asc=xxx_asc）；不排序回落到时间倒序
+  const sortOf = (col: 'time' | 'exec' | 'rows_examined') =>
+    (order === col ? 'descend' : order === `${col}_asc` ? 'ascend' : null)
+  const onTableChange = (_p: unknown, _f: unknown, sorter: { columnKey?: string; order?: string }) => {
+    if (!onOrderChange) return
+    const key = sorter?.columnKey
+    if (!key || !sorter?.order) { onOrderChange('time'); return }
+    onOrderChange(sorter.order === 'descend' ? key : `${key}_asc`)
+  }
   const columns: TableColumnsType<SlowSqlEventItem> = [
     {
-      title: '执行开始时间', dataIndex: 'start_time', width: 168,
+      title: '执行开始时间', dataIndex: 'start_time', width: 168, key: 'time',
+      sorter: true, sortOrder: sortOf('time'),
       render: (v: string) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '-'),
     },
     {
@@ -68,12 +82,13 @@ export default function SlowSqlEventTable({
     { title: 'SQL', dataIndex: 'sql_text', width: 380, render: (v: string) => <SqlCell sql={v} /> },
     { title: '数据库', dataIndex: 'schema_name', width: 96, render: (v: string) => v || '-' },
     {
-      title: '执行耗时(秒)', dataIndex: 'exec_seconds', width: 108, align: 'right',
+      title: '执行耗时(秒)', dataIndex: 'exec_seconds', width: 108, align: 'right', key: 'exec',
+      sorter: true, sortOrder: sortOf('exec'),
       render: (v: number) => <b style={{ color: (v || 0) > 1 ? '#cf1322' : undefined }}>{fmtNum(v, 2)}</b>,
     },
     { title: '锁等待耗时(秒)', dataIndex: 'lock_seconds', width: 118, align: 'right', render: (v: number) => fmtNum(v, 2) },
     { title: '返回行数', dataIndex: 'rows_sent', width: 90, align: 'right', render: (v: number) => fmtNum(v) },
-    { title: '扫描行数', dataIndex: 'rows_examined', width: 96, align: 'right', render: (v: number) => fmtNum(v) },
+    { title: '扫描行数', dataIndex: 'rows_examined', width: 96, align: 'right', key: 'rows_examined', sorter: true, sortOrder: sortOf('rows_examined'), render: (v: number) => fmtNum(v) },
     { title: '访问来源', dataIndex: 'client_host', width: 128, render: (v: string) => v || '-' },
     { title: '用户', dataIndex: 'db_user', width: 96, render: (v: string) => v || '-' },
     { title: '线程', dataIndex: 'thread_id', width: 78, align: 'right', render: (v: number) => fmtNum(v) },
@@ -99,6 +114,7 @@ export default function SlowSqlEventTable({
     <Table
       rowKey="id"
       size="small"
+      onChange={onTableChange as never}
       dataSource={items}
       columns={columns}
       loading={loading}

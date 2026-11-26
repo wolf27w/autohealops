@@ -826,7 +826,7 @@ export interface SlowSqlEventsResult {
   note: string
   items: SlowSqlEventItem[]
 }
-export type SlowSqlEventOrder = 'time' | 'exec' | 'rows_examined'
+export type SlowSqlEventOrder = 'time' | 'exec' | 'rows_examined' | 'time_asc' | 'exec_asc' | 'rows_examined_asc'
 export interface SlowSqlEventsQuery {
   start?: string
   end?: string

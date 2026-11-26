@@ -175,6 +175,17 @@ class TestFiltersAndOrder(unittest.TestCase):
         expr = svc._order_column("rows_examined")
         self.assertIn("rows_examined", str(expr))
 
+    def test_order_exec_asc(self):
+        # 2026-11-26（老板）：耗时支持点表头升序
+        expr = svc._order_column("exec_asc")
+        self.assertIn("exec_seconds", str(expr))
+        self.assertIn("ASC", str(expr))
+
+    def test_order_rows_examined_asc(self):
+        expr = svc._order_column("rows_examined_asc")
+        self.assertIn("rows_examined", str(expr))
+        self.assertIn("ASC", str(expr))
+
     def test_order_unknown_falls_back_to_time(self):
         expr = svc._order_column("bogus")
         self.assertIn("start_time", str(expr))
