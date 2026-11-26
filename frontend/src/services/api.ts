@@ -634,6 +634,10 @@ export const deleteSelfHealRule = (id: number) => http.delete(`/self-heal-rules/
 export const getSettings = () => http.get<Record<string, unknown>>('/settings')
 export const updateSettings = (data: Payload) => http.put('/settings', data)
 // 自动化授权策略（2026-11-26）：模式 + 置信度阈值 + 动作×环境矩阵
+// 告警 AI 处置台（2026-11-26）：候选动作 + 判定 / 触发处置
+export const getCandidateActions = (id: number) => http.get<Payload>(`/alerts/${id}/candidate-actions`)
+export const dispatchAlertAction = (id: number, action: 'ai' | 'manual') => http.post(`/alerts/${id}/dispatch`, { action })
+
 export const getAutomationPolicy = () => http.get<Payload>('/settings/automation-policy')
 export const updateAutomationPolicy = (data: Payload) => http.put('/settings/automation-policy', data)
 // Web 终端安全开关（B9）：危险命令拦截 / 允许粘贴 / 显示水印 / 禁止复制

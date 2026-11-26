@@ -15,6 +15,7 @@ from app.api import (
     workload_logs,
     oracle_clients,)
 from app.api import hosts, host_groups, jvm, host_terminal, host_audits, host_sessions, host_credentials, zombie, prompt_health
+from app.api import alert_actions
 from app.api import settings as settings_api
 from app.core.config import settings
 from app.core.database import async_session
@@ -673,6 +674,7 @@ app.include_router(ai_proxy.router)  # AI 服务代理（需在具体路由之�
 app.include_router(clusters.router)
 app.include_router(monitoring.router)
 app.include_router(alerts.router)
+app.include_router(alert_actions.router)
 app.include_router(alert_policies.router)
 app.include_router(alert_silences.router)
 app.include_router(self_heal_rules.router)

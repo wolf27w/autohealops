@@ -1558,6 +1558,7 @@ async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
             if a:
                 if repaired:
                     a.status = "self_healed"
+                    a.resolved_by = a.resolved_by or "ai-agent"
                     a.resolved_at = now
                     a.message = (a.message or "") + "（自愈：删 Pod 重建，验证通过）"
                 else:
@@ -1957,6 +1958,7 @@ async def _repair_image_pull_inner(alert: Alert, trace_id: str) -> None:
             a = await session.get(Alert, alert.id)
             if repaired:
                 a.status = "self_healed"
+                a.resolved_by = a.resolved_by or "ai-agent"
                 a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 a.message = a.message + f"（自愈：{msg[:100]}，验证通过）"
             elif "自动修复" not in (a.message or ""):
@@ -1990,6 +1992,7 @@ async def _repair_image_pull_inner(alert: Alert, trace_id: str) -> None:
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
             a.status = "self_healed"
+            a.resolved_by = a.resolved_by or "ai-agent"
             a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             a.message = a.message + "（Pod 已重建/删除，告警过时自愈关闭）"
             await session.commit()
@@ -2322,6 +2325,7 @@ async def _auto_force_delete_terminating(alert: Alert) -> bool:
             a = await session.get(Alert, alert.id)
             if a:
                 a.status = "self_healed"
+                a.resolved_by = a.resolved_by or "ai-agent"
                 a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 a.message = (a.message or "") + "（TerminatingStuck 免审批自动强删，验证通过）"
                 await session.commit()
@@ -2409,6 +2413,7 @@ async def _process_node_alert(alert: Alert) -> bool:
                 if a is not None:
                     if recovered:
                         a.status = "self_healed"
+                        a.resolved_by = a.resolved_by or "ai-agent"
                         a.resolved_at = now
                         a.message = (a.message or "") + "（自愈：节点隔离成功，节点已恢复）"
                     else:
@@ -3438,6 +3443,7 @@ async def _process_one(alert: Alert) -> bool:
             async with async_session() as session:
                 a = await session.get(Alert, alert.id)
                 a.status = "self_healed"
+                a.resolved_by = a.resolved_by or "ai-agent"
                 a.resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 a.message = a.message + "（自愈，验证通过）"
                 await session.commit()

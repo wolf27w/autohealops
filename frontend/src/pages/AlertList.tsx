@@ -9,6 +9,7 @@ import { canWrite } from '../utils/auth'
 import StatusTag from '../components/StatusTag'
 import SeverityTag from '../components/SeverityTag'
 import CodeBlock from '../components/CodeBlock'
+import AlertActionPanel from '../components/AlertActionPanel'
 import type { Alert, AlertComment } from '../types'
 
 // 容器故障（无需看服务日志，看 describe + 诊断结果）
@@ -498,6 +499,7 @@ function DiagnosisPanel({ alert }: { alert: Alert }) {
         )
       })()}
       {data.diagnosis_json ? <CodeBlock code={data.diagnosis_json} /> : null}
+      <AlertActionPanel alertId={alert.id} />
     </div>
   )
 }
