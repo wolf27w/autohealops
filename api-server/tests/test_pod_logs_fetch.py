@@ -86,5 +86,36 @@ class TestFetchPodLogs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await pod_logs.fetch_pod_logs(1, "ns", ""), "")
 
 
+class TestDeadPodFallback(unittest.IsolatedAsyncioTestCase):
+    """告警上的 Pod 已重建（CrashLoop 下常见）→ 不能因 NotFound 就判「证据不足」"""
+
+    async def test_falls_back_to_live_pod(self):
+        async def fake_acall(fn, *args, **kw):
+            name = getattr(fn, "__name__", "")
+            if name == "get_pod_logs":
+                pod = args[2]
+                if pod.endswith("-5k562"):
+                    return {"success": False, "logs": "", "error": 'pods "x" not found'}
+                return {"success": True, "logs": APP_LOG}
+            if name == "list_deployment_pods":
+                return {"success": True, "pods": [
+                    {"name": "dgis-module-universals-78b9d9865-fjtnp", "ready": False, "restart_count": 9},
+                    {"name": "dgis-module-universals-5c4c574c85-6vr6s", "ready": True, "restart_count": 0},
+                ], "all_ready": False}
+            return {"success": False, "logs": "", "error": "unexpected"}
+
+        facts = {"containers": [{"name": "dgis-module-universals"}], "summary": "x"}
+        with patch.object(pod_logs.executor_client, "acall", fake_acall), \
+                patch("app.services.termination_evidence.collect_pod_termination",
+                      AsyncMock(return_value=facts)):
+            pod_logs._CTN_CACHE.clear()
+            out = await pod_logs.fetch_pod_logs(
+                999025, "qa-asfp", "dgis-module-universals-78b9d9865-5k562")
+
+        self.assertIn("已不存在", out)
+        self.assertIn("dgis-module-universals-78b9d9865-fjtnp", out)
+        self.assertIn("APPLICATION FAILED TO START", out)
+
+
 if __name__ == "__main__":
     unittest.main()

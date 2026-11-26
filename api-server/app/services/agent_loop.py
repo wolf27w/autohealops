@@ -56,6 +56,11 @@ MAX_ROUNDS_HARD_LIMIT = 16
 # 启动失败场景（2026-11-25 事故复盘）：固定采集顺序需要 8~12 轮才能挖到镜像内文件/版本差异，
 # 按场景放大预算（只放大不缩小，且不超硬上限）。
 STARTUP_FAILURE_MAX_ROUNDS = 12
+# 2026-11-26：个别工具的输出需要更长保留（否则定性的 Description/Action 被截掉）
+TOOL_OUTPUT_TRUNCATE_OVERRIDE = {
+    "collect_startup_evidence": 6000,
+}
+
 STARTUP_FAILURE_TOTAL_TIMEOUT = 180.0
 
 # 启动失败场景识别：告警字段或上下文里出现这些特征即按启动失败给预算与采集清单
@@ -341,6 +346,12 @@ async def _degrade(
             pass
     logger.info("ReAct 循环降级（%s）：%s", reason, detail)
 
+    # 2026-11-26：证据已能确定性定根因时直接收口，不再花一次 AI 调用（也避免又回「未能确定根因」）
+    det = _deterministic_root_cause(state, start)
+    if det:
+        det["degrade_reason"] = reason
+        return det
+
     fallback_result = None
     if fallback is not None:
         try:
@@ -384,6 +395,79 @@ async def _degrade(
         "rounds": state["rounds"],
         "elapsed_ms": int((time.monotonic() - start) * 1000),
     }
+
+
+# 确定性证据结论（2026-11-26）：超时/降级时不再一律回「未能确定根因」——
+# 已采集的工具输出里如果能命中硬错误特征，直接给确定性结论（零 AI 成本、秒出）。
+# 背景：qa-asfp/dgis-module-universals 实测 collect_startup_evidence 已拿到
+# 「APPLICATION FAILED TO START + ParserConfig.getProvider() 不存在」，但循环 total_timeout 后
+# 直接输出「未能确定根因」——证据在手却不说。
+_HARD_FINDINGS = (
+    (
+        ("fastjson.parser.parserconfig.getprovider", "com.alibaba.fastjson2.reader.objectreaderprovider"),
+        "依赖冲突：容器里同时存在 fastjson 1.x（如 wcspsdk 内置）与 fastjson2，"
+        "com.alibaba.fastjson.parser.ParserConfig 被旧版覆盖，FastJsonSecurityConfiguration 调 "
+        "getProvider() 抛 NoSuchMethodError，应用启动失败退出。",
+        [
+            "在引入 wcspsdk 等 SDK 的依赖上加 <exclusion>com.alibaba:fastjson</exclusion>，只保留 fastjson2",
+            "重新构建后检查 BOOT-INF/lib 只剩 fastjson2-2.x（不得同时存在 fastjson-1.x）",
+            "先回滚到上一可用镜像止血，再按上述修依赖重发",
+        ],
+    ),
+    (
+        ("nosuchmethoderror",),
+        "依赖/版本不兼容：运行时抛 NoSuchMethodError（调用的方法在已加载的类里不存在）。",
+        ["对比本次变更的依赖版本（升级/降级了哪个包）", "清理冲突版本（mvn dependency:tree 看重复依赖）后重构建"],
+    ),
+    (
+        ("noclassdeffounderror", "classnotfoundexception"),
+        "运行时缺类（NoClassDefFoundError/ClassNotFoundException）：打包漏依赖或类加载器看不到该类。",
+        ["检查 fat jar 内 BOOT-INF/lib 是否缺该依赖", "确认依赖 scope 不是 provided/test"],
+    ),
+    (
+        ("outofmemoryerror",),
+        "内存不足：JVM 抛 OutOfMemoryError 后进程退出（非 kubelet OOMKilled）。",
+        ["确认 -Xmx/MaxRAMPercentage 与容器 limit 匹配", "排查内存泄漏（堆 dump / GC 日志）"],
+    ),
+    (
+        ("no such file or directory",),
+        "启动路径/文件缺失（日志目录、配置文件或挂载点不存在）。",
+        ["为缺失目录加 initContainer mkdir -p 或挂载卷", "修正配置里的路径"],
+    ),
+)
+
+
+def _deterministic_root_cause(state: dict, start: float) -> dict | None:
+    """从已成功采集的工具输出里确定性命中硬错误 → 直接给结论（不调 LLM）。
+
+    命中不了返回 None（调用方仍走原「证据不足」收口）。
+    """
+    blob = "\n".join(str(t.get("output") or "") for t in state["tool_steps"] if t.get("success"))
+    low = blob.lower()
+    if not low.strip():
+        return None
+    for markers, cause, advices in _HARD_FINDINGS:
+        if not any(m in low for m in markers):
+            continue
+        # 取命中处附近的原始行作为证据
+        idx = min((low.find(m) for m in markers if m in low), default=-1)
+        seg = blob[max(0, idx - 300): idx + 500]
+        line = next((ln.strip() for ln in seg.splitlines()
+                     if any(m in ln.lower() for m in markers) and ln.strip()), "")[:300]
+        logger.info("ReAct 降级但证据充分：确定性命中硬错误（%s）", markers[0])
+        return {
+            "root_cause": cause + (f" 关键证据：{line}" if line else ""),
+            "suggestions": advices,
+            "root_cause_layer": "B",
+            "handling_advice": "诊断预算耗尽前已采集到确定性失败证据，以上结论由证据直接得出（未调用模型）。",
+            "model_used": "",
+            "degraded": True,
+            "degrade_reason": "deterministic_evidence",
+            "tool_steps": list(state["tool_steps"]),
+            "rounds": state["rounds"],
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+        }
+    return None
 
 
 def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, detail: str = "") -> dict:
@@ -442,6 +526,11 @@ async def _wrap_up(
             pass
     logger.info("ReAct 循环收口（%s）：%s", reason, detail)
 
+    # 2026-11-26：收口前先看证据能不能确定性定根因（比再问一次模型便宜，也不会回「未能确定根因」）
+    det = _deterministic_root_cause(state, start)
+    if det:
+        return det
+
     # 收口决策：让 LLM 基于已采集证据给出最终结论（prompt 已含「证据不足→结构化交代」）
     try:
         messages.append({
@@ -474,6 +563,9 @@ async def _wrap_up(
             }
     except Exception as e:  # noqa: BLE001 收口决策失败 → 确定性输出
         logger.warning("收口决策失败，回退确定性证据不足输出: %s", e)
+    det = _deterministic_root_cause(state, start)
+    if det:
+        return det
     return _wrap_up_insufficient_evidence(state, reason, start, detail=detail)
 
 
@@ -559,7 +651,11 @@ async def _run_loop_body(
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         output = (result.get("output") or result.get("error") or "").strip()
-        truncated = output[:policy.tool_output_truncate]
+        # 2026-11-26：启动失败证据包单次采集千行内容，2KB 截断会把 Description/Action 切掉
+        # （实测：定性行在第 3KB 处 → 模型只能看到堆栈帧，结论只能写「证据不足」）
+        _trunc_limit = max(policy.tool_output_truncate,
+                           TOOL_OUTPUT_TRUNCATE_OVERRIDE.get(tool_name, 0))
+        truncated = output[:_trunc_limit]
 
         # 5. 每轮工具调用全量审计（tool + args + 输出摘要 + 耗时）
         if audit is not None:
@@ -580,7 +676,9 @@ async def _run_loop_body(
             "tool": tool_name,
             "args": args,
             "success": bool(result.get("success")),
-            "output": truncated[:2000],
+            # 2026-11-26：与下发给模型的内容同步截断（原来固定 2000，
+            # 导致降级时 _deterministic_root_cause 看不到定性行 → 又回「未能确定根因」）
+            "output": output[:_trunc_limit],
             "elapsed_ms": elapsed_ms,
         })
         state["rounds"] += 1
@@ -663,6 +761,10 @@ async def run_react_loop(
         )
     except asyncio.TimeoutError:
         # 2026-11-23 R69：总时限耗尽 → 确定性「证据不足」结构化收口（不再调用 LLM，避免超时后再拖时间）
+        # 2026-11-26：先看已采集证据能不能确定性定根因（能就不再说「未能确定根因」）
+        det = _deterministic_root_cause(state, start)
+        if det:
+            return det
         return _wrap_up_insufficient_evidence(
             state, "total_timeout", start,
             detail=f"超过整个循环超时 {policy.total_timeout}s",

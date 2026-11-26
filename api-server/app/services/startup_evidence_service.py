@@ -54,12 +54,24 @@ JAR_CONFIG_SUFFIXES = (
 JAR_SEARCH_DIRS = ("/apps/works/server", "/app", "/opt/app", "/opt", "/works")
 
 # 首错行识别：越靠前越像「根异常」
+# 2026-11-26 调整：
+#   ① hard_failure 最高优先——APPLICATION FAILED TO START / 方法不存在 / NoSuchMethod / 缺类 / 类冲突，
+#      这些直接定性（实测：原优先级会把「关闭阶段的 BeanCreationNotAllowedException」当根异常排第一）；
+#   ② shutdown_noise 最低——初始化失败后的关闭/销毁阶段噪声，不是根因。
 _ERROR_PATTERNS = [
+    ("hard_failure", re.compile(
+        r"(APPLICATION FAILED TO START|Application run failed|does not exist|NoSuchMethodError|"
+        r"NoClassDefFoundError|ClassNotFoundException|LinkageError|Invalid or corrupt jarfile)", re.I)),
     ("root_exception", re.compile(r"^(?:Caused by:\s*)?((?:[a-zA-Z_$][\w$]*\.)+[A-Za-z_$][\w$]*(?:Exception|Error)):\s*(.*)$")),
-    ("boot_failed", re.compile(r"(Application run failed|APPLICATION FAILED TO START|Failed to start|Error creating bean)", re.I)),
+    ("boot_failed", re.compile(r"(Failed to start|Error creating bean)", re.I)),
     ("error_line", re.compile(r"\b(ERROR|FATAL|PANIC|panic:)\b")),
     ("generic", re.compile(r"(exception|error|failed|refused|timeout|timed out)", re.I)),
 ]
+
+# 关闭/销毁阶段噪声（初始化失败后的清理动作，不可能是根因）
+_SHUTDOWN_NOISE_RE = re.compile(
+    r"(in destruction|destroy method|GracefulShutdown|Stopping service|closing \.\.\.|"
+    r"Start destroying|shutdown)", re.I)
 
 # 敏感值打码：KEY=VALUE / KEY: VALUE / --key=value
 _SECRET_KEY = r"(?:password|passwd|pwd|secret|token|access[_-]?key|api[_-]?key)"
@@ -106,6 +118,9 @@ def extract_first_error(text: str, limit: int = 5) -> list[dict]:
             if key in seen:
                 break
             seen.add(key)
+            # 关闭/销毁阶段噪声降级（除非本身就是 hard_failure）
+            if kind != "hard_failure" and _SHUTDOWN_NOISE_RE.search(line):
+                kind = "shutdown_noise"
             if kind == "root_exception":
                 hits.append({"line_no": idx, "kind": kind, "exception": m.group(1),
                              "message": m.group(2)[:300], "text": line[:400]})
@@ -115,7 +130,10 @@ def extract_first_error(text: str, limit: int = 5) -> list[dict]:
             break
         if len(hits) >= limit * 3:
             break
-    order = {"root_exception": 0, "boot_failed": 1, "error_line": 2, "generic": 3}
+    # 真实异常（带异常类+消息）排第一；决定性标记（APPLICATION FAILED TO START / 方法不存在）其次；
+    # 关闭阶段噪声垫底（2026-11-26）
+    order = {"root_exception": 0, "hard_failure": 1, "boot_failed": 2, "error_line": 3,
+             "generic": 4, "shutdown_noise": 9}
     hits.sort(key=lambda h: (order.get(h["kind"], 9), h["line_no"]))
     return hits[:limit]
 
@@ -247,6 +265,10 @@ def _render(pack: dict) -> str:
         lines.append("- 首错行（日志）：")
         for e in pack["first_error"]:
             lines.append(f"  · [L{e['line_no']}] {e['text']}")
+    if pack.get("startup_window"):
+        lines.append("- 启动失败详情（关键段落）：")
+        for ln in (pack.get("startup_window") or [])[:60]:
+            lines.append(f"  {ln[:400]}")
     src = pack.get("source") or {}
     lines.append(f"- 镜像内文件来源：{src.get('channel','-')}"
                  + (f"（{src.get('note')}）" if src.get("note") else ""))
@@ -398,6 +420,13 @@ async def collect(context: dict, container: str = "", compare_previous: bool = T
         from app.utils.pod_logs import fetch_pod_logs
         logs = await fetch_pod_logs(cluster_id, ns, pod, tail=300)
         pack["first_error"] = extract_first_error(logs)
+        # 2026-11-26：把「启动失败详情」块（APPLICATION FAILED TO START + Description/Action）
+        # 直接放进证据包靠前位置——首错行常常只能给一行，定性靠这段
+        try:
+            from app.utils.pod_logs import extract_startup_window
+            pack["startup_window"] = extract_startup_window([ln for ln in logs.splitlines()])
+        except Exception:  # noqa: BLE001
+            pack["startup_window"] = []
     except Exception as e:  # noqa: BLE001
         pack["notes"].append(f"日志采集失败: {e}")
 

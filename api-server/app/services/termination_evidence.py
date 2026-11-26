@@ -20,6 +20,14 @@ _SUBFIELD_RE = re.compile(r"^      ([^:]+):\s*(.*)$")
 # 强错误行特征（小写匹配）
 _ERROR_MARKERS = ("exception", "caused by", "fatal", "panic", "error", "failed to")
 
+# 硬错误（2026-11-26）：确定性失败原因，优先于普通 ERROR/WARN 返回
+_HARD_ERROR_MARKERS = (
+    "application failed to start", "an attempt was made to call a method that does not exist",
+    "nosuchmethoderror", "noclassdeffounderror", "classnotfoundexception", "linkageerror",
+    "outofmemoryerror", "invalid or corrupt jarfile", "no such file or directory",
+    "error creating bean", "beancreationexception", "failed to bind", "caused by:",
+)
+
 
 def _split_kv(line: str) -> tuple[str, str]:
     """按首个冒号拆 key/value，value 去首尾空白（容错：无冒号返回整行）"""
@@ -182,13 +190,20 @@ def first_error_line(text: str) -> str:
     """从日志文本提取第一条强错误行（Exception/Caused by/ERROR/FATAL/panic/Error:/failed to）。
 
     逐行匹配、返回原始行（去首尾空白）截断 300 字符；找不到返回空串。
+
+    2026-11-26（老板实测 qa-asfp/dgis-module-universals 诊断跑偏）：原实现「第一个命中标记的行」
+    经常先遇到无关 WARN（如 nacosGracefulShutdownDelegate 的 BeanCreationNotAllowed），
+    真正的失败点（NoSuchMethodError / APPLICATION FAILED TO START / Caused by）在日志中后段
+    → 模型看到的首错行与真因无关。现在分优先级：先找硬错误，再回落普通标记。
     """
     if not text:
         return ""
-    for line in text.splitlines():
-        low = line.lower()
-        if any(m in low for m in _ERROR_MARKERS):
-            return line.strip()[:300]
+    lines = text.splitlines()
+    for markers in (_HARD_ERROR_MARKERS, _ERROR_MARKERS):
+        for line in lines:
+            low = line.lower()
+            if any(m in low for m in markers):
+                return line.strip()[:300]
     return ""
 
 
