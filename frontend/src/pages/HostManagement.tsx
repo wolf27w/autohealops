@@ -101,6 +101,10 @@ export default function HostManagement() {
   }
 
   useEffect(() => { loadGroups() }, [])
+  // 未分组清空后自动退出该视图（分类已不再显示）
+  useEffect(() => {
+    if (groupFilter === 'ungrouped' && ungroupedCount === 0) setGroupFilter('all')
+  }, [groupFilter, ungroupedCount])
   // 搜索防抖：停止输入 300ms 才查询
   useEffect(() => {
     const t = setTimeout(() => setKeyword(kwInput.trim()), 300)
@@ -192,9 +196,10 @@ export default function HostManagement() {
     URL.revokeObjectURL(url)
   }
 
+  // 2026-11-26（老板）：没有未分组主机时，这个虚拟分类直接不出现（不让它占位/碍眼）
   const menuItems = [
     { key: 'all', label: '全部主机' },
-    { key: 'ungrouped', label: '未分组' },
+    ...(ungroupedCount > 0 ? [{ key: 'ungrouped', label: `未分组（${ungroupedCount}）` }] : []),
     ...groups.map((g) => ({ key: String(g.id), label: `${g.name}（${g.host_count}）` })),
   ]
 
@@ -497,13 +502,14 @@ export default function HostManagement() {
       {/* 分组管理 */}
       <Drawer title="主机分组管理" open={groupDrawer} onClose={() => setGroupDrawer(false)} width={480}>
         {canManageHosts && <Button type="primary" icon={<PlusOutlined />} block style={{ marginBottom: 12 }} onClick={() => { setGroupEdit(null); groupForm.resetFields(); setGroupModalOpen(true) }}>新建分组</Button>}
-        {/* 2026-11-26（老板）：分组管理里要有「未分组」，且能查看/清空 */}
-        <List.Item
-          style={{ paddingLeft: 0, paddingRight: 0, borderBottom: '1px solid #f0f0f0' }}
-          actions={[
-            <a key="v" onClick={() => { setGroupDrawer(false); setGroupFilter('ungrouped') }}>查看主机</a>,
-            isAdmin && (ungroupedCount > 0
-              ? (
+        {/* 2026-11-26（老板）：「未分组」是虚拟分类，没有实体记录可删；只在真有未分组主机时出现，
+            提供「查看主机 / 删除（清空该分类下主机）」 */}
+        {ungroupedCount > 0 && (
+          <List.Item
+            style={{ paddingLeft: 0, paddingRight: 0, borderBottom: '1px solid #f0f0f0' }}
+            actions={[
+              <a key="v" onClick={() => { setGroupDrawer(false); setGroupFilter('ungrouped') }}>查看主机</a>,
+              isAdmin && (
                 <Popconfirm key="c" title={`删除未分组主机？将删除全部 ${ungroupedCount} 台未分组主机（分组内主机不受影响）`}
                   okText="确认删除" okButtonProps={{ danger: true }}
                   onConfirm={async () => {
@@ -513,15 +519,15 @@ export default function HostManagement() {
                   }}>
                   <a style={{ color: '#cf1322' }}>删除</a>
                 </Popconfirm>
-              )
-              : <Tooltip key="c" title="当前没有未分组主机，无需删除"><a style={{ color: '#bfbfbf' }}>删除</a></Tooltip>),
-          ].filter(Boolean) as React.ReactNode[]}
-        >
-          <List.Item.Meta
-            title={<span>未分组<Tag style={{ marginLeft: 6 }} color="warning">虚拟</Tag></span>}
-            description={<span>不属于任何分组的主机 · 主机 {ungroupedCount}</span>}
-          />
-        </List.Item>
+              ),
+            ].filter(Boolean) as React.ReactNode[]}
+          >
+            <List.Item.Meta
+              title={<span>未分组<Tag style={{ marginLeft: 6 }} color="warning">虚拟</Tag></span>}
+              description={<span>不属于任何分组的主机 · 主机 {ungroupedCount}</span>}
+            />
+          </List.Item>
+        )}
         <List
           dataSource={groups}
           renderItem={(g) => (
