@@ -74,11 +74,16 @@ async def find_reusable_diagnosis(
     resource_name: str,
     fault_type: str,
     window_min: int | None = None,
+    fingerprint: str = "",
 ) -> tuple[AIDiagnosisResult, dict] | None:
     """查找可复用的诊断（同集群+namespace+资源名+fault_type，窗口内，有 root_cause）
 
     返回 (诊断行, 解析后的 diagnosis dict)；无可复用返回 None。
     """
+    # 2026-11-26（老板口径）：同一个容器不同的错误就是不同问题——
+    # 跨告警复用必须**指纹完全一致**；没有指纹一律不复用（宁可重诊断，也不给错的旧结论）。
+    if not (fingerprint or "").strip():
+        return None
     minutes = await get_reuse_window_minutes() if window_min is None else int(window_min)
     if minutes <= 0:
         return None
@@ -96,6 +101,7 @@ async def find_reusable_diagnosis(
                     # 2026-11-26：只从**仍在途**的告警复用——告警已 resolved/self_healed 说明
                     # 那轮故障已结束，新告警必须重新诊断（否则输出上一次的原因）
                     Alert.status.in_(ACTIVE_ALERT_STATUSES),
+                    Alert.fault_signature == fingerprint,
                     AIDiagnosisResult.created_at >= since,
                 )
                 .order_by(AIDiagnosisResult.id.desc())

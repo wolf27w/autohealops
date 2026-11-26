@@ -73,10 +73,13 @@ class TestReuseOnlyFromInflightAlert(unittest.IsolatedAsyncioTestCase):
         session, ctx = _fake_session()
         with patch.object(dreuse, "async_session", return_value=ctx), \
                 patch.object(dreuse, "get_reuse_window_minutes", AsyncMock(return_value=30)):
-            out = await dreuse.find_reusable_diagnosis(1, "ns", "pod-a", "CrashLoopBackOff")
+            out = await dreuse.find_reusable_diagnosis(1, "ns", "pod-a", "CrashLoopBackOff",
+                                                       fingerprint="sig-abc")
         self.assertIsNone(out)
         sql = _sql_of(session)
         self.assertIn("alerts.status IN", sql)
+        # 2026-11-26：跨告警复用必须指纹完全一致
+        self.assertIn("alerts.fault_signature", sql)
         for st in ("pending", "awaiting_approval", "ticketed"):
             self.assertIn(st, sql)
         # 已结束的上一轮不得参与复用
@@ -92,10 +95,19 @@ class TestReuseOnlyFromInflightAlert(unittest.IsolatedAsyncioTestCase):
         session, ctx = _fake_session([(stale, now), (fresh, now)])
         with patch.object(dreuse, "async_session", return_value=ctx), \
                 patch.object(dreuse, "get_reuse_window_minutes", AsyncMock(return_value=30)):
-            out = await dreuse.find_reusable_diagnosis(1, "ns", "pod-a", "CrashLoopBackOff")
+            out = await dreuse.find_reusable_diagnosis(1, "ns", "pod-a", "CrashLoopBackOff",
+                                                       fingerprint="sig-abc")
         self.assertIsNotNone(out)
         self.assertEqual(out[0].id, 2)
         self.assertEqual(out[1].get("root_cause"), "本轮原因")
+
+    async def test_no_fingerprint_means_no_reuse(self):
+        """没有指纹（历史数据/首次）→ 不做跨告警复用，宁可重新诊断"""
+        session, ctx = _fake_session()
+        with patch.object(dreuse, "async_session", return_value=ctx):
+            out = await dreuse.find_reusable_diagnosis(1, "ns", "pod-a", "CrashLoopBackOff")
+        self.assertIsNone(out)
+        session.execute.assert_not_called()
 
     async def test_alert_diagnosis_filters_by_episode_start(self):
         session, ctx = _fake_session()
@@ -145,6 +157,39 @@ class TestUpsertContract(unittest.IsolatedAsyncioTestCase):
         n, diagnose = await self._process((0, False, False))
         self.assertEqual(n, 0)
         diagnose.assert_not_awaited()
+
+
+class TestTicketedRediagnose(unittest.IsolatedAsyncioTestCase):
+    """老板 2026-11-26：已转工单不能成为「再也不诊断」的理由；同一容器不同错误=不同问题"""
+
+    async def _run(self, drifted):
+        from app.services import alert_auto_service as aas
+        alert = SimpleNamespace(id=3799, resource_type="pod", resource_name="app-1",
+                                namespace="qa-x", cluster_id=1, fault_type="CrashLoopBackOff",
+                                fault_signature="sig-old")
+        with patch.object(aas, "_diagnosis_evidence_drifted", AsyncMock(return_value=drifted)), \
+                patch.object(aas, "_run_diagnosis_only", AsyncMock(return_value=True)) as diag:
+            ok = await aas.refresh_ticketed_diagnosis(alert)
+        return ok, diag
+
+    async def test_same_error_no_rediagnose(self):
+        ok, diag = await self._run(False)
+        self.assertFalse(ok)
+        diag.assert_not_awaited()
+
+    async def test_changed_error_rediagnoses(self):
+        ok, diag = await self._run(True)
+        self.assertTrue(ok)
+        diag.assert_awaited_once()
+
+    async def test_non_pod_skipped(self):
+        from app.services import alert_auto_service as aas
+        alert = SimpleNamespace(id=1, resource_type="node", resource_name="n1",
+                                fault_signature="", cluster_id=1, fault_type="NodeNotReady",
+                                namespace="", status="ticketed")
+        with patch.object(aas, "_run_diagnosis_only", AsyncMock(return_value=True)) as diag:
+            self.assertFalse(await aas.refresh_ticketed_diagnosis(alert))
+        diag.assert_not_awaited()
 
 
 if __name__ == "__main__":

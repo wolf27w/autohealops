@@ -1525,7 +1525,7 @@ async def _persist_react_diagnosis(alert: Alert, diagnosis: dict, alert_data: di
         payload = {k: diagnosis.get(k) for k in (
             "root_cause", "root_cause_chain", "analysis", "suggestions", "suggestions_detail",
             "root_cause_layer", "handling_advice", "impact", "risk_level", "category",
-            "confidence", "evidence_refs", "model_used", "model_fallback", "fallback_from",
+            "confidence", "confidence_basis", "evidence_refs", "model_used", "model_fallback", "fallback_from",
             "degraded", "degrade_reason",
         )}
         payload["_source"] = "react"
@@ -2535,7 +2535,8 @@ async def _process_one(alert: Alert) -> bool:
         try:
             from app.services import diagnosis_reuse
             reused = await diagnosis_reuse.find_reusable_diagnosis(
-                alert.cluster_id, alert.namespace or "", alert.resource_name or "", alert.fault_type
+                alert.cluster_id, alert.namespace or "", alert.resource_name or "", alert.fault_type,
+                fingerprint=(getattr(alert, "fault_signature", "") or ""),
             )
             if reused:
                 _rrow, _rdata = reused[0], (reused[1] if len(reused) > 1 else {})
@@ -3528,6 +3529,89 @@ async def escalate_stale_alerts() -> int:
     return escalated
 
 
+async def refresh_ticketed_diagnosis(alert) -> bool:
+    """已转工单(ticketed)告警：仅当「证据指纹变化（=出现新错误）」时重新诊断。
+
+    老板 2026-11-26 口径：同一个容器不同的错误是**不同问题**——已转工单不能成为
+    「再也不诊断」的理由；但同一错误持续时也不该反复调 AI。
+    因此这里只做「指纹比对 + 变了才重诊断」，绝不触发任何修复/审批动作。
+    返回是否重新诊断过。
+    """
+    if (getattr(alert, "resource_type", "") or "") != "pod":
+        return False
+    prev = (getattr(alert, "fault_signature", "") or "")
+    if prev:
+        try:
+            if not await _diagnosis_evidence_drifted(alert):
+                return False
+        except Exception as e:  # noqa: BLE001
+            logger.debug("告警 %d 指纹比对失败（跳过）: %s", alert.id, e)
+            return False
+    # 无指纹（历史数据）或指纹已变化 → 重新诊断一次（不进入修复链路）
+    try:
+        logger.info("告警 %d 已转工单但证据指纹%s → 重新诊断（不触发修复）",
+                    alert.id, "变化" if prev else "缺失")
+        diag = await _run_diagnosis_only(alert)
+        return bool(diag)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 工单态重诊断失败: %s", alert.id, e)
+        return False
+
+
+async def _run_diagnosis_only(alert) -> bool:
+    """只做取证 + 诊断 + 落库（复用诊断主链路的取证/落库，不建计划、不审批、不改告警状态）"""
+    alert_data = {
+        "alert_id": alert.id, "cluster_name": str(alert.cluster_id),
+        "namespace": alert.namespace, "pod_name": alert.resource_name if alert.resource_type == "pod" else "",
+        "node_name": alert.resource_name if alert.resource_type == "node" else "",
+        "fault_type": alert.fault_type, "fault_family": alert.fault_family,
+        "fault_domain": alert.fault_domain, "severity": alert.severity,
+        "status_info": alert.message,
+    }
+    diag_ctx: dict = {}
+    if alert.resource_type == "pod" and alert.resource_name:
+        try:
+            from app.services.termination_evidence import collect_pod_termination, first_error_line
+            term = await collect_pod_termination(alert.cluster_id, alert.namespace or "", alert.resource_name)
+            if term.get("summary"):
+                alert_data["termination_evidence"] = term["summary"]
+                diag_ctx["termination_evidence"] = term["summary"]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("工单态重诊断采集退出证据失败: %s", e)
+        try:
+            from app.utils.pod_logs import fetch_pod_logs
+            logs_text = await fetch_pod_logs(alert.cluster_id, alert.namespace or "", alert.resource_name)
+            if logs_text:
+                alert_data["recent_logs"] = logs_text[:6000]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("工单态重诊断采集日志失败: %s", e)
+        # 记录本次指纹（下一轮据此判断是否又是新错误）
+        try:
+            from app.services import fault_signature
+            from app.services.termination_evidence import first_error_line as _fel
+            sig = fault_signature.build(
+                alert.fault_type,
+                term_summary=(alert_data.get("termination_evidence") or ""),
+                first_error=_fel(alert_data.get("recent_logs") or ""),
+            )
+            await _persist_fault_signature(alert.id, sig)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("工单态重诊断落指纹失败: %s", e)
+    trace_id = generate_trace_id()
+    try:
+        from app.services import agent_loop as _agent_loop
+        if _agent_loop.is_react_loop_enabled():
+            diag = await _agent_loop.diagnose_alert_react(
+                alert, alert_data, diag_ctx, severity=alert.severity or "high", trace_id=trace_id)
+            await _persist_react_diagnosis(alert, diag, alert_data, diag_ctx)
+        else:
+            await ai_client.diagnose(alert.id, alert_data, diag_ctx, trace_id)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 工单态纯诊断失败: %s", alert.id, e)
+        return False
+
+
 async def auto_process_alerts() -> int:
     """扫描 pending 告警，逐条执行完整闭环（诊断/方案复用，断点续传）；返回处理数量"""
     value = await acquire_lock(redis_pool, "lock:alert_auto", 300000)  # 5 分钟：覆盖单批最长处理时间，防拆分后并发重叠
@@ -3540,9 +3624,22 @@ async def auto_process_alerts() -> int:
                 select(Alert).where(Alert.status.in_(["pending", "awaiting_approval"])).order_by(Alert.id.desc()).limit(50)
             )
             alert_ids = [a.id for a in result.scalars()]
+            # 2026-11-26：已转工单的 Pod 告警也要「指纹变了就重诊断」（同一容器不同错误=不同问题）
+            ticketed = list((await session.execute(
+                select(Alert).where(
+                    Alert.status == "ticketed",
+                    Alert.resource_type == "pod",
+                ).order_by(Alert.id.desc()).limit(20)
+            )).scalars())
         for alert_id in alert_ids:
             if await process_alert(alert_id):
                 processed += 1
+        for a in ticketed:
+            try:
+                if await refresh_ticketed_diagnosis(a):
+                    processed += 1
+            except Exception as e:  # noqa: BLE001
+                logger.warning("工单态重诊断异常 alert=%s: %s", a.id, e)
     finally:
         await release_lock(redis_pool, "lock:alert_auto", value)
     return processed

@@ -365,7 +365,8 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
         if not reused:
             # ② 其他告警但同一 Pod 同故障，且在复用窗口内 → 也算同一问题
             reused = await diagnosis_reuse.find_reusable_diagnosis(
-                cluster_id, pod["namespace"], pod["name"], fault_type
+                cluster_id, pod["namespace"], pod["name"], fault_type,
+                fingerprint=(getattr(alert, "fault_signature", "") or ""),
             )
     except Exception as e:  # noqa: BLE001
         logger.debug("诊断复用查询失败: %s", e)
