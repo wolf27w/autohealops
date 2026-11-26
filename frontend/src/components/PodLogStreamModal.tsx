@@ -57,6 +57,9 @@ function saveBlob(blob: Blob, filename: string) {
 
 export default function PodLogStreamModal({ pod, onClose }: Props) {
   const [containers, setContainers] = useState<string[]>([])
+  // 2026-11-26：容器列表是否已按当前 Pod 拉取完成——未完成前不建连，
+  // 避免重开弹窗时先拿上一次的旧容器列表连一次、列表回填后又连一次（双连）。
+  const [containersReady, setContainersReady] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   // 2026-11-23 老板反馈：改成单一开关——开=实时跟随，关=停止（显示最近 200 行）
   const [live, setLive] = useState(false)
@@ -155,13 +158,15 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   useEffect(() => {
     if (!pod) return
     setContainers([]); setSelected([]); setRows([]); setKeyword(''); bufRef.current.clear()
+    setContainersReady(false)
     getPodContainers(pod.clusterId, pod.namespace, pod.name)
       .then((d) => {
         const list = (d as unknown as { containers?: string[] }).containers || []
         setContainers(list)
         const def = pickDefaultContainer(list)
         setSelected(def ? [def] : [])
-      }).catch(() => {})
+        setContainersReady(true)
+      }).catch(() => { setContainersReady(true) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod])
 
@@ -169,11 +174,11 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
   // 打开=实时跟随；关闭=重新拉一段（最近 200 行快照）。
   // A: Pod / 容器 / 重启前 变化 → 按当前状态重建（快照或实时）
   useEffect(() => {
-    if (!pod || !effectiveContainers.length) return
+    if (!pod || !containersReady || !effectiveContainers.length) return
     connect(false)
     return () => closeAllWs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pod, effectiveContainers, previous])
+  }, [pod, containersReady, effectiveContainers, previous])
 
   // B: 实时开关 → 开=从末位续接；关=**直接停住**（不清空、不重连、不闪）
   useEffect(() => {
@@ -184,6 +189,23 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
     else closeAllWs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live])
+
+  // C: 2026-11-26 老板口径：关窗 = 停实时。组件是常驻挂载的（父级只把 pod 置 null），
+  // 不在这里复位的话 live 会留到下次打开，重开直接又进实时跟随（与「聚合日志」不一致）。
+  // 复位后重开统一回到「最近 200 行快照、实时关闭」。
+  useEffect(() => {
+    if (pod) return
+    closeAllWs()
+    setLive(false)
+    livePrevRef.current = false
+    seenRef.current = new Set()
+    bufRef.current.clear()
+    setRows([])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pod])
+
+  // 卸载兜底：组件被父级真正卸载时也要断流
+  useEffect(() => () => closeAllWs(), [])
 
   useEffect(() => { if (autoScroll && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [rows, autoScroll])
 
@@ -222,7 +244,7 @@ export default function PodLogStreamModal({ pod, onClose }: Props) {
       <span style={{ color: connected ? '#52c41a' : '#bfbfbf', fontSize: 12 }}>
         ● {live ? (connected ? '实时' : '连接中…') : '已暂停'}
       </span>
-    </Space>} footer={null} onCancel={onClose} width={1000} destroyOnClose>
+    </Space>} footer={null} onCancel={onClose} width={1000} destroyOnHidden>
       <Space wrap style={{ marginBottom: 8 }}>
         <Select mode="multiple" style={{ width: 240 }} allowClear placeholder="容器(留空=全部)"
           value={selected.length ? selected : undefined}
