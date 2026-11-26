@@ -63,7 +63,11 @@ _PATH_HINT_RES = (
     re.compile(r"-D[\w.]*log(?:\.path|\.dir)=([^\s\"'=]+)", re.I),  # -Dapp.log.path=...
     re.compile(r"\b(?:LOG_PATH|LOG_DIR|LOGGING_PATH|LOG_HOME|LOG_DIRECTORY)=([^\s\"'=]+)", re.I),
 )
-_FIND_ROOTS = ("/apps", "/opt", "/data", "/home", "/usr/local", "/var/log")
+# 2026-11-26（老板）：这些是链路追踪/采集 agent 自己的日志，不是应用日志，一律排除
+_AGENT_PATH_RE = re.compile(
+    r"(skywalking|/opt/[^/]*-agent|/opt/agent|opentelemetry|otel|filebeat|fluent-?bit|logtail)", re.I)
+
+_FIND_ROOTS = ("/apps", "/opt", "/data", "/datadisk", "/home", "/usr/local", "/var/log")
 _DEFAULT_LOG_DIRS = (
     "/apps/works/logs", "/app/logs", "/opt/logs", "/usr/local/tomcat/logs",
     "/home/app/logs", "/var/log/app", "/logs",
@@ -157,6 +161,45 @@ def _log_dirs_from_hints(*texts: str) -> list[str]:
     return out
 
 
+async def _log_dirs_from_mounts(cluster_id: int, namespace: str, pod_name: str,
+                               container: str) -> list[str]:
+    """从 Pod 的 volumeMounts 里取应用日志目录（2026-11-26 老板口径）。
+
+    例：Deployment 里
+        volumeMounts:
+        - name: log
+          mountPath: /datadisk/efreight/logs/efreight-afbase
+    这里只要监控名含 log 的挂载点——这是**部署里声明的**日志目录，比从启动参数猜、比全盘 find 都准。
+    """
+    try:
+        from app.clients.executor_client import executor_client as ec
+        r = await ec.acall(ec.get_pod_yaml, cluster_id, namespace, pod_name)
+        if not r.get("success") or not r.get("yaml"):
+            return []
+        import yaml
+        doc = yaml.safe_load(r["yaml"]) or {}
+        spec = doc.get("spec") or {}
+        out: list[str] = []
+        for c in (spec.get("containers") or []):
+            if container and c.get("name") != container:
+                continue
+            for vm in (c.get("volumeMounts") or []):
+                name = str(vm.get("name") or "")
+                path = str(vm.get("mountPath") or "")
+                if not path or not _safe_path(path.rstrip("/")):
+                    continue
+                if _AGENT_PATH_RE.search(path):
+                    continue
+                # 挂载名或路径里带 log 的才算日志卷（避开 data/config/html 卷）
+                if re.search(r"log", name + " " + path, re.I):
+                    if path not in out:
+                        out.append(path)
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取 Pod 日志挂载点失败: %s", e)
+        return []
+
+
 def _safe_path(p: str) -> bool:
     return bool(p) and ".." not in p and bool(_SAFE_PATH_RE.match(p))
 
@@ -215,7 +258,8 @@ async def _container_log_files(cluster_id: int, namespace: str, pod_name: str,
             return ""
         return _render(f"容器内日志文件 {fpath}", text)
 
-    dirs = _log_dirs_from_hints(hints) + list(_DEFAULT_LOG_DIRS)
+    mount_dirs = await _log_dirs_from_mounts(cluster_id, namespace, pod_name, container)
+    dirs = mount_dirs + _log_dirs_from_hints(hints) + list(_DEFAULT_LOG_DIRS)
     parts: list[str] = []
     seen: set[str] = set()
     for d in dirs:
@@ -255,7 +299,7 @@ async def _container_log_files(cluster_id: int, namespace: str, pod_name: str,
             if not r.get("success"):
                 continue
             cand = [ln.strip() for ln in (r.get("output") or "").splitlines() if ln.strip()]
-            cand = [c for c in cand if _safe_path(c)][:6]
+            cand = [c for c in cand if _safe_path(c) and not _AGENT_PATH_RE.search(c)][:6]
             for fpath in cand:
                 tail = await _exec(f"tail -n 2000 {fpath}")
                 text = (tail.get("output") or "").strip() if tail.get("success") else ""
@@ -413,8 +457,16 @@ async def fetch_pod_logs(cluster_id: int, namespace: str, pod_name: str, tail: i
     # 2026-11-26：按「有没有硬错误行」排序——带真错误的段放最前（文件日志不一定比 stdout 有料，
     # 比如本例真正的 OOM 证据就在 stdout 的 Killed 行），保证首错行来自真证据。
     def _rank(seg: str) -> int:
+        # 2026-11-26（老板口径「以容器里的日志为主」）：
+        #  0 = 容器内日志文件（Deployment 声明的日志卷最可信）
+        #  1 = 带硬错误的 stdout 段（如 OOM 的 Killed 行）
+        #  2 = 其它
+        if "容器内日志文件" in seg:
+            return 0
         low = seg.lower()
-        return 0 if any(h in low for h in ("oomkilled", "outofmemory", "exception", "caused by",
-                                           "fatal", "panic", "error ", "killed")) else 1
+        if any(h in low for h in ("oomkilled", "outofmemory", "exception", "caused by",
+                                  "fatal", "panic", "error ", "killed")):
+            return 1
+        return 2
     parts.sort(key=_rank)
     return (note + "\n\n".join(parts)) if parts else ""

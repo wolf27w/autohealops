@@ -41,8 +41,11 @@ class TestFetchPodLogs(unittest.IsolatedAsyncioTestCase):
     async def _run(self, containers, behaviour):
         """behaviour(container, previous) -> dict"""
 
-        async def fake_acall(fn, cluster_id, namespace, pod_name, container="", tail_lines=0,
+        async def fake_acall(fn, cluster_id, namespace, pod_name="", container="", tail_lines=0,
                              previous=False, **kw):
+            # 只关心 get_pod_logs；get_pod_yaml（读日志挂载点）等其它 RPC 直接给失败
+            if getattr(fn, "__name__", "") != "get_pod_logs":
+                return {"success": False, "output": "", "error": "not supported in test"}
             return behaviour(container, previous)
 
         facts = {"containers": [{"name": n} for n in containers], "summary": "x"}
