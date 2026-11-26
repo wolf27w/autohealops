@@ -1353,11 +1353,116 @@ async def send_repair_complete_notification(alert: Alert | None, verdict: str) -
         await _send_webhook_with_retry(c, content, alert.id if alert else None)
 
 
-def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str, title: str = "已恢复") -> str:
-    """渲染「已恢复/已解决」通知内容（与告警通知同风格，形成「告警→恢复/解决」闭环）"""
+def _to_dt(v):
+    """时间字段可能是 datetime 也可能是字符串（不同来源口径不一）→ 统一成 datetime"""
+    if isinstance(v, datetime):
+        return v
+    if not v:
+        return None
+    try:
+        return datetime.strptime(str(v)[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds or 0))
+    if seconds < 60:
+        return f"{seconds} 秒"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{m} 分 {s} 秒" if s else f"{m} 分钟"
+    h, m = divmod(m, 60)
+    return f"{h} 小时 {m} 分"
+
+
+def _shorten(s: str, n: int = 120) -> str:
+    s = (s or "").strip().replace("\n", " ")
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+async def _build_recovery_context(alert: Alert) -> dict:
+    """恢复通知上下文（2026-11-26 老板口径）。
+
+    场景：告警已经发出去了，但 AI 诊断还没跑完故障就恢复了 —— 恢复通知必须说清楚
+    「诊断做到哪步 / 平台到底动没动手 / 为什么恢复」，否则值班人不知道还需不需要处理。
+
+    返回 {duration, diagnosis, action, conclusion}，全部可为空串（查询失败不阻断发送）。
+    """
+    ctx = {"duration": "", "diagnosis": "", "action": "", "conclusion": ""}
+    start = _to_dt(getattr(alert, "detected_at", None) or getattr(alert, "occurred_at", None))
+    end = _to_dt(getattr(alert, "resolved_at", None)) or datetime.now()
+    if start and end >= start:
+        ctx["duration"] = (f"{_fmt_duration((end - start).total_seconds())}"
+                           f"（{start:%Y-%m-%d %H:%M:%S} → {end:%Y-%m-%d %H:%M:%S}）")
+
+    plan_statuses: list[str] = []
+    diag_ok = False
+    root_cause = ""
+    try:
+        from app.models import AIDiagnosisResult, RepairPlan
+        async with async_session() as session:
+            d = (await session.execute(
+                select(AIDiagnosisResult).where(AIDiagnosisResult.alert_id == alert.id)
+                .order_by(AIDiagnosisResult.id.desc()).limit(1)
+            )).scalar_one_or_none()
+            # 复合并发复用同一行 alert（detected_at 会重置）→ 只认本轮故障之后产生的诊断
+            fresh = not (d is not None and start and d.created_at
+                         and d.created_at < (start - timedelta(seconds=120)))
+            if d is not None and fresh:
+                try:
+                    root_cause = (json.loads(d.diagnosis_json or "{}") or {}).get("root_cause", "") or ""
+                except (ValueError, TypeError):
+                    root_cause = ""
+                diag_ok = bool(d.diagnosis_json)
+            plan_statuses = list((await session.execute(
+                select(RepairPlan.status).where(RepairPlan.alert_id == alert.id)
+            )).scalars())
+    except Exception as e:  # noqa: BLE001
+        logger.debug("恢复通知上下文查询失败（按最小信息发送）: %s", e)
+
+    if diag_ok:
+        ctx["diagnosis"] = (f"已完成：{_shorten(root_cause)}" if root_cause
+                            else "已完成（未得出明确根因）")
+    else:
+        ctx["diagnosis"] = "未完成（故障在 AI 分析期间已恢复，分析中止，未产生结论）"
+
+    if "completed" in plan_statuses:
+        ctx["action"] = "平台已执行自动修复方案"
+    elif "failed" in plan_statuses:
+        ctx["action"] = "平台尝试过自动修复，未成功"
+    else:
+        ctx["action"] = "平台未执行任何修复动作"
+
+    by = (getattr(alert, "resolved_by", "") or "").strip()
+    status = getattr(alert, "status", "") or ""
+    if status == "self_healed" or by in ("", "system"):
+        ctx["conclusion"] = ("故障自行恢复，无需人工处理；若再次出现会重新告警"
+                             if "completed" not in plan_statuses
+                             else "平台自动修复后故障恢复，无需人工处理")
+    elif by == "工单闭环":
+        ctx["conclusion"] = "工单已处理完毕，告警闭环，无需重复处理"
+    else:
+        ctx["conclusion"] = f"已由 {by} 处理完毕，无需重复处理"
+    return ctx
+
+
+def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str, title: str = "已恢复",
+                             ctx: dict | None = None) -> str:
+    """渲染「已恢复/已解决」通知内容（与告警通知同风格，形成「告警→恢复/解决」闭环）
+
+    ctx：_build_recovery_context() 的结果（持续时长/诊断进度/平台处置/结论）。
+    """
     proj = f"项目: {project_name}\n" if project_name else ""
     cluster = cluster_name or str(alert.cluster_id or "-")
     resolved = alert.resolved_at or "-"
+    extra = ""
+    if ctx:
+        for key, label in (("duration", "持续"), ("diagnosis", "诊断"),
+                           ("action", "处置"), ("conclusion", "结论")):
+            val = (ctx.get(key) or "").strip()
+            if val:
+                extra += f"{label}: {val}\n"
     return (
         f"【AutoHealOps {title}】\n"
         f"{proj}"
@@ -1366,7 +1471,9 @@ def _render_recovery_content(alert: Alert, project_name: str, cluster_name: str,
         f"命名空间: {alert.namespace or '-'}\n"
         f"故障类型: {alert.fault_type}\n"
         f"严重级别: {alert.severity}\n"
+        f"发现时间: {alert.detected_at or '-'}\n"
         f"恢复时间: {resolved}\n"
+        f"{extra}"
         f"详情: {alert.message}"
     )
 
@@ -1392,9 +1499,10 @@ async def send_recovery_notification(alert: Alert, title: str = "已恢复") -> 
 
     cluster_name = await _cluster_name(alert.cluster_id)
     project_cfg, project_name = await _resolve_project_notify_config(alert.cluster_id, alert.namespace)
+    ctx = await _build_recovery_context(alert)
     if project_cfg and _source_match(project_cfg, alert.resource_type):
         await _send_webhook_with_retry(
-            project_cfg, _render_recovery_content(alert, project_name, cluster_name, title),
+            project_cfg, _render_recovery_content(alert, project_name, cluster_name, title, ctx),
             alert.id, receiver=f"项目:{project_name}",
         )
         return
@@ -1402,7 +1510,7 @@ async def send_recovery_notification(alert: Alert, title: str = "已恢复") -> 
     for c in configs:
         if not _ns_match(c, alert.namespace) or not _source_match(c, alert.resource_type):
             continue
-        await _send_webhook_with_retry(c, _render_recovery_content(alert, project_name, cluster_name, title), alert.id)
+        await _send_webhook_with_retry(c, _render_recovery_content(alert, project_name, cluster_name, title, ctx), alert.id)
 
 
 # ============ 告警爆发汇总通知（未解决告警堆积时自动推送） ============

@@ -2981,6 +2981,25 @@ async def _process_one(alert: Alert) -> bool:
             except Exception as e:  # noqa: BLE001
                 logger.warning("告警 %d 结论通知失败: %s", alert.id, e)
 
+    # 2026-11-26 老板口径：诊断期间故障已恢复 → 不再生成/执行修复方案
+    # （已恢复还去删 Pod/改配置 = 造成二次故障）；若并发已被别处关闭（恢复扫描/工单闭环）也停下。
+    _post_skip = await _manual_recheck_skip_reason(alert)
+    if _post_skip:
+        logger.info("告警 %d 诊断后复查命中（%s），中止后续修复链路", alert.id, _post_skip)
+        if _post_skip == "recovered":
+            try:
+                closed = await _close_related_alerts(alert)
+                if closed == 0:
+                    async with async_session() as session:
+                        a = await session.get(Alert, alert.id)
+                        if a and (a.status or "") not in ("resolved", "self_healed"):
+                            _mark_alert_recovered(a, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                            await session.commit()
+                await _cancel_related_approvals(alert.id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("告警 %d 恢复后关闭失败: %s", alert.id, e)
+        return True
+
     # R74：诊断完成后比较本次根因与 KB 根因，匹配才复用 KB 动作（不匹配/可疑/无步骤 → 丢弃，走 AI 方案生成）
     kb_hit_steps, kb_reuse_reason = await _resolve_kb_reuse(kb_ref, root_cause, alert)
     if kb_hit_steps:
