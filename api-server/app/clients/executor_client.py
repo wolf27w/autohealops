@@ -279,7 +279,20 @@ class _TunnelAwareStub:
                     raise RuntimeError(_friendly_agent_error(cid, name, e)) from e
                 if out is not None:
                     return out
-            return fn(req, timeout=timeout, metadata=metadata, **kwargs)
+            try:
+                return fn(req, timeout=timeout, metadata=metadata, **kwargs)
+            except Exception as e:  # noqa: BLE001
+                # 2026-11-26：agent 集群在 agent 掉线时会落到本地 executor，
+                # 报「no configuration has been provided」（平台侧没有该集群 kubeconfig）——
+                # 这对用户完全看不懂。这里改写成明确的「agent 未连接」提示。
+                msg = str(e)
+                if cid and "no configuration has been provided" in msg:
+                    raise RuntimeError(
+                        f"集群 {cid} 的 agent 未连接（平台侧没有该集群 kubeconfig）："
+                        "请检查 agent 到平台 :9095 的网络是否可达、平台 IP 是否变化，"
+                        "或在集群里重启 autohealops-agent 后重试；集群页可看「最后在线时间」"
+                    ) from e
+                raise
 
         return _call
 

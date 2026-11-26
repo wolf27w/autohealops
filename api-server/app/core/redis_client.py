@@ -6,11 +6,18 @@ import redis.asyncio as aioredis
 from app.core.config import settings
 
 # 全局 Redis 连接池
+# 2026-11-26：Redis 端偶发 reset（192.168.6.99 空闲连接被服务端回收）会导致 auth 依赖直接 500。
+# 加 keepalive / 健康检查 / 超时与重试，避免把「一次网络抖动」放大成整站 500。
 redis_pool = aioredis.from_url(
     settings.REDIS_URL,
     encoding="utf-8",
     decode_responses=True,
     max_connections=50,
+    socket_keepalive=True,
+    socket_connect_timeout=3,
+    socket_timeout=5,
+    health_check_interval=30,
+    retry_on_timeout=True,
 )
 
 
