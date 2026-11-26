@@ -15,7 +15,7 @@ class ClaudeAdapter(BaseAIModelAdapter):
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
             max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
+            temperature=self.temperature,
         )
         content = resp.content[0].text if resp.content else ""
         token_usage = (resp.usage.input_tokens or 0) + (resp.usage.output_tokens or 0)

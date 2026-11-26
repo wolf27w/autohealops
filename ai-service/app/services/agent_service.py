@@ -18,6 +18,17 @@ from app.utils.json_util import extract_json, extract_json_prefer
 # 单轮决策允许的最大工具调用步数（由 api-server 编排循环控制，这里仅作提示上限）
 MAX_TOOL_STEPS = 12
 
+# 历史瘦身（2026-11-26 老板：上下文越滝越大→每步 6~7s、12 轮就撞超时收口）
+# 只保留最近 N 条工具输出，单条截断到 O 字；早期全部已影响不大（后续步骤已引用总结）。
+def _history_limits() -> tuple[int, int]:
+    try:
+        from app.core.config import settings
+        chars = max(300, int(getattr(settings, "AGENT_TOOL_OUTPUT_CHARS", 1200) or 1200))
+        keep = max(2, int(getattr(settings, "AGENT_HISTORY_KEEP_TOOL_MSGS", 8) or 8))
+        return chars, keep
+    except Exception:  # noqa: BLE001
+        return 1200, 8
+
 SYSTEM_PROMPT = """你是一个 Kubernetes 应用层故障诊断专家助手。
 
 你会收到：
@@ -155,14 +166,30 @@ async def decide_next_step(
     ]
     for t in tools:
         lines.append(f"- {t['name']}: {t.get('description', '')}（参数：{json.dumps(t.get('args', {}), ensure_ascii=False)}）")
+    # 场景固定采集清单（2026-11-26）：会话入口也按告警入口那套「告知即全面诊断」，
+    # 不再依赖模型自己联想该查什么。
+    checklist = str(context.get("scenario_checklist") or "").strip()
+    if checklist:
+        lines.append("")
+        lines.append(checklist)
+        lines.append("")
+        lines.append("【要求】上面的固定采集清单优先：未按清单采完关键项前，不得给 final_answer"
+                     "（除非已用采集到的证据明确排除该分支）。")
     lines.append("")
     lines.append("【对话历史】")
     if not messages:
         lines.append("（无）")
-    for m in messages:
+    tool_chars, keep_tools = _history_limits()
+    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    dropped = set(tool_idxs[:-keep_tools]) if len(tool_idxs) > keep_tools else set()
+    if dropped:
+        lines.append(f"（已省略较早的 {len(dropped)} 条工具输出，仅保留最近 {keep_tools} 条）")
+    for i, m in enumerate(messages):
+        if i in dropped:
+            continue
         role = m.get("role", "user")
         if role == "tool":
-            lines.append(f"[工具 {m.get('tool', '')} 输出]\n{m.get('content', '')[:3000]}")
+            lines.append(f"[工具 {m.get('tool', '')} 输出]\n{m.get('content', '')[:tool_chars]}")
         elif role == "assistant":
             lines.append(f"[助手]\n{m.get('content', '')[:2000]}")
         else:

@@ -20,7 +20,7 @@ class OpenAIAdapter(BaseAIModelAdapter):
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
+            temperature=self.temperature,
         )
         content = resp.choices[0].message.content or ""
         token_usage = resp.usage.total_tokens if resp.usage else 0

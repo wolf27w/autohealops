@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     # 仍受上层 LLM_TIMEOUT_SECONDS / LLM_AGENT_DECIDE_TIMEOUT_SECONDS 约束。
     LLM_HTTP_TIMEOUT_SECONDS: float = 120.0
 
+    # ===== 2026-11-26 老板：诊断不主动/上下文膨胀/空响应即降级 =====
+    # 结构化输出（决策、诊断、方案）用低温，减少 JSON 漂移与自由发挥
+    LLM_DECISION_TEMPERATURE: float = 0.2
+    # 「整轮模型都返回空内容」时的重试次数（默认 1；真超时/断连不重试）
+    LLM_EMPTY_RESPONSE_RETRIES: int = 1
+    # 决策 prompt 里每条工具输出的字符上限与保留的最近工具条数（控制上下文膨胀）
+    AGENT_TOOL_OUTPUT_CHARS: int = 1200
+    AGENT_HISTORY_KEEP_TOOL_MSGS: int = 8
+
     LOG_LEVEL: str = "INFO"
 
     model_config = SettingsConfigDict(

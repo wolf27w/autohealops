@@ -27,6 +27,7 @@ logger = get_logger("api-server.agent")
 DEFAULT_MAX_TOOL_STEPS = 12  # 深度诊断：单次对话最多「有效」工具执行步数（重复调用不占额，可在系统设置覆盖）
 MAX_DECIDE_ROUNDS = 24  # LLM 决策轮数硬上限（防止重复调用空转，兜底）
 MAX_CONSECUTIVE_DUP = 2  # 连续重复调用达到此值 → 强制收敛，不再空转
+HISTORY_MAX_MESSAGES = 60  # 渲染给 LLM 的历史消息上限（更早的不再发送，控制 prompt 体积）
 
 
 async def _get_max_tool_steps() -> int:
@@ -347,12 +348,21 @@ async def run_agent_turn(session: DiagnosisSession, user_input: str, cluster_nam
 
     # ===== 深度诊断：多轮工具取证循环 =====
     max_tool_steps = await _get_max_tool_steps()
+    # 2026-11-26 老板：会话入口也要「告知即全面诊断」——注入与告警入口相同的场景采集清单，
+    # 不靠模型自己联想该查什么（否则就是“我一句它一句”）。
+    try:
+        from app.services import agent_loop as _al
+        _scenario = _al.detect_scenario({"message": user_input}, context)
+        context["scenario"] = _scenario
+        context["scenario_checklist"] = _al.scenario_checklist_text(_scenario)
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("场景清单注入失败（不影响诊断）: %s", _e)
     # 2. 构建历史上下文（含本轮之前的消息 + 本轮工具执行记录）
     history: list[dict] = []  # 给 LLM 的多轮上下文（本轮工具结果也追加进来）
     from app.services import agent_session_store as _store
     _file_msgs = _store.read_messages(session.id)
     if _file_msgs is not None:
-        for m in _file_msgs:
+        for m in _file_msgs[-HISTORY_MAX_MESSAGES:]:
             if m.get("role") == "user":
                 history.append({"role": "user", "content": m.get("content", "")})
             elif m.get("role") == "assistant":
@@ -365,7 +375,7 @@ async def run_agent_turn(session: DiagnosisSession, user_input: str, cluster_nam
             result = await s.execute(
                 select(DiagnosisMessage).where(DiagnosisMessage.session_id == session.id).order_by(DiagnosisMessage.id)
             )
-            for m in result.scalars():
+            for m in list(result.scalars())[-HISTORY_MAX_MESSAGES:]:
                 if m.role == "user":
                     history.append({"role": "user", "content": m.content})
                 elif m.role == "assistant":

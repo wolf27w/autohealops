@@ -20,7 +20,7 @@ class DeepSeekAdapter(BaseAIModelAdapter):
                 {"role": "user", "content": user_prompt},
             ],
             "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
+            "temperature": self.temperature,
         }
         client = get_http_client(trust_env=True)
         # 2026-11-26：单次请求超时可配（默认 120s）。原来写死 60s，实测 deepseek-v4-pro 小请求就要 77s

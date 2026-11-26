@@ -265,6 +265,33 @@ def _evidence_lines(alert_data: dict, context: dict) -> list[str]:
     return blocks
 
 
+AGENT_TOOL_MSG_CHARS = 2500  # 发给 LLM 的每条工具观察字符上限（state/降级仍用完整输出）
+AGENT_KEEP_TOOL_MSGS = 8     # 保留最近 N 条工具观察，更早的折叠（控制 12 轮 prompt 膨胀）
+
+
+def _trim_agent_messages(messages: list[dict]) -> None:
+    """上下文瘦身（2026-11-26 老板）：每步 6~7s、12 轮就撞超时的主因是历史越滚越大。
+
+    只影响下发给模型的决策上下文；state["tool_steps"] 保留完整输出，
+    降级时的确定性结论不受影响。
+    """
+    for m in messages:
+        if m.get("role") == "tool":
+            c = m.get("content") or ""
+            if len(c) > AGENT_TOOL_MSG_CHARS:
+                m["content"] = c[:AGENT_TOOL_MSG_CHARS] + "…（已截断）"
+    idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if len(idx) > AGENT_KEEP_TOOL_MSGS:
+        drop = set(idx[:-AGENT_KEEP_TOOL_MSGS])
+        kept = [m for i, m in enumerate(messages) if i not in drop]
+        marker = "【已省略的较早工具输出】"
+        if not any(marker in (m.get("content") or "") for m in kept):
+            kept.insert(1, {"role": "user",
+                             "content": f"{marker}较早的工具输出已省略以控制上下文，"
+                                        "关键证据不足时请重新调用工具获取。"})
+        messages[:] = kept
+
+
 def _build_initial_messages(alert_data: dict, context: dict, task_memory: str) -> list[dict]:
     """初始观察：告警信息 + 平台预采集证据 + 任务记忆摘要，作为 LLM 第一轮输入。"""
     lines = ["【告警信息】"]
@@ -341,6 +368,33 @@ def _startup_checklist_lines() -> list[str]:
         "7) 拿到异常类名/配置键后，调 inspect_jar（只读，自动在镜像内找 jar 并反编译）定位到具体类/方法/配置行；"
         "这是「证据不足→转人工」前的最后一步：能从镜像里查到具体原因，就不要停在猜测。",
     ]
+
+
+def _default_checklist_lines() -> list[str]:
+    """通用排查链（2026-11-26，探针失败/崩溃/5xx 等未归场景的默认顺序）。
+
+    老板口径：给了线索（如「探针失败」）就要自己进容器查到底，不能停在表象。
+    """
+    return [
+        "【通用排查顺序（按序执行，不要跳步）】",
+        "1) describe_pod：先取 Last State/exitCode/events/重启次数（区分 OOMKilled / 137 / 143 / 非 0 退出）。",
+        "2) search_logs（tail 200，含上次崩溃实例）：拿首条错误行/异常类名；容器起来过就必须拿到应用日志。",
+        "3) exec_in_pod：ps -ef 看进程在不在、ss -lntp 看端口监听（探针失败先确认「进程/端口」是否真的没起来）。",
+        "4) 探针类：get_probe_config 对比 initialDelay/timeout/failureThreshold 与实测启动耗时；只有端点可访问且参数不合理才把探针当根因。",
+        "5) 资源/扩缩：get_pod_metrics + get_hpa + get_deployment（requests/limits 与扩缩依据）。",
+        "6) 依赖连通性：从容器内测 DB/中间件/下游；配置类先查 env/Secret/ConfigMap 引用（值打码）。",
+        "7) Java 应用（有 java 进程）必须 jvm_diag：vm_flags + heap_info + gc_class_histo + thread_dump。",
+        "8) 证据不足时按结构化交代（①已排除 ②缺失证据 ③建议补充采集），禁止用「探针失败/重启次数」当根因，禁止编造。",
+    ]
+
+
+def scenario_checklist_text(scenario: str) -> str:
+    """场景固定采集清单文本（告警入口与会话入口共用，2026-11-26）"""
+    if scenario == "oom":
+        return "\n".join(_oom_checklist_lines())
+    if scenario == "startup_failure":
+        return "\n".join(_startup_checklist_lines())
+    return "\n".join(_default_checklist_lines())
 
 
 def _to_conf(value) -> float | None:
@@ -792,6 +846,16 @@ async def _wrap_up(
 
     # 收口决策：让 LLM 基于已采集证据给出最终结论（prompt 已含「证据不足→结构化交代」）
     try:
+        # 2026-11-26：上下文已瘦身（只保留最近 N 条工具输出），收口前把较早结果压成摘要补回，
+        # 否则收口模型看不到早期关键证据，只能写「未能确定根因」。
+        _omitted = list(state.get("tool_steps") or [])[:-AGENT_KEEP_TOOL_MSGS]
+        if _omitted:
+            _lines = ["【较早采集结果摘要（原始输出已从上下文省略）】"]
+            for s in _omitted:
+                _ok = "成功" if s.get("success") else "失败"
+                _lines.append(f"- {s.get('tool')}({json.dumps(s.get('args') or {}, ensure_ascii=False)})"
+                              f" {_ok}：{(s.get('output') or '')[:300]}")
+            messages.append({"role": "user", "content": "\n".join(_lines)})
         messages.append({
             "role": "user",
             "content": (
@@ -949,6 +1013,7 @@ async def _run_loop_body(
 
         # 6. observe：把工具输出追加进观察历史，供下一轮决策
         messages.append({"role": "tool", "tool": tool_name, "content": truncated or result.get("error", "")})
+        _trim_agent_messages(messages)
 
         # 7. 工具连续失败 ≥ N → 降级为单次诊断（避免空转）
         if not result.get("success"):

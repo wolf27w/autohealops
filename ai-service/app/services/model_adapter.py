@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """统一模型适配器：severity 分级 + 降级链 + 成本控制"""
+import asyncio
 import ipaddress
 import time
 from dataclasses import dataclass, field
@@ -35,10 +36,15 @@ SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 class BaseAIModelAdapter:
-    """模型适配器抽象基类"""
+    """模型适配器抽象基类
 
-    def __init__(self, config: AIModelConfig):
+    temperature：调用级温度覆盖（2026-11-26）。结构化决策/JSON 输出用低温（0.2）
+    比库里的 0.7 稳定；不传则用模型配置值。
+    """
+
+    def __init__(self, config: AIModelConfig, temperature: float | None = None):
         self.config = config
+        self.temperature = temperature if temperature is not None else getattr(config, "temperature", 0.7)
         # api_key_encrypted 存的是密文，解密到内存供 adapter 使用（兼容存量明文）
         self.api_key = self._decrypt_key(config.api_key_encrypted)
 
@@ -110,20 +116,20 @@ class ModelFactory:
     """模型工厂：按 provider 返回适配器"""
 
     @staticmethod
-    def get_adapter(config: AIModelConfig):
+    def get_adapter(config: AIModelConfig, temperature: float | None = None):
         _validate_api_base(config.api_base or "")
         if config.provider == "openai":
             from app.services.model_openai import OpenAIAdapter
 
-            return OpenAIAdapter(config)
+            return OpenAIAdapter(config, temperature)
         if config.provider == "deepseek":
             from app.services.model_deepseek import DeepSeekAdapter
 
-            return DeepSeekAdapter(config)
+            return DeepSeekAdapter(config, temperature)
         if config.provider == "claude":
             from app.services.model_claude import ClaudeAdapter
 
-            return ClaudeAdapter(config)
+            return ClaudeAdapter(config, temperature)
         raise ValueError(f"不支持的 provider: {config.provider}")
 
 
@@ -155,6 +161,24 @@ async def _today_cost() -> float:
             )
         )
         return float(result.scalar())
+
+
+# 结构化输出类请求：用低温（默认 0.2）减少 JSON 漂移/自由发挥（老板 2026-11-26）
+_DETERMINISTIC_REQUEST_TYPES = (
+    "agent_decide", "agent_decide_once", "diagnosis", "multi_diagnosis",
+    "repair_plan", "sql_optimize", "db_diagnose",
+)
+
+
+def decision_temperature(request_type: str) -> float | None:
+    """请求级温度：结构化输出类返回低温，其余返回 None（用模型配置值）"""
+    if request_type not in _DETERMINISTIC_REQUEST_TYPES:
+        return None
+    try:
+        from app.core.config import settings
+        return float(getattr(settings, "LLM_DECISION_TEMPERATURE", 0.2))
+    except Exception:  # noqa: BLE001
+        return 0.2
 
 
 async def call_with_fallback(
@@ -205,31 +229,49 @@ async def call_with_fallback(
 
     last_err = ""
     failed_models: list[str] = []
-    for cfg in filtered:
-        try:
-            adapter = ModelFactory.get_adapter(cfg)
-            start = time.perf_counter()
-            resp = await adapter.chat_completion(system_prompt, user_prompt)
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            # 空返回视为失败：否则会存下一份空诊断（root_cause 空）并当成成功
-            if not (resp.content or "").strip():
-                last_err = "模型返回内容为空"
+    temp = decision_temperature(request_type)
+    # 空响应重试（2026-11-26 老板）：实测失败调用 100% 是 model 返回空内容/超时
+    # （token_usage=0），原来直接放弃→降级成确定性结论。这里对「整轮都空返回」再打一轮，
+    # 最多 LLM_EMPTY_RESPONSE_RETRIES 次（默认 1）；真实异常（超时/断连）不重试，避免雪上加霜。
+    try:
+        from app.core.config import settings as _st
+        empty_retries = max(0, min(int(getattr(_st, "LLM_EMPTY_RESPONSE_RETRIES", 1) or 0), 2))
+    except Exception:  # noqa: BLE001
+        empty_retries = 1
+    attempt = 0
+    while True:
+        empty_round = True  # 本轮是否「所有模型都只是空返回」（含未尝试到）
+        for cfg in filtered:
+            try:
+                adapter = ModelFactory.get_adapter(cfg, temp)
+                start = time.perf_counter()
+                resp = await adapter.chat_completion(system_prompt, user_prompt)
+                latency_ms = int((time.perf_counter() - start) * 1000)
+                # 空返回视为失败：否则会存下一份空诊断（root_cause 空）并当成成功
+                if not (resp.content or "").strip():
+                    last_err = "模型返回内容为空"
+                    failed_models.append(cfg.model_name)
+                    await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, latency_ms, "failed", last_err)
+                    continue
+                resp.model_fallback = bool(failed_models)
+                resp.fallback_from = list(failed_models)
+                # 2026-11-26：慢调用可见化（决策步骤超过 30s 基本就快撞超时了）
+                if latency_ms >= SLOW_CALL_WARN_MS:
+                    logger.warning("模型慢调用 %s/%s: %.1fs（决策类建议换快模型）",
+                                   cfg.model_name, request_type, latency_ms / 1000)
+                await _log_call(cfg.id, request_type, system_prompt, user_prompt, resp, latency_ms, "success")
+                return resp, cfg.model_name
+            except Exception as e:  # noqa: BLE001
+                # 2026-11-23：空消息异常（如 TimeoutError）原来只记录空串，无法排查；记录类型+repr
+                last_err = str(e) or f"{type(e).__name__} (empty message) repr={e!r}"
                 failed_models.append(cfg.model_name)
-                await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, latency_ms, "failed", last_err)
+                empty_round = False  # 真异常（超时/断连）→ 不重试
+                logger.warning("模型调用失败 %s/%s: %s", cfg.model_name, request_type, last_err)
+                await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, 0, "failed", last_err)
                 continue
-            resp.model_fallback = bool(failed_models)
-            resp.fallback_from = list(failed_models)
-            # 2026-11-26：慢调用可见化（决策步骤超过 30s 基本就快撞超时了）
-            if latency_ms >= SLOW_CALL_WARN_MS:
-                logger.warning("模型慢调用 %s/%s: %.1fs（决策类建议换快模型）",
-                               cfg.model_name, request_type, latency_ms / 1000)
-            await _log_call(cfg.id, request_type, system_prompt, user_prompt, resp, latency_ms, "success")
-            return resp, cfg.model_name
-        except Exception as e:  # noqa: BLE001
-            # 2026-11-23：空消息异常（如 TimeoutError）原来只记录空串，无法排查；记录类型+repr
-            last_err = str(e) or f"{type(e).__name__} (empty message) repr={e!r}"
-            failed_models.append(cfg.model_name)
-            logger.warning("模型调用失败 %s/%s: %s", cfg.model_name, request_type, last_err)
-            await _log_call(cfg.id, request_type, system_prompt, user_prompt, None, 0, "failed", last_err)
+        if empty_round and attempt < empty_retries:
+            attempt += 1
+            logger.warning("本轮模型全部返回空内容（%s，第 %d 次），重试", request_type, attempt)
+            await asyncio.sleep(1.0)
             continue
-    raise RuntimeError(f"所有模型调用失败: {last_err}")
+        raise RuntimeError(f"所有模型调用失败: {last_err}")
