@@ -889,7 +889,7 @@ export interface SlowSqlDiagnoseData {
   model: string
 }
 export const diagnoseSlowSQL = (connId: number, digest: string, payload: { sql_text?: string; schema_name?: string }) =>
-  http.post<SlowSqlDiagnoseData>(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/optimize`, payload)
+  http.post<SlowSqlDiagnoseData>(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/optimize`, payload, { timeout: 180000 })
 
 // ============ SQL 终端（B11-b：库管理 / 导入 SQL / 备份）============
 // 建库

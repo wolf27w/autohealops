@@ -322,7 +322,9 @@ async def sql_optimize(payload: dict):
         data["suggestions"] = parsed.get("suggestions") or []
         data["risk_level"] = parsed.get("risk_level", "medium")
     else:
-        data["summary"] = (resp.content or "")[:2000]
+        # 2026-11-26：模型输出被截断/不是合法 JSON 时，不要把半截 JSON 塞进「结论」给用户看
+        # （原始内容仍通过 data["raw"] 返回，便于排查）
+        data["summary"] = "AI 未返回可解析的结构化结论（输出可能被截断），以下为执行计划与静态规则的确定性结论"
 
     # verdict 非法兜底 maybe
     if data["verdict"] not in ("optimizable", "maybe", "hard"):

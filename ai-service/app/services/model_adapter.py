@@ -65,6 +65,11 @@ class BaseAIModelAdapter:
 _QUALITY_REQUEST_TYPES = ("diagnosis", "multi_diagnosis", "repair_plan")
 _INTERACTIVE_REQUEST_TYPES = ("agent_decide", "agent_decide_once")
 
+# 快返回类请求：不按 severity 过滤模型池（2026-11-26 老板反馈「慢 SQL 诊断失败」）
+# sql_optimize 默认 severity=medium，而 flash 配置的 min_severity=high → 被过滤掉，只剩 pro（实测 55~90s），
+# 前端 30s 超时直接失败。这类请求要的是「几秒出结构化结论」，一律优先默认（快）模型。
+_FAST_REQUEST_TYPES = ("agent_decide", "agent_decide_once", "sql_optimize")
+
 # 慢调用告警阈值（毫秒）：超过就打 WARNING，便于发现「模型选错了/上游变慢」
 SLOW_CALL_WARN_MS = 30000
 
@@ -175,10 +180,13 @@ async def call_with_fallback(
 
     # severity 分级过滤：min_severity 需满足当前告警级别
     target_level = SEVERITY_ORDER.get(severity, 3)
-    filtered = [
-        c for c in configs
-        if SEVERITY_ORDER.get(c.min_severity, 1) <= target_level
-    ]
+    if request_type in _FAST_REQUEST_TYPES:
+        filtered = list(configs)  # 快返回类：忽略 min_severity 门槛，交给 order_model_configs 取默认（快）模型
+    else:
+        filtered = [
+            c for c in configs
+            if SEVERITY_ORDER.get(c.min_severity, 1) <= target_level
+        ]
     if not filtered:
         filtered = configs  # 无匹配时回退全部
 

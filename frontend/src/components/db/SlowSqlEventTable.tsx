@@ -61,8 +61,15 @@ export default function SlowSqlEventTable({
   // 表头排序 ↔ 后端 order 参数（desc=xxx，asc=xxx_asc）；不排序回落到时间倒序
   const sortOf = (col: 'time' | 'exec' | 'rows_examined') =>
     (order === col ? 'descend' : order === `${col}_asc` ? 'ascend' : null)
-  const onTableChange = (_p: unknown, _f: unknown, sorter: { columnKey?: string; order?: string }) => {
-    if (!onOrderChange) return
+  const onTableChange = (
+    _p: unknown, _f: unknown,
+    sorter: { columnKey?: string; order?: string },
+    extra?: { action?: string },
+  ) => {
+    // 2026-11-26 老板反馈「翻页失败」：翻页/筛选也会触发 onChange，
+    // 原来无条件把 order 重置成 time 并把页码打回 1，表现为「点第 2 页自己跳回第 1 页」。
+    // 只有真正的排序动作（action === 'sort'）才改排序。
+    if (!onOrderChange || extra?.action !== 'sort') return
     const key = sorter?.columnKey
     if (!key || !sorter?.order) { onOrderChange('time'); return }
     onOrderChange(sorter.order === 'descend' ? key : `${key}_asc`)
