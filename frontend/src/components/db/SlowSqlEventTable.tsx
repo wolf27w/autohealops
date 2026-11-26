@@ -1,8 +1,8 @@
 // 慢 SQL 执行明细表（阿里云慢日志样式：一行 = 一次执行）
 // 14 列：执行开始时间 → SQL ID → SQL 展开 → 数据库 → 执行耗时 → 锁等待耗时 → 返回行数
-//        → 扫描行数 → 访问来源 → 用户 → 线程 → 表名 → 标签 → 操作
+//        → 扫描行数 → 访问来源 → 用户 → 线程 → 标签 → 操作
 import { useState } from 'react'
-import { Table, Button, Tag, Space, message, type TableColumnsType } from 'antd'
+import { Table, Button, Tag, Space, message, Modal, type TableColumnsType } from 'antd'
 import { ThunderboltOutlined, ProfileOutlined, CopyOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { SlowSqlEventItem } from '../../services/api'
@@ -19,32 +19,42 @@ export function SqlCell({ sql, maxLines = 2 }: {
   const [open, setOpen] = useState(false)
   if (!sql) return <>-</>
   const long = sql.length > 120 || sql.split('\n').length > maxLines
-  const clamped = long && !open
-  // 2026-11-26（老板）：按原样显示 SQL（保留数据库里的换行与缩进）
+  // 2026-11-26（老板）：展开要看到**整条**语句 → 用弹窗铺开显示（单元格空间不够，展示不完整）
   return (
     <div>
       <pre style={{
         margin: 0, fontFamily: 'inherit', fontSize: 12, lineHeight: '18px',
         whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-        ...(clamped
+        ...(long
           ? { display: '-webkit-box', WebkitLineClamp: maxLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
           : {}),
       }}>{sql}</pre>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-        {long && (
-          <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
-            onClick={() => setOpen((v) => !v)}>{open ? '收起' : '展开全文'}</Button>
-        )}
-        {open && (
-          <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
-            icon={<CopyOutlined />}
-            onClick={() => {
-              navigator.clipboard?.writeText(sql)
-                .then(() => message.success('已复制完整 SQL'))
-                .catch(() => message.error('复制失败'))
-            }}>复制</Button>
-        )}
-      </div>
+      {long && (
+        <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
+          onClick={() => setOpen(true)}>展开全文</Button>
+      )}
+      <Modal
+        open={open}
+        onCancel={() => setOpen(false)}
+        width={1000}
+        title={`完整 SQL（${sql.length} 字符）`}
+        footer={[
+          <Button key="copy" icon={<CopyOutlined />} onClick={() => {
+            navigator.clipboard?.writeText(sql)
+              .then(() => message.success('已复制完整 SQL'))
+              .catch(() => message.error('复制失败'))
+          }}>复制 SQL</Button>,
+          <Button key="close" type="primary" onClick={() => setOpen(false)}>关闭</Button>,
+        ]}
+        destroyOnHidden
+      >
+        <pre style={{
+          margin: 0, fontFamily: 'monospace', fontSize: 12, lineHeight: '18px',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          maxHeight: '60vh', overflow: 'auto',
+          background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4, padding: 12,
+        }}>{sql}</pre>
+      </Modal>
     </div>
   )
 }
@@ -117,7 +127,6 @@ export default function SlowSqlEventTable({
     { title: '访问来源', dataIndex: 'client_host', width: 128, render: (v: string) => v || '-' },
     { title: '用户', dataIndex: 'db_user', width: 96, render: (v: string) => v || '-' },
     { title: '线程', dataIndex: 'thread_id', width: 78, align: 'right', render: (v: number) => fmtNum(v) },
-    { title: '表名', dataIndex: 'tables', width: 140, ellipsis: true, render: (v: string) => v || '-' },
     { title: '标签', dataIndex: 'tag', width: 110, render: (v: string, r) => (
       v
         ? <Tag color="purple" style={{ cursor: 'pointer' }} onClick={() => onEditTag(r)}>{v}</Tag>
