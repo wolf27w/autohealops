@@ -904,6 +904,9 @@ export interface SlowSqlDiagnoseData {
   stats: SlowSqlDiagnoseStats
   model: string
 }
+// 2026-11-26：快速体检（不调 AI，实测 ~1.5s）——详情抽屉/诊断弹窗首屏用
+export const inspectSlowSQL = (connId: number, digest: string, payload: { sql_text?: string; schema_name?: string }) =>
+  http.post<SlowSqlDiagnoseData>(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/inspect`, payload, { timeout: 60000 })
 export const diagnoseSlowSQL = (connId: number, digest: string, payload: { sql_text?: string; schema_name?: string }) =>
   http.post<SlowSqlDiagnoseData>(`/db-connections/${connId}/slow-sql/${encodeURIComponent(digest)}/optimize`, payload, { timeout: 180000 })
 

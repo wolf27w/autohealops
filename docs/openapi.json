@@ -7060,6 +7060,69 @@
         "summary": "Slow Sql Trend"
       }
     },
+    "/api/v1/db-connections/{conn_id}/slow-sql/{digest}/inspect": {
+      "post": {
+        "description": "慢 SQL 快速体检（2026-11-26）：只读采集执行计划/索引/库参数/表体量 + 确定性结论，**不调 AI**。\n\n详情抽屉与诊断弹窗都先调它（实测 ~1.5s），AI 深度结论再走 /optimize 异步补。",
+        "operationId": "post_api_v1_db_connections_conn_id_slow_sql_digest_inspect",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conn_id",
+            "required": true,
+            "schema": {
+              "title": "Conn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "digest",
+            "required": true,
+            "schema": {
+              "title": "Digest",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Inspect Slow Sql"
+      }
+    },
     "/api/v1/db-connections/{conn_id}/slow-sql/{digest}/optimize": {
       "post": {
         "description": "R3.3+：慢 SQL 逐条优化诊断（读执行计划 + 查索引 + AI 判定是否可优化，全程只读）。\n\nbody: {sql_text: 可选（空则按 digest 查 SlowSQLRecord）, schema_name: 可选}\n返回 code=200 时 data 为 {digest, verdict, verdict_label, summary, risk_level,\nissues, suggestions, explain, indexes, stats, model}。",

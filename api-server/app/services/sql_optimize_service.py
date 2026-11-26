@@ -901,3 +901,70 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
             logger.debug("写 SQL 优化缓存失败: %s", e)
 
     return result
+
+async def inspect(conn, digest: str, sql_text: str, schema_name: str) -> dict | None:
+    """**快速体检**（2026-11-26 老板反馈「点详情和诊断都特别慢」）：
+
+    只做只读采集 + 确定性分析，**不调 AI**（实测 DB 侧合计约 1.5s，AI 单独要 20~40s）。
+    详情抽屉 / 诊断弹窗都先用它立即出内容，AI 结论再异步补充。
+    """
+    sql_text = (sql_text or "").strip()
+    schema_name = (schema_name or "").strip()
+    digest = digest or ""
+
+    digest_info = await _load_digest(conn.id, digest) if digest else None
+    if not sql_text:
+        if not digest_info:
+            return None
+        sql_text = digest_info["sql_text"]
+    _db_sql = (digest_info or {}).get("sql_text") or ""
+    if len(_db_sql.strip()) > len(sql_text):
+        sql_text = _db_sql.strip()
+    if not schema_name and digest_info:
+        schema_name = digest_info["schema_name"] or ""
+    stats = (digest_info or {}).get("stats") or {
+        "avg_latency_ms": 0.0, "max_latency_ms": 0.0, "exec_count": 0, "schema_name": schema_name,
+    }
+
+    explain, indexes, params, status, sizes = await asyncio.gather(
+        _explain(conn, sql_text),
+        _indexes(conn, sql_text, schema_name),
+        _server_params(conn),
+        _server_status(conn),
+        _table_sizes(conn, schema_name),
+    )
+    rules = _build_rules(sql_text)
+    exp_issues, exp_sugg = _explain_findings(explain)
+    try:
+        sv_issues = server_issues(params, status)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("库级体检结论生成失败: %s", e)
+        sv_issues = []
+    issues = sv_issues + exp_issues + _static_issues(rules)
+    suggestions = exp_sugg + _static_suggestions(rules)
+    try:
+        param_suggestions = suggest_param_changes(params, status, sizes)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("参数建议生成失败: %s", e)
+        param_suggestions = []
+
+    return {
+        "digest": digest,
+        "sql_full": sql_text,
+        "sql_truncated": _looks_truncated(sql_text),
+        "verdict": "maybe",
+        "verdict_label": _VERDICT_LABEL["maybe"],
+        "summary": "",
+        "risk_level": "medium",
+        "issues": issues,
+        "suggestions": suggestions,
+        "param_suggestions": param_suggestions[:8],
+        "explain": explain,
+        "indexes": indexes,
+        "stats": stats,
+        "server_params": (params or {}).get("vars") or {},
+        "server_stats": (status or {}).get("status") or {},
+        "table_sizes": ((sizes or {}).get("tables") or [])[:8],
+        "model": "",
+        "ai_pending": True,
+    }

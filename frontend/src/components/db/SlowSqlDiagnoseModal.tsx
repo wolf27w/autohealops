@@ -6,6 +6,7 @@ import {
 import { CopyOutlined } from '@ant-design/icons'
 import {
   diagnoseSlowSQL,
+  inspectSlowSQL,
   type SlowSqlDiagnoseData,
 } from '../../services/api'
 
@@ -81,6 +82,8 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
   // 2026-11-26（老板）：采集文本被截断时，允许粘完整 SQL 重跑，拿到准确执行计划与改写
   const [fullSql, setFullSql] = useState('')
   const [reRunning, setReRunning] = useState(false)
+  // 2026-11-26：两阶段——先 inspect（~1.5s 出 SQL/计划/索引/参数体检），AI 结论后台补
+  const [aiLoading, setAiLoading] = useState(false)
 
   useEffect(() => {
     if (!open || !digest) return
@@ -92,13 +95,20 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
     setLoading(true)
     setData(null)
     setFullSql('')
-    diagnoseSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
+    const payload = { sql_text: row?.sql_text, schema_name: row?.schema_name }
+    // 阶段 1：快速体检（不调 AI）
+    inspectSlowSQL(connId, digest, payload)
+      .then((d) => { setData(d); setLoading(false) })
+      .catch(() => { setLoading(false) }) // 403/500 已由拦截器 message.error 提示
+    // 阶段 2：AI 深度结论（20~40s，到了再覆盖；失败保留阶段 1 结果）
+    setAiLoading(true)
+    diagnoseSlowSQL(connId, digest, payload)
       .then((d) => {
         setCache((c) => ({ ...c, [digest]: d }))
         setData(d)
       })
-      .catch(() => setData(null)) // 403/500 已由拦截器 message.error 提示
-      .finally(() => setLoading(false))
+      .catch(() => { /* 保留体检结果 */ })
+      .finally(() => setAiLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, digest, connId])
 
@@ -157,7 +167,9 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
           <Space wrap style={{ marginBottom: 12 }}>
             <Tag color={verdictMeta.color}>{data.verdict_label || verdictMeta.label}</Tag>
             <Tag color={riskMeta.color}>变更风险 {riskMeta.label}</Tag>
-            {data.model ? <Text type="secondary" style={{ fontSize: 12 }}>模型：{data.model}</Text> : null}
+            {aiLoading
+              ? <Tag color="processing">AI 深度分析中…（20~40 秒，先看下面的执行计划/参数体检）</Tag>
+              : (data.model ? <Text type="secondary" style={{ fontSize: 12 }}>模型：{data.model}</Text> : null)}
           </Space>
 
           <Descriptions size="small" column={4} bordered style={{ marginBottom: 12 }}>

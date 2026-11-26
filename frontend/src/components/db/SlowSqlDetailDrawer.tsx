@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Drawer, Tabs, Spin, Tag, Descriptions, Space, List, Table, Card, Button, Typography, Empty, message,
 } from 'antd'
-import { CopyOutlined } from '@ant-design/icons'
+import { CopyOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   diagnoseSlowSQL,
+  inspectSlowSQL,
   type SlowSqlDiagnoseData,
   type SlowSqlEventItem,
 } from '../../services/api'
@@ -61,20 +62,38 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
 
   const [data, setData] = useState<SlowSqlDiagnoseData | null>(null)
   const [loading, setLoading] = useState(false)
+  // 2026-11-26（老板反馈「点详情特别慢」）：详情只跑快速体检（不调 AI，~1.5s）；
+  // AI 深度结论只在你切到「诊断」Tab 时才发起，不阻塞看 SQL/执行计划/索引。
+  const [aiData, setAiData] = useState<SlowSqlDiagnoseData | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiErr, setAiErr] = useState('')
 
   useEffect(() => {
-    if (!open) { setData(null); setLoading(false); return }
+    if (!open) { setData(null); setLoading(false); setAiData(null); setAiErr(''); return }
     if (!digest) { setData(null); setLoading(false); return }
     setLoading(true)
     setData(null)
-    diagnoseSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
+    setAiData(null)
+    setAiErr('')
+    inspectSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
       .then(setData)
       .catch(() => {
         setData(null)
-        message.error('诊断加载失败，请稍后重试')
+        message.error('加载执行计划/索引失败，请稍后重试')
       })
       .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, digest, connId])
+
+  const runAiDiagnose = () => {
+    if (!digest || aiLoading || aiData) return
+    setAiLoading(true)
+    setAiErr('')
+    diagnoseSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
+      .then(setAiData)
+      .catch(() => setAiErr('AI 诊断失败（可稍后重试）'))
+      .finally(() => setAiLoading(false))
+  }
 
   // 执行计划动态列（取 rows[0] 的 key）
   const explainColumns = useMemo(() => {
@@ -218,7 +237,30 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
     { key: 'overview', label: '概览', children: overview },
     { key: 'explain', label: '执行计划', children: loading ? <Spin /> : (data ? explainTab : <Empty description="暂无执行计划" />) },
     { key: 'index', label: '索引', children: loading ? <Spin /> : (data ? indexTab : <Empty description="暂无索引信息" />) },
-    { key: 'diagnose', label: '诊断', children: loading ? <Spin /> : (data ? diagnoseTab : <Empty description="诊断失败或暂无结果，请稍后重试" />) },
+    {
+      key: 'diagnose',
+      label: '诊断',
+      children: loading ? <Spin /> : (
+        aiData ? diagnoseTab : (
+          <div style={{ padding: '24px 0', textAlign: 'center' }}>
+            {aiLoading ? (
+              <>
+                <Spin />
+                <div style={{ marginTop: 12, color: '#8c8c8c' }}>AI 深度分析中（通常 20~40 秒）…</div>
+              </>
+            ) : (
+              <>
+                {aiErr && <div style={{ color: '#cf1322', marginBottom: 8 }}>{aiErr}</div>}
+                <Button type="primary" icon={<ThunderboltOutlined />} onClick={runAiDiagnose}>运行 AI 深度诊断</Button>
+                <div style={{ marginTop: 8, color: '#8c8c8c', fontSize: 12 }}>
+                  概览 / 执行计划 / 索引 已就绪；AI 结论按需生成（约 20~40 秒）
+                </div>
+              </>
+            )}
+          </div>
+        )
+      ),
+    },
   ]
 
   return (
