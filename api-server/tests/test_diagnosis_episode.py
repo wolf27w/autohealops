@@ -192,5 +192,27 @@ class TestTicketedRediagnose(unittest.IsolatedAsyncioTestCase):
         diag.assert_not_awaited()
 
 
+class TestActionDiagnosis(unittest.IsolatedAsyncioTestCase):
+    """2026-11-26 老板：诊断之后必须修复；确定性修复也要留诊断（结论=事实，建议=已执行动作）"""
+
+    async def test_record_action_diagnosis_writes_row(self):
+        from app.services import alert_auto_service as aas
+        alert = SimpleNamespace(id=42, status="self_healed", resource_type="pod",
+                                resource_name="p1", namespace="ns", cluster_id=1)
+        session = MagicMock()
+        session.add = MagicMock()
+        session.commit = AsyncMock()
+        session.refresh = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=session)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(aas, "async_session", return_value=ctx):
+            rid = await aas.record_action_diagnosis(
+                alert, root_cause="卡 Terminating", actions=["强删 Pod"], ok=True)
+        self.assertIsInstance(rid, int)
+        session.add.assert_called_once()
+        session.commit.assert_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

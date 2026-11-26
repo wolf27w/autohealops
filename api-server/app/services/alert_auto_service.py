@@ -709,13 +709,15 @@ async def _alert_env(alert: Alert | None) -> str:
 async def _rollback_allowed(alert: Alert | None) -> bool:
     """该环境是否允许自动回滚（2026-11-24 老板口径：只生产需要回滚，测试/UAT 不需要）。
 
-    system_settings.rollback_envs（逗号分隔环境名，默认 "prod"；空 / "*" / "all" = 全环境允许）。
+    system_settings.rollback_envs（逗号分隔环境名，默认 "all"；空 / "*" / "all" = 全环境允许）。
     """
     try:
         from app.services.system_setting_service import get_setting
-        raw = (await get_setting("rollback_envs", "prod") or "").strip().lower()
+        # 2026-11-26 老板：诊断出「发布变更导致启动失败」就必须修（回滚），测试/UAT 同样适用。
+        # 需要收紧时在 系统设置 → rollback_envs 里填 prod（或具体环境名）。
+        raw = (await get_setting("rollback_envs", "all") or "").strip().lower()
     except Exception:  # noqa: BLE001
-        raw = "prod"
+        raw = "all"
     if raw in ("", "*", "all"):
         return True
     allowed = {x.strip() for x in raw.split(",") if x.strip()}
@@ -1504,6 +1506,59 @@ async def _try_rebuild_once(alert: Alert, trace_id: str) -> bool:
         await _end_repair(alert.id)
 
 
+async def record_action_diagnosis(alert: Alert, *, root_cause: str, actions: list[str],
+                                 ok: bool, layer: str = "A", extra: dict | None = None) -> int:
+    """确定性修复动作执行后落一条诊断（2026-11-26 老板：要诊断 + 要修复，不能只有诊断）。
+
+    用于 TerminatingStuck 强删 / ImagePullBackOff 补 secrets / PodEvicted 清理这类
+    「平台自己能动手」的故障：结论=事实根因，建议里第一条就是**已执行的动作与结果**。
+    """
+    try:
+        actions = [a for a in (actions or []) if a]
+        detail = {
+            "immediate": (["已执行：" + a for a in actions] or ["平台已自动处置"]) + (
+                [] if ok else ["执行未成功/验证未通过 → 已转人工（见告警状态）"]),
+            "root_fix": [
+                f"根因：{root_cause}" if root_cause else "根因见告警正文",
+                "若同类故障反复出现（循环抑制触发），按根因转人工/工单处理（镜像未上传、finalizer 依赖异常、节点容量不足等）",
+            ],
+            "verification": ["告警状态变为 self_healed/resolved 且 Pod 不再复发，即视为修复成功"],
+            "prevention": ["同类故障加监控阈值/清理策略；镜像发布流水线增加制品存在性校验"],
+        }
+        payload = {
+            "root_cause": root_cause or "平台已自动处置（确定性动作）",
+            "suggestions": detail["immediate"] + detail["root_fix"],
+            "suggestions_detail": detail,
+            "root_cause_layer": layer,
+            "confidence": 0.95,
+            "confidence_basis": "evidence",
+            "handling_advice": "本条由平台确定性动作直接产生（未调用模型）：结论=故障事实，建议=已执行动作与结果。",
+            "model_used": "",
+            "degraded": False,
+            "_source": "action",
+        }
+        if extra:
+            payload.update(extra)
+        async with async_session() as session:
+            rec = AIDiagnosisResult(
+                alert_id=alert.id,
+                context_snapshot=json.dumps({"source": "action", "actions": actions, "ok": ok,
+                                             "alert_status": getattr(alert, "status", "")},
+                                            ensure_ascii=False)[:20000],
+                diagnosis_json=json.dumps(payload, ensure_ascii=False),
+                confidence=0.95,
+            )
+            session.add(rec)
+            await session.commit()
+            await session.refresh(rec)
+        logger.info("告警 %d 动作诊断已落库 #%d（%s，ok=%s）", alert.id, rec.id,
+                    (actions[0] if actions else "自动处置")[:40], ok)
+        return int(rec.id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("告警 %d 动作诊断落库失败: %s", alert.id, e)
+        return 0
+
+
 async def _persist_react_diagnosis(alert: Alert, diagnosis: dict, alert_data: dict, diag_ctx: dict) -> int:
     """R75.8：把 ReAct 诊断结果落 `ai_diagnosis_results`（原来只在内存，四段展示/工单/复盘拿不到）。
 
@@ -1810,6 +1865,14 @@ async def _repair_image_pull_inner(alert: Alert, trace_id: str) -> None:
     if fixed:
         # 补 secrets 成功 → 验证 → 自愈
         repaired = await _verify_auto_repair(alert)
+        await record_action_diagnosis(
+            alert,
+            root_cause=(f"Pod {alert.namespace}/{alert.resource_name} 拉取镜像失败："
+                        "工作负载缺少可用的 imagePullSecrets（私有仓库凭据未挂载/名称不匹配）"),
+            actions=["patch 工作负载补 imagePullSecrets", "重建 Pod 触发重新拉取",
+                     "验证：" + ("镜像拉取成功、Pod 就绪" if repaired else "验证未通过（疑似镜像地址错误或镜像未上传）")],
+            ok=bool(repaired), layer="A",
+        )
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
             if repaired:
@@ -2169,6 +2232,12 @@ async def _auto_force_delete_terminating(alert: Alert) -> bool:
         await _mark_scaled_to_zero(alert)
         return True
     if _repaired:
+        await record_action_diagnosis(
+            alert,
+            root_cause=f"Pod {alert.namespace}/{alert.resource_name} 卡在 Terminating（finalizer/节点/kubelet 未响应），平台强制删除（force + grace 0）后重建成功",
+            actions=["kubectl delete pod --force --grace-period=0（免审批强删）", "验证：新 Pod 已就绪、重启计数稳定"],
+            ok=True, layer="A",
+        )
         async with async_session() as session:
             a = await session.get(Alert, alert.id)
             if a:
@@ -2337,7 +2406,25 @@ async def _process_one(alert: Alert) -> bool:
                 if "Evicted：已通知" not in (a.message or ""):
                     a.message = (a.message or "") + "（Evicted：已通知；清理该 Pod 或同服务新 Pod 就绪后自动关闭）"
                     await session.commit()
-        logger.info("PodEvicted 告警 %d 已通知（不做自动修复）", alert.id)
+        # 2026-11-26 老板：诊断之后要修复。Evicted 的确定性修复=清理已驱逐的 Pod（释放 etcd/干扰项），
+        # 并落一条「动作诊断」说明根因与已执行动作。
+        deleted = 0
+        cleanup_ok = False
+        try:
+            r = await executor_client.acall(executor_client.cleanup_evicted, alert.cluster_id)
+            cleanup_ok = bool(r.get("success"))
+            deleted = int(r.get("deleted") or 0)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("PodEvicted 告警 %d 清理失败: %s", alert.id, e)
+        await record_action_diagnosis(
+            alert,
+            root_cause=(f"Pod {alert.namespace}/{alert.resource_name} 被 kubelet 驱逐（Evicted）："
+                        "节点资源压力（磁盘/内存/PID）或 Pod 自身资源请求超限，属节点/调度层问题"),
+            actions=[f"清理集群内已 Evicted 的 Pod（本轮删除 {deleted} 个）",
+                     "验证：同服务新 Pod 就绪后该告警自动关闭"],
+            ok=cleanup_ok, layer="D",
+        )
+        logger.info("PodEvicted 告警 %d 已通知 + 清理 Evicted Pod（deleted=%d）", alert.id, deleted)
         return True
 
     # 节点类告警（2026-10-21）：走节点诊断分支（Pod 那套采集/工具都不适用）
