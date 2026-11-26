@@ -253,6 +253,20 @@ async def db_diagnose(payload: dict):
                 "impact": str(s.get("impact", "") or ""),
             })
     data["suggestions"] = norm
+    # 2026-11-26：参数建议归一化（name/current/suggested/reason/apply/risk）
+    norm_params = []
+    for it in (data.get("param_suggestions") or []):
+        if isinstance(it, dict) and str(it.get("name") or "").strip():
+            norm_params.append({
+                "name": str(it.get("name") or "").strip(),
+                "current": str(it.get("current") or ""),
+                "suggested": str(it.get("suggested") or ""),
+                "reason": str(it.get("reason") or ""),
+                "apply": str(it.get("apply") or ""),
+                "risk": str(it.get("risk") or ""),
+            })
+    data["param_suggestions"] = norm_params
+
     data["model"] = model
     data["raw"] = resp.content
     return {"code": 200, "message": "success", "data": data}
@@ -307,6 +321,11 @@ async def sql_optimize(payload: dict):
         "explain": _dumps(explain),
         "indexes": _dumps(payload.get("indexes") or []),
         "rules": _dumps(payload.get("rules") or []),
+        # 2026-11-26（老板）：参数建议要有依据 → 把库参数/状态/表体量/截断标记一起给模型
+        "server_params": _dumps(payload.get("server_params") or {}),
+        "server_stats": _dumps(payload.get("server_stats") or {}),
+        "table_sizes": _dumps(payload.get("table_sizes") or []),
+        "sql_truncated": "true" if payload.get("sql_truncated") else "false",
     })
     try:
         resp, model = await call_with_fallback(system, user, "sql_optimize", payload.get("severity", "medium"))
@@ -315,6 +334,19 @@ async def sql_optimize(payload: dict):
 
     data = {"verdict": "maybe", "summary": "", "issues": [], "suggestions": [], "risk_level": "medium"}
     parsed = _extract_json_dict(resp.content)
+    if not parsed:
+        # 2026-11-26：模型偶发输出超长被截断 → 用同一模型再要一次「精简版 JSON」（只一次，避免拖慢）
+        try:
+            resp2, model = await call_with_fallback(
+                system + "\n【重要】JSON 必须完整闭合、字段精简：summary ≤ 120 字，每条 detail ≤ 80 字，"
+                         "suggestions 最多 3 条，sql_after 只写完整 SQL 本身，不要额外说明文字。",
+                user, "sql_optimize", payload.get("severity", "low"),
+            )
+            parsed = _extract_json_dict(resp2.content)
+            if parsed:
+                resp = resp2
+        except Exception:  # noqa: BLE001
+            parsed = None
     if parsed:
         data["verdict"] = parsed.get("verdict", "maybe")
         data["summary"] = parsed.get("summary", "")
@@ -367,6 +399,20 @@ async def sql_optimize(payload: dict):
                 "risk": str(s.get("risk", "") or ""),
             })
     data["suggestions"] = norm_sug
+
+    # 2026-11-26：参数建议归一化（name/current/suggested/reason/apply/risk）
+    norm_params = []
+    for it in (data.get("param_suggestions") or []):
+        if isinstance(it, dict) and str(it.get("name") or "").strip():
+            norm_params.append({
+                "name": str(it.get("name") or "").strip(),
+                "current": str(it.get("current") or ""),
+                "suggested": str(it.get("suggested") or ""),
+                "reason": str(it.get("reason") or ""),
+                "apply": str(it.get("apply") or ""),
+                "risk": str(it.get("risk") or ""),
+            })
+    data["param_suggestions"] = norm_params
 
     data["model"] = model
     data["raw"] = resp.content

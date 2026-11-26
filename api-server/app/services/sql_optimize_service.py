@@ -28,6 +28,306 @@ _MAX_INDEX_TABLES = 8
 _CACHE_TTL = 600
 _EXPLAIN_ERROR_MAX = 300
 
+# ===== 2026-11-26（老板）：诊断要「有干货」——库参数体检 + 完整 SQL =====
+# 只读 SHOW 变量/状态；采集失败一律降级（不打断诊断）
+_PARAM_KEYS = (
+    "version", "innodb_buffer_pool_size", "innodb_log_file_size", "innodb_flush_log_at_trx_commit",
+    "tmp_table_size", "max_heap_table_size", "sort_buffer_size", "join_buffer_size",
+    "long_query_time", "slow_query_log", "table_open_cache", "max_connections",
+    "innodb_io_capacity", "performance_schema",
+)
+_STATUS_KEYS = (
+    "Uptime", "Questions", "Slow_queries", "Innodb_buffer_pool_reads",
+    "Innodb_buffer_pool_read_requests", "Created_tmp_disk_tables", "Created_tmp_tables",
+    "Sort_merge_passes", "Opened_tables", "Table_open_cache_hits", "Table_open_cache_misses",
+)
+_SIZE_UNITS = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}
+
+
+def _parse_bytes(v) -> int:
+    """MySQL 变量值 → 字节数（'134217728' / '128M' / '1G' 都支持）；失败返回 0。"""
+    s = str(v or "").strip()
+    if not s:
+        return 0
+    try:
+        unit = s[-1].lower()
+        if unit in _SIZE_UNITS:
+            return int(float(s[:-1]) * _SIZE_UNITS[unit])
+        return int(float(s))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_int(v) -> int:
+    try:
+        return int(float(str(v)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _human_bytes(n: int) -> str:
+    if n <= 0:
+        return "0"
+    for unit, div in (("G", 1024 ** 3), ("M", 1024 ** 2), ("K", 1024)):
+        if n >= div:
+            return f"{n / div:.1f}{unit}"
+    return f"{n}B"
+
+
+def _looks_truncated(sql: str) -> bool:
+    """SQL 文本是否被截断（performance_schema DIGEST_TEXT 默认只留 1024 字符）。"""
+    s = (sql or "").strip()
+    if len(s) >= 1000:
+        return True
+    if s.count("(") != s.count(")"):
+        return True
+    if s.count("'") % 2 == 1:
+        return True
+    # 结尾停在半个词/逗号/运算符上，也视为截断
+    return bool(re.search(r"[,.(\s=+*/<>-]$", s)) and not s.endswith(")")
+
+
+async def _server_params(c) -> dict:
+    """库参数现状（只读 SHOW GLOBAL VARIABLES）。仅 MySQL，失败降级。"""
+    out: dict = {"available": False, "vars": {}, "error": ""}
+    if (c.db_type or "mysql").lower() != "mysql":
+        out["error"] = "仅 MySQL 支持参数体检"
+        return out
+    try:
+        data = await _run_sql(c, "SHOW GLOBAL VARIABLES", limit=3000, allow_write=False)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"读取库参数失败：{str(e)[:200]}"
+        return out
+    raw = {str(r.get("Variable_name") or ""): r.get("Value") for r in _rows_as_dicts(data)}
+    if not raw:
+        out["error"] = "读取库参数为空（可能无权限）"
+        return out
+    out["available"] = True
+    out["vars"] = {k: raw[k] for k in _PARAM_KEYS if k in raw}
+    return out
+
+
+async def _server_status(c) -> dict:
+    """库状态计数（只读 SHOW GLOBAL STATUS，用于算命中率/临时表落盘比例）。"""
+    out: dict = {"available": False, "status": {}, "error": ""}
+    if (c.db_type or "mysql").lower() != "mysql":
+        return out
+    try:
+        data = await _run_sql(c, "SHOW GLOBAL STATUS", limit=3000, allow_write=False)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"读取库状态失败：{str(e)[:200]}"
+        return out
+    raw = {str(r.get("Variable_name") or ""): r.get("Value") for r in _rows_as_dicts(data)}
+    out["available"] = True
+    out["status"] = {k: raw[k] for k in _STATUS_KEYS if k in raw}
+    return out
+
+
+async def _table_sizes(c, schema: str = "") -> dict:
+    """库/表体量（information_schema，用于判断 buffer pool 是否明显偏小）。"""
+    out: dict = {"available": False, "total_bytes": 0, "tables": [], "error": ""}
+    if (c.db_type or "mysql").lower() != "mysql":
+        return out
+    sch = (schema or c.database or "").replace("'", "")
+    where = f"WHERE table_schema = '{sch}'" if sch else \
+        "WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys')"
+    try:
+        data = await _run_sql(
+            c,
+            "SELECT table_schema, table_name, "
+            "IFNULL(data_length,0)+IFNULL(index_length,0) AS bytes_, IFNULL(table_rows,0) AS rows_ "
+            f"FROM information_schema.tables {where} ORDER BY bytes_ DESC",
+            limit=20, allow_write=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"读取表体量失败：{str(e)[:200]}"
+        return out
+    rows = _rows_as_dicts(data)
+    if not rows:
+        return out
+    out["available"] = True
+    out["tables"] = [{
+        "table": f"{r.get('table_schema')}.{r.get('table_name')}",
+        "bytes": _parse_bytes(r.get("bytes_")),
+        "rows": _parse_int(r.get("rows_")),
+    } for r in rows]
+    out["total_bytes"] = sum(t["bytes"] for t in out["tables"])
+    return out
+
+
+def suggest_param_changes(params: dict, status: dict, sizes: dict) -> list:
+    """确定性参数建议（纯函数）：每条都给当前值、建议值、依据数字、生效方式/风险。"""
+    v = (params or {}).get("vars") or {}
+    st = (status or {}).get("status") or {}
+    if not v:
+        return []
+    advice: list = []
+
+    # 1) buffer pool 相对数据量偏小 → 全表扫描/回表更慢
+    bp = _parse_bytes(v.get("innodb_buffer_pool_size"))
+    total = _parse_int((sizes or {}).get("total_bytes"))
+    if bp and total and bp < total * 0.6:
+        target = max(int(total * 0.75), 1024 ** 3)
+        advice.append({
+            "name": "innodb_buffer_pool_size",
+            "current": _human_bytes(bp),
+            "suggested": _human_bytes(target),
+            "reason": f"实例数据量约 {_human_bytes(total)}，buffer pool 仅 {_human_bytes(bp)}"
+                      f"（{bp * 100 // total}%），热点页放不下会导致大量磁盘读",
+            "apply": "MySQL 8.0 可在线调整（SET GLOBAL），建议先加到 50%~70% 主机内存",
+            "risk": "占用内存上升，需确认主机内存余量；变更后观察 10 分钟",
+        })
+
+    # 2) 临时表落盘比例高
+    tmp_disk = _parse_int(st.get("Created_tmp_disk_tables"))
+    tmp_all = _parse_int(st.get("Created_tmp_tables"))
+    tts = _parse_bytes(v.get("tmp_table_size"))
+    mhts = _parse_bytes(v.get("max_heap_table_size"))
+    if tmp_all >= 100 and tmp_disk / tmp_all > 0.2 and min(tts or 0, mhts or 0) < 64 * 1024 ** 2:
+        advice.append({
+            "name": "tmp_table_size / max_heap_table_size",
+            "current": f"{_human_bytes(tts)} / {_human_bytes(mhts)}",
+            "suggested": "64M / 64M",
+            "reason": f"临时表落盘 {tmp_disk}/{tmp_all}（{tmp_disk * 100 // max(tmp_all, 1)}%），"
+                      "内存临时表上限偏小会落盘变成磁盘临时表",
+            "apply": "两个参数必须一起调（取较小值生效），动态生效",
+            "risk": "单连接可能占用更多内存，高并发时注意总内存",
+        })
+
+    # 3) 排序缓冲偏小 + 归并排序次数多
+    sb = _parse_bytes(v.get("sort_buffer_size"))
+    merges = _parse_int(st.get("Sort_merge_passes"))
+    questions = max(_parse_int(st.get("Questions")), 1)
+    if sb and sb < 1024 ** 2 and merges / questions > 0.01:
+        advice.append({
+            "name": "sort_buffer_size",
+            "current": _human_bytes(sb),
+            "suggested": "2M",
+            "reason": f"Sort_merge_passes={merges}（每次查询均值 {merges / questions:.3f}），"
+                      "排序放不下会走多轮归并并落盘",
+            "apply": "会话级/全局均可（SET GLOBAL 影响新连接）",
+            "risk": "按连接分配，不要盲目调大（2M~4M 足够）",
+        })
+
+    # 4) join buffer 偏小
+    jb = _parse_bytes(v.get("join_buffer_size"))
+    if jb and jb < 1024 ** 2:
+        advice.append({
+            "name": "join_buffer_size",
+            "current": _human_bytes(jb),
+            "suggested": "2M",
+            "reason": "默认 256K 在无索引 JOIN（BNL）时会产生大量重复扫描",
+            "apply": "动态生效；优先靠索引消除无索引 JOIN，参数只是兜底",
+            "risk": "按连接分配，大并发下注意总内存",
+        })
+
+    # 5) 慢查询阈值太宽 → 慢 SQL 采集漏报
+    lqt = float(v.get("long_query_time") or 0) if str(v.get("long_query_time") or "").replace(".", "", 1).isdigit() else 0
+    if lqt > 1:
+        advice.append({
+            "name": "long_query_time",
+            "current": f"{lqt}s",
+            "suggested": "1",
+            "reason": "阈值过宽会让 1~N 秒的慢查询不被记录，平台侧慢 SQL 统计会偏少",
+            "apply": "动态生效",
+            "risk": "慢日志量会增加，注意日志空间",
+        })
+
+    # 6) 表缓存偏小
+    toc = _parse_int(v.get("table_open_cache"))
+    opened = _parse_int(st.get("Opened_tables"))
+    uptime = max(_parse_int(st.get("Uptime")), 1)
+    if toc and toc < 2000 and opened / uptime > 0.5:
+        advice.append({
+            "name": "table_open_cache",
+            "current": str(toc),
+            "suggested": "2000",
+            "reason": f"平均每秒打开表 {opened / uptime:.2f} 次，缓存偏小会频繁开关表文件",
+            "apply": "动态生效",
+            "risk": "占用文件描述符，需同步确认 open_files_limit",
+        })
+
+    # 7) 缓冲池命中率低（信息性，不单独立建议）
+    return advice[:6]
+
+
+def server_issues(params: dict, status: dict) -> list:
+    """库级体检结论（纯函数）：把 SHOW STATUS 的计数换成「有问题/没问题 + 具体数字」的条目。
+
+    2026-11-26（老板）：「异常里没有有价值的东西」→ 这里给真实比值与阈值，不再只写套话。
+    """
+    v = (params or {}).get("vars") or {}
+    st = (status or {}).get("status") or {}
+    if not st:
+        return []
+    out: list = []
+    questions = max(_parse_int(st.get("Questions")), 1)
+    uptime = max(_parse_int(st.get("Uptime")), 1)
+
+    slow_q = _parse_int(st.get("Slow_queries"))
+    if slow_q:
+        ratio = slow_q / questions * 100
+        if ratio >= 1:
+            out.append({
+                "type": "慢查询占比偏高",
+                "detail": f"累计慢查询 {slow_q:,} / 总查询 {questions:,} = {ratio:.2f}%"
+                          f"（阈值 1%）；慢查询阈值 long_query_time={v.get('long_query_time', '?')}s，"
+                          "说明存在大量秒级以上的 SQL，需要按 digest 逐个治理",
+                "severity": "high" if ratio >= 5 else "medium",
+            })
+
+    reqs = _parse_int(st.get("Innodb_buffer_pool_read_requests"))
+    reads = _parse_int(st.get("Innodb_buffer_pool_reads"))
+    if reqs > 0:
+        hit = (1 - reads / reqs) * 100
+        if hit < 99.5:
+            out.append({
+                "type": "缓冲池命中率偏低",
+                "detail": f"命中率 {hit:.2f}%（物理读 {reads:,} / 逻辑读 {reqs:,}），低于 99.5%，"
+                          f"当前 innodb_buffer_pool_size={_human_bytes(_parse_bytes(v.get('innodb_buffer_pool_size')))}；"
+                          "热点页放不下会直接打到磁盘",
+                "severity": "high" if hit < 98 else "medium",
+            })
+
+    tmp_all = _parse_int(st.get("Created_tmp_tables"))
+    tmp_disk = _parse_int(st.get("Created_tmp_disk_tables"))
+    if tmp_all >= 1000:
+        dr = tmp_disk / tmp_all * 100
+        if dr >= 5:
+            out.append({
+                "type": "临时表落盘比例偏高",
+                "detail": f"磁盘临时表 {tmp_disk:,} / 临时表总数 {tmp_all:,} = {dr:.2f}%（阈值 5%），"
+                          f"tmp_table_size={_human_bytes(_parse_bytes(v.get('tmp_table_size')))}、"
+                          f"max_heap_table_size={_human_bytes(_parse_bytes(v.get('max_heap_table_size')))}；"
+                          "GROUP BY / DISTINCT / 派生表会因此落盘",
+                "severity": "high" if dr >= 20 else "medium",
+            })
+
+    merges = _parse_int(st.get("Sort_merge_passes"))
+    if merges:
+        per_q = merges / questions
+        if per_q >= 0.05:
+            out.append({
+                "type": "内存排序不足（多轮归并）",
+                "detail": f"Sort_merge_passes={merges:,}，平均每次查询 {per_q:.3f} 次归并（阈值 0.05），"
+                          f"sort_buffer_size={_human_bytes(_parse_bytes(v.get('sort_buffer_size')))}；"
+                          "ORDER BY / GROUP BY 无法一次排完时会落盘",
+                "severity": "medium",
+            })
+
+    opened = _parse_int(st.get("Opened_tables"))
+    if opened:
+        per_s = opened / uptime
+        if per_s >= 10:
+            out.append({
+                "type": "表缓存频繁失效",
+                "detail": f"平均每秒打开表 {per_s:.2f} 次（阈值 10），table_open_cache={v.get('table_open_cache', '?')}；"
+                          "说明表缓存不够或存在大量动态表名/临时表",
+                "severity": "medium",
+            })
+    return out
+
+
 # 静态规则严重度映射（AI 兜底用，给个比「全 medium」更有信号的级别）
 _SEVERITY_BY_RULE = {
     "join_no_on": "high",
@@ -466,6 +766,10 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
         if not digest_info:
             return None
         sql_text = digest_info["sql_text"]
+    # 2026-11-26（老板）：「SQL 语句要是全的」——取获得的最长版本（前端传的 vs 库里记录的）
+    _db_sql = (digest_info or {}).get("sql_text") or ""
+    if len(_db_sql.strip()) > len(sql_text):
+        sql_text = _db_sql.strip()
     if not schema_name and digest_info:
         schema_name = digest_info["schema_name"] or ""
     stats = (digest_info or {}).get("stats") or {
@@ -485,10 +789,13 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
     except Exception as e:  # noqa: BLE001
         logger.debug("读 SQL 优化缓存失败: %s", e)
 
-    # 2. 执行计划 + 索引（并发，互不依赖）
-    explain, indexes = await asyncio.gather(
+    # 2. 执行计划 + 索引 + 库参数体检（并发，互不依赖；任何一项失败都只降级）
+    explain, indexes, params, status, sizes = await asyncio.gather(
         _explain(conn, sql_text),
         _indexes(conn, sql_text, schema_name),
+        _server_params(conn),
+        _server_status(conn),
+        _table_sizes(conn, schema_name),
     )
 
     # 3. 静态规则 → ai-service 判定
@@ -502,6 +809,10 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
         "explain": explain,
         "indexes": indexes,
         "rules": rules,
+        "server_params": (params or {}).get("vars") or {},
+        "server_stats": (status or {}).get("status") or {},
+        "table_sizes": ((sizes or {}).get("tables") or [])[:8],
+        "sql_truncated": _looks_truncated(sql_text),
     }
 
     model = ""
@@ -512,6 +823,7 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
         suggestions = (data or {}).get("suggestions") or []
         risk_level = (data or {}).get("risk_level") or "medium"
         model = (data or {}).get("model") or ""
+        ai_params = (data or {}).get("param_suggestions") or []
         summary = (data or {}).get("summary") or ""
         exp_issues, exp_sugg = _explain_findings(explain)
         if not issues:
@@ -529,9 +841,45 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
         issues = exp_issues + _static_issues(rules)
         suggestions = exp_sugg + _static_suggestions(rules)
         model = ""
+        ai_params = []
+
+    # 库级体检结论（真实比值）并入 issues，排在 AI 结论之前
+    try:
+        _sv = server_issues(params, status)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("库级体检结论生成失败: %s", e)
+        _sv = []
+    if _sv:
+        _seen_types = {str(x.get("type") or "") for x in issues}
+        issues = [x for x in _sv if x["type"] not in _seen_types] + list(issues)
+
+    # 参数建议：确定性规则（带真实数字）在前，AI 给的按参数名去重合并
+    param_suggestions = suggest_param_changes(params, status, sizes)
+    seen = {str(x.get("name") or "").lower() for x in param_suggestions}
+    for it in (ai_params or []):
+        if not isinstance(it, dict):
+            continue
+        nm = str(it.get("name") or "").strip()
+        if not nm or nm.lower() in seen:
+            continue
+        seen.add(nm.lower())
+        param_suggestions.append({
+            "name": nm,
+            "current": str(it.get("current") or ""),
+            "suggested": str(it.get("suggested") or ""),
+            "reason": str(it.get("reason") or ""),
+            "apply": str(it.get("apply") or "按官方文档确认生效方式"),
+            "risk": str(it.get("risk") or ""),
+        })
 
     result = {
         "digest": digest,
+        "sql_full": sql_text,
+        "sql_truncated": bool(payload.get("sql_truncated")),
+        "param_suggestions": param_suggestions[:8],
+        "server_params": (params or {}).get("vars") or {},
+        "server_stats": (status or {}).get("status") or {},
+        "table_sizes": ((sizes or {}).get("tables") or [])[:8],
         "verdict": verdict,
         "verdict_label": _VERDICT_LABEL.get(verdict, _VERDICT_LABEL["maybe"]),
         "summary": summary,

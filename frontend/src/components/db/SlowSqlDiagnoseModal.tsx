@@ -1,7 +1,7 @@
 // 慢 SQL 诊断弹窗：调用后端 AI 诊断接口，展示结论 / 执行计划 / 索引现状 / 优化建议
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Modal, Spin, Tag, Descriptions, Space, List, Table, Card, Button, Typography, Collapse, Empty, message,
+  Modal, Spin, Tag, Descriptions, Space, List, Table, Card, Button, Typography, Collapse, Empty, message, Input,
 } from 'antd'
 import { CopyOutlined } from '@ant-design/icons'
 import {
@@ -78,6 +78,9 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
   const [cache, setCache] = useState<Record<string, SlowSqlDiagnoseData>>({})
   const [data, setData] = useState<SlowSqlDiagnoseData | null>(null)
   const [loading, setLoading] = useState(false)
+  // 2026-11-26（老板）：采集文本被截断时，允许粘完整 SQL 重跑，拿到准确执行计划与改写
+  const [fullSql, setFullSql] = useState('')
+  const [reRunning, setReRunning] = useState(false)
 
   useEffect(() => {
     if (!open || !digest) return
@@ -88,6 +91,7 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
     }
     setLoading(true)
     setData(null)
+    setFullSql('')
     diagnoseSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
       .then((d) => {
         setCache((c) => ({ ...c, [digest]: d }))
@@ -173,9 +177,79 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
             </Card>
           )}
 
-          {/* 问题点 */}
+          {/* 完整 SQL（2026-11-26 老板：SQL 语句要是全的） */}
+          {data.sql_full && (
+            <Card size="small" style={{ marginBottom: 12 }}
+              title={<Space size={6}><span>本次诊断 SQL（全文）</span>
+                {data.sql_truncated
+                  ? <Tag color="orange">采集文本被截断</Tag>
+                  : <Tag color="green">完整</Tag>}</Space>}>
+              <div style={{ textAlign: 'right', marginBottom: 4 }}><CopyButton text={data.sql_full} label="复制全文" /></div>
+              <pre style={{
+                background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4,
+                padding: 10, fontSize: 12, margin: 0, maxHeight: 260, overflow: 'auto',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+              }}>{data.sql_full}</pre>
+              {data.sql_truncated && (
+                <>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    说明：MySQL performance_schema 的 DIGEST_TEXT 只保留 1024 字符，原始 SQL 更长时会被截断；
+                    截断会影响执行计划与改写的准确度。把完整 SQL 贴到下面重跑一次，结论会基于完整语句给出。
+                  </Text>
+                  <Input.TextArea
+                    style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+                    rows={4}
+                    value={fullSql}
+                    onChange={(e) => setFullSql(e.target.value)}
+                    placeholder="粘贴完整 SQL（可含 ? 占位符），然后点「用完整 SQL 重新诊断」"
+                  />
+                  <Button
+                    size="small" type="primary" style={{ marginTop: 8 }} loading={reRunning}
+                    disabled={!fullSql.trim()}
+                    onClick={async () => {
+                      if (!digest) return
+                      setReRunning(true)
+                      try {
+                        const d = await diagnoseSlowSQL(connId, digest, { sql_text: fullSql.trim(), schema_name: row?.schema_name })
+                        setCache((c) => ({ ...c, [digest]: d }))
+                        setData(d)
+                        message.success('已基于完整 SQL 重新诊断')
+                      } catch {
+                        message.error('重新诊断失败')
+                      } finally {
+                        setReRunning(false)
+                      }
+                    }}
+                  >用完整 SQL 重新诊断</Button>
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* 库参数建议（确定性规则 + AI 补充） */}
+          {!!data.param_suggestions?.length && (
+            <Card size="small" title={`参数修改建议（${data.param_suggestions.length}）`} style={{ marginBottom: 12 }}>
+              <Table
+                size="small"
+                rowKey={(r) => r.name}
+                pagination={false}
+                dataSource={data.param_suggestions}
+                scroll={{ x: 'max-content' }}
+                columns={[
+                  { title: '参数', dataIndex: 'name', width: 210, render: (v: string) => <Text code>{v}</Text> },
+                  { title: '当前值', dataIndex: 'current', width: 110 },
+                  { title: '建议值', dataIndex: 'suggested', width: 130, render: (v: string) => <Text strong style={{ color: '#096dd9' }}>{v || '-'}</Text> },
+                  { title: '依据', dataIndex: 'reason', ellipsis: true },
+                  { title: '生效方式', dataIndex: 'apply', width: 210, ellipsis: true },
+                  { title: '风险', dataIndex: 'risk', width: 220, ellipsis: true },
+                ]}
+              />
+            </Card>
+          )}
+
+          {/* 问题点（带证据） */}
           {!!data.issues?.length && (
-            <Card size="small" title="问题点" style={{ marginBottom: 12 }}>
+            <Card size="small" title={`问题与证据（${data.issues.length}）`} style={{ marginBottom: 12 }}>
               <List
                 size="small"
                 dataSource={data.issues}

@@ -875,8 +875,24 @@ export interface SlowSqlDiagnoseIndex { table: string; index: string; columns: s
 export interface SlowSqlDiagnoseStats {
   avg_latency_ms: number; max_latency_ms: number; exec_count: number; schema_name: string
 }
+export interface SlowSqlParamSuggestion {
+  name: string
+  current: string
+  suggested: string
+  reason: string
+  apply: string
+  risk: string
+}
 export interface SlowSqlDiagnoseData {
   digest: string
+  /** 2026-11-26：本次诊断用的 SQL 全文；sql_truncated=true 表示采集文本被截断（performance_schema 1024 字符） */
+  sql_full?: string
+  sql_truncated?: boolean
+  /** 库参数建议（确定性规则 + AI 补充） */
+  param_suggestions?: SlowSqlParamSuggestion[]
+  server_params?: Record<string, string>
+  server_stats?: Record<string, string>
+  table_sizes?: { table: string; bytes: number; rows: number }[]
   verdict: 'optimizable' | 'maybe' | 'hard'
   verdict_label: string
   summary: string
