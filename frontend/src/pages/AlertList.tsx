@@ -1,7 +1,7 @@
 // 告警列表页：筛选 + 表格 + 批量解决 + 行展开诊断 + 日志查看（诊断已自动，保留手动重试）
 import { envLabel, envColor } from '../utils/env'
 import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { Key, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Select, Button, Space, Drawer, message, Modal, Form, Input, Tag, Tooltip, Badge, Alert as AntAlert } from 'antd'
 import { getAlertsPaged, diagnoseAlert, getDiagnosis, getAlertDescribe, batchResolveAlerts, manualResolveAlert, searchLogs, assignAlert, ackAlert, getAlertComments, addAlertComment } from '../services/api'
@@ -31,6 +31,8 @@ export default function AlertList() {
   const [faultType, setFaultType] = useState<string>()
   const [faultFamily, setFaultFamily] = useState<string>()
   const [page, setPage] = useState(1)
+  // 行展开（受控）：操作列「AI 处置」按钮直接展开该行，不必找左侧小箭头
+  const [expandedKeys, setExpandedKeys] = useState<Key[]>([])
   const PAGE_SIZE = 20
   const writable = canWrite()
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
@@ -204,7 +206,14 @@ export default function AlertList() {
         pagination={{ current: page, pageSize: PAGE_SIZE, total: alertTotal, showSizeChanger: false, showTotal: (t) => `共 ${t} 条（同故障已合并）`, onChange: (p) => setPage(p) }}
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as number[]) }}
         expandable={{
-          expandedRowRender: (record) => <DiagnosisPanel alert={record} />,
+          expandedRowKeys: expandedKeys,
+          onExpandedRowsChange: (keys) => setExpandedKeys([...keys]),
+          expandedRowRender: (record) => (
+            <div>
+              <DiagnosisPanel alert={record} />
+              <AlertActionPanel alertId={record.id} onChanged={refetch} />
+            </div>
+          ),
         }}
         columns={[
           { title: '来源', dataIndex: 'source', render: (v, r: Alert) => v || r.cluster_name || '-' },
@@ -255,6 +264,10 @@ export default function AlertList() {
           {
             title: '操作', render: (_, record) => (
               <Space>
+                {record.resource_type !== 'db' && writable && (
+                  <Button size="small" loading={diagnosing === record.id}
+                    onClick={() => setExpandedKeys((prev) => prev.includes(record.id) ? prev.filter((k) => k !== record.id) : [...prev, record.id])}>AI 处置</Button>
+                )}
                 {record.resource_type !== 'db' && writable && (
                   <Button size="small" type="primary" loading={diagnosing === record.id}
                     onClick={() => handleDiagnose(record.id)}>重新诊断</Button>
@@ -499,7 +512,6 @@ function DiagnosisPanel({ alert }: { alert: Alert }) {
         )
       })()}
       {data.diagnosis_json ? <CodeBlock code={data.diagnosis_json} /> : null}
-      <AlertActionPanel alertId={alert.id} />
     </div>
   )
 }
