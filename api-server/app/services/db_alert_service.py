@@ -217,8 +217,9 @@ async def _resolve_db_alerts(c: DBConnection) -> int:
             select(Alert).where(
                 Alert.resource_type == "db",
                 Alert.resource_name == c.name,
-                # 在途告警：pending / awaiting_approval（含 manual_required=True 者，它们同属这两态）
-                Alert.status.in_(["pending", "awaiting_approval"]),
+                # 在途告警：pending / awaiting_approval / ticketed（含 manual_required=True 者；
+                # 2026-11-26 补 ticketed：超时转人工落 ticketed 后，连接恢复也必須把告警关掉、工单随之自动关）
+                Alert.status.in_(["pending", "awaiting_approval", "ticketed"]),
             )
         )
         alerts = list(result.scalars())

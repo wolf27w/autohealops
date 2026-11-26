@@ -224,7 +224,8 @@ async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则�
     rule_tag = f"（规则:{rule.name}）"
     async with async_session() as session:
         q = select(Alert).where(
-            Alert.status == "pending",
+            # 2026-11-26：含 ticketed——超时转人工（已转工单）的告警同属本规则，删/停规则时也要关
+            Alert.status.in_(["pending", "ticketed"]),
             Alert.resource_type == "pod",
             Alert.fault_type == fault_type,
         )
@@ -249,13 +250,14 @@ async def close_alerts_for_rule(rule: ResourceAlertRule, reason: str = "规则�
 
 
 async def _resolve_alert(rule: ResourceAlertRule, item: dict, cluster_id: int) -> None:
-    """资源恢复 → 关闭 pending 告警（含历史 cluster_id=0 的脏数据）+ 清防抖键"""
+    """资源恢复 → 关闭在途告警（含 ticketed，工单侧跟随自动关）+ 清防抖键"""
     fault_type = FAULT_TYPE_BY_METRIC.get(rule.metric_type, "ContainerMemHigh")
     resolved_alerts: list[Alert] = []
     async with async_session() as session:
         result = await session.execute(
             select(Alert).where(
-                Alert.status == "pending",
+                # 2026-11-26：含 ticketed——超时转人工的告警不纳入的话，指标回落后会永久挂「已转工单」
+                Alert.status.in_(["pending", "ticketed"]),
                 Alert.fault_type == fault_type,
                 Alert.cluster_id.in_([cluster_id, 0]),  # 0=历史无集群脏数据，一并关闭
                 Alert.namespace == item["namespace"],

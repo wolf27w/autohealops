@@ -27,6 +27,7 @@
 参考 db_alert_service.py（N6 建单/去重/恢复范式）。
 """
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -51,6 +52,13 @@ SCAN_INTERVAL = 60
 POD_RESTART_OOM = "PodRestartOOM"
 POD_RESTART_PROBE = "PodRestartProbeFail"
 POD_RESTART_FAULT_TYPES = (POD_RESTART_OOM, POD_RESTART_PROBE)
+
+# 在途（未终态）状态：本服务自闭环负责关闭的全部状态。
+# 2026-11-26 修（老板反馈：qa-aero-chain/eft-service-audit-logger Pod 已恢复，告警仍挂在「已转工单」）：
+# PodRestart* 被 alert_auto_service 自动转工单后 status=ticketed，而 sweep_recovered_alerts
+# 明确跳过本类 fault_type（由此处自闭环负责）→ 原来的 pending-only 过滤让 ticketed 永久悬挂，
+# 且工单也永不自动关（auto_close_tickets_for_resolved_alerts 需要告警先 resolved）。
+INFLIGHT_ALERT_STATUSES = ("pending", "awaiting_approval", "ticketed")
 
 # 诊断上下文 fault_type 映射：让 ai-service 命中 pod_crash_diagnosis 模板
 # （ai-service POD_FAULTS 含 OOMKilled/CrashLoopBackOff，不含 N5 自定义 fault_type）
@@ -422,6 +430,8 @@ async def _resolve_pod_alerts(cluster_id: int, pod: dict) -> int:
 
     按 deployment_name + resource_name 精确匹配（告警 resource_name 指向最新出问题的 Pod），
     避免多副本场景下单个 Pod 恢复就误关同服务其它仍在故障的告警。
+    在途状态含 ticketed（已自动转工单）——本类 fault_type 由 N5 自闭环负责关闭，
+    工单侧再靠 auto_close_tickets_for_resolved_alerts 跟随关闭。
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     dep = infer_deployment_name(pod["name"])
@@ -434,7 +444,7 @@ async def _resolve_pod_alerts(cluster_id: int, pod: dict) -> int:
                 Alert.deployment_name == dep,
                 Alert.resource_name == pod["name"],
                 Alert.fault_type.in_(POD_RESTART_FAULT_TYPES),
-                Alert.status == "pending",
+                Alert.status.in_(INFLIGHT_ALERT_STATUSES),
             )
         )
         alerts = list(result.scalars())
@@ -445,6 +455,9 @@ async def _resolve_pod_alerts(cluster_id: int, pod: dict) -> int:
             if "已恢复" not in (a.message or ""):
                 a.message = (a.message or "") + "（Pod 已恢复，系统自动关闭）"
         await session.commit()
+        if alerts:
+            logger.info("Pod %s/%s 已恢复，关闭在途重启告警 %d 条（id=%s）",
+                        pod["namespace"], pod["name"], len(alerts), ",".join(str(a.id) for a in alerts))
         return len(alerts)
 
 
@@ -461,7 +474,7 @@ async def _close_alerts_for_missing_pods(cluster_id: int, live_pods: set[str]) -
                 Alert.cluster_id == cluster_id,
                 Alert.resource_type == "pod",
                 Alert.fault_type.in_(POD_RESTART_FAULT_TYPES),
-                Alert.status.in_(["pending", "awaiting_approval"]),
+                Alert.status.in_(INFLIGHT_ALERT_STATUSES),
             )
         )).scalars())
         closed = 0
@@ -480,12 +493,27 @@ async def _close_alerts_for_missing_pods(cluster_id: int, live_pods: set[str]) -
         return closed
 
 
+# 本进程内各集群上一次拉取重启信息的失败原因（去重日志，避免每 60s 刷屏）
+_SCAN_LAST_ERROR: dict[int, str] = {}
+
+
 async def scan_cluster(cluster_id: int) -> int:
     """扫描单集群：基线对比 + 增量判定 + 建单诊断通知 + 恢复关闭；返回新建告警数"""
     result = await executor_client.acall(executor_client.list_pod_restart_info, cluster_id)
     if not result.get("success"):
+        # 2026-11-26：此前这里静默 return 0——agent 集群拉取失败时既建不了告警也永远不关告警，
+        # 现场表现为「Pod 早恢复了告警还挂着」且日志里毫无线索。同一错误只记一次，避免每 60s 刷屏。
+        err = str(result.get("error") or "unknown")[:200]
+        if _SCAN_LAST_ERROR.get(cluster_id) != err:
+            _SCAN_LAST_ERROR[cluster_id] = err
+            logger.warning("集群 %d 重启信息拉取失败（N5 检测/恢复本轮跳过）：%s", cluster_id, err)
         return 0
+    _SCAN_LAST_ERROR.pop(cluster_id, None)
     pods = result.get("pods", [])
+    if os.getenv("N5_DEBUG") == "1":
+        tgt = [p for p in pods if "audit-logger-86dc4fd448-2zx2k" in (p.get("name") or "")]
+        logger.info("[N5-debug] cluster=%d pods=%d target=%s", cluster_id, len(pods),
+                    [{k: t.get(k) for k in ("namespace", "restart_count", "ready", "phase")} for t in tgt])
     if not pods:
         return 0
 
