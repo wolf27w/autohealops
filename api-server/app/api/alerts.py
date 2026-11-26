@@ -607,6 +607,13 @@ async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
     analysis = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
     return {"code": 200, "message": "success", "data": {
         "diagnosis_json": d.diagnosis_json, "confidence": d.confidence, "created_at": str(d.created_at),
+        # 2026-11-26：把握度口径——basis=evidence（证据直接判定）/ model（模型自评）/ unknown（未评估，降级或证据不足）
+        # 历史数据没有 basis：降级且 confidence=0 → unknown；否则有值当 model
+        "confidence_basis": str(data.get("confidence_basis", "") or "") or (
+            "unknown" if (data.get("degraded") and not (d.confidence or 0))
+            else ("model" if d.confidence else "unknown")
+        ),
+        "degraded": bool(data.get("degraded")),
         # 2026-11-26：轮次标记（stale=True = 上一轮故障的诊断，本轮尚未重新诊断）
         "stale": stale, "episode_started_at": str(episode_start) if episode_start else "",
         # R68 七字段（诊断侧）

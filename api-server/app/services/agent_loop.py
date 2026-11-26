@@ -305,6 +305,19 @@ def _startup_checklist_lines() -> list[str]:
     ]
 
 
+def _to_conf(value) -> float | None:
+    """把握度归一化：只接受 0~1 的数字/数字串；其它（缺失、文字、越界）→ None（= 未评估）"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n != n or n < 0 or n > 1:  # NaN / 越界
+        return None
+    return round(n, 4)
+
+
 def _normalize_final(decision: dict, state: dict, start: float) -> dict:
     """把 LLM 的 final_answer 归一化为「诊断结果」形状 + 循环元信息。"""
     return {
@@ -316,6 +329,9 @@ def _normalize_final(decision: dict, state: dict, start: float) -> dict:
         "suggestions_detail": decision.get("suggestions_detail") or {},
         "root_cause_layer": decision.get("root_cause_layer", "") or "",
         "handling_advice": decision.get("handling_advice", "") or "",
+        # 2026-11-26：把握度透传（模型给了就用，标 basis=model；没给就是未评估，不能显示成 0%）
+        "confidence": _to_conf(decision.get("confidence")),
+        "confidence_basis": "model" if _to_conf(decision.get("confidence")) is not None else "unknown",
         "model_used": decision.get("model_used", "") or "",
         "model_fallback": bool(decision.get("model_fallback")),
         "fallback_from": list(decision.get("fallback_from") or []),
@@ -495,6 +511,9 @@ def _deterministic_root_cause(state: dict, start: float) -> dict | None:
                 "prevention": list(f.get("prevention") or []),
             },
             "root_cause_layer": "B",
+            # 2026-11-26：确定性结论是「证据直接命中」，不是模型自评 → 给证据级置信度
+            "confidence": 0.9,
+            "confidence_basis": "evidence",
             "handling_advice": ("诊断预算耗尽前已采集到确定性失败证据，结论由证据直接得出（未调用模型）。"
                                 "修复步骤里 <workload>/<namespace>/<pod> 需替换成实际值。"),
             "model_used": "",
@@ -527,6 +546,9 @@ def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, de
     return {
         "root_cause": "未能确定根因",
         "suggestions": suggestions,
+        # 2026-11-26：证据不足 = 未评估（前端显示「未评估」，不能当 0% 把握度）
+        "confidence": 0.0,
+        "confidence_basis": "unknown",
         "root_cause_layer": "",
         "handling_advice": (
             f"诊断在 {reason} 处收口（已达步数/时限上限），未给无证据推测；"
@@ -589,6 +611,9 @@ async def _wrap_up(
                 "suggestions_detail": decision.get("suggestions_detail") or {},
                 "root_cause_layer": decision.get("root_cause_layer", "") or "",
                 "handling_advice": decision.get("handling_advice", "") or "",
+                # 2026-11-26：把握度透传（同上）
+                "confidence": _to_conf(decision.get("confidence")),
+                "confidence_basis": "model" if _to_conf(decision.get("confidence")) is not None else "unknown",
                 "model_used": decision.get("model_used", "") or "",
                 "model_fallback": bool(decision.get("model_fallback")),
                 "fallback_from": list(decision.get("fallback_from") or []),

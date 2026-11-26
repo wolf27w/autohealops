@@ -56,6 +56,9 @@ class TestDeterministicRootCause(unittest.TestCase):
         self.assertTrue(any("exclusion" in x for x in sd["root_fix"]))
         # 旧消费方用的 suggestions 仍存在（= immediate + root_fix）
         self.assertGreaterEqual(len(out["suggestions"]), len(sd["immediate"]))
+        # 2026-11-26（老板问「把握度 0%」）：证据直接判定给 0.9 + basis=evidence，不能是 0
+        self.assertEqual(out["confidence"], 0.9)
+        self.assertEqual(out["confidence_basis"], "evidence")
 
     def test_no_hard_evidence_returns_none(self):
         self.assertIsNone(agent_loop._deterministic_root_cause(_state("一切正常 INFO 没有错误"), 0.0))

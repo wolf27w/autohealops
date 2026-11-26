@@ -347,6 +347,8 @@ interface DiagnosisData {
   risk_level?: string
   eliminated?: string[]
   root_cause_chain?: Record<string, string>
+  confidence_basis?: string
+  degraded?: boolean
 }
 
 // 告警状态 → 「已做处置」文案（与后端 _handling_status_label 对齐）
@@ -358,10 +360,19 @@ const HANDLING_LABELS: Record<string, string> = {
   pending: '待人工（分析/自动处置中）',
 }
 
-function renderConfidence(c?: number | string | null): string {
-  if (c === null || c === undefined || c === '') return '未知'
-  const n = Number(c)
-  if (!Number.isNaN(n) && n >= 0 && n <= 1) return `${(n * 100).toFixed(0)}%`
+// 2026-11-26（老板问「把握度 0% 是什么意思」）：0% 原来混了两个含义——「未评估」和「0 分」。
+// 现在按 confidence_basis 区分：unknown=未评估（降级/证据不足）、evidence=证据直接判定、model=模型自评。
+function renderConfidence(c?: number | string | null, basis?: string, degraded?: boolean): string {
+  const n = (c === null || c === undefined || c === '') ? null : Number(c)
+  if (basis === 'unknown' || (degraded && (!n || n <= 0))) {
+    return '未评估（降级结论，按已采集证据直接给出，不是模型评分）'
+  }
+  if (n === null || Number.isNaN(n)) return '未知'
+  if (n <= 0) return '0%（模型判定无法确定）'
+  if (n >= 0 && n <= 1) {
+    const pct = `${Math.round(n * 100)}%`
+    return basis === 'evidence' ? `${pct}（证据直接判定）` : pct
+  }
   return String(c)
 }
 
@@ -426,7 +437,7 @@ function DiagnosisPanel({ alert }: { alert: Alert }) {
   const handling = HANDLING_LABELS[alert.status] || alert.status || '待人工'
   const rootCause = renderRootCause(data, alert)
   const evidence = data.evidence_refs?.length ? data.evidence_refs.join('；') : '无'
-  const confidence = renderConfidence(data.confidence)
+  const confidence = renderConfidence(data.confidence, data.confidence_basis, data.degraded)
   const impact = renderImpact(data)
   const sug = data.suggestions || ''
 
