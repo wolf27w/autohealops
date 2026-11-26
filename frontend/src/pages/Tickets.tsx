@@ -173,6 +173,8 @@ export default function Tickets() {
       render: (v: string) => <Tag color={STATUS_COLOR[v]}>{STATUS_LABEL[v] ?? v}</Tag>,
     },
     { title: '集群', dataIndex: 'cluster_name', width: 120, render: (v: string) => v || '-' },
+    // 2026-11-26（老板）：工单列表增加命名空间列，定位异常服务更快
+    { title: '命名空间', dataIndex: 'namespace', width: 140, render: (v: string) => v || '-' },
     { title: '环境', dataIndex: 'env_tag', width: 90, render: (v: string) => v ? <Tag color={envColor(v)}>{envLabel(v)}</Tag> : '-' },
     { title: '数据库', dataIndex: 'db_name', width: 130, render: (v: string) => v || '-' },
     { title: '资源', dataIndex: 'resource_name', width: 160, render: (v: string) => v || '-' },
@@ -241,7 +243,7 @@ export default function Tickets() {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建工单</Button>
       </Space>
 
-      <Table rowKey="id" loading={loading} dataSource={items} columns={columns} scroll={{ x: 1200 }}
+      <Table rowKey="id" loading={loading} dataSource={items} columns={columns} scroll={{ x: 1340 }}
         pagination={{
           current: page, pageSize, total, showSizeChanger: false,
           showTotal: (t) => `共 ${t} 条`, onChange: setPage,
