@@ -69,7 +69,7 @@ DEFAULT_RISK_POLICY = {
         "service": 25, "ingress": 25, "namespace": 40, "node": 30,
     },
     "impact": {"multi_replica": 0, "unknown": 5, "stateful": 10, "single_replica": 15},
-    "env": {"qa": 0, "release": 10, "prod": 20},
+    "env": {"qa": 0, "uat": 10, "release": 10, "prod": 20},
     "levels": [20, 40, 60, 80],   # 分数段上限 → 1~5 级
     "approval_threshold": 4,      # 等级 >= 阈值需审核（1/2/3 单人，4/5 双人）
     "timeout_minutes": 20,        # 审批超时（分钟）

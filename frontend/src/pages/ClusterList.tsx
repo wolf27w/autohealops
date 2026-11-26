@@ -7,7 +7,7 @@ import { getClusters, createCluster, updateCluster, deleteCluster, healthCheckCl
 import StatusTag from '../components/StatusTag'
 import type { Cluster } from '../types'
 
-const ENV_TAG_COLOR: Record<string, string> = { qa: 'green', release: 'orange', prod: 'red' }
+const ENV_TAG_COLOR: Record<string, string> = { qa: 'green', uat: 'orange', release: 'gold', prod: 'red' }
 const SOURCE_LABEL: Record<string, string> = { kubeconfig: 'kubeconfig', 'in-cluster': '集群内', agent: 'Agent' }
 const SOURCE_COLOR: Record<string, string> = { kubeconfig: 'default', 'in-cluster': 'blue', agent: 'cyan' }
 
@@ -325,6 +325,7 @@ export default function ClusterList() {
           <Form.Item name="env_tag" label="环境标签" rules={[{ required: true }]}>
             <Select options={[
               { value: 'qa', label: 'qa（测试）' },
+              { value: 'uat', label: 'uat（UAT）' },
               { value: 'release', label: 'release（预发）' },
               { value: 'prod', label: 'prod（生产）' },
             ]} />

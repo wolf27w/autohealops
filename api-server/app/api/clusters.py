@@ -162,7 +162,7 @@ async def import_multi(payload: dict, user=Depends(require_admin)):
     kubeconfig = payload.get("kubeconfig", "")
     ctx_names = [str(x) for x in (payload.get("contexts") or [])]
     env_tag = payload.get("env_tag", "prod")
-    if env_tag not in ("qa", "release", "prod"):
+    if env_tag not in ("qa", "uat", "release", "prod"):
         env_tag = "prod"
     if not kubeconfig.strip() or not ctx_names:
         return {"code": 400, "message": "kubeconfig 与 contexts 必填", "data": None}
@@ -216,7 +216,7 @@ async def agent_onboard(payload: dict, user=Depends(require_admin)):
     if not name:
         return {"code": 400, "message": "集群名称必填", "data": None}
     env_tag = payload.get("env_tag", "prod")
-    if env_tag not in ("qa", "release", "prod"):
+    if env_tag not in ("qa", "uat", "release", "prod"):
         env_tag = "prod"
     token = _new_agent_token()
     # R14 双接入：push（默认，反向隧道）/ pull（平台直连 agent）
@@ -666,7 +666,7 @@ async def create_cluster(payload: dict, user=Depends(require_admin)):
     env_tag = payload.get("env_tag", "prod")
     server_url = _kubeconfig_server(kubeconfig)
     cred_type, cred_expires_at = _kubeconfig_credential(kubeconfig)
-    if env_tag not in ("qa", "release", "prod"):
+    if env_tag not in ("qa", "uat", "release", "prod"):
         env_tag = "prod"
 
     async with async_session() as session:
@@ -836,7 +836,7 @@ async def update_cluster(cluster_id: int, payload: dict, user=Depends(require_ad
             c.description = payload.get("description", "")
         if "env_tag" in payload:
             tag = payload.get("env_tag", "prod")
-            c.env_tag = tag if tag in ("qa", "release", "prod") else "prod"
+            c.env_tag = tag if tag in ("qa", "uat", "release", "prod") else "prod"
         if "maintenance_window" in payload:
             mw = payload.get("maintenance_window")
             c.maintenance_window = json.dumps(mw, ensure_ascii=False) if isinstance(mw, dict) else str(mw or "{}")

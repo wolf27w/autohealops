@@ -3,7 +3,9 @@ export interface EnvMeta { value: string; label: string; color: string }
 
 export const ENV_OPTIONS: EnvMeta[] = [
   { value: 'prod', label: '生产', color: 'red' },
-  { value: 'release', label: 'UAT', color: 'orange' },
+  // 2026-11-26：新增独立 uat 环境（原来 UAT 借用 release 标签，语义混淆）
+  { value: 'uat', label: 'UAT', color: 'orange' },
+  { value: 'release', label: '预发', color: 'gold' },
   { value: 'qa', label: '测试', color: 'green' },
 ]
 

@@ -20,7 +20,7 @@ class Cluster(Base):
     kubeconfig_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="unknown")  # unknown/healthy/unreachable
     version: Mapped[str] = mapped_column(String(50), default="")
-    # 环境标签：qa(测试)/release(预生产)/prod(生产)，admin 创建/编辑集群时配置，一个集群一个环境
+    # 环境标签：qa(测试)/uat(UAT)/release(预生产)/prod(生产)，admin 创建/编辑集群时配置，一个集群一个环境
     env_tag: Mapped[str] = mapped_column(String(20), default="prod", index=True)
     # 接入方式（集群接入三方式）：kubeconfig / in-cluster / agent
     source: Mapped[str] = mapped_column(String(20), default="kubeconfig", server_default="kubeconfig")
