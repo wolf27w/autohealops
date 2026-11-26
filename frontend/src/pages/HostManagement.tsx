@@ -502,17 +502,19 @@ export default function HostManagement() {
           style={{ paddingLeft: 0, paddingRight: 0, borderBottom: '1px solid #f0f0f0' }}
           actions={[
             <a key="v" onClick={() => { setGroupDrawer(false); setGroupFilter('ungrouped') }}>查看主机</a>,
-            isAdmin && (ungroupedCount > 0) && (
-              <Popconfirm key="c" title={`清空未分组？将删除全部 ${ungroupedCount} 台未分组主机（分组内主机不受影响）`}
-                okText="确认删除" okButtonProps={{ danger: true }}
-                onConfirm={async () => {
-                  const r = await clearUngroupedHosts() as { deleted?: number }
-                  message.success(`已删除 ${r?.deleted ?? 0} 台未分组主机`)
-                  load(); loadGroups()
-                }}>
-                <a style={{ color: '#cf1322' }}>清空</a>
-              </Popconfirm>
-            ),
+            isAdmin && (ungroupedCount > 0
+              ? (
+                <Popconfirm key="c" title={`删除未分组主机？将删除全部 ${ungroupedCount} 台未分组主机（分组内主机不受影响）`}
+                  okText="确认删除" okButtonProps={{ danger: true }}
+                  onConfirm={async () => {
+                    const r = await clearUngroupedHosts() as { deleted?: number }
+                    message.success(`已删除 ${r?.deleted ?? 0} 台未分组主机`)
+                    load(); loadGroups()
+                  }}>
+                  <a style={{ color: '#cf1322' }}>删除</a>
+                </Popconfirm>
+              )
+              : <Tooltip key="c" title="当前没有未分组主机，无需删除"><a style={{ color: '#bfbfbf' }}>删除</a></Tooltip>),
           ].filter(Boolean) as React.ReactNode[]}
         >
           <List.Item.Meta
