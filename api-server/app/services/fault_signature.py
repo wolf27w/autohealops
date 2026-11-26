@@ -51,9 +51,13 @@ def facts_from_pod(pod: dict | None) -> list[str]:
 
 
 def build(fault_type: str, facts: list[str] | None = None,
-          term_summary: str = "", first_error: str = "") -> str:
-    """算指纹（sha1 前 32 位，落 alerts.fault_signature）"""
-    parts = [normalize(fault_type or "")]
+          term_summary: str = "", first_error: str = "", phase: str = "") -> str:
+    """算指纹（sha1 前 32 位，落 alerts.fault_signature）
+
+    phase（2026-11-26 老板口径）：startup / runtime —— 同一句报错发生在启动期和运行期是不同问题，
+    必须分别诊断，所以阶段参与指纹。
+    """
+    parts = [normalize(fault_type or ""), normalize(phase or "")]
     parts.extend(normalize(x) for x in (facts or []))
     parts.append(normalize(term_summary))
     parts.append(normalize(first_error))

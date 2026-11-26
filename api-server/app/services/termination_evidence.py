@@ -9,6 +9,7 @@ Restart Count / Ready，并从日志文本提取第一条强错误行，作为�
 全部纯函数，不 import 任何项目内模块、不做任何 IO，方便单测。
 """
 import re
+from datetime import datetime
 
 # 容器名行：2 空格缩进 + 单词 + 冒号结尾（如 "  app:"）
 _CONTAINER_HEADER_RE = re.compile(r"^  ([\w.-]+):\s*$")
@@ -315,3 +316,75 @@ def apply_probe_guard(root_cause: str, evidence_text: str) -> tuple[str, int | N
         return rc, code
     return (f"【证据校正】容器上次以 exitCode={code} 退出（启动失败），"
             f"健康检查未通过属于伴随现象；{rc}"), code
+
+
+# ============ 故障阶段判定（2026-11-26）：启动期 vs 运行期 ============
+# 老板口径：同一句报错，一次发生在启动、一次发生在运行中，是不同问题 → 指纹要区分。
+PHASE_STARTUP_SECONDS = 180
+
+
+def _parse_iso(value) -> datetime | None:
+    """解析 k8s 时间（2026-11-26T05:23:21Z 或 2026-11-26 13:23:21）为 naive datetime（UTC 归一到本地不做时区换算）"""
+    if not value:
+        return None
+    v = str(value).strip().replace("Z", "").replace("+00:00", "")
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(v[:26], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def phase_of(term: dict) -> str:
+    """由容器退出事实判阶段：容器活了 < 180s 被判定为启动期（startup），否则运行期（runtime）。
+
+    取「有 last_started/last_finished 的容器里活得最久的那个」；拿不到时间返回 ""（未知）。
+    """
+    best = None
+    for c in (term or {}).get("containers") or []:
+        st = _parse_iso(c.get("last_started"))
+        fi = _parse_iso(c.get("last_finished"))
+        if not st or not fi:
+            continue
+        secs = (fi - st).total_seconds()
+        if best is None or secs > best:
+            best = secs
+    if best is None:
+        return ""
+    return "startup" if best < PHASE_STARTUP_SECONDS else "runtime"
+
+
+def phase_from_summary(summary: str) -> str:
+    """从 collect_pod_termination 的 summary 文本里判阶段（Started=… Finished=…）。"""
+    if not summary:
+        return ""
+    import re as _re
+    pairs = _re.findall(
+        r"Started=([0-9T:.\-]+Z?).*?Finished=([0-9T:.\-]+Z?)", summary)
+    best = None
+    for a, b in pairs:
+        st, fi = _parse_iso(a), _parse_iso(b)
+        if not st or not fi:
+            continue
+        secs = (fi - st).total_seconds()
+        if best is None or secs > best:
+            best = secs
+    if best is None:
+        return ""
+    return "startup" if best < PHASE_STARTUP_SECONDS else "runtime"
+
+
+def phase_from_logs(text: str) -> str:
+    """从日志判阶段：出现过「Started … in N seconds」= 应用起过一次（运行期故障）；
+    只有 Spring banner / APPLICATION FAILED TO START / Application run failed = 启动期。"""
+    if not text:
+        return ""
+    low = text.lower()
+    import re as _re
+    if _re.search(r"started \S+ in [\d.]+ seconds", low):
+        return "runtime"
+    if ("application failed to start" in low or "application run failed" in low
+            or "starting " in low or "spring boot ::" in low):
+        return "startup"
+    return ""

@@ -139,5 +139,36 @@ class TestEvidenceDriftCheck(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self._run("", "container app: OOMKilled exit 137", "ERROR boom"))
 
 
+class TestPhaseInSignature(unittest.TestCase):
+    """2026-11-26 老板：同一句报错，启动期 vs 运行期是不同问题 → 阶段必须参与指纹"""
+
+    def test_phase_changes_signature(self):
+        a = fs.build("CrashLoopBackOff", ["app:Error:1"], first_error="boom", phase="startup")
+        b = fs.build("CrashLoopBackOff", ["app:Error:1"], first_error="boom", phase="runtime")
+        self.assertNotEqual(a, b)
+
+    def test_same_phase_stable(self):
+        a = fs.build("CrashLoopBackOff", ["app:Error:1"], first_error="boom", phase="startup")
+        b = fs.build("CrashLoopBackOff", ["app:Error:1"], first_error="boom", phase="startup")
+        self.assertEqual(a, b)
+
+    def test_phase_of_boundaries(self):
+        from app.services.termination_evidence import phase_of, PHASE_STARTUP_SECONDS
+        short = {"containers": [{"last_started": "2026-11-26T05:23:21Z",
+                                 "last_finished": "2026-11-26T05:23:52Z"}]}   # 31s
+        long = {"containers": [{"last_started": "2026-11-26T03:00:00Z",
+                                "last_finished": "2026-11-26T05:23:52Z"}]}    # 2h23m
+        self.assertEqual(phase_of(short), "startup")
+        self.assertEqual(phase_of(long), "runtime")
+        self.assertEqual(phase_of({}), "")
+        self.assertGreaterEqual(PHASE_STARTUP_SECONDS, 60)
+
+    def test_phase_from_logs(self):
+        from app.services.termination_evidence import phase_from_logs
+        self.assertEqual(phase_from_logs("Started CertificationApplication in 12.3 seconds"), "runtime")
+        self.assertEqual(phase_from_logs("APPLICATION FAILED TO START"), "startup")
+        self.assertEqual(phase_from_logs("plain info line"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

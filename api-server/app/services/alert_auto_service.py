@@ -851,13 +851,15 @@ async def _diagnosis_evidence_drifted(alert) -> bool:
         return False
     try:
         from app.services import fault_signature
-        from app.services.termination_evidence import collect_pod_termination, first_error_line
+        from app.services.termination_evidence import (collect_pod_termination, first_error_line,
+                                                       phase_of, phase_from_logs)
         from app.utils.pod_logs import fetch_pod_logs
         term = await collect_pod_termination(alert.cluster_id, alert.namespace or "", alert.resource_name or "")
         logs = await fetch_pod_logs(alert.cluster_id, alert.namespace or "", alert.resource_name or "")
+        phase = phase_of(term) or phase_from_logs(logs or "")
         cur = fault_signature.build(
             alert.fault_type, term_summary=(term.get("summary") or ""),
-            first_error=first_error_line(logs or ""))
+            first_error=first_error_line(logs or ""), phase=phase)
     except Exception as e:  # noqa: BLE001
         logger.debug("告警 %d 证据漂移检查失败: %s", alert.id, e)
         return False
@@ -2594,10 +2596,14 @@ async def _process_one(alert: Alert) -> bool:
             try:
                 from app.services import fault_signature
                 from app.services.termination_evidence import first_error_line as _first_err_line
+                from app.services.termination_evidence import phase_from_logs
+                from app.services.termination_evidence import phase_from_summary
                 _sig_now = fault_signature.build(
                     alert.fault_type,
                     term_summary=(alert_data.get("termination_evidence") or ""),
                     first_error=_first_err_line(alert_data.get("recent_logs") or ""),
+                    phase=(phase_from_summary(alert_data.get("termination_evidence") or "")
+                           or phase_from_logs(alert_data.get("recent_logs") or "")),
                 )
                 await _persist_fault_signature(alert.id, _sig_now)
             except Exception as e:  # noqa: BLE001
@@ -3589,10 +3595,13 @@ async def _run_diagnosis_only(alert) -> bool:
         try:
             from app.services import fault_signature
             from app.services.termination_evidence import first_error_line as _fel
+            from app.services.termination_evidence import phase_from_summary, phase_from_logs as _pfl
             sig = fault_signature.build(
                 alert.fault_type,
                 term_summary=(alert_data.get("termination_evidence") or ""),
                 first_error=_fel(alert_data.get("recent_logs") or ""),
+                phase=(phase_from_summary(alert_data.get("termination_evidence") or "")
+                       or _pfl(alert_data.get("recent_logs") or "")),
             )
             await _persist_fault_signature(alert.id, sig)
         except Exception as e:  # noqa: BLE001

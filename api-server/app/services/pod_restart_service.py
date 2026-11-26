@@ -347,8 +347,11 @@ async def _diagnose_and_notify(alert_id: int, cluster_id: int, pod: dict,
     # 2026-11-26（老板口径）：同一错误反复重启 → 不重复诊断；**报错变了 → 必须重新诊断**。
     # 指纹 = fault_type + 每容器退出事实（容器/原因/退出码）+ 退出证据摘要 + 首条错误行
     from app.services import fault_signature
+    from app.services.termination_evidence import phase_from_summary, phase_from_logs
+    _phase = (phase_from_summary(term_summary or "")
+              or phase_from_logs((logs_text or "") + "\n" + (events_text or "")))
     _sig = fault_signature.build(
-        fault_type, fault_signature.facts_from_pod(pod), term_summary, first_err)
+        fault_type, fault_signature.facts_from_pod(pod), term_summary, first_err, phase=_phase)
     _prev_sig = (getattr(alert, "fault_signature", "") or "")
     _sig_changed = fault_signature.changed(_prev_sig, _sig)
 
