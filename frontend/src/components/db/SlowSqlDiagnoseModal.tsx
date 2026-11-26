@@ -192,22 +192,15 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
           {/* 完整 SQL（2026-11-26 老板：SQL 语句要是全的） */}
           {data.sql_full && (
             <Card size="small" style={{ marginBottom: 12 }}
-              title={<Space size={6}><span>本次诊断 SQL（全文）</span>
-                {data.sql_truncated
-                  ? <Tag color="orange">采集文本被截断</Tag>
-                  : <Tag color="green">完整</Tag>}</Space>}>
+              title={<span>本次诊断 SQL</span>}>
               <div style={{ textAlign: 'right', marginBottom: 4 }}><CopyButton text={data.sql_full} label="复制全文" /></div>
               <pre style={{
                 background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4,
                 padding: 10, fontSize: 12, margin: 0, maxHeight: 260, overflow: 'auto',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                whiteSpace: 'pre',
               }}>{data.sql_full}</pre>
               {data.sql_truncated && (
                 <>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    说明：MySQL performance_schema 的 DIGEST_TEXT 只保留 1024 字符，原始 SQL 更长时会被截断；
-                    截断会影响执行计划与改写的准确度。把完整 SQL 贴到下面重跑一次，结论会基于完整语句给出。
-                  </Text>
                   <Input.TextArea
                     style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
                     rows={4}

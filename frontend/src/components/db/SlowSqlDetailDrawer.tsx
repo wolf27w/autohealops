@@ -122,24 +122,14 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
       </Descriptions>
       <Card size="small" title={
         <Space wrap>
-          <Text strong style={{ fontSize: 13 }}>完整 SQL</Text>
-          {/* 2026-11-26（老板）：要能看出这条 SQL 是不是完整的 */}
-          {row?.sql_truncated
-            ? <Tag color="orange">疑似被截断 · {(row?.sql_len ?? (row?.sql_text || '').trim().length)} 字符</Tag>
-            : <Tag color="green">完整 · {(row?.sql_len ?? (row?.sql_text || '').trim().length)} 字符</Tag>}
+          <Text strong style={{ fontSize: 13 }}>SQL</Text>
           <CopyButton text={row?.sql_text || ''} label="复制 SQL" />
         </Space>
       }>
         <pre style={{
-          margin: 0, fontSize: 12, lineHeight: '18px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-          maxHeight: 360, overflow: 'auto',
+          margin: 0, fontSize: 12, lineHeight: '18px',
+          whiteSpace: 'pre', overflowX: 'auto', overflowY: 'auto', maxHeight: 360,
         }}>{row?.sql_text || '-'}</pre>
-        {row?.sql_truncated && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            说明：MySQL performance_schema 的 DIGEST_TEXT 只保留 1024 字符，原文更长时会在此处被硬截断；
-            需要完整语句请在「诊断」里粘贴完整 SQL 重新分析。
-          </Text>
-        )}
       </Card>
     </div>
   )

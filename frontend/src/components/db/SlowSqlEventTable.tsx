@@ -9,49 +9,40 @@ import type { SlowSqlEventItem } from '../../services/api'
 
 // SQL 单元格：保留原换行（DIGEST_TEXT 常是超长单行），默认折 2 行可展开，避免省略号挡住后半段。
 // 导出供聚合回退视图复用。
-export function SqlCell({ sql, maxLines = 2, truncated, len }: {
+export function SqlCell({ sql, maxLines = 2 }: {
   sql?: string
   maxLines?: number
-  /** 后端标记：文本疑似被截断（performance_schema 只保留 1024 字符） */
+  /** 兼容旧调用（不再展示截断提示，2026-11-26 老板要求） */
   truncated?: boolean
-  /** 后端返回的字符长度 */
   len?: number
 }) {
   const [open, setOpen] = useState(false)
   if (!sql) return <>-</>
   const long = sql.length > 120 || sql.split('\n').length > maxLines
   const clamped = long && !open
-  const chars = len ?? sql.trim().length
+  // 2026-11-26（老板）：SQL 不换行——按原样显示（保留原有换行），超宽横向滚动
   return (
     <div>
       <pre style={{
         margin: 0, fontFamily: 'inherit', fontSize: 12, lineHeight: '18px',
-        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        whiteSpace: 'pre', overflowX: 'auto', overflowY: 'hidden',
         ...(clamped
           ? { display: '-webkit-box', WebkitLineClamp: maxLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
           : {}),
       }}>{sql}</pre>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
         {long && (
           <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
             onClick={() => setOpen((v) => !v)}>{open ? '收起' : '展开全文'}</Button>
         )}
         {open && (
-          <>
-            <Tag color={truncated ? 'orange' : 'green'} style={{ marginInlineEnd: 0 }}>
-              {truncated ? '疑似被截断' : '完整'} · {chars} 字符
-            </Tag>
-            <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
-              icon={<CopyOutlined />}
-              onClick={() => {
-                navigator.clipboard?.writeText(sql)
-                  .then(() => message.success('已复制完整 SQL'))
-                  .catch(() => message.error('复制失败'))
-              }}>复制</Button>
-          </>
-        )}
-        {!open && truncated && (
-          <Tag color="orange" style={{ marginInlineEnd: 0 }}>文本被截断</Tag>
+          <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
+            icon={<CopyOutlined />}
+            onClick={() => {
+              navigator.clipboard?.writeText(sql)
+                .then(() => message.success('已复制完整 SQL'))
+                .catch(() => message.error('复制失败'))
+            }}>复制</Button>
         )}
       </div>
     </div>
@@ -113,7 +104,7 @@ export default function SlowSqlEventTable({
         ? <Button type="link" size="small" style={{ padding: 0 }} onClick={() => onOpenTrend(r)}>{v.slice(0, 16)}…</Button>
         : '-'),
     },
-    { title: 'SQL', dataIndex: 'sql_text', width: 380, render: (v: string, r) => <SqlCell sql={v} truncated={r.sql_truncated} len={r.sql_len} /> },
+    { title: 'SQL', dataIndex: 'sql_text', width: 380, render: (v: string) => <SqlCell sql={v} /> },
     { title: '数据库', dataIndex: 'schema_name', width: 96, render: (v: string) => v || '-' },
     {
       title: '执行耗时(秒)', dataIndex: 'exec_seconds', width: 108, align: 'right', key: 'exec',
