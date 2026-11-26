@@ -20,12 +20,12 @@ export function SqlCell({ sql, maxLines = 2 }: {
   if (!sql) return <>-</>
   const long = sql.length > 120 || sql.split('\n').length > maxLines
   const clamped = long && !open
-  // 2026-11-26（老板）：SQL 不换行——按原样显示（保留原有换行），超宽横向滚动
+  // 2026-11-26（老板）：按原样显示 SQL（保留数据库里的换行与缩进）
   return (
     <div>
       <pre style={{
         margin: 0, fontFamily: 'inherit', fontSize: 12, lineHeight: '18px',
-        whiteSpace: 'pre', overflowX: 'auto', overflowY: 'hidden',
+        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
         ...(clamped
           ? { display: '-webkit-box', WebkitLineClamp: maxLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
           : {}),

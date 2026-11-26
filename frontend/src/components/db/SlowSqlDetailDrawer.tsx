@@ -128,7 +128,7 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
       }>
         <pre style={{
           margin: 0, fontSize: 12, lineHeight: '18px',
-          whiteSpace: 'pre', overflowX: 'auto', overflowY: 'auto', maxHeight: 360,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 360, overflow: 'auto',
         }}>{row?.sql_text || '-'}</pre>
       </Card>
     </div>

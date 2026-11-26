@@ -178,10 +178,9 @@ def _map_event(row: dict, conn_id: int | None = None) -> dict:
 def _serialize_event(r: SlowSQLEvent, full_sql: str = "") -> dict:
     """ORM 对象 → 接口返回字段（契约见 DEV-PLAN §3.1）。
 
-    2026-11-26（老板）：SQL 展示不要换行；有补齐的完整文本时用它。
+    2026-11-26（老板）：有补齐的完整文本时用它；SQL 保留**原始格式**（不压成一行）。
     """
-    from app.services.slow_sql_fulltext_service import normalize_sql
-    _sql = normalize_sql(full_sql or r.sql_text or "")
+    _sql = (full_sql or r.sql_text or "").strip()
     return {
         "id": r.id,
         "digest": r.digest or "",

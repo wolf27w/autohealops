@@ -58,7 +58,7 @@ function SqlBlock({ title, sql }: { title: string; sql: string }) {
       </div>
       <pre style={{
         background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4,
-        padding: 10, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre', margin: 0,
+        padding: 10, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
       }}>{sql}</pre>
     </div>
   )
@@ -197,7 +197,7 @@ export default function SlowSqlDiagnoseModal({ connId, row, onClose }: Props) {
               <pre style={{
                 background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4,
                 padding: 10, fontSize: 12, margin: 0, maxHeight: 260, overflow: 'auto',
-                whiteSpace: 'pre',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
               }}>{data.sql_full}</pre>
               {data.sql_truncated && (
                 <>
