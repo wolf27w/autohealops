@@ -57,13 +57,23 @@ class BaseAIModelAdapter:
 
 
 # 质量优先的请求类型：诊断/决策（analysis 质量直接决定处置是否正确）
-_QUALITY_REQUEST_TYPES = ("diagnosis", "agent_decide", "agent_decide_once", "multi_diagnosis", "repair_plan")
+# 高质量请求：按 priority 升序（数字小=高能力，pro 优先）
+# 2026-11-26：agent_decide / agent_decide_once 从该列表移出——它们是「每步交互」（选工具/回 JSON），
+# 不是为了深度分析。实测 deepseek-v4-pro 单次 77s，而决策超时只有 40s
+# → 每步都超时（异常消息为空）→ ReAct 永远降级（decide_error），多步推理完全用不上。
+# 现在交互步骤走默认（快）模型；深度诊断/方案仍走高能力模型。
+_QUALITY_REQUEST_TYPES = ("diagnosis", "multi_diagnosis", "repair_plan")
+_INTERACTIVE_REQUEST_TYPES = ("agent_decide", "agent_decide_once")
+
+# 慢调用告警阈值（毫秒）：超过就打 WARNING，便于发现「模型选错了/上游变慢」
+SLOW_CALL_WARN_MS = 30000
 
 
 def order_model_configs(configs, request_type: str = ""):
     """按请求类型排序候选模型（纯函数，便于单测）。
 
-    - 诊断/决策类：按 priority 升序（数字小=高能力），跳过 is_default 覆盖；
+    - 深度诊断/方案类：按 priority 升序（数字小=高能力），跳过 is_default 覆盖；
+    - 交互步骤（agent_decide）：**默认（快）模型优先**，再按 priority；
     - 其它请求：默认模型优先（老板 2026-09-23 口径），再按 priority。
     """
     if request_type in _QUALITY_REQUEST_TYPES:
@@ -201,6 +211,10 @@ async def call_with_fallback(
                 continue
             resp.model_fallback = bool(failed_models)
             resp.fallback_from = list(failed_models)
+            # 2026-11-26：慢调用可见化（决策步骤超过 30s 基本就快撞超时了）
+            if latency_ms >= SLOW_CALL_WARN_MS:
+                logger.warning("模型慢调用 %s/%s: %.1fs（决策类建议换快模型）",
+                               cfg.model_name, request_type, latency_ms / 1000)
             await _log_call(cfg.id, request_type, system_prompt, user_prompt, resp, latency_ms, "success")
             return resp, cfg.model_name
         except Exception as e:  # noqa: BLE001

@@ -23,9 +23,13 @@ class TestModelOrder(unittest.TestCase):
         out = order_model_configs([self.flash, self.pro], "diagnosis")
         self.assertEqual(out[0].model_name, "deepseek-v4-pro")
 
-    def test_agent_decide_prefers_pro(self):
+    def test_agent_decide_prefers_fast_model(self):
+        # 2026-11-26 变更：agent_decide 是「每步交互」（选工具/回 JSON），不是深度分析。
+        # 实测 deepseek-v4-pro 单次 77s > 决策超时 40s → 每步必超时（decide_error，异常消息为空）
+        # → ReAct 永远降级，多步推理完全用不上。交互步骤改走默认（快）模型；
+        # 深度诊断/方案（diagnosis/repair_plan/multi_diagnosis）仍优先 pro。
         out = order_model_configs([self.flash, self.pro], "agent_decide")
-        self.assertEqual(out[0].model_name, "deepseek-v4-pro")
+        self.assertEqual(out[0].model_name, "deepseek-v4-flash")
 
     def test_other_requests_keep_default(self):
         out = order_model_configs([self.flash, self.pro], "verification")

@@ -23,7 +23,11 @@ class DeepSeekAdapter(BaseAIModelAdapter):
             "temperature": self.config.temperature,
         }
         client = get_http_client(trust_env=True)
-        resp = await client.post(url, headers=headers, json=body, timeout=60)
+        # 2026-11-26：单次请求超时可配（默认 120s）。原来写死 60s，实测 deepseek-v4-pro 小请求就要 77s
+        # → pro 的深度诊断必 ReadTimeout。上层（LLM_TIMEOUT_SECONDS / wait_for）仍是最终闸门。
+        from app.core.config import settings as _settings
+        http_timeout = float(getattr(_settings, "LLM_HTTP_TIMEOUT_SECONDS", 120.0) or 120.0)
+        resp = await client.post(url, headers=headers, json=body, timeout=http_timeout)
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"] or ""

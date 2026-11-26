@@ -348,7 +348,9 @@ class TestInspectJarFlow(unittest.IsolatedAsyncioTestCase):
         with patch.object(tr.executor_client, "acall", _boom):
             res = await tr.execute_tool("inspect_jar", {"pattern": "com.foo.Bar"}, _CTX)
         self.assertFalse(res["success"])
-        self.assertIn("镜像内没找到 jar", res["error"])
+        # 2026-11-26：exec 失败（容器未运行/CrashLoop）要给真实原因 + 指向镜像层取证，不再只说「没找到 jar」
+        self.assertIn("无法执行查找", res["error"])
+        self.assertIn("collect_startup_evidence", res["error"])
 
 
 if __name__ == "__main__":

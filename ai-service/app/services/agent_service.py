@@ -188,7 +188,10 @@ async def decide_next_step(
             user_prompt
             + "\n\n【你上一条输出】\n"
             + (resp.content or "")[:2000]
-            + "\n\n你上一条输出不是合法 JSON，请只输出一个 JSON 对象，不要任何解释文字。"
+            + "\n\n你上一条输出不是合法 JSON。请严格只输出一个 JSON 对象，两种形状之一：\n"
+              '{"action":"tool_call","tool":"<工具名>","args":{...},"thought":"<一句话>"}\n'
+              '{"action":"final_answer","root_cause":"...","suggestions":["..."]}\n'
+              "不要任何解释文字、不要 markdown 代码块。"
         )
         resp2, model_used2 = await asyncio.wait_for(
             call_with_fallback(SYSTEM_PROMPT, retry_prompt, "agent_decide", severity),

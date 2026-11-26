@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     LLM_AGENT_DECIDE_TIMEOUT_SECONDS: float = 40.0
     #   一般诊断 / 方案类（api-server AI_DIAGNOSE_TIMEOUT_SECONDS 默认 100、AI_PLAN_TIMEOUT_SECONDS 默认 60）
     LLM_TIMEOUT_SECONDS: float = 60.0
+    # 单个模型 HTTP 请求超时（秒，2026-11-26）：实测 deepseek-v4-pro 一次小请求就要 77s，
+    # 原来适配器写死 60s → pro 的深度诊断必 ReadTimeout（日志实证：
+    # "模型调用失败 deepseek-v4-pro/diagnosis: ReadTimeout"）。现在可配，默认 120s，
+    # 仍受上层 LLM_TIMEOUT_SECONDS / LLM_AGENT_DECIDE_TIMEOUT_SECONDS 约束。
+    LLM_HTTP_TIMEOUT_SECONDS: float = 120.0
 
     LOG_LEVEL: str = "INFO"
 

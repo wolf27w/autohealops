@@ -1162,9 +1162,12 @@ async def _h_inspect_jar(args: dict, context: dict) -> dict:
         jar_path = jar_arg
         if not jar_path:
             found: list[str] = []
+            exec_errors: list[str] = []
             for cmd in _JAR_FIND_CMDS:
                 r = await _run(cmd)
                 if not (r.get("success") or r.get("output")):
+                    if r.get("error"):
+                        exec_errors.append(str(r.get("error"))[:120])
                     continue
                 for line in (r.get("output") or "").splitlines():
                     s = line.strip()
@@ -1174,6 +1177,14 @@ async def _h_inspect_jar(args: dict, context: dict) -> dict:
                     break
             jar_path = _pick_jar(found)
         if not jar_path:
+            # 2026-11-26：容器 CrashLoop 时 exec 不可用（容器没在运行），原来只报「镜像内没找到 jar」，
+            # 模型会误以为路径猜错、反复重试浪费步数。这里把真实原因说清楚并指向镜像层取证工具。
+            if exec_errors:
+                return {"success": False, "output": "",
+                        "error": ("容器内无法执行查找（容器可能未运行/CrashLoop，exec 不可用）："
+                                  + exec_errors[0]
+                                  + "；建议改用 collect_startup_evidence（镜像层读取，不依赖容器运行），"
+                                    "或已知路径时传 jar 参数")}
             return {"success": False, "output": "",
                     "error": "镜像内没找到 jar，可能是多模块/非 Spring Boot，可传 jar 参数（如 /app/app.jar）"}
 

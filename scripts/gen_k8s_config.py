@@ -64,7 +64,9 @@ EXECUTOR_CONFIGMAP = ["GRPC_PORT", "LOGSTREAM_ADDR", "LOG_LEVEL", "API_SERVER_UR
                       "POD_METRICS_RAW_RETENTION_HOURS"]
 AI_CONFIGMAP = ["LOG_LEVEL", "PROMETHEUS_URL", "DAILY_COST_LIMIT", "SINGLE_ALERT_COST_LIMIT",
                 # 2026-11-25：LLM 超时须 ≤ api-server 侧对应值
-                "LLM_AGENT_DECIDE_TIMEOUT_SECONDS", "LLM_TIMEOUT_SECONDS"]
+                "LLM_AGENT_DECIDE_TIMEOUT_SECONDS", "LLM_TIMEOUT_SECONDS",
+                # 2026-11-26：单个模型 HTTP 请求超时（pro 慢调用 77s，原写死 60s 必 ReadTimeout）
+                "LLM_HTTP_TIMEOUT_SECONDS"]
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
