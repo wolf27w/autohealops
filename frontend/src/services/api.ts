@@ -808,6 +808,9 @@ export interface SlowSqlEventItem {
   id: number
   digest?: string
   sql_text?: string
+  /** 2026-11-26：SQL 文本长度与是否被截断（performance_schema DIGEST_TEXT 默认 1024 字符） */
+  sql_len?: number
+  sql_truncated?: boolean
   schema_name?: string
   start_time?: string
   exec_seconds?: number

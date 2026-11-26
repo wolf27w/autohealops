@@ -76,15 +76,8 @@ def _human_bytes(n: int) -> str:
 
 def _looks_truncated(sql: str) -> bool:
     """SQL 文本是否被截断（performance_schema DIGEST_TEXT 默认只留 1024 字符）。"""
-    s = (sql or "").strip()
-    if len(s) >= 1000:
-        return True
-    if s.count("(") != s.count(")"):
-        return True
-    if s.count("'") % 2 == 1:
-        return True
-    # 结尾停在半个词/逗号/运算符上，也视为截断
-    return bool(re.search(r"[,.(\s=+*/<>-]$", s)) and not s.endswith(")")
+    from app.utils.sql_text import looks_truncated
+    return looks_truncated(sql)
 
 
 async def _server_params(c) -> dict:

@@ -176,11 +176,18 @@ def _map_event(row: dict, conn_id: int | None = None) -> dict:
 
 
 def _serialize_event(r: SlowSQLEvent) -> dict:
-    """ORM 对象 → 接口返回字段（契约见 DEV-PLAN §3.1）。"""
+    """ORM 对象 → 接口返回字段（契约见 DEV-PLAN §3.1）。
+
+    2026-11-26（老板）：「展开后没有结尾符号，不知道是不是完整 SQL」→ 带上长度与截断标记。
+    """
+    from app.utils.sql_text import looks_truncated
+    _sql = r.sql_text or ""
     return {
         "id": r.id,
         "digest": r.digest or "",
-        "sql_text": r.sql_text or "",
+        "sql_text": _sql,
+        "sql_len": len(_sql.strip()),
+        "sql_truncated": looks_truncated(_sql),
         "schema_name": r.schema_name or "",
         "start_time": r.start_time.isoformat() if r.start_time else "",
         "exec_seconds": round(float(r.exec_seconds or 0), 3),

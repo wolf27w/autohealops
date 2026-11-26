@@ -1,5 +1,5 @@
-// 慢 SQL 执行详情抽屉：概览（执行信息 + 完整 SQL）/ 执行计划 / 索引 / 诊断
-// 数据源复用现有 diagnoseSlowSQL 接口（digest + sql_text 传参），只读展示。
+// 慢 SQL 执行详情抽屉：概览（执行信息 + 完整 SQL）/ 执行计划 / 索引（AI 诊断走列表「诊断」按钮）
+// 2026-11-26（老板）：详情只展示事实（概览/完整 SQL/执行计划/索引），不做 AI 诊断——
 import { useEffect, useMemo, useState } from 'react'
 import {
   Drawer, Tabs, Spin, Tag, Descriptions, Space, List, Table, Card, Button, Typography, Empty, message,
@@ -7,7 +7,6 @@ import {
 import { CopyOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
-  diagnoseSlowSQL,
   inspectSlowSQL,
   type SlowSqlDiagnoseData,
   type SlowSqlEventItem,
@@ -62,19 +61,13 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
 
   const [data, setData] = useState<SlowSqlDiagnoseData | null>(null)
   const [loading, setLoading] = useState(false)
-  // 2026-11-26（老板反馈「点详情特别慢」）：详情只跑快速体检（不调 AI，~1.5s）；
-  // AI 深度结论只在你切到「诊断」Tab 时才发起，不阻塞看 SQL/执行计划/索引。
-  const [aiData, setAiData] = useState<SlowSqlDiagnoseData | null>(null)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiErr, setAiErr] = useState('')
-
+  // 2026-11-26（老板）：详情 = 事实（SQL/执行计划/索引/参数体检），不做 AI 诊断；
+  // AI 诊断走列表行的「诊断」按钮，两者分开。详情只跑快速体检（不调 AI，实测 ~0.5s）。
   useEffect(() => {
-    if (!open) { setData(null); setLoading(false); setAiData(null); setAiErr(''); return }
+    if (!open) { setData(null); setLoading(false); return }
     if (!digest) { setData(null); setLoading(false); return }
     setLoading(true)
     setData(null)
-    setAiData(null)
-    setAiErr('')
     inspectSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
       .then(setData)
       .catch(() => {
@@ -84,16 +77,6 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, digest, connId])
-
-  const runAiDiagnose = () => {
-    if (!digest || aiLoading || aiData) return
-    setAiLoading(true)
-    setAiErr('')
-    diagnoseSlowSQL(connId, digest, { sql_text: row?.sql_text, schema_name: row?.schema_name })
-      .then(setAiData)
-      .catch(() => setAiErr('AI 诊断失败（可稍后重试）'))
-      .finally(() => setAiLoading(false))
-  }
 
   // 执行计划动态列（取 rows[0] 的 key）
   const explainColumns = useMemo(() => {
@@ -138,12 +121,25 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
         <Descriptions.Item label="SQL ID" span={2}>{row?.digest || '-'}</Descriptions.Item>
       </Descriptions>
       <Card size="small" title={
-        <Space><Text strong style={{ fontSize: 13 }}>完整 SQL</Text><CopyButton text={row?.sql_text || ''} label="复制 SQL" /></Space>
+        <Space wrap>
+          <Text strong style={{ fontSize: 13 }}>完整 SQL</Text>
+          {/* 2026-11-26（老板）：要能看出这条 SQL 是不是完整的 */}
+          {row?.sql_truncated
+            ? <Tag color="orange">疑似被截断 · {(row?.sql_len ?? (row?.sql_text || '').trim().length)} 字符</Tag>
+            : <Tag color="green">完整 · {(row?.sql_len ?? (row?.sql_text || '').trim().length)} 字符</Tag>}
+          <CopyButton text={row?.sql_text || ''} label="复制 SQL" />
+        </Space>
       }>
         <pre style={{
           margin: 0, fontSize: 12, lineHeight: '18px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
           maxHeight: 360, overflow: 'auto',
         }}>{row?.sql_text || '-'}</pre>
+        {row?.sql_truncated && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            说明：MySQL performance_schema 的 DIGEST_TEXT 只保留 1024 字符，原文更长时会在此处被硬截断；
+            需要完整语句请在「诊断」里粘贴完整 SQL 重新分析。
+          </Text>
+        )}
       </Card>
     </div>
   )
@@ -170,97 +166,10 @@ export default function SlowSqlDetailDrawer({ connId, row, onClose }: Props) {
     </Card>
   )
 
-  const diagnoseTab = (
-    <div>
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Tag color={verdictMeta.color}>{data?.verdict_label || verdictMeta.label}</Tag>
-        <Tag color={riskMeta.color}>变更风险 {riskMeta.label}</Tag>
-        {data?.model ? <Text type="secondary" style={{ fontSize: 12 }}>模型：{data.model}</Text> : null}
-      </Space>
-
-      {data?.summary && (
-        <Card size="small" style={{ marginBottom: 12 }} styles={{ body: { padding: '8px 12px' } }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text strong style={{ fontSize: 13 }}>诊断结论</Text>
-            <CopyButton text={data.summary} />
-          </div>
-          <Paragraph style={{ margin: '8px 0 0', whiteSpace: 'pre-wrap' }}>{data.summary}</Paragraph>
-        </Card>
-      )}
-
-      {!!data?.issues?.length && (
-        <Card size="small" title="问题点" style={{ marginBottom: 12 }}>
-          <List size="small" dataSource={data.issues}
-            renderItem={(it) => (
-              <List.Item style={{ alignItems: 'flex-start' }}>
-                <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                  <Space size={6}>
-                    <Text strong>{it.type}</Text>
-                    {it.severity ? <Tag color={SEVERITY_COLOR[it.severity] || 'default'}>{it.severity}</Tag> : null}
-                  </Space>
-                  <Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>{it.detail}</Text>
-                </Space>
-              </List.Item>
-            )} />
-        </Card>
-      )}
-
-      {!!data?.suggestions?.length && (
-        <Card size="small" title={`优化建议（${data.suggestions.length}）`}>
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            {data.suggestions.map((s, i) => (
-              <Card key={i} size="small" type="inner" title={<Text strong>{i + 1}. {s.title}</Text>}>
-                {s.detail && <Paragraph style={{ margin: '0 0 4px', whiteSpace: 'pre-wrap' }}>{s.detail}</Paragraph>}
-                {s.impact && <div style={{ fontSize: 13, marginBottom: 2 }}><Text type="secondary">影响：</Text>{s.impact}</div>}
-                {s.risk && <div style={{ fontSize: 13 }}><Text type="secondary">风险：</Text>{s.risk}</div>}
-                {s.index_ddl && (
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ marginBottom: 4, color: '#595959', fontSize: 12 }}>推荐索引 DDL</div>
-                    <pre style={{ background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4, padding: 10, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre', margin: 0 }}>{s.index_ddl}</pre>
-                  </div>
-                )}
-                {s.sql_after && (
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ marginBottom: 4, color: '#595959', fontSize: 12 }}>优化后 SQL</div>
-                    <pre style={{ background: '#f6f8fa', border: '1px solid #e8e8e8', borderRadius: 4, padding: 10, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre', margin: 0 }}>{s.sql_after}</pre>
-                  </div>
-                )}
-              </Card>
-            ))}
-          </Space>
-        </Card>
-      )}
-    </div>
-  )
-
   const items = [
     { key: 'overview', label: '概览', children: overview },
     { key: 'explain', label: '执行计划', children: loading ? <Spin /> : (data ? explainTab : <Empty description="暂无执行计划" />) },
     { key: 'index', label: '索引', children: loading ? <Spin /> : (data ? indexTab : <Empty description="暂无索引信息" />) },
-    {
-      key: 'diagnose',
-      label: '诊断',
-      children: loading ? <Spin /> : (
-        aiData ? diagnoseTab : (
-          <div style={{ padding: '24px 0', textAlign: 'center' }}>
-            {aiLoading ? (
-              <>
-                <Spin />
-                <div style={{ marginTop: 12, color: '#8c8c8c' }}>AI 深度分析中（通常 20~40 秒）…</div>
-              </>
-            ) : (
-              <>
-                {aiErr && <div style={{ color: '#cf1322', marginBottom: 8 }}>{aiErr}</div>}
-                <Button type="primary" icon={<ThunderboltOutlined />} onClick={runAiDiagnose}>运行 AI 深度诊断</Button>
-                <div style={{ marginTop: 8, color: '#8c8c8c', fontSize: 12 }}>
-                  概览 / 执行计划 / 索引 已就绪；AI 结论按需生成（约 20~40 秒）
-                </div>
-              </>
-            )}
-          </div>
-        )
-      ),
-    },
   ]
 
   return (

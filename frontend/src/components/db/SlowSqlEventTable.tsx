@@ -2,18 +2,26 @@
 // 14 列：执行开始时间 → SQL ID → SQL 展开 → 数据库 → 执行耗时 → 锁等待耗时 → 返回行数
 //        → 扫描行数 → 访问来源 → 用户 → 线程 → 表名 → 标签 → 操作
 import { useState } from 'react'
-import { Table, Button, Tag, Space, type TableColumnsType } from 'antd'
-import { ThunderboltOutlined, ProfileOutlined } from '@ant-design/icons'
+import { Table, Button, Tag, Space, message, type TableColumnsType } from 'antd'
+import { ThunderboltOutlined, ProfileOutlined, CopyOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { SlowSqlEventItem } from '../../services/api'
 
 // SQL 单元格：保留原换行（DIGEST_TEXT 常是超长单行），默认折 2 行可展开，避免省略号挡住后半段。
 // 导出供聚合回退视图复用。
-export function SqlCell({ sql, maxLines = 2 }: { sql?: string; maxLines?: number }) {
+export function SqlCell({ sql, maxLines = 2, truncated, len }: {
+  sql?: string
+  maxLines?: number
+  /** 后端标记：文本疑似被截断（performance_schema 只保留 1024 字符） */
+  truncated?: boolean
+  /** 后端返回的字符长度 */
+  len?: number
+}) {
   const [open, setOpen] = useState(false)
   if (!sql) return <>-</>
   const long = sql.length > 120 || sql.split('\n').length > maxLines
   const clamped = long && !open
+  const chars = len ?? sql.trim().length
   return (
     <div>
       <pre style={{
@@ -23,10 +31,29 @@ export function SqlCell({ sql, maxLines = 2 }: { sql?: string; maxLines?: number
           ? { display: '-webkit-box', WebkitLineClamp: maxLines, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
           : {}),
       }}>{sql}</pre>
-      {long && (
-        <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
-          onClick={() => setOpen((v) => !v)}>{open ? '收起' : '展开'}</Button>
-      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+        {long && (
+          <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
+            onClick={() => setOpen((v) => !v)}>{open ? '收起' : '展开全文'}</Button>
+        )}
+        {open && (
+          <>
+            <Tag color={truncated ? 'orange' : 'green'} style={{ marginInlineEnd: 0 }}>
+              {truncated ? '疑似被截断' : '完整'} · {chars} 字符
+            </Tag>
+            <Button type="link" size="small" style={{ padding: 0, height: 18, fontSize: 12 }}
+              icon={<CopyOutlined />}
+              onClick={() => {
+                navigator.clipboard?.writeText(sql)
+                  .then(() => message.success('已复制完整 SQL'))
+                  .catch(() => message.error('复制失败'))
+              }}>复制</Button>
+          </>
+        )}
+        {!open && truncated && (
+          <Tag color="orange" style={{ marginInlineEnd: 0 }}>文本被截断</Tag>
+        )}
+      </div>
     </div>
   )
 }
@@ -86,7 +113,7 @@ export default function SlowSqlEventTable({
         ? <Button type="link" size="small" style={{ padding: 0 }} onClick={() => onOpenTrend(r)}>{v.slice(0, 16)}…</Button>
         : '-'),
     },
-    { title: 'SQL', dataIndex: 'sql_text', width: 380, render: (v: string) => <SqlCell sql={v} /> },
+    { title: 'SQL', dataIndex: 'sql_text', width: 380, render: (v: string, r) => <SqlCell sql={v} truncated={r.sql_truncated} len={r.sql_len} /> },
     { title: '数据库', dataIndex: 'schema_name', width: 96, render: (v: string) => v || '-' },
     {
       title: '执行耗时(秒)', dataIndex: 'exec_seconds', width: 108, align: 'right', key: 'exec',
