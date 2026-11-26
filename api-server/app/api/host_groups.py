@@ -46,6 +46,10 @@ async def list_groups(user=Depends(require_any_user)):
         host_counts = dict((await s.execute(
             select(Host.group_id, func.count()).where(Host.group_id.isnot(None)).group_by(Host.group_id)
         )).all())
+        # 2026-11-26（老板）：分组管理里也要能看到「未分组」（虚拟分组，可查看/清空）
+        ungrouped_count = int((await s.execute(
+            select(func.count()).select_from(Host).where(Host.group_id.is_(None))
+        )).scalar() or 0)
     is_admin = hgs.is_platform_admin(user)
     roles = await hgs.get_group_roles(user)
     data = [
@@ -53,7 +57,8 @@ async def list_groups(user=Depends(require_any_user)):
                    "admin" if is_admin else roles.get(g.id))
         for g in groups
     ]
-    return {"code": 200, "message": "success", "data": {"is_admin": is_admin, "groups": data}}
+    return {"code": 200, "message": "success",
+            "data": {"is_admin": is_admin, "groups": data, "ungrouped_count": ungrouped_count}}
 
 
 @router.post("")

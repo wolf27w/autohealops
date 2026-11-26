@@ -1276,6 +1276,7 @@ export interface HostGroup {
   is_default: boolean; member_count: number; host_count: number; my_role: 'admin' | 'operator' | 'viewer' | null
 }
 export interface HostGroupMember { id: number; user_id: number; username: string; role: string }
+export const clearUngroupedHosts = () => http.post('/hosts/clear-ungrouped')
 export const getHosts = (params?: { group_id?: number; kind?: string; source?: string; keyword?: string }) =>
   http.get<HostItem[]>('/hosts', { params })
 export const createHost = (d: Record<string, unknown>) => http.post<HostItem>('/hosts', d)

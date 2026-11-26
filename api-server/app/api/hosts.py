@@ -282,6 +282,23 @@ async def update_host(host_id: int, payload: dict, user=Depends(require_any_user
     return {"code": 200, "message": "success", "data": _row(h, gname)}
 
 
+@router.post("/clear-ungrouped")
+async def clear_ungrouped_hosts(user=Depends(require_host_admin)):
+    """清空「未分组」主机（2026-11-26 老板：分组管理里要有未分组且可处理）。
+
+    只删除 group_id 为空的主机；分组内的主机不受影响。管理员操作，带审计。
+    """
+    async with async_session() as s:
+        rows = list((await s.execute(select(Host).where(Host.group_id.is_(None)))).scalars())
+        ids = [h.id for h in rows]
+        for h in rows:
+            await s.delete(h)
+        await s.commit()
+    if ids:
+        await _audit_host(generate_trace_id(), f"清空未分组主机 {len(ids)} 台", ids[0] if ids else 0)
+    return {"code": 200, "message": "success", "data": {"deleted": len(ids), "ids": ids}}
+
+
 @router.delete("/{host_id}")
 async def delete_host(host_id: int, user=Depends(require_any_user)):
     async with async_session() as s:

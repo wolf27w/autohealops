@@ -10540,6 +10540,28 @@
         "summary": "Create Host"
       }
     },
+    "/api/v1/hosts/clear-ungrouped": {
+      "post": {
+        "description": "清空「未分组」主机（2026-11-26 老板：分组管理里要有未分组且可处理）。\n\n只删除 group_id 为空的主机；分组内的主机不受影响。管理员操作，带审计。",
+        "operationId": "post_api_v1_hosts_clear_ungrouped",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clear Ungrouped Hosts"
+      }
+    },
     "/api/v1/hosts/import": {
       "post": {
         "description": "批量导入主机（CSV / 粘贴表格）。\n\nbody: {content, format: csv|table, on_duplicate: skip|update, default_group_id, dry_run}",

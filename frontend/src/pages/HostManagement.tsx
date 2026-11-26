@@ -7,7 +7,7 @@ import {
 } from 'antd'
 import { CodeOutlined, DownloadOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons'
 import {
-  getHosts, createHost, updateHost, deleteHost, checkHost,
+  getHosts, createHost, updateHost, deleteHost, checkHost, clearUngroupedHosts,
   getHostGroups, createHostGroup, updateHostGroup, deleteHostGroup,
   getHostGroupMembers, addHostGroupMember, removeHostGroupMember, getUsers,
   importHosts, getHostImportTemplate,
@@ -34,6 +34,7 @@ export default function HostManagement() {
   const navigate = useNavigate()
   const [hosts, setHosts] = useState<HostItem[]>([])
   const [groups, setGroups] = useState<HostGroup[]>([])
+  const [ungroupedCount, setUngroupedCount] = useState(0)
   const [isAdmin, setIsAdmin] = useState(false)
   const [loading, setLoading] = useState(false)
   const [groupFilter, setGroupFilter] = useState<string>('all')
@@ -86,7 +87,7 @@ export default function HostManagement() {
   const canManageHosts = isAdmin || groups.some((g) => g.my_role === 'admin')
 
   const loadGroups = () => {
-    getHostGroups().then((d) => { setGroups(d?.groups || []); setIsAdmin(!!d?.is_admin) }).catch(() => {})
+    getHostGroups().then((d) => { setGroups(d?.groups || []); setIsAdmin(!!d?.is_admin); setUngroupedCount(Number((d as unknown as { ungrouped_count?: number })?.ungrouped_count || 0)) }).catch(() => {})
   }
 
   const load = () => {
@@ -496,6 +497,29 @@ export default function HostManagement() {
       {/* 分组管理 */}
       <Drawer title="主机分组管理" open={groupDrawer} onClose={() => setGroupDrawer(false)} width={480}>
         {canManageHosts && <Button type="primary" icon={<PlusOutlined />} block style={{ marginBottom: 12 }} onClick={() => { setGroupEdit(null); groupForm.resetFields(); setGroupModalOpen(true) }}>新建分组</Button>}
+        {/* 2026-11-26（老板）：分组管理里要有「未分组」，且能查看/清空 */}
+        <List.Item
+          style={{ paddingLeft: 0, paddingRight: 0, borderBottom: '1px solid #f0f0f0' }}
+          actions={[
+            <a key="v" onClick={() => { setGroupDrawer(false); setGroupFilter('ungrouped') }}>查看主机</a>,
+            isAdmin && (ungroupedCount > 0) && (
+              <Popconfirm key="c" title={`清空未分组？将删除全部 ${ungroupedCount} 台未分组主机（分组内主机不受影响）`}
+                okText="确认删除" okButtonProps={{ danger: true }}
+                onConfirm={async () => {
+                  const r = await clearUngroupedHosts() as { deleted?: number }
+                  message.success(`已删除 ${r?.deleted ?? 0} 台未分组主机`)
+                  load(); loadGroups()
+                }}>
+                <a style={{ color: '#cf1322' }}>清空</a>
+              </Popconfirm>
+            ),
+          ].filter(Boolean) as React.ReactNode[]}
+        >
+          <List.Item.Meta
+            title={<span>未分组<Tag style={{ marginLeft: 6 }} color="warning">虚拟</Tag></span>}
+            description={<span>不属于任何分组的主机 · 主机 {ungroupedCount}</span>}
+          />
+        </List.Item>
         <List
           dataSource={groups}
           renderItem={(g) => (
