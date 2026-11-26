@@ -175,19 +175,19 @@ def _map_event(row: dict, conn_id: int | None = None) -> dict:
     }
 
 
-def _serialize_event(r: SlowSQLEvent) -> dict:
+def _serialize_event(r: SlowSQLEvent, full_sql: str = "") -> dict:
     """ORM 对象 → 接口返回字段（契约见 DEV-PLAN §3.1）。
 
-    2026-11-26（老板）：「展开后没有结尾符号，不知道是不是完整 SQL」→ 带上长度与截断标记。
+    2026-11-26（老板）：SQL 展示不要换行；有补齐的完整文本时用它。
     """
-    from app.utils.sql_text import looks_truncated
-    _sql = r.sql_text or ""
+    from app.services.slow_sql_fulltext_service import normalize_sql
+    _sql = normalize_sql(full_sql or r.sql_text or "")
     return {
         "id": r.id,
         "digest": r.digest or "",
         "sql_text": _sql,
-        "sql_len": len(_sql.strip()),
-        "sql_truncated": looks_truncated(_sql),
+        "sql_len": len(_sql),
+        "sql_full": bool(full_sql),
         "schema_name": r.schema_name or "",
         "start_time": r.start_time.isoformat() if r.start_time else "",
         "exec_seconds": round(float(r.exec_seconds or 0), 3),
@@ -476,9 +476,17 @@ async def query_slow_events(c: DBConnection, *, start=None, end=None, schema: st
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars().all()
 
+    # 2026-11-26：有补齐的完整 SQL 就用它（performance_schema 采集文本会被截断）
+    from app.services.slow_sql_fulltext_service import get_conn_full_texts
+    try:
+        full_map = await get_conn_full_texts(c.id, [r.digest or "" for r in rows])
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取完整 SQL 失败: %s", e)
+        full_map = {}
+
     return {
         "total": int(total),
-        "items": [_serialize_event(r) for r in rows],
+        "items": [_serialize_event(r, full_map.get(r.digest or "", "")) for r in rows],
         "supported": True,
         "note": "",
     }

@@ -763,6 +763,16 @@ async def optimize(conn, digest: str, sql_text: str, schema_name: str) -> dict |
     _db_sql = (digest_info or {}).get("sql_text") or ""
     if len(_db_sql.strip()) > len(sql_text):
         sql_text = _db_sql.strip()
+    # 2026-11-26（老板）：优先用「补齐的完整 SQL」（人工粘贴/慢日志解析），并把更长的版本存起来
+    try:
+        from app.services import slow_sql_fulltext_service as _fts
+        _stored = await _fts.get_full_text(conn.id, digest) if digest else ""
+        if len(_stored) > len(sql_text):
+            sql_text = _stored
+        elif digest and len(sql_text) > len(_stored):
+            await _fts.upsert_full_text(conn.id, digest, sql_text)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("完整 SQL 读写失败: %s", e)
     if not schema_name and digest_info:
         schema_name = digest_info["schema_name"] or ""
     stats = (digest_info or {}).get("stats") or {
@@ -913,6 +923,16 @@ async def inspect(conn, digest: str, sql_text: str, schema_name: str) -> dict | 
     _db_sql = (digest_info or {}).get("sql_text") or ""
     if len(_db_sql.strip()) > len(sql_text):
         sql_text = _db_sql.strip()
+    # 2026-11-26（老板）：优先用「补齐的完整 SQL」（人工粘贴/慢日志解析），并把更长的版本存起来
+    try:
+        from app.services import slow_sql_fulltext_service as _fts
+        _stored = await _fts.get_full_text(conn.id, digest) if digest else ""
+        if len(_stored) > len(sql_text):
+            sql_text = _stored
+        elif digest and len(sql_text) > len(_stored):
+            await _fts.upsert_full_text(conn.id, digest, sql_text)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("完整 SQL 读写失败: %s", e)
     if not schema_name and digest_info:
         schema_name = digest_info["schema_name"] or ""
     stats = (digest_info or {}).get("stats") or {

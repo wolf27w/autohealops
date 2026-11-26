@@ -47,6 +47,7 @@ from app.models.release import JenkinsInstance, ReleaseBuild, ReleaseMapping, Us
 from app.models.self_heal_rule import SelfHealRule
 from app.models.slow_sql import SlowSQLRecord
 from app.models.slow_sql_event import SlowSQLEvent
+from app.models.slow_sql_full_text import SlowSQLFullText
 from app.models.slow_sql_tag import SlowSQLTag
 from app.models.sql_task import SqlTask
 from app.models.db_group import DbGroup
@@ -108,6 +109,7 @@ __all__ = [
     "SelfHealRule",
     "SlowSQLRecord",
     "SlowSQLEvent",
+    "SlowSQLFullText",
     "SlowSQLTag",
     "SqlTask",
     "DbGroup",
