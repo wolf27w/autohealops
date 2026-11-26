@@ -83,7 +83,7 @@ DEFAULT_SETTINGS = {
     "automation_mode": ("by_env", "自动化处置模式：by_env=生产审批/测试直修（默认）｜full=全局直修｜assist=全局审批"),
     # 自动回滚允许的环境（2026-11-24 老板口径：只生产需要回滚，测试/UAT 让开发自己重发）
     #   逗号分隔环境名（prod/production/release/qa…）；空 / * / all = 所有环境都允许
-    "rollback_envs": ("prod", "允许自动回滚的环境（逗号分隔，默认 prod；空=全部允许）"),
+    "rollback_envs": ("prod", "允许**自动**回滚的环境（逗号分隔，默认仅 prod；空/all=全部允许）"),
     # 审批意见模板（JSON 字符串数组，审批时可直接选用）
     "approval_comment_templates": ("[]", "审批意见模板（JSON 字符串数组）"),
     # AI 诊断：深度诊断单次对话最大「有效」工具步数（重复调用不占额，按环境可调）

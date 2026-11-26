@@ -709,15 +709,15 @@ async def _alert_env(alert: Alert | None) -> str:
 async def _rollback_allowed(alert: Alert | None) -> bool:
     """该环境是否允许自动回滚（2026-11-24 老板口径：只生产需要回滚，测试/UAT 不需要）。
 
-    system_settings.rollback_envs（逗号分隔环境名，默认 "all"；空 / "*" / "all" = 全环境允许）。
+    system_settings.rollback_envs（逗号分隔环境名，默认 "prod"；空 / "*" / "all" = 全环境允许）。
     """
     try:
         from app.services.system_setting_service import get_setting
-        # 2026-11-26 老板：诊断出「发布变更导致启动失败」就必须修（回滚），测试/UAT 同样适用。
-        # 需要收紧时在 系统设置 → rollback_envs 里填 prod（或具体环境名）。
-        raw = (await get_setting("rollback_envs", "all") or "").strip().lower()
+        # 2026-11-26 老板口径：**只有生产自动回滚**，测试/UAT 不回滚（需人工）。
+        # 要放开在某环境自动回滚，在 系统设置 → rollback_envs 里加该环境名（逗号分隔）。
+        raw = (await get_setting("rollback_envs", "prod") or "").strip().lower()
     except Exception:  # noqa: BLE001
-        raw = "all"
+        raw = "prod"
     if raw in ("", "*", "all"):
         return True
     allowed = {x.strip() for x in raw.split(",") if x.strip()}
@@ -2942,8 +2942,21 @@ async def _process_one(alert: Alert) -> bool:
     release_steps: list = []
     if release_change.get("changed") and release_change.get("rollback_to") \
             and not await _rollback_allowed(alert):
-        logger.info("告警 %d 环境 %s 未开启自动回滚（rollback_envs），跳过回滚方案",
-                    alert.id, await _alert_env(alert) or "未知")
+        # 2026-11-26 老板：只有生产自动回滚；其他环境不执行，但必须把「怎么修」写清楚（人工回滚命令）
+        _env = await _alert_env(alert) or "未知"
+        _dep = release_change.get("deployment") or ""
+        _to = release_change.get("rollback_to")
+        logger.info("告警 %d 环境 %s 不自动回滚（rollback_envs），仅给人工回滚指引", alert.id, _env)
+        try:
+            _hint = (f"（本环境不自动回滚；人工修复：kubectl rollout undo deployment/{_dep} "
+                     f"-n {alert.namespace or '<ns>'} --to-revision={_to}）")
+            async with async_session() as session:
+                _a = await session.get(Alert, alert.id)
+                if _a is not None and "本环境不自动回滚" not in (_a.message or ""):
+                    _a.message = (_a.message or "") + _hint
+                    await session.commit()
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("写人工回滚指引失败: %s", _e)
     elif release_change.get("changed") and release_change.get("rollback_to"):
         if layer != "B":
             logger.info("告警 %d 发布变更命中（诊断 layer=%s），仍按回滚处置", alert.id, layer or "空")
