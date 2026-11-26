@@ -87,5 +87,22 @@ class TestFirstErrorLinePriority(unittest.TestCase):
         self.assertIn("failed to connect", first_error_line("INFO start\nWARN slow\nfailed to connect to db"))
 
 
+class TestInsufficientEvidenceStillHasSolution(unittest.TestCase):
+    """2026-11-26（老板）：诊断里没有解决方法 —— 连「证据不足」收口也必须给下一步怎么做"""
+
+    def test_insufficient_has_actionable_detail(self):
+        out = agent_loop._wrap_up_insufficient_evidence(
+            {"tool_steps": [], "rounds": 1}, "total_timeout", 0.0,
+            context={"namespace": "qa-x", "pod_name": "app-1"})
+        sd = out["suggestions_detail"]
+        for k in ("immediate", "root_fix", "verification", "prevention"):
+            self.assertTrue(sd[k], f"{k} 不能为空")
+        imm = " ".join(sd["immediate"])
+        self.assertIn("kubectl -n qa-x describe pod app-1", imm)
+        self.assertIn("--previous", imm)
+        # 旧消费方字段仍在
+        self.assertGreaterEqual(len(out["suggestions"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

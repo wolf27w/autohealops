@@ -564,7 +564,8 @@ def _deterministic_root_cause(state: dict, start: float) -> dict | None:
     return None
 
 
-def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, detail: str = "") -> dict:
+def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, detail: str = "",
+                                   context: dict | None = None) -> dict:
     """预算耗尽收口（2026-11-23 R69）：确定性「证据不足」结构化输出，不给无证据推测。
 
     对齐 R60-9 ai-service 新口径：root_cause=未能确定根因，suggestions 依次为
@@ -576,14 +577,43 @@ def _wrap_up_insufficient_evidence(state: dict, reason: str, start: float, *, de
     ran = "、".join(dict.fromkeys(t.get("tool", "") or "" for t in succeeded)) or "无"
     missed = "、".join(dict.fromkeys(t.get("tool", "") or "" for t in failed)) or "无"
 
+    # 2026-11-26（老板：诊断里没有解决方法）：证据不足也必须给「下一步怎么做」，
+    # 而不是只写「建议补充采集」。这里按「补什么证据 → 拿到什么 → 对应怎么修」给可执行方案。
+    ctx = context or {}
+    ns = str(ctx.get("namespace") or "<namespace>")
+    pod = str(ctx.get("pod_name") or ctx.get("resource_name") or "<pod>")
+    container = str(ctx.get("container") or ctx.get("container_name") or "")
+    cflag = f" -c {container}" if container else ""
+
     suggestions = [
         f"① 已排除：已采集 {ran} 数据，未发现可定位根因的直接证据",
         f"② 缺失证据：关键证据不足（" + (f"失败项：{missed}" if missed != "无" else "已采集项仍不足以锁定根因") + "）",
         "③ 建议补充采集：人工复核已采集原始数据，或转工单补充采集后再诊断",
     ]
+    detail_fix = {
+        "immediate": [
+            f"kubectl -n {ns} describe pod {pod}   # 看 Last State / Exit Code / Reason / Events",
+            f"kubectl -n {ns} logs {pod}{cflag} --previous --tail=300   # 上次崩溃实例日志（最关键）",
+            f"kubectl -n {ns} get events --field-selector involvedObject.name={pod} --sort-by=.lastTimestamp   # 时间线",
+        ],
+        "root_fix": [
+            "拿到 exit code 再定方向：137/143 → 内存/被探针杀（查 limits 与 -Xmx/MaxRAMPercentage）；"
+            "1/2 + 首错行 → 配置或代码问题（按异常类名/配置键定位）；无退出码 → 查镜像与启动命令",
+            "证据补齐后点「重新诊断」，平台会按指纹判断是否同一故障并重新取证",
+        ],
+        "verification": [
+            f"kubectl -n {ns} get pod {pod}   # RESTARTS 不再增长、READY 1/1 视为恢复",
+            "重新诊断后应能拿到确定性根因（不再是「证据不足」）",
+        ],
+        "prevention": [
+            "开启崩溃日志留存（平台每 180s 采集一次异常 Pod 日志），避免现场丢失",
+            "JVM 应用加 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
+        ],
+    }
     return {
         "root_cause": "未能确定根因",
         "suggestions": suggestions,
+        "suggestions_detail": detail_fix,
         # 2026-11-26：证据不足 = 未评估（前端显示「未评估」，不能当 0% 把握度）
         "confidence": 0.0,
         "confidence_basis": "unknown",
@@ -666,7 +696,7 @@ async def _wrap_up(
     det = _deterministic_root_cause(state, start)
     if det:
         return det
-    return _wrap_up_insufficient_evidence(state, reason, start, detail=detail)
+    return _wrap_up_insufficient_evidence(state, reason, start, detail=detail, context=context)
 
 
 async def _default_decide(messages: list[dict], tools: list[dict], context: dict) -> dict:
@@ -868,6 +898,7 @@ async def run_react_loop(
         return _wrap_up_insufficient_evidence(
             state, "total_timeout", start,
             detail=f"超过整个循环超时 {policy.total_timeout}s",
+            context=context,
         )
 
 
