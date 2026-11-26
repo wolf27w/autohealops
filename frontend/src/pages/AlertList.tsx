@@ -322,6 +322,13 @@ export default function AlertList() {
 }
 
 // 诊断结果面板（行展开）—— R68（2026-11-23）：展示七字段（现象/首次出现时间/原因/证据/把握度/已做处置/影响面），缺字段占位不空白
+interface SuggestionsDetail {
+  immediate?: string[]
+  root_fix?: string[]
+  verification?: string[]
+  prevention?: string[]
+}
+
 interface DiagnosisData {
   confidence?: number | string | null
   diagnosis_json?: string
@@ -334,6 +341,12 @@ interface DiagnosisData {
   impact?: unknown
   root_cause_layer?: string
   suggestions?: unknown
+  // 2026-11-26（老板）：诊断还要给「解决方法」——结构化四段 + 处置说明
+  suggestions_detail?: SuggestionsDetail
+  handling_advice?: string
+  risk_level?: string
+  eliminated?: string[]
+  root_cause_chain?: Record<string, string>
 }
 
 // 告警状态 → 「已做处置」文案（与后端 _handling_status_label 对齐）
@@ -372,6 +385,31 @@ function renderRootCause(d: DiagnosisData, alert: Alert): string {
   if (d.root_cause) return d.root_cause
   if (alert.status === 'pending' && !alert.manual_required) return '分析中'
   return '未能确定根因（缺失证据）'
+}
+
+// 2026-11-26（老板）：「解决方法」分四段展示；命令/配置片段用等宽字体，方便直接复制
+const _CMD_RE = /^(kubectl|mvn|unzip|curl|docker|crictl|helm|git|systemctl|grep|find|java|jstack)\b/i
+function SolutionItem({ text }: { text: string }) {
+  const isCmd = _CMD_RE.test(text.trim()) || /<exclusion>|BOOT-INF|dependencyManagement|pom\.xml/i.test(text)
+  return (
+    <li style={{ margin: '2px 0', lineHeight: 1.6 }}>
+      {isCmd ? (
+        <code style={{ background: '#f6f6f6', padding: '1px 4px', borderRadius: 3, fontSize: 12, whiteSpace: 'pre-wrap' }}>{text}</code>
+      ) : text}
+    </li>
+  )
+}
+
+function SolutionSection({ title, color, items }: { title: string; color: string; items?: string[] }) {
+  if (!items || !items.length) return null
+  return (
+    <div style={{ marginTop: 6 }}>
+      <b style={{ color }}>{title}</b>
+      <ul style={{ margin: '2px 0 0 18px', padding: 0 }}>
+        {items.map((t, i) => <SolutionItem key={i} text={String(t)} />)}
+      </ul>
+    </div>
+  )
 }
 
 function DiagnosisPanel({ alert }: { alert: Alert }) {
@@ -421,7 +459,33 @@ function DiagnosisPanel({ alert }: { alert: Alert }) {
       {field('把握度', confidence)}
       {field('已做处置', handling)}
       {field('影响面', impact)}
-      {!!sug && <div style={{ marginTop: 6 }}><b>处理意见：</b>{Array.isArray(sug) ? sug.join('；') : String(sug)}</div>}
+      {(() => {
+        // 2026-11-26（老板）：不止诊断结果，必须给「解决方法」
+        const sd = data.suggestions_detail || {}
+        const hasDetail = (sd.immediate?.length || sd.root_fix?.length || sd.verification?.length || sd.prevention?.length) as unknown as boolean
+        const flat = Array.isArray(sug) ? sug : (sug ? [String(sug)] : [])
+        if (!hasDetail && !flat.length) return null
+        return (
+          <div style={{ marginTop: 10, background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 4, padding: '8px 10px' }}>
+            <b style={{ fontSize: 13 }}>解决方法：</b>
+            {hasDetail ? (
+              <>
+                <SolutionSection title="① 立即止血" color="#cf1322" items={sd.immediate} />
+                <SolutionSection title="② 根因修复" color="#1677ff" items={sd.root_fix} />
+                <SolutionSection title="③ 验证方法" color="#389e0d" items={sd.verification} />
+                <SolutionSection title="④ 防复发" color="#8c8c8c" items={sd.prevention} />
+              </>
+            ) : (
+              <div style={{ marginTop: 4 }}>{flat.join('；')}</div>
+            )}
+            {data.handling_advice ? (
+              <div style={{ marginTop: 8, color: '#595959', fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                <b>处置说明：</b>{data.handling_advice}
+              </div>
+            ) : null}
+          </div>
+        )
+      })()}
       {data.diagnosis_json ? <CodeBlock code={data.diagnosis_json} /> : null}
     </div>
   )

@@ -48,6 +48,14 @@ class TestDeterministicRootCause(unittest.TestCase):
         self.assertTrue(out["suggestions"])
         self.assertEqual(out["degrade_reason"], "deterministic_evidence")
         self.assertEqual(out["root_cause_layer"], "B")
+        # 2026-11-26（老板）：解决方法必须给四段，且要有可执行命令
+        sd = out["suggestions_detail"]
+        for k in ("immediate", "root_fix", "verification", "prevention"):
+            self.assertTrue(sd[k], f"{k} 不能为空")
+        self.assertTrue(any("kubectl" in x for x in sd["immediate"]))
+        self.assertTrue(any("exclusion" in x for x in sd["root_fix"]))
+        # 旧消费方用的 suggestions 仍存在（= immediate + root_fix）
+        self.assertGreaterEqual(len(out["suggestions"]), len(sd["immediate"]))
 
     def test_no_hard_evidence_returns_none(self):
         self.assertIsNone(agent_loop._deterministic_root_cause(_state("一切正常 INFO 没有错误"), 0.0))

@@ -59,6 +59,10 @@ DEPTH_ANALYSIS_SPEC = (
     "\"suggestions_detail\": 建议四分对象 {\"immediate\": [立即止血], \"root_fix\": [根因修复，尽量给文件+键名], "
     "\"verification\": [如何验证修好], \"prevention\": [防复发]}。\n"
     "\"suggestions\": 仍必须输出为字符串数组 = immediate + root_fix 拍平（旧消费方依赖此字段，禁止返回对象）。\n"
+    "【解决方法硬要求】immediate 与 root_fix 每一条都必须是**可执行的具体动作**："
+"能给命令就给命令（kubectl/mvn/unzip 等，未知值用 <workload>/<namespace>/<pod> 占位符），"
+"能给配置片段就给片段（pom exclusion / yaml 键值 / 环境变量名），不要只写「建议检查/建议排查」；"
+"verification 必须给验证命令和期望结果（如「无输出」「只应剩一个版本」「1/1 Running」）。\n"
     "以上字段都必须输出完整，禁止截断；JSON 必须完整合法。"
 )
 

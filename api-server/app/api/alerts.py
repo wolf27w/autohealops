@@ -598,6 +598,13 @@ async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
     refs = data.get("evidence_refs")
     if not isinstance(refs, list):
         refs = []
+    # 2026-11-26（老板）：不能只给「诊断结果」，必须给「解决方法」。
+    # 模型早就按要求输出了 suggestions_detail（立即止血/根因修复/验证/防复发）与 handling_advice，
+    # 但接口只返回了拍平的 suggestions → 前端只能显示一句话。这里全部透出。
+    sd = data.get("suggestions_detail")
+    if not isinstance(sd, dict):
+        sd = {}
+    analysis = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
     return {"code": 200, "message": "success", "data": {
         "diagnosis_json": d.diagnosis_json, "confidence": d.confidence, "created_at": str(d.created_at),
         # 2026-11-26：轮次标记（stale=True = 上一轮故障的诊断，本轮尚未重新诊断）
@@ -607,7 +614,19 @@ async def get_diagnosis(alert_id: int, user=Depends(require_any_user)):
         "evidence_refs": [str(x).strip() for x in refs if str(x).strip()],
         "impact": data.get("impact"),
         "root_cause_layer": str(data.get("root_cause_layer", "") or "").strip(),
+        "root_cause_chain": data.get("root_cause_chain") if isinstance(data.get("root_cause_chain"), dict) else {},
+        "risk_level": str(data.get("risk_level", "") or "").strip(),
         "suggestions": data.get("suggestions", []),
+        # 解决方法（结构化）
+        "suggestions_detail": {
+            "immediate": sd.get("immediate") or [],
+            "root_fix": sd.get("root_fix") or [],
+            "verification": sd.get("verification") or [],
+            "prevention": sd.get("prevention") or [],
+        },
+        "handling_advice": str(data.get("handling_advice", "") or "").strip(),
+        "eliminated": analysis.get("eliminated") or [],
+        "evidence_gaps": analysis.get("evidence_gaps") or [],
     }}
 
 

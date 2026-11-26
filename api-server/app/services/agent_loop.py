@@ -402,38 +402,63 @@ async def _degrade(
 # 背景：qa-asfp/dgis-module-universals 实测 collect_startup_evidence 已拿到
 # 「APPLICATION FAILED TO START + ParserConfig.getProvider() 不存在」，但循环 total_timeout 后
 # 直接输出「未能确定根因」——证据在手却不说。
+# 2026-11-26（老板）：降级/确定性结论也必须带「解决方法」，所以每条都给出四段（可复制执行）。
 _HARD_FINDINGS = (
-    (
-        ("fastjson.parser.parserconfig.getprovider", "com.alibaba.fastjson2.reader.objectreaderprovider"),
-        "依赖冲突：容器里同时存在 fastjson 1.x（如 wcspsdk 内置）与 fastjson2，"
-        "com.alibaba.fastjson.parser.ParserConfig 被旧版覆盖，FastJsonSecurityConfiguration 调 "
-        "getProvider() 抛 NoSuchMethodError，应用启动失败退出。",
-        [
-            "在引入 wcspsdk 等 SDK 的依赖上加 <exclusion>com.alibaba:fastjson</exclusion>，只保留 fastjson2",
-            "重新构建后检查 BOOT-INF/lib 只剩 fastjson2-2.x（不得同时存在 fastjson-1.x）",
-            "先回滚到上一可用镜像止血，再按上述修依赖重发",
+    {
+        "markers": ("fastjson.parser.parserconfig.getprovider",
+                    "com.alibaba.fastjson2.reader.objectreaderprovider"),
+        "cause": ("依赖冲突：容器里同时存在 fastjson 1.x（如 wcspsdk 内置）与 fastjson2，"
+                  "com.alibaba.fastjson.parser.ParserConfig 被旧版覆盖，FastJsonSecurityConfiguration 调 "
+                  "getProvider() 抛 NoSuchMethodError，应用启动失败退出。"),
+        "immediate": [
+            "kubectl rollout undo deployment/<workload> -n <namespace>   # 先回滚到上一可用版本止血",
+            "kubectl -n <namespace> rollout status deployment/<workload>  # 确认新 Pod 1/1 Running、RestartCount=0",
         ],
-    ),
-    (
-        ("nosuchmethoderror",),
-        "依赖/版本不兼容：运行时抛 NoSuchMethodError（调用的方法在已加载的类里不存在）。",
-        ["对比本次变更的依赖版本（升级/降级了哪个包）", "清理冲突版本（mvn dependency:tree 看重复依赖）后重构建"],
-    ),
-    (
-        ("noclassdeffounderror", "classnotfoundexception"),
-        "运行时缺类（NoClassDefFoundError/ClassNotFoundException）：打包漏依赖或类加载器看不到该类。",
-        ["检查 fat jar 内 BOOT-INF/lib 是否缺该依赖", "确认依赖 scope 不是 provided/test"],
-    ),
-    (
-        ("outofmemoryerror",),
-        "内存不足：JVM 抛 OutOfMemoryError 后进程退出（非 kubelet OOMKilled）。",
-        ["确认 -Xmx/MaxRAMPercentage 与容器 limit 匹配", "排查内存泄漏（堆 dump / GC 日志）"],
-    ),
-    (
-        ("no such file or directory",),
-        "启动路径/文件缺失（日志目录、配置文件或挂载点不存在）。",
-        ["为缺失目录加 initContainer mkdir -p 或挂载卷", "修正配置里的路径"],
-    ),
+        "root_fix": [
+            "在引入 wcspsdk 的依赖上加排除：<exclusion><groupId>com.alibaba</groupId><artifactId>fastjson</artifactId></exclusion>",
+            "若 SDK 强依赖 fastjson 1.x：用 maven-shade-plugin 把 com.alibaba.fastjson relocate 到私有包名，消除同名类",
+            "dependencyManagement 里锁定唯一 fastjson2 版本（如 2.0.66），确保 BOOT-INF/lib 只有一个 ParserConfig",
+        ],
+        "verification": [
+            "解包校验：unzip -l <app.jar> | grep -E 'fastjson'   # 只应有一个提供 com/alibaba/fastjson/parser/ParserConfig.class 的 jar",
+            "启动校验：kubectl -n <namespace> logs <pod> --tail=200 | grep -E 'APPLICATION FAILED TO START|NoSuchMethodError'  # 应无输出",
+        ],
+        "prevention": ["CI 加 maven-enforcer-plugin bannedDependencies / duplicate-finder，构建期就拦住同名类"],
+    },
+    {
+        "markers": ("nosuchmethoderror",),
+        "cause": "依赖/版本不兼容：运行时抛 NoSuchMethodError（调用的方法在已加载的类里不存在）。",
+        "immediate": ["kubectl rollout undo deployment/<workload> -n <namespace>"],
+        "root_fix": ["mvn dependency:tree -Dincludes=<疑似 groupId:artifactId> 找出多版本依赖",
+                      "统一 dependencyManagement 版本，或排除传递进来的旧版本"],
+        "verification": ["mvn dependency:tree | grep <artifactId>   # 只应剩一个版本"],
+        "prevention": ["CI 增加依赖冲突/重复类检查"],
+    },
+    {
+        "markers": ("noclassdeffounderror", "classnotfoundexception"),
+        "cause": "运行时缺类（NoClassDefFoundError/ClassNotFoundException）：打包漏依赖或类加载器看不到该类。",
+        "immediate": ["kubectl rollout undo deployment/<workload> -n <namespace>"],
+        "root_fix": ["检查 fat jar 的 BOOT-INF/lib 是否缺该依赖；确认依赖 scope 不是 provided/test"],
+        "verification": ["unzip -l <app.jar> | grep <缺失类所在 jar>"],
+        "prevention": ["构建产物做启动冒烟（java -jar 起一遍）后再推镜像"],
+    },
+    {
+        "markers": ("outofmemoryerror",),
+        "cause": "内存不足：JVM 抛 OutOfMemoryError 后进程退出（非 kubelet OOMKilled）。",
+        "immediate": ["kubectl -n <namespace> set resources deployment/<workload> --limits=memory=<更大值>"],
+        "root_fix": ["对齐 -Xmx/MaxRAMPercentage 与容器 limit（堆 ≤ 75% limit）",
+                      "取堆转储分析泄漏：kubectl exec <pod> -- jcmd 1 GC.heap_dump /tmp/h.hprof"],
+        "verification": ["kubectl top pod <pod>   # 观察内存曲线不再单调爬升"],
+        "prevention": ["加内存使用率告警阈值与定期 GC 日志巡检"],
+    },
+    {
+        "markers": ("no such file or directory",),
+        "cause": "启动路径/文件缺失（日志目录、配置文件或挂载点不存在）。",
+        "immediate": ["先用 emptyDir 挂载缺失目录应急（改 Deployment volumeMounts）"],
+        "root_fix": ["加 initContainer 执行 mkdir -p <缺失目录>，或修正配置里的路径到可写目录"],
+        "verification": ["kubectl -n <namespace> logs <pod> --tail=100   # 不再出现 No such file or directory"],
+        "prevention": ["镜像构建时预创建运行期目录并 chown 到应用用户"],
+    },
 )
 
 
@@ -446,7 +471,8 @@ def _deterministic_root_cause(state: dict, start: float) -> dict | None:
     low = blob.lower()
     if not low.strip():
         return None
-    for markers, cause, advices in _HARD_FINDINGS:
+    for f in _HARD_FINDINGS:
+        markers = f["markers"]
         if not any(m in low for m in markers):
             continue
         # 取命中处附近的原始行作为证据
@@ -455,11 +481,22 @@ def _deterministic_root_cause(state: dict, start: float) -> dict | None:
         line = next((ln.strip() for ln in seg.splitlines()
                      if any(m in ln.lower() for m in markers) and ln.strip()), "")[:300]
         logger.info("ReAct 降级但证据充分：确定性命中硬错误（%s）", markers[0])
+        immediate = list(f.get("immediate") or [])
+        root_fix = list(f.get("root_fix") or [])
         return {
-            "root_cause": cause + (f" 关键证据：{line}" if line else ""),
-            "suggestions": advices,
+            "root_cause": f["cause"] + (f" 关键证据：{line}" if line else ""),
+            # 旧消费方要字符串数组 = 立即止血 + 根因修复
+            "suggestions": immediate + root_fix,
+            # 2026-11-26（老板）：解决方法四段（前端按「立即止血/根因修复/验证/防复发」展示）
+            "suggestions_detail": {
+                "immediate": immediate,
+                "root_fix": root_fix,
+                "verification": list(f.get("verification") or []),
+                "prevention": list(f.get("prevention") or []),
+            },
             "root_cause_layer": "B",
-            "handling_advice": "诊断预算耗尽前已采集到确定性失败证据，以上结论由证据直接得出（未调用模型）。",
+            "handling_advice": ("诊断预算耗尽前已采集到确定性失败证据，结论由证据直接得出（未调用模型）。"
+                                "修复步骤里 <workload>/<namespace>/<pod> 需替换成实际值。"),
             "model_used": "",
             "degraded": True,
             "degrade_reason": "deterministic_evidence",
