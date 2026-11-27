@@ -1,6 +1,6 @@
 // 数据库诊断 Tab（单实例）：手动触发诊断 + 进度轮询 + 诊断报告列表 + 指标趋势
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Drawer, Empty, Progress, Space, Table, Tag, message } from 'antd'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Button, Card, Collapse, Drawer, Empty, Progress, Space, Table, Tag, Tooltip, message } from 'antd'
 import { PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import Markdown from '../Markdown'
@@ -34,6 +34,21 @@ interface SuggestionItem { title?: string; detail?: string; sql_before?: string;
 
 const PAGE_SIZE = 20
 
+// 报告详情分区（可折叠）：单段内容可能很长，折叠后每段独立滚动，保证三段都能看到
+const SECTION_KEYS = ['conclusion', 'root_cause', 'suggestion']
+
+// 折叠标题里的一行摘要（截断显示，展开后看全文）
+function preview(text?: string, max = 60): string {
+  const t = (text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return '（空）'
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+// 长内容滚动容器：避免一段把另外两段顶出可视区
+function ScrollBox({ children }: { children: ReactNode }) {
+  return <div style={{ maxHeight: '40vh', overflowY: 'auto', paddingRight: 8 }}>{children}</div>
+}
+
 export default function DbDiagnosisPanel({ connId }: Props) {
   const [diag, setDiag] = useState<DiagProgress | null>(null)
   const [reports, setReports] = useState<DBReport[]>([])
@@ -41,6 +56,7 @@ export default function DbDiagnosisPanel({ connId }: Props) {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [detail, setDetail] = useState<DBReport | null>(null)
+  const [activeSections, setActiveSections] = useState<string[]>(['conclusion'])
   const [trends, setTrends] = useState<TrendPoint[]>([])
   const [loadingReports, setLoadingReports] = useState(false)
   const timerRef = useRef<number | null>(null)
@@ -105,6 +121,12 @@ export default function DbDiagnosisPanel({ connId }: Props) {
     }
   }
 
+  // 打开详情：默认只展开「结论」，根因/建议先收起（标题带摘要，展开不受长度遮挡）
+  const openDetail = (r: DBReport) => {
+    setActiveSections(['conclusion'])
+    setDetail(r)
+  }
+
   // 复制报告全文
   const copyReport = async (r: DBReport) => {
     const text = [
@@ -166,6 +188,8 @@ export default function DbDiagnosisPanel({ connId }: Props) {
     return <Markdown text={suggestion} />
   }
 
+  const allOpen = activeSections.length === SECTION_KEYS.length
+
   return (
     <div>
       {/* 顶部：开始诊断按钮 + 进度条 */}
@@ -198,8 +222,14 @@ export default function DbDiagnosisPanel({ connId }: Props) {
           columns={[
             { title: 'ID', dataIndex: 'id', width: 60 },
             { title: '数据库', dataIndex: 'db_name', width: 150, render: (v: string, r: DBReport) => v ? <span>{v}{r.db_type ? <Tag style={{ marginLeft: 4 }}>{r.db_type}</Tag> : null}</span> : '-' },
-            { title: '结论', dataIndex: 'conclusion', ellipsis: true, render: (v: string) => v || '-' },
-            { title: '根因', dataIndex: 'root_cause', ellipsis: true, render: (v: string) => v || '-' },
+            {
+              title: '结论', dataIndex: 'conclusion', ellipsis: { showTitle: false },
+              render: (v: string) => v ? <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip> : '-',
+            },
+            {
+              title: '根因', dataIndex: 'root_cause', ellipsis: { showTitle: false },
+              render: (v: string) => v ? <Tooltip title={v} placement="topLeft"><span>{v}</span></Tooltip> : '-',
+            },
             { title: '建议', dataIndex: 'suggestion', ellipsis: true, render: (v: string) => {
               if (!v) return '-'
               try { const arr = JSON.parse(v); if (Array.isArray(arr)) return arr.map((s: string | SuggestionItem) => typeof s === 'string' ? s : (s.title || '')).filter(Boolean).join('；') } catch { /* ignore */ }
@@ -207,28 +237,74 @@ export default function DbDiagnosisPanel({ connId }: Props) {
             } },
             { title: '创建时间', dataIndex: 'created_at', width: 170 },
             { title: '操作', width: 90, render: (_, r) => (
-              <Button size="small" type="link" onClick={() => setDetail(r)}>详情</Button>
+              <Button size="small" type="link" onClick={() => openDetail(r)}>详情</Button>
             ) },
           ]}
         />
         {reports.length === 0 && !loadingReports && <Empty description="暂无诊断报告（点击上方「开始诊断」生成）" />}
       </Card>
 
-      {/* 报告详情 Drawer（支持复制） */}
+      {/* 报告详情 Drawer：三段折叠 + 各自滚动，长报告也能全部看到 */}
       <Drawer
         title={`诊断报告 #${detail?.id ?? ''}`}
         open={!!detail}
         onClose={() => setDetail(null)}
-        width={720}
+        width={860}
+        styles={{ body: { paddingTop: 8 } }}
         extra={detail && (
-          <Button size="small" onClick={() => copyReport(detail)}>复制</Button>
+          <Space>
+            <Button
+              size="small"
+              onClick={() => setActiveSections(allOpen ? [] : [...SECTION_KEYS])}
+            >
+              {allOpen ? '全部收起' : '全部展开'}
+            </Button>
+            <Button size="small" onClick={() => copyReport(detail)}>复制</Button>
+          </Space>
         )}
       >
         {detail && (
           <div>
-            <div style={{ marginBottom: 12 }}><b>结论</b><Markdown text={detail.conclusion} /></div>
-            <div style={{ marginBottom: 12 }}><b>根因</b><Markdown text={detail.root_cause} /></div>
-            <div style={{ marginBottom: 12 }}><b>优化建议</b>{renderSuggestion(detail.suggestion)}</div>
+            <div style={{ marginBottom: 10, color: '#8c8c8c', fontSize: 12 }}>
+              {detail.db_name || '-'}{detail.db_type ? ` · ${detail.db_type}` : ''}{detail.created_at ? ` · ${detail.created_at}` : ''}
+            </div>
+            <Collapse
+              size="small"
+              activeKey={activeSections}
+              onChange={(k) => setActiveSections(Array.isArray(k) ? k.map(String) : [String(k)])}
+              items={[
+                {
+                  key: 'conclusion',
+                  label: (
+                    <span>
+                      <b>结论</b>
+                      <span style={{ color: '#8c8c8c', marginLeft: 8, fontWeight: 400 }}>{preview(detail.conclusion)}</span>
+                    </span>
+                  ),
+                  children: <ScrollBox>{detail.conclusion ? <Markdown text={detail.conclusion} /> : <div style={{ color: '#999' }}>-</div>}</ScrollBox>,
+                },
+                {
+                  key: 'root_cause',
+                  label: (
+                    <span>
+                      <b>根因</b>
+                      <span style={{ color: '#8c8c8c', marginLeft: 8, fontWeight: 400 }}>{preview(detail.root_cause)}</span>
+                    </span>
+                  ),
+                  children: <ScrollBox>{detail.root_cause ? <Markdown text={detail.root_cause} /> : <div style={{ color: '#999' }}>-</div>}</ScrollBox>,
+                },
+                {
+                  key: 'suggestion',
+                  label: (
+                    <span>
+                      <b>优化建议</b>
+                      <span style={{ color: '#8c8c8c', marginLeft: 8, fontWeight: 400 }}>{preview(detail.suggestion)}</span>
+                    </span>
+                  ),
+                  children: <ScrollBox>{renderSuggestion(detail.suggestion)}</ScrollBox>,
+                },
+              ]}
+            />
           </div>
         )}
       </Drawer>
